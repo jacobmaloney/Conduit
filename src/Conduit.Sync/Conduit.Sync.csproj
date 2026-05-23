@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Conduit.Sync</AssemblyName>
+    <RootNamespace>Conduit.Sync</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Conduit.Core\Conduit.Core.csproj" />
+    <ProjectReference Include="..\Conduit.DataAccess\Conduit.DataAccess.csproj" />
+  </ItemGroup>
+</Project>

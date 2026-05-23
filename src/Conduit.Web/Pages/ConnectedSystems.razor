@@ -1,0 +1,1080 @@
+@page "/connected-systems"
+@attribute [Authorize]
+@using Conduit.Core.Models
+@using Conduit.DataAccess.Repositories
+@using Conduit.Web.Services
+@inject TenantRepository TenantRepo
+@inject ApiTokenService Tokens
+@inject DemoSeedService DemoSeed
+@inject ActiveSystemState ActiveSystem
+@inject DataChangeNotifier DataChange
+@inject AuditLogService Audit
+@inject TenantSnapshotService Snapshots
+@inject AuthenticationStateProvider AuthState
+@inject IHttpContextAccessor HttpCtx
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>Connected Systems - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1>Connected Systems</h1>
+            <p class="text-muted">External identity targets this SCIM server connects to.</p>
+        </div>
+        <div>
+            <button class="btn btn-outline-secondary me-2" @onclick="SeedDemo" disabled="@seeding">
+                @if (seeding)
+                {
+                    <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                }
+                <i class="oi oi-data-transfer-download"></i> Seed Demo Data
+            </button>
+            <button class="btn btn-primary" @onclick="ShowCreateModal">
+                <i class="oi oi-plus"></i> + Connect a system
+            </button>
+        </div>
+    </div>
+
+    @if (lastSeedResult != null)
+    {
+        <div class="alert alert-success">
+            <h5 class="alert-heading">Demo seed complete</h5>
+            <p class="mb-1">
+                Created: <strong>@lastSeedResult.ConnectedSystemsCreated</strong> connected systems,
+                <strong>@lastSeedResult.UsersCreated</strong> users,
+                <strong>@lastSeedResult.GroupsCreated</strong> groups,
+                <strong>@lastSeedResult.MembershipsCreated</strong> memberships,
+                <strong>@lastSeedResult.TokensCreated</strong> tokens.
+            </p>
+            @if (lastSeedResult.Notes.Any())
+            {
+                <details class="mt-2">
+                    <summary>Details</summary>
+                    <ul class="small mb-0">
+                        @foreach (var n in lastSeedResult.Notes)
+                        {
+                            <li>@n</li>
+                        }
+                    </ul>
+                </details>
+            }
+        </div>
+    }
+
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    }
+    else if (!stats.Any())
+    {
+        <div class="alert alert-info">
+            <h4 class="alert-heading">No connected systems yet</h4>
+            <p>Connect one to get started.</p>
+            <button class="btn btn-primary btn-sm" @onclick="ShowCreateModal">
+                <i class="oi oi-plus"></i> Connect a system
+            </button>
+        </div>
+    }
+    else
+    {
+        <div class="tenant-grid">
+            @foreach (var s in stats)
+            {
+                <div class="tenant-card @(s.IsActive ? "" : "is-inactive")">
+                    <div class="tenant-card-head">
+                        <span class="avatar avatar-40">@GlyphFor(s)</span>
+                        <div class="tenant-card-title">
+                            <div class="tenant-card-name">@s.Name</div>
+                            <div class="tenant-card-domain">@(string.IsNullOrWhiteSpace(s.Domain) ? s.Slug : s.Domain)</div>
+                        </div>
+                        <span class="kind-pill @(s.SystemType == "Real" ? "kind-real" : "kind-emulator")">@s.SystemType</span>
+                    </div>
+
+                    <div class="tenant-card-stats">
+                        <div>
+                            <span class="tenant-stat-label">Users</span>
+                            <span class="tenant-stat-value">@s.UserCount</span>
+                        </div>
+                        <div>
+                            <span class="tenant-stat-label">Groups</span>
+                            <span class="tenant-stat-value">@s.GroupCount</span>
+                        </div>
+                        <div>
+                            <span class="tenant-stat-label">Tokens</span>
+                            <span class="tenant-stat-value">@s.TokenCount</span>
+                        </div>
+                    </div>
+
+                    <div class="tenant-card-foot">
+                        <div class="d-flex align-items-center gap-2">
+                            @if (!s.IsActive)
+                            {
+                                <span class="kind-pill">Inactive</span>
+                            }
+                            else
+                            {
+                                <span class="status-dot ok"></span>
+                                <span class="text-muted" style="font-size: 11.5px;">Active</span>
+                            }
+                        </div>
+                        <div class="d-flex align-items-center gap-1">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => ShowEndpoints(s)">
+                                <i class="oi oi-link-intact"></i> Endpoints
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => EditSystem(s.TenantId)">
+                                <i class="oi oi-pencil"></i>
+                            </button>
+                            <button class="btn btn-sm @(s.LegalHold ? "btn-warning" : "btn-outline-secondary")"
+                                    @onclick="() => ToggleLegalHold(s)"
+                                    title="@(s.LegalHold ? "Legal hold ON — destructive actions are refused. Click to release." : "Put this system on legal hold — refuses Clear/Deactivate/Delete until released.")">
+                                <i class="oi @(s.LegalHold ? "oi-lock-locked" : "oi-lock-unlocked")"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    @onclick="() => ClearData(s)"
+                                    disabled="@(clearInProgress || s.LegalHold)"
+                                    title="@(s.LegalHold ? "Refused — system is on legal hold." : "Clear users + groups in this system (keeps the system, its tokens, and its config)")">
+                                <i class="oi oi-eraser"></i>
+                            </button>
+                            @if (s.TenantId != TenantRepository.DefaultTenantId)
+                            {
+                                <button class="btn btn-sm btn-outline-warning"
+                                        @onclick="() => DeactivateSystem(s)"
+                                        disabled="@s.LegalHold"
+                                        title="@(s.LegalHold ? "Refused — system is on legal hold." : "Deactivate (soft delete — data stays in the database)")">
+                                    <i class="oi oi-ban"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger"
+                                        @onclick="() => ShowDeleteModal(s)"
+                                        disabled="@s.LegalHold"
+                                        title="@(s.LegalHold ? "Refused — system is on legal hold." : "Delete forever (purges users, groups, tokens, memberships)")">
+                                    <i class="oi oi-trash"></i>
+                                </button>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <button class="tenant-card-add" @onclick="ShowCreateModal">
+                <i class="oi oi-plus" style="font-size: 24px;"></i>
+                Connect a system
+            </button>
+        </div>
+    }
+</div>
+
+<!-- Create / Edit modal -->
+<div class="modal @(showModal ? "show d-block" : "")" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">@(editingId.HasValue ? "Edit Connected System" : "Connect a System")</h5>
+                <button type="button" class="btn-close" @onclick="CloseModal"></button>
+            </div>
+            <div class="modal-body">
+                @if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    <div class="alert alert-danger py-2">@errorMessage</div>
+                }
+                <div class="mb-3">
+                    <label class="form-label">Name *</label>
+                    <input class="form-control" @bind="form.Name" @bind:event="oninput" @bind:after="OnNameChanged" placeholder="e.g. IT Helpdesk Portal" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Slug *</label>
+                    <input class="form-control" @bind="form.Slug" placeholder="it-helpdesk" />
+                    <small class="form-text text-muted">URL-safe identifier. Auto-derived from the name; edit if needed. Unique across all systems.</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Domain</label>
+                    <input class="form-control" @bind="form.Domain" placeholder="e.g. it.demo.local (optional)" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">System Type *</label>
+                    <select class="form-select" @bind="form.SystemType">
+                        <option value="Emulator">Emulator (test/demo target)</option>
+                        <option value="Real">Real (production target)</option>
+                    </select>
+                    <small class="form-text text-muted">Emulator systems show an amber badge. Real systems are green.</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="3" @bind="form.Description"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
+                <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+                    @if (saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                    }
+                    @(editingId.HasValue ? "Save changes" : "Connect")
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (showModal)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+<!-- Endpoints modal -->
+@if (endpointsFor != null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        Endpoints — @endpointsFor.Name
+                        @if (endpointsFor.SystemType == "Real")
+                        {
+                            <span class="badge bg-success ms-2">REAL</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-warning text-dark ms-2">EMULATOR</span>
+                        }
+                    </h5>
+                    <button class="btn-close" @onclick="CloseEndpoints"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">
+                        POST here from your ARS PowerShell workflows or any external app. Two URL forms work —
+                        <strong>slug-scoped</strong> (recommended, URL identifies the Connected System) and
+                        <strong>token-scoped</strong> (legacy, bearer token decides). When you use the slug form,
+                        a token that's scoped to a <em>different</em> system is rejected with 403.
+                    </p>
+
+                    <div class="section-eyebrow">URLs</div>
+                    <div class="table-responsive">
+                        <table class="endpoints-table">
+                            <thead>
+                                <tr><th style="width: 24%">Surface</th><th>URL</th><th style="width: 16%">Method</th><th style="width: 14%">Scope</th></tr>
+                            </thead>
+                            <tbody>
+                                @{
+                                    string scimUsersUrl   = $"{baseUrl}/scim/v2/t/{endpointsFor.Slug}/Users";
+                                    string scimGroupsUrl  = $"{baseUrl}/scim/v2/t/{endpointsFor.Slug}/Groups";
+                                    string genericUsers   = $"{baseUrl}/api/v1/users";
+                                    string genericGroups  = $"{baseUrl}/api/v1/groups";
+                                    string sqlAccounts    = $"{baseUrl}/sql/v1/accounts";
+                                }
+                                <tr>
+                                    <td><strong>SCIM 2.0 · Users</strong></td>
+                                    <td>
+                                        <span class="url-cell">
+                                            <code>@scimUsersUrl</code>
+                                            <button class="url-copy" title="Copy URL" @onclick="@(() => CopyAsync(scimUsersUrl, "scim-users"))">
+                                                <i class="oi oi-clipboard"></i> @(copiedKey == "scim-users" ? "Copied" : "")
+                                            </button>
+                                        </span>
+                                        <br /><small class="text-muted">Legacy: <code>@baseUrl/scim/v2/Users</code></small>
+                                    </td>
+                                    <td class="text-muted">POST / GET / PATCH</td>
+                                    <td><span class="kind-pill">Slug + Token</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>SCIM 2.0 · Groups</strong></td>
+                                    <td>
+                                        <span class="url-cell">
+                                            <code>@scimGroupsUrl</code>
+                                            <button class="url-copy" title="Copy URL" @onclick="@(() => CopyAsync(scimGroupsUrl, "scim-groups"))">
+                                                <i class="oi oi-clipboard"></i> @(copiedKey == "scim-groups" ? "Copied" : "")
+                                            </button>
+                                        </span>
+                                        <br /><small class="text-muted">Legacy: <code>@baseUrl/scim/v2/Groups</code></small>
+                                    </td>
+                                    <td class="text-muted">POST / GET / PATCH</td>
+                                    <td><span class="kind-pill">Slug + Token</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Generic REST · Users</strong></td>
+                                    <td>
+                                        <span class="url-cell">
+                                            <code>@genericUsers</code>
+                                            <button class="url-copy" title="Copy URL" @onclick="@(() => CopyAsync(genericUsers, "rest-users"))">
+                                                <i class="oi oi-clipboard"></i> @(copiedKey == "rest-users" ? "Copied" : "")
+                                            </button>
+                                        </span>
+                                    </td>
+                                    <td class="text-muted">POST / GET / PATCH / DELETE</td>
+                                    <td><span class="kind-pill">Tenant</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Generic REST · Groups</strong></td>
+                                    <td>
+                                        <span class="url-cell">
+                                            <code>@genericGroups</code>
+                                            <button class="url-copy" title="Copy URL" @onclick="@(() => CopyAsync(genericGroups, "rest-groups"))">
+                                                <i class="oi oi-clipboard"></i> @(copiedKey == "rest-groups" ? "Copied" : "")
+                                            </button>
+                                        </span>
+                                    </td>
+                                    <td class="text-muted">POST / GET / DELETE</td>
+                                    <td><span class="kind-pill">Tenant</span></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>SQL emulator</strong></td>
+                                    <td>
+                                        <span class="url-cell">
+                                            <code>@sqlAccounts</code>
+                                            <button class="url-copy" title="Copy URL" @onclick="@(() => CopyAsync(sqlAccounts, "sql"))">
+                                                <i class="oi oi-clipboard"></i> @(copiedKey == "sql" ? "Copied" : "")
+                                            </button>
+                                        </span>
+                                    </td>
+                                    <td class="text-muted">POST / GET / PATCH / DELETE</td>
+                                    <td><span class="kind-pill">Tenant</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="section-eyebrow">Tokens scoped to this Connected System</div>
+                    @if (endpointTokens.Count == 0)
+                    {
+                        <div class="alert alert-warning py-2">
+                            No tokens are scoped to this system yet. Go to <a href="/tokens">API Tokens</a> to create one
+                            (choose <strong>@endpointsFor.Name</strong> from the Connected System dropdown).
+                        </div>
+                    }
+                    else
+                    {
+                        <table class="endpoints-table">
+                            <thead>
+                                <tr><th>Name</th><th>Scope</th><th>Created</th><th>Bearer header</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var t in endpointTokens)
+                                {
+                                    var demoRaw = LookupDemoToken(t.Name);
+                                    <tr>
+                                        <td>
+                                            <strong>@t.Name</strong>
+                                            @if (!string.IsNullOrEmpty(t.Description))
+                                            {
+                                                <br /><small class="text-muted">@t.Description</small>
+                                            }
+                                        </td>
+                                        <td><span class="kind-pill">@(string.IsNullOrEmpty(t.Scope) ? "Tenant" : t.Scope)</span></td>
+                                        <td class="mono" style="font-size: 11.5px; color: var(--muted);">@t.CreatedAt.ToString("yyyy-MM-dd")</td>
+                                        <td>
+                                            @if (demoRaw != null)
+                                            {
+                                                <span class="url-cell">
+                                                    <code>Bearer scim_@demoRaw</code>
+                                                    <button class="url-copy" title="Copy header" @onclick="@(() => CopyAsync($"Bearer scim_{demoRaw}", $"tok-{t.Id}"))">
+                                                        <i class="oi oi-clipboard"></i> @(copiedKey == $"tok-{t.Id}" ? "Copied" : "")
+                                                    </button>
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted small">Raw token shown only at creation time — see <a href="/tokens">API Tokens</a> to mint a new one.</span>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+
+                    @{
+                        var scimExample = ScimCurlExample();
+                        var genericExample = GenericCurlExample();
+                        var powershellExample = PowershellExample();
+                    }
+
+                    <div class="section-eyebrow">Example: create a user via SCIM</div>
+                    <div class="code-block">
+                        <button class="code-copy" title="Copy" @onclick="@(() => CopyAsync(scimExample, "SCIM cURL"))">
+                            <i class="oi oi-clipboard"></i>
+                            <span>@(copiedKey == "SCIM cURL" ? "Copied" : "Copy")</span>
+                        </button>
+                        <pre><code>@scimExample</code></pre>
+                    </div>
+
+                    <div class="section-eyebrow">Example: create a user via Generic REST</div>
+                    <div class="code-block">
+                        <button class="code-copy" title="Copy" @onclick="@(() => CopyAsync(genericExample, "Generic cURL"))">
+                            <i class="oi oi-clipboard"></i>
+                            <span>@(copiedKey == "Generic cURL" ? "Copied" : "Copy")</span>
+                        </button>
+                        <pre><code>@genericExample</code></pre>
+                    </div>
+
+                    <div class="section-eyebrow">Example: PowerShell <code>Invoke-RestMethod</code> from ARS workflow</div>
+                    <div class="code-block">
+                        <button class="code-copy" title="Copy" @onclick="@(() => CopyAsync(powershellExample, "PowerShell"))">
+                            <i class="oi oi-clipboard"></i>
+                            <span>@(copiedKey == "PowerShell" ? "Copied" : "Copy")</span>
+                        </button>
+                        <pre><code>@powershellExample</code></pre>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseEndpoints">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@if (deletingFor is not null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-danger">
+                        <i class="oi oi-warning"></i>
+                        Delete Connected System forever
+                    </h5>
+                    <button class="btn-close" @onclick="CloseDeleteModal" disabled="@deleteInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger">
+                        <strong>This cannot be undone.</strong>
+                        Hard-delete <strong>@deletingFor.Name</strong> and every row that references it.
+                    </div>
+
+                    <div class="section-eyebrow">What will be deleted</div>
+                    <div class="table-responsive mb-3">
+                        <table class="endpoints-table">
+                            <thead>
+                                <tr><th style="width: 60%">Surface</th><th>Rows</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Users (with their emails, phone numbers, addresses)</td><td><code>@deletingFor.UserCount</code></td></tr>
+                                <tr><td>Groups (with all memberships)</td><td><code>@deletingFor.GroupCount</code></td></tr>
+                                <tr><td>API tokens scoped to this system</td><td><code>@deletingFor.TokenCount</code></td></tr>
+                                <tr><td>The Connected System row itself</td><td><code>1</code></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p>Type the system's <strong>slug</strong> (<code>@deletingFor.Slug</code>) below to enable the delete button:</p>
+                    <input class="form-control mono"
+                           @bind="deleteConfirmText"
+                           @bind:event="oninput"
+                           placeholder="@deletingFor.Slug"
+                           disabled="@deleteInProgress"
+                           autocomplete="off" />
+
+                    @if (!string.IsNullOrEmpty(deleteError))
+                    {
+                        <div class="alert alert-danger mt-3 mb-0 py-2">@deleteError</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseDeleteModal" disabled="@deleteInProgress">Cancel</button>
+                    <button class="btn btn-danger"
+                            @onclick="ConfirmDeleteSystem"
+                            disabled="@(deleteInProgress || !string.Equals(deleteConfirmText, deletingFor.Slug, StringComparison.Ordinal))">
+                        @if (deleteInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <span>Deleting…</span>
+                        }
+                        else
+                        {
+                            <i class="oi oi-trash"></i>
+                            <span class="ms-1">Delete forever</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@if (clearingFor is not null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-warning">
+                        <i class="oi oi-warning"></i>
+                        Clear data in @clearingFor.Name?
+                    </h5>
+                    <button class="btn-close" @onclick="CloseClearModal" disabled="@clearInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning">
+                        <strong>Are you sure?</strong>
+                        This will delete <strong>@clearingFor.UserCount</strong> user(s)
+                        and <strong>@clearingFor.GroupCount</strong> group(s) in
+                        <strong>@clearingFor.Name</strong>, plus their memberships,
+                        role assignments, emails, phones, and addresses.
+                        <br /><br />
+                        The Connected System itself, its API tokens, and its
+                        configuration <strong>stay</strong>. This cannot be undone.
+                    </div>
+
+                    <p class="mb-2">Type the system's <strong>slug</strong> (<code>@clearingFor.Slug</code>) to enable the clear button:</p>
+                    <input class="form-control mono"
+                           @bind="clearConfirmText"
+                           @bind:event="oninput"
+                           placeholder="@clearingFor.Slug"
+                           disabled="@clearInProgress"
+                           autocomplete="off" />
+
+                    @if (!string.IsNullOrEmpty(clearError))
+                    {
+                        <div class="alert alert-danger mt-3 mb-0 py-2">@clearError</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseClearModal" disabled="@clearInProgress">Cancel</button>
+                    <button class="btn btn-warning"
+                            @onclick="ConfirmClearData"
+                            disabled="@(clearInProgress || !string.Equals(clearConfirmText, clearingFor.Slug, StringComparison.Ordinal))">
+                        @if (clearInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <span>Clearing…</span>
+                        }
+                        else
+                        {
+                            <i class="oi oi-eraser"></i>
+                            <span class="ms-1">Clear data</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private List<TenantStats> stats = new();
+    private bool loading = true;
+    private bool showModal;
+    private bool saving;
+    private bool seeding;
+    private Guid? editingId;
+    private Tenant form = new();
+    private string errorMessage = "";
+    private DemoSeedService.SeedResult? lastSeedResult;
+
+    private static string GlyphFor(TenantStats s)
+    {
+        var name = s.Name?.Trim();
+        if (string.IsNullOrEmpty(name)) return "?";
+        return char.ToUpperInvariant(name[0]).ToString();
+    }
+
+    // Endpoints modal state
+    private TenantStats? endpointsFor;
+    private List<Conduit.Web.Services.ApiToken> endpointTokens = new();
+    private string baseUrl = "";
+
+    // Last-copied key, shown briefly as "Copied" feedback next to that button.
+    private string? copiedKey;
+
+    private async Task CopyAsync(string value, string key)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", value);
+            copiedKey = key;
+            StateHasChanged();
+            await Task.Delay(1200);
+            if (copiedKey == key) copiedKey = null;
+            StateHasChanged();
+        }
+        catch
+        {
+            // Clipboard API can be denied in some embedded contexts — silent best-effort.
+        }
+    }
+
+    // Demo seed tokens (name → raw value) — only ones whose raw value is documented.
+    // For any other token, raw value is unrecoverable from the hash by design.
+    private static readonly Dictionary<string, string> KnownDemoTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "it-helpdesk-token",    "demo-it-2024" },
+        { "finance-suite-token",  "demo-finance-2024" },
+        { "hr-connect-token",     "demo-hr-2024" },
+        { "admin-token",          "admin-conduit-2024" },
+        { "ars-proxy-token",      "ars-proxy-2024" }
+    };
+
+    private static string? LookupDemoToken(string name) =>
+        KnownDemoTokens.TryGetValue(name, out var v) ? v : null;
+
+    private async Task ShowEndpoints(TenantStats s)
+    {
+        endpointsFor = s;
+        baseUrl = Navigation.BaseUri.TrimEnd('/');
+        try
+        {
+            var all = await Tokens.GetAllTokensAsync();
+            endpointTokens = all.Where(t => t.TenantId == s.TenantId).ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load tokens for endpoints view: {ex.Message}");
+            endpointTokens = new();
+        }
+    }
+
+    private void CloseEndpoints() => endpointsFor = null;
+
+    private string DemoBearer() =>
+        endpointTokens
+            .Select(t => LookupDemoToken(t.Name))
+            .FirstOrDefault(v => v != null) is { } raw
+                ? $"scim_{raw}"
+                : "scim_<your-token>";
+
+    private string ExampleDomain()
+    {
+        var d = endpointsFor?.Domain;
+        return string.IsNullOrWhiteSpace(d) ? "example.com" : d;
+    }
+
+    private string ScimCurlExample()
+    {
+        var bearer = DemoBearer();
+        var domain = ExampleDomain();
+        var slug = endpointsFor?.Slug ?? "default";
+        var url = baseUrl + "/scim/v2/t/" + slug + "/Users";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("curl -X POST " + url + " \\");
+        sb.AppendLine("  -H \"Authorization: Bearer " + bearer + "\" \\");
+        sb.AppendLine("  -H \"Content-Type: application/scim+json\" \\");
+        sb.AppendLine("  -d '{");
+        sb.AppendLine("    \"schemas\": [\"urn:ietf:params:scim:schemas:core:2.0:User\"],");
+        sb.AppendLine("    \"userName\": \"jsmith\",");
+        sb.AppendLine("    \"name\": { \"givenName\": \"John\", \"familyName\": \"Smith\" },");
+        sb.AppendLine("    \"emails\": [{ \"value\": \"jsmith@" + domain + "\", \"primary\": true }],");
+        sb.AppendLine("    \"active\": true");
+        sb.Append("  }'");
+        return sb.ToString();
+    }
+
+    private string GenericCurlExample()
+    {
+        var bearer = DemoBearer();
+        var domain = ExampleDomain();
+        var url = baseUrl + "/api/v1/users";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("curl -X POST " + url + " \\");
+        sb.AppendLine("  -H \"Authorization: Bearer " + bearer + "\" \\");
+        sb.AppendLine("  -H \"Content-Type: application/json\" \\");
+        sb.AppendLine("  -d '{");
+        sb.AppendLine("    \"username\": \"jsmith\",");
+        sb.AppendLine("    \"email\": \"jsmith@" + domain + "\",");
+        sb.AppendLine("    \"firstName\": \"John\",");
+        sb.AppendLine("    \"lastName\": \"Smith\",");
+        sb.AppendLine("    \"active\": true");
+        sb.Append("  }'");
+        return sb.ToString();
+    }
+
+    private string PowershellExample()
+    {
+        var bearer = DemoBearer();
+        var domain = ExampleDomain();
+        var slug = endpointsFor?.Slug ?? "default";
+        var url = baseUrl + "/scim/v2/t/" + slug + "/Users";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("$headers = @{");
+        sb.AppendLine("    'Authorization' = 'Bearer " + bearer + "'");
+        sb.AppendLine("    'Content-Type'  = 'application/scim+json'");
+        sb.AppendLine("}");
+        sb.AppendLine("$body = @{");
+        sb.AppendLine("    schemas  = @('urn:ietf:params:scim:schemas:core:2.0:User')");
+        sb.AppendLine("    userName = 'jsmith'");
+        sb.AppendLine("    name     = @{ givenName = 'John'; familyName = 'Smith' }");
+        sb.AppendLine("    emails   = @(@{ value = 'jsmith@" + domain + "'; primary = $true })");
+        sb.AppendLine("    active   = $true");
+        sb.AppendLine("} | ConvertTo-Json -Depth 5");
+        sb.Append("Invoke-RestMethod -Method Post -Uri '" + url + "' -Headers $headers -Body $body");
+        return sb.ToString();
+    }
+
+    private async Task SeedDemo()
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm",
+            "Seed demo data? This creates three Connected Systems (IT Helpdesk Portal, Finance Suite, HR Connect), 25 users + 5 groups in IT Helpdesk with the SOD trap pair, and five fixed-value API tokens. The operation is idempotent — re-running is safe.");
+        if (!ok) return;
+        seeding = true;
+        lastSeedResult = null;
+        try
+        {
+            lastSeedResult = await DemoSeed.SeedAsync();
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Seed failed: {ex.Message}";
+        }
+        finally
+        {
+            seeding = false;
+        }
+    }
+
+    protected override Task OnInitializedAsync() => Task.CompletedTask;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await Load();
+            StateHasChanged();
+        }
+    }
+
+    private async Task Load()
+    {
+        loading = true;
+        try { stats = await TenantRepo.GetStatsAsync(); }
+        catch (Exception ex) { Console.WriteLine($"Failed to load connected systems: {ex.Message}"); }
+        finally { loading = false; }
+        // Tell the sidebar (and anyone else listening) that the tenant list may
+        // have changed — switcher refreshes without a full page reload.
+        await DataChange.NotifyAsync(DataChangeKind.Tenants);
+    }
+
+    private void ShowCreateModal()
+    {
+        editingId = null;
+        form = new Tenant { SystemType = "Emulator", IsActive = true };
+        errorMessage = "";
+        showModal = true;
+    }
+
+    private async Task EditSystem(Guid id)
+    {
+        var existing = await TenantRepo.GetByIdAsync(id);
+        if (existing == null) return;
+        editingId = id;
+        form = existing;
+        errorMessage = "";
+        showModal = true;
+    }
+
+    private void CloseModal()
+    {
+        showModal = false;
+        errorMessage = "";
+    }
+
+    private void OnNameChanged()
+    {
+        // Auto-derive slug when creating a new tenant and the slug field hasn't been hand-edited yet.
+        if (editingId.HasValue) return;
+        if (string.IsNullOrWhiteSpace(form.Name)) return;
+        form.Slug = Slugify(form.Name);
+    }
+
+    private static string Slugify(string s)
+    {
+        var lower = s.ToLowerInvariant();
+        var chars = lower.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
+        var collapsed = new string(chars);
+        while (collapsed.Contains("--")) collapsed = collapsed.Replace("--", "-");
+        return collapsed.Trim('-');
+    }
+
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(form.Name) || string.IsNullOrWhiteSpace(form.Slug))
+        {
+            errorMessage = "Name and Slug are required.";
+            return;
+        }
+        saving = true;
+        errorMessage = "";
+        try
+        {
+            if (editingId.HasValue)
+            {
+                form.Id = editingId.Value;
+                await TenantRepo.UpdateAsync(form);
+            }
+            else
+            {
+                var clash = await TenantRepo.GetBySlugAsync(form.Slug);
+                if (clash != null)
+                {
+                    errorMessage = $"A connected system with slug '{form.Slug}' already exists.";
+                    return;
+                }
+                await TenantRepo.CreateAsync(form);
+            }
+            showModal = false;
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task DeactivateSystem(TenantStats s)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm",
+            $"Deactivate '{s.Name}'? Users and groups in this system stay in the database but it will be hidden from active lists.");
+        if (!confirmed) return;
+        await TenantRepo.DeactivateAsync(s.TenantId);
+        await AuditDestructiveAsync("ConnectedSystem.Deactivate", s,
+            details: $"Soft delete — IsActive=0; users ({s.UserCount}) and groups ({s.GroupCount}) preserved.");
+        await Load();
+    }
+
+    // Centralized audit emit so every destructive action on this page lands in
+    // the same shape. Captures the signed-in operator, the request's client IP,
+    // the counts that were affected at the time the action ran, AND (when a
+    // snapshot is supplied) the full JSON serialization of the data that was
+    // about to disappear — so forensic recovery is possible even after a wipe.
+    private async Task AuditDestructiveAsync(string action, TenantStats target, string details, string? snapshotJson = null)
+    {
+        try
+        {
+            string userName = "unknown";
+            try
+            {
+                var auth = await AuthState.GetAuthenticationStateAsync();
+                userName = auth.User?.Identity?.Name ?? "unknown";
+            }
+            catch { /* best-effort */ }
+
+            var ip = HttpCtx.HttpContext?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            var ua = HttpCtx.HttpContext?.Request.Headers["User-Agent"].ToString();
+
+            await Audit.LogAsync(
+                action: action,
+                resourceType: "Tenant",
+                resourceId: target.TenantId.ToString(),
+                userName: userName,
+                ipAddress: ip,
+                userAgent: ua,
+                statusCode: 200,
+                details: $"System '{target.Name}' (slug={target.Slug}). {details}",
+                oldValue: snapshotJson,   // full pre-destroy snapshot when supplied — enables recovery
+                newValue: $"UserCount={target.UserCount}, GroupCount={target.GroupCount}, TokenCount={target.TokenCount}");
+        }
+        catch (Exception ex)
+        {
+            // Audit writes must never block the user-facing flow. Log to console
+            // so we know the audit pipeline misbehaved, but don't surface to the
+            // operator — the destructive action already succeeded.
+            Console.WriteLine($"Audit write failed for {action} on {target.Slug}: {ex.Message}");
+        }
+    }
+
+    // Toggle the legal-hold flag. Audit-logged on both directions because the
+    // act of changing the hold IS evidence — operators flipping a hold off
+    // immediately before a wipe is exactly the pattern an investigator would
+    // want to see end-to-end in the audit trail.
+    private async Task ToggleLegalHold(TenantStats s)
+    {
+        var turningOn = !s.LegalHold;
+        var prompt = turningOn
+            ? $"Put '{s.Name}' on legal hold? Clear, Deactivate, and Delete will all be refused until the hold is released."
+            : $"Release legal hold on '{s.Name}'? Destructive actions will be possible again.";
+        var confirmed = await JS.InvokeAsync<bool>("confirm", prompt);
+        if (!confirmed) return;
+
+        try
+        {
+            await TenantRepo.SetLegalHoldAsync(s.TenantId, turningOn);
+            await AuditDestructiveAsync(
+                action: turningOn ? "ConnectedSystem.LegalHold.Set" : "ConnectedSystem.LegalHold.Released",
+                target: s,
+                details: turningOn
+                    ? $"Operator placed system on legal hold. Destructive actions now refused at the repository layer."
+                    : $"Operator released legal hold. Destructive actions are permitted again — investigate any wipe that follows.");
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("alert", $"Could not change legal hold: {ex.Message}");
+        }
+    }
+
+    // Per-card "clear data" — wipes users + groups in this Connected System but
+    // leaves the system itself (and its API tokens and config) alive. Same
+    // typed-slug confirmation as Delete-forever; the operator literally has to
+    // re-type the system identifier before the button enables.
+    private TenantStats? clearingFor;
+    private string clearConfirmText = "";
+    private bool clearInProgress;
+    private string clearError = "";
+
+    private async Task ClearData(TenantStats s)
+    {
+        if (s.UserCount == 0 && s.GroupCount == 0)
+        {
+            await JS.InvokeVoidAsync("alert", $"'{s.Name}' is already empty — nothing to clear.");
+            return;
+        }
+        clearingFor = s;
+        clearConfirmText = "";
+        clearError = "";
+        clearInProgress = false;
+    }
+
+    private void CloseClearModal()
+    {
+        if (clearInProgress) return;
+        clearingFor = null;
+        clearConfirmText = "";
+        clearError = "";
+    }
+
+    private async Task ConfirmClearData()
+    {
+        if (clearingFor is null) return;
+        if (!string.Equals(clearConfirmText, clearingFor.Slug, StringComparison.Ordinal)) return;
+
+        clearInProgress = true;
+        clearError = "";
+        StateHasChanged();
+        try
+        {
+            var target = clearingFor;
+
+            // Snapshot every doomed row BEFORE the cascade runs — stored on the
+            // audit log entry so a later forensic recovery has the data to work from.
+            string? snapshot = null;
+            try { snapshot = await Snapshots.BuildAsync(target.TenantId); }
+            catch (Exception snapEx)
+            {
+                Console.WriteLine($"Snapshot failed for {target.Slug}: {snapEx.Message}");
+                // Best-effort. We still audit-log the action, just without the recovery JSON.
+            }
+
+            var removed = await TenantRepo.ClearDataAsync(target.TenantId);
+            if (removed < 0)
+            {
+                // Repo returns -1 when LegalHold is set. Surface clearly; no audit
+                // because nothing happened.
+                clearError = "Refused: this Connected System is on legal hold. Clear the hold first via its lock icon.";
+                clearInProgress = false;
+                return;
+            }
+            await AuditDestructiveAsync("ConnectedSystem.ClearData", target,
+                details: $"Hard wipe of users + groups. {removed} rows removed (snapshot before clear: {target.UserCount} users, {target.GroupCount} groups). System, tokens, and config preserved.",
+                snapshotJson: snapshot);
+            var name = target.Name;
+            clearingFor = null;
+            clearConfirmText = "";
+            await Load();
+            await JS.InvokeVoidAsync("alert", $"Removed {removed} rows from '{name}'.");
+        }
+        catch (Exception ex)
+        {
+            clearError = $"Clear failed: {ex.Message}";
+        }
+        finally
+        {
+            clearInProgress = false;
+        }
+    }
+
+    // ─── Hard-delete (forever) ─────────────────────────────────────────────
+    // The destructive flow is intentionally awkward: a dedicated modal, a typed-
+    // name confirmation, a separate "Deleting…" spinner state. Anyone who reaches
+    // the final click was thinking about it long enough to mean it.
+    private TenantStats? deletingFor;
+    private string deleteConfirmText = "";
+    private bool deleteInProgress;
+    private string deleteError = "";
+
+    private void ShowDeleteModal(TenantStats s)
+    {
+        deletingFor = s;
+        deleteConfirmText = "";
+        deleteError = "";
+        deleteInProgress = false;
+    }
+
+    private void CloseDeleteModal()
+    {
+        if (deleteInProgress) return;
+        deletingFor = null;
+        deleteConfirmText = "";
+        deleteError = "";
+    }
+
+    private async Task ConfirmDeleteSystem()
+    {
+        if (deletingFor is null) return;
+        if (!string.Equals(deleteConfirmText, deletingFor.Slug, StringComparison.Ordinal)) return;
+
+        deleteInProgress = true;
+        deleteError = "";
+        StateHasChanged();
+        try
+        {
+            var target = deletingFor;
+
+            // Snapshot before the cascade — same forensic-recovery contract as Clear.
+            string? snapshot = null;
+            try { snapshot = await Snapshots.BuildAsync(target.TenantId); }
+            catch (Exception snapEx)
+            {
+                Console.WriteLine($"Snapshot failed for {target.Slug}: {snapEx.Message}");
+            }
+
+            if (target.LegalHold)
+            {
+                deleteError = "Refused: this Connected System is on legal hold. Clear the hold first via its lock icon.";
+                return;
+            }
+
+            var ok = await TenantRepo.DeleteAsync(target.TenantId);
+            if (!ok)
+            {
+                deleteError = "Delete refused — the Default system cannot be removed.";
+                return;
+            }
+
+            await AuditDestructiveAsync("ConnectedSystem.DeleteForever", target,
+                details: $"Hard delete of Connected System and ALL referencing rows: {target.UserCount} users, {target.GroupCount} groups, {target.TokenCount} tokens, plus the Tenant row itself. Irreversible.",
+                snapshotJson: snapshot);
+
+            // If the active sidebar selection was the one we just nuked, drop it
+            // so the rest of the app doesn't keep pointing at a dead Connected System.
+            if (ActiveSystem.ActiveSystem?.Id == target.TenantId)
+            {
+                await ActiveSystem.SetAsync(null);
+            }
+
+            deletingFor = null;
+            deleteConfirmText = "";
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            deleteError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            deleteInProgress = false;
+        }
+    }
+}

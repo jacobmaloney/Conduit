@@ -1,0 +1,524 @@
+@page "/tokens"
+@attribute [Authorize]
+@using Conduit.Web.Authentication
+@using Conduit.Web.Services
+@using Conduit.Core.Models
+@using Conduit.DataAccess.Repositories
+@inject ApiTokenService ApiTokenService
+@inject TenantRepository TenantRepo
+@inject NavigationManager Navigation
+
+<PageTitle>API Tokens - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <PageHeader Title="API Tokens" Subtitle="Manage bearer tokens used by external apps to call the SCIM and Generic REST endpoints.">
+        <Actions>
+            <button class="btn btn-primary" @onclick="ShowCreateTokenModal">
+                <i class="oi oi-plus"></i> Create Token
+            </button>
+        </Actions>
+    </PageHeader>
+
+    <div class="alert alert-warning">
+        <i class="oi oi-warning"></i> <strong>Security Notice:</strong> Treat API tokens like passwords. Never share them or commit them to source control.
+    </div>
+
+    @if (schemaError)
+    {
+        <div class="alert alert-danger">
+            <h4 class="alert-heading">Database Schema Error</h4>
+            <p>The API Tokens table is missing or has an incorrect schema. This usually happens when using a database created before this feature was added.</p>
+            <hr>
+            <p class="mb-0">
+                <strong>To fix this:</strong> restart the application — pending migrations are applied automatically at startup.
+                If that doesn't resolve it, re-run <a href="/setup">Setup</a> against a fresh database.
+            </p>
+        </div>
+    }
+
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    }
+    else if (!tokens.Any())
+    {
+        <div class="alert alert-info">
+            <h4 class="alert-heading">No API Tokens</h4>
+            <p>You haven't created any API tokens yet.</p>
+            <hr>
+            <p class="mb-0">
+                <button class="btn btn-primary btn-sm" @onclick="ShowCreateTokenModal">
+                    <i class="oi oi-plus"></i> Create Your First Token
+                </button>
+            </p>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Connected System</th>
+                                <th>Scope</th>
+                                <th>Created</th>
+                                <th>Last Used</th>
+                                <th>Expires</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var token in tokens)
+                            {
+                                <tr>
+                                    <td>
+                                        <strong>@token.Name</strong>
+                                        @if (!string.IsNullOrWhiteSpace(token.Description))
+                                        {
+                                            <div><small class="text-muted">@token.Description</small></div>
+                                        }
+                                    </td>
+                                    <td>
+                                        @{
+                                            var name = TenantNameFor(token.TenantId);
+                                        }
+                                        @if (token.TenantId == null)
+                                        {
+                                            <span class="badge bg-dark">Admin — all systems</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@name</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-info text-dark">@(string.IsNullOrEmpty(token.Scope) ? "Tenant" : token.Scope)</span>
+                                    </td>
+                                    <td>
+                                        <small>@token.CreatedAt.ToString("MMM dd, yyyy")</small>
+                                    </td>
+                                    <td>
+                                        @if (token.LastUsedAt.HasValue)
+                                        {
+                                            <small>@token.LastUsedAt.Value.ToString("MMM dd, yyyy")</small>
+                                        }
+                                        else
+                                        {
+                                            <small class="text-muted">Never</small>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (token.ExpiresAt.HasValue)
+                                        {
+                                            <small>@token.ExpiresAt.Value.ToString("MMM dd, yyyy")</small>
+                                        }
+                                        else
+                                        {
+                                            <small class="text-muted">Never</small>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (!token.IsActive)
+                                        {
+                                            <span class="badge bg-secondary">Inactive</span>
+                                        }
+                                        else if (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTime.UtcNow)
+                                        {
+                                            <span class="badge bg-danger">Expired</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-success">Active</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (token.IsActive && (!token.ExpiresAt.HasValue || token.ExpiresAt.Value > DateTime.UtcNow))
+                                        {
+                                            <button class="btn btn-sm btn-outline-warning" @onclick="() => ToggleToken(token)">
+                                                <i class="oi oi-ban"></i> Deactivate
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button class="btn btn-sm btn-outline-success" @onclick="() => ToggleToken(token)">
+                                                <i class="oi oi-check"></i> Activate
+                                            </button>
+                                        }
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteToken(token)">
+                                            <i class="oi oi-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- Create Token Modal -->
+<div class="modal @(showCreateModal ? "show d-block" : "")" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create API Token</h5>
+                <button type="button" class="btn-close" @onclick="CloseCreateModal"></button>
+            </div>
+            <div class="modal-body">
+                <form>
+                    <div class="mb-3">
+                        <label class="form-label">Token Name *</label>
+                        <input type="text" class="form-control" @bind="newToken.Name" placeholder="e.g., Production API" />
+                        <small class="form-text text-muted">A descriptive name to identify this token</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Connected System *</label>
+                        <select class="form-select" @bind="newTokenSystemSelection">
+                            <option value="__admin__">Admin — all systems</option>
+                            <option value="__arsproxy__">ARS Proxy (for /ars/v1/ inbound)</option>
+                            @foreach (var sys in tenants)
+                            {
+                                <option value="@sys.Id">@sys.Name @(sys.Domain != null ? $"({sys.Domain})" : "")</option>
+                            }
+                        </select>
+                        <small class="form-text text-muted">Scopes the token's read/write reach. Admin = full access. ARS Proxy = inbound /ars/v1/ only.</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" rows="3" @bind="newToken.Description"
+                                  placeholder="What will this token be used for?"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Expiration</label>
+                        <select class="form-select" @bind="expirationOption">
+                            <option value="never">Never expires</option>
+                            <option value="30">30 days</option>
+                            <option value="60">60 days</option>
+                            <option value="90">90 days</option>
+                            <option value="180">180 days</option>
+                            <option value="365">1 year</option>
+                        </select>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(generatedToken))
+                    {
+                        <div class="alert alert-success">
+                            <h6 class="alert-heading"><i class="oi oi-check"></i> Token created — copy it now.</h6>
+                            <p class="mb-2">The raw value is shown <strong>once</strong>. After this dialog closes only the hash is kept; lose the value and you have to mint a new token.</p>
+
+                            <div class="mb-2">
+                                <small class="text-muted d-block mb-1">Authorization header (this is the full string your client sends):</small>
+                                <div class="input-group">
+                                    <input type="text" id="newTokenHeader" class="form-control font-monospace" value="Bearer @generatedToken" readonly @onclick="SelectAllOnFocus" />
+                                    <button class="btn @(tokenCopied ? "btn-success" : "btn-outline-secondary")" type="button" @onclick="CopyToken">
+                                        <i class="oi oi-clipboard"></i> @(tokenCopied ? "Copied" : "Copy")
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="mb-2">
+                                <small class="text-muted d-block mb-1">Raw value only (if you only need the part after <code>Bearer </code>):</small>
+                                <div class="input-group">
+                                    <input type="text" class="form-control font-monospace" value="@generatedToken" readonly @onclick="SelectAllOnFocus" />
+                                </div>
+                            </div>
+
+                            <hr />
+
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <button class="btn btn-sm btn-outline-primary" type="button" @onclick="TestNewToken" disabled="@testInFlight">
+                                    @if (testInFlight)
+                                    {
+                                        <span class="spinner-border spinner-border-sm me-1"></span>
+                                        <span>Testing…</span>
+                                    }
+                                    else
+                                    {
+                                        <i class="oi oi-pulse"></i>
+                                        <span>Test this token now</span>
+                                    }
+                                </button>
+                                <small class="text-muted">Hits <code>/scim/v2/ServiceProviderConfig</code> with this exact header.</small>
+                            </div>
+                            @if (!string.IsNullOrEmpty(testResult))
+                            {
+                                <div class="@(testOk ? "alert alert-success" : "alert alert-danger") py-2 mb-2 small">
+                                    @testResult
+                                </div>
+                            }
+
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="confirmCopied" @bind="confirmCopied" />
+                                <label class="form-check-label" for="confirmCopied">
+                                    I've copied the token somewhere safe.
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </form>
+            </div>
+            <div class="modal-footer">
+                @if (string.IsNullOrEmpty(generatedToken))
+                {
+                    <button type="button" class="btn btn-secondary" @onclick="CloseCreateModal">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="CreateToken" disabled="@string.IsNullOrWhiteSpace(newToken.Name)">
+                        Create Token
+                    </button>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-primary" @onclick="CloseCreateModal" disabled="@(!confirmCopied)" title="@(confirmCopied ? "" : "Tick the checkbox above first.")">
+                        Done
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (showCreateModal)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private List<Conduit.Web.Services.ApiToken> tokens = new();
+    private List<Tenant> tenants = new();
+    private bool loading = true;
+    private bool showCreateModal = false;
+    private bool schemaError = false;
+    private Conduit.Web.Services.ApiToken newToken = new();
+    private string generatedToken = "";
+    private string expirationOption = "never";
+    // "__admin__" | "__arsproxy__" | a tenant Guid string
+    private string newTokenSystemSelection = "__admin__";
+
+    private string TenantNameFor(Guid? id)
+    {
+        if (id == null) return "Admin";
+        var t = tenants.FirstOrDefault(x => x.Id == id.Value);
+        return t?.Name ?? id.Value.ToString();
+    }
+
+    protected override Task OnInitializedAsync()
+    {
+        // Don't call LoadTokens here during pre-rendering
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadTenants();
+            await LoadTokens();
+            StateHasChanged(); // Force re-render with loaded data
+        }
+    }
+
+    private async Task LoadTenants()
+    {
+        try { tenants = await TenantRepo.GetAllAsync(); }
+        catch (Exception ex) { Console.WriteLine($"LoadTenants failed: {ex.Message}"); }
+    }
+
+    private async Task LoadTokens()
+    {
+        loading = true;
+        try
+        {
+            tokens = await ApiTokenService.GetAllTokensAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading tokens: {ex.Message}");
+            
+            // Check if it's a schema error
+            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("Invalid object name"))
+            {
+                schemaError = true;
+            }
+            
+            tokens = new List<Conduit.Web.Services.ApiToken>();
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void ShowCreateTokenModal()
+    {
+        newToken = new Conduit.Web.Services.ApiToken();
+        generatedToken = "";
+        expirationOption = "never";
+        newTokenSystemSelection = "__admin__";
+        tokenCopied = false;
+        confirmCopied = false;
+        testInFlight = false;
+        testOk = false;
+        testResult = "";
+        showCreateModal = true;
+    }
+
+    private void CloseCreateModal()
+    {
+        showCreateModal = false;
+        newToken = new Conduit.Web.Services.ApiToken();
+        generatedToken = "";
+        tokenCopied = false;
+        confirmCopied = false;
+        testInFlight = false;
+        testOk = false;
+        testResult = "";
+    }
+
+    private async Task CreateToken()
+    {
+        if (string.IsNullOrWhiteSpace(newToken.Name))
+        {
+            return;
+        }
+
+        // Set expiration based on selection
+        if (expirationOption != "never")
+        {
+            newToken.ExpiresAt = DateTime.UtcNow.AddDays(int.Parse(expirationOption));
+        }
+
+        try
+        {
+            Guid? tenantId;
+            string scope;
+            switch (newTokenSystemSelection)
+            {
+                case "__admin__":
+                    tenantId = null;
+                    scope = nameof(ApiTokenScope.Admin);
+                    break;
+                case "__arsproxy__":
+                    tenantId = null;
+                    scope = nameof(ApiTokenScope.ArsProxy);
+                    break;
+                default:
+                    tenantId = Guid.Parse(newTokenSystemSelection);
+                    scope = nameof(ApiTokenScope.Tenant);
+                    break;
+            }
+            generatedToken = await ApiTokenService.CreateTokenAsync(
+                newToken.Name, newToken.Description, newToken.ExpiresAt,
+                tenantId, scope, fixedRawValue: null);
+            await LoadTokens();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error creating token: {ex.Message}");
+        }
+    }
+
+    private async Task ToggleToken(Conduit.Web.Services.ApiToken token)
+    {
+        try
+        {
+            await ApiTokenService.ToggleTokenAsync(token.Id);
+            await LoadTokens();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling token: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteToken(Conduit.Web.Services.ApiToken token)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete the token '{token.Name}'?"))
+        {
+            return;
+        }
+
+        try
+        {
+            await ApiTokenService.DeleteTokenAsync(token.Id);
+            await LoadTokens();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error deleting token: {ex.Message}");
+        }
+    }
+
+    // Post-mint hardening state. The "Done" button stays disabled until confirmCopied
+    // is checked. The test runner round-trips the raw value against the local SCIM
+    // discovery endpoint so the user can confirm — in the same dialog — that the token
+    // they're about to walk away with actually works.
+    private bool tokenCopied;
+    private bool confirmCopied;
+    private bool testInFlight;
+    private bool testOk;
+    private string testResult = "";
+
+    private async Task CopyToken()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", $"Bearer {generatedToken}");
+            tokenCopied = true;
+        }
+        catch
+        {
+            // Clipboard API can be denied in embedded contexts — silent best-effort.
+        }
+    }
+
+    private async Task SelectAllOnFocus(MouseEventArgs _)
+    {
+        // Convenience: clicking the token field selects the whole value for easy copy.
+        await JSRuntime.InvokeVoidAsync("eval", "document.activeElement && document.activeElement.select && document.activeElement.select();");
+    }
+
+    private async Task TestNewToken()
+    {
+        if (string.IsNullOrEmpty(generatedToken)) return;
+        testInFlight = true;
+        testResult = "";
+        testOk = false;
+        StateHasChanged();
+        try
+        {
+            var baseUrl = Navigation.BaseUri.TrimEnd('/');
+            using var client = new HttpClient { BaseAddress = new Uri(baseUrl) };
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", generatedToken);
+            var resp = await client.GetAsync("/scim/v2/ServiceProviderConfig");
+            testOk = resp.IsSuccessStatusCode;
+            testResult = testOk
+                ? $"✓ {(int)resp.StatusCode} {resp.ReasonPhrase} — token validated against /scim/v2/ServiceProviderConfig."
+                : $"✗ {(int)resp.StatusCode} {resp.ReasonPhrase} — token did NOT validate. Check the value you saved.";
+        }
+        catch (Exception ex)
+        {
+            testOk = false;
+            testResult = $"✗ Request failed: {ex.Message}";
+        }
+        finally
+        {
+            testInFlight = false;
+        }
+    }
+
+    [Inject]
+    private IJSRuntime JSRuntime { get; set; } = default!;
+}

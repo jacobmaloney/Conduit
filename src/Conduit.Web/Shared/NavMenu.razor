@@ -1,0 +1,525 @@
+@using Conduit.Core.Models
+@using Conduit.Core.Services
+@using Conduit.DataAccess.Repositories
+@using Conduit.Web.Services
+@inject TenantRepository TenantRepo
+@inject UserRepository UserRepo
+@inject GroupRepository GroupRepo
+@inject ActiveSystemState ActiveSystem
+@inject DataChangeNotifier DataChange
+@inject OpenAccessState OpenAccess
+@inject NavigationManager NavigationManager
+@implements IDisposable
+
+<div class="nav-wrapper">
+    <div class="nav-header">
+        <a class="nav-brand" href="">
+            <i class="oi oi-cloud"></i>
+            <span><b>SCIM</b><span class="brand-suffix">Server</span></span>
+        </a>
+        <button class="nav-toggle" @onclick="ToggleNavMenu">
+            <span class="nav-toggle-icon"></span>
+        </button>
+    </div>
+
+    @if (OpenAccess.IsEnabled)
+    {
+        <a class="open-access-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
+            <i class="oi oi-warning"></i>
+            <span>Open access</span>
+        </a>
+    }
+
+    <AuthorizeView>
+        <Authorized>
+            <div class="system-switcher">
+                <button class="ss-button" @onclick="ToggleSwitcher" @onclick:stopPropagation="true">
+                    <span class="ss-glyph">@GlyphFor(ActiveSystem.ActiveSystem)</span>
+                    <span class="ss-meta">
+                        <span class="ss-name">@(ActiveSystem.ActiveSystem?.Name ?? "All Connected Systems")</span>
+                        <span class="ss-domain">@SubtitleFor(ActiveSystem.ActiveSystem)</span>
+                    </span>
+                    <i class="oi oi-chevron-bottom ss-chev"></i>
+                </button>
+                @if (switcherOpen)
+                {
+                    <div class="ss-menu" @onclick:stopPropagation="true">
+                        <div class="ss-menu-label">Connected Systems</div>
+                        <button class="ss-menu-item @(ActiveSystem.ActiveSystem == null ? "active" : "")"
+                                @onclick="() => SelectSystemAsync(null)">
+                            <span class="ss-glyph ss-glyph-sm">★</span>
+                            <span class="ss-menu-meta">
+                                <span>All Connected Systems</span>
+                                <span class="ss-menu-domain">admin · cross-system</span>
+                            </span>
+                            <span class="kind-pill">Admin</span>
+                        </button>
+                        @foreach (var sys in tenants)
+                        {
+                            <button class="ss-menu-item @(ActiveSystem.ActiveSystem?.Id == sys.Id ? "active" : "")"
+                                    title="@sys.Name"
+                                    @onclick="() => SelectSystemAsync(sys)">
+                                <span class="ss-glyph ss-glyph-sm">@GlyphFor(sys)</span>
+                                <span class="ss-menu-meta">
+                                    <span>@sys.Name</span>
+                                    <span class="ss-menu-domain">@(sys.Domain ?? sys.Slug)</span>
+                                </span>
+                                <span class="kind-pill @(sys.SystemType == "Real" ? "kind-real" : "kind-emulator")">@sys.SystemType</span>
+                            </button>
+                        }
+                        <div class="ss-menu-divider"></div>
+                        <a class="ss-menu-add" href="connected-systems" @onclick="CloseSwitcher">
+                            <i class="oi oi-plus"></i> Connect a system
+                        </a>
+                    </div>
+                }
+            </div>
+        </Authorized>
+    </AuthorizeView>
+
+    <nav class="nav-menu @NavMenuCssClass">
+        <div class="nav-section nav-section-main">
+            <div class="nav-section-title">Main</div>
+            <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
+                <i class="oi oi-dashboard"></i>
+                <span>Dashboard</span>
+            </NavLink>
+            <NavLink class="nav-item" href="users">
+                <i class="oi oi-people"></i>
+                <span>Users</span>
+                @if (userCount is { } uc)
+                {
+                    <span class="nav-count" title="@CountTooltip">@uc.ToString("N0")</span>
+                }
+            </NavLink>
+            <NavLink class="nav-item" href="groups">
+                <i class="oi oi-badge"></i>
+                <span>Groups</span>
+                @if (groupCount is { } gc)
+                {
+                    <span class="nav-count" title="@CountTooltip">@gc.ToString("N0")</span>
+                }
+            </NavLink>
+        </div>
+        
+        <div class="nav-section nav-section-tools">
+            <div class="nav-section-title">Tools</div>
+            <NavLink class="nav-item" href="user-generation">
+                <i class="oi oi-people"></i>
+                <span>Generate Users</span>
+            </NavLink>
+            <NavLink class="nav-item" href="group-generation">
+                <i class="oi oi-layers"></i>
+                <span>Generate Groups</span>
+            </NavLink>
+            <NavLink class="nav-item" href="quick-connect">
+                <i class="oi oi-link-intact"></i>
+                <span>Quick Connect</span>
+            </NavLink>
+            <NavLink class="nav-item" href="api-explorer">
+                <i class="oi oi-code"></i>
+                <span>API Explorer</span>
+            </NavLink>
+            <NavLink class="nav-item" href="tokens">
+                <i class="oi oi-key"></i>
+                <span>API Tokens</span>
+            </NavLink>
+        </div>
+        
+        <div class="nav-section nav-section-settings">
+            <div class="nav-section-title">Settings</div>
+            <NavLink class="nav-item" href="connected-systems">
+                <i class="oi oi-globe"></i>
+                <span>Connected Systems</span>
+            </NavLink>
+            <NavLink class="nav-item" href="configuration">
+                <i class="oi oi-cog"></i>
+                <span>Configuration</span>
+            </NavLink>
+            <NavLink class="nav-item" href="database-settings">
+                <i class="oi oi-hard-drive"></i>
+                <span>Database</span>
+            </NavLink>
+            <NavLink class="nav-item" href="audit-log">
+                <i class="oi oi-list-rich"></i>
+                <span>Audit Log</span>
+            </NavLink>
+            <NavLink class="nav-item" href="logs">
+                <i class="oi oi-bug"></i>
+                <span>Debug Logs</span>
+            </NavLink>
+        </div>
+    </nav>
+    
+    <div class="nav-footer">
+        <AuthorizeView>
+            <Authorized>
+                <div class="mb-2">
+                    <small class="text-muted d-block">Signed in as</small>
+                    <strong>@context.User.Identity?.Name</strong>
+                </div>
+                <a class="btn btn-sm btn-outline-secondary w-100" href="/logout">Sign out</a>
+            </Authorized>
+            <NotAuthorized>
+                <a class="btn btn-sm btn-outline-primary w-100" href="/login">Sign in</a>
+            </NotAuthorized>
+        </AuthorizeView>
+        <div class="nav-footer-info mt-2">
+            <small>SCIM 2.0 Compliant</small>
+            <small>Version 1.0.0</small>
+        </div>
+    </div>
+</div>
+
+<style>
+    .nav-wrapper {
+        height: 100%;
+        background: white;
+        border-right: 1px solid #e5e7eb;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .nav-header {
+        padding: 1.5rem;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .nav-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        text-decoration: none;
+        color: var(--dark-color);
+        font-weight: 600;
+        font-size: 1.25rem;
+    }
+    
+    .nav-brand i {
+        color: var(--primary-color);
+        font-size: 1.5rem;
+    }
+    
+    .nav-toggle {
+        display: none;
+        background: none;
+        border: none;
+        padding: 0.5rem;
+        cursor: pointer;
+        color: var(--dark-color);
+    }
+    
+    .nav-toggle-icon {
+        display: block;
+        width: 24px;
+        height: 2px;
+        background: currentColor;
+        position: relative;
+    }
+    
+    .nav-toggle-icon::before,
+    .nav-toggle-icon::after {
+        content: '';
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background: currentColor;
+        left: 0;
+    }
+    
+    .nav-toggle-icon::before {
+        top: -6px;
+    }
+    
+    .nav-toggle-icon::after {
+        top: 6px;
+    }
+    
+    .nav-menu {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem 0;
+    }
+    
+    .nav-section {
+        margin-bottom: 2rem;
+        padding: 0 1rem;
+    }
+    
+    .nav-section-title {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--secondary-color);
+        margin-bottom: 0.5rem;
+        padding: 0 1rem;
+    }
+    
+    /* Purple for Main section */
+    .nav-section-main .nav-section-title {
+        color: #8b5cf6;
+    }
+    
+    .nav-section-main .nav-item {
+        color: #6b7280;
+    }
+    
+    .nav-section-main .nav-item i {
+        color: #8b5cf6;
+    }
+    
+    .nav-section-main .nav-item:hover {
+        background: #f3f0ff;
+        color: #7c3aed;
+    }
+    
+    .nav-section-main .nav-item.active {
+        background: #8b5cf6;
+        color: white;
+    }
+    
+    .nav-section-main .nav-item.active i {
+        color: white;
+    }
+    
+    /* Green for Tools section */
+    .nav-section-tools .nav-section-title {
+        color: #10b981;
+    }
+    
+    .nav-section-tools .nav-item {
+        color: #6b7280;
+    }
+    
+    .nav-section-tools .nav-item i {
+        color: #059669;
+    }
+    
+    .nav-section-tools .nav-item:hover {
+        background: #d1fae5;
+        color: #047857;
+    }
+    
+    .nav-section-tools .nav-item.active {
+        background: #10b981;
+        color: white;
+    }
+    
+    .nav-section-tools .nav-item.active i {
+        color: white;
+    }
+    
+    /* Blue for Settings section */
+    .nav-section-settings .nav-section-title {
+        color: #3b82f6;
+    }
+    
+    .nav-section-settings .nav-item {
+        color: #6b7280;
+    }
+    
+    .nav-section-settings .nav-item i {
+        color: #2563eb;
+    }
+    
+    .nav-section-settings .nav-item:hover {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+    
+    .nav-section-settings .nav-item.active {
+        background: #3b82f6;
+        color: white;
+    }
+    
+    .nav-section-settings .nav-item.active i {
+        color: white;
+    }
+    
+    .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        text-decoration: none;
+        color: var(--dark-color);
+        border-radius: 0.5rem;
+        transition: all 0.2s;
+        margin-bottom: 0.25rem;
+    }
+    
+    .nav-item:hover {
+        background: var(--light-bg);
+        color: var(--primary-color);
+    }
+    
+    .nav-item.active {
+        background: var(--primary-color);
+        color: white;
+    }
+    
+    .nav-item i {
+        font-size: 1.125rem;
+        width: 1.5rem;
+        text-align: center;
+    }
+
+    /* Count badge on Users / Groups items — neutral by default, brightens when active */
+    .nav-item .nav-count {
+        margin-left: auto;
+        background: rgba(0, 0, 0, 0.06);
+        color: var(--secondary-color, #6b7280);
+        font-family: var(--font-mono, ui-monospace, monospace);
+        font-size: 11.5px;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 10px;
+        line-height: 1.4;
+        min-width: 22px;
+        text-align: center;
+    }
+    .nav-item.active .nav-count {
+        background: rgba(255, 255, 255, 0.25);
+        color: #fff;
+    }
+    
+    .nav-footer {
+        padding: 1.5rem;
+        border-top: 1px solid #e5e7eb;
+    }
+    
+    .nav-footer-info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        color: var(--secondary-color);
+        font-size: 0.875rem;
+    }
+    
+    @@media (max-width: 768px) {
+        .nav-toggle {
+            display: block;
+        }
+        
+        .nav-menu.collapse {
+            display: none;
+        }
+        
+        .nav-footer {
+            display: none;
+        }
+    }
+</style>
+
+@code {
+    private bool collapseNavMenu = true;
+    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
+    private void ToggleNavMenu() => collapseNavMenu = !collapseNavMenu;
+
+    // System switcher state. The selected system is held in the scoped
+    // ActiveSystemState service so the Users / Groups pages can read it.
+    private bool switcherOpen;
+    private List<Tenant> tenants = new();
+    private int? userCount;
+    private int? groupCount;
+
+    private string CountTooltip => ActiveSystem.ActiveSystem is { } s
+        ? $"Total in {s.Name}"
+        : "Total across all Connected Systems";
+
+    protected override void OnInitialized()
+    {
+        ActiveSystem.OnChangeAsync += HandleActiveChangedAsync;
+        DataChange.OnChangedAsync += HandleDataChangedAsync;
+    }
+
+    private async Task HandleDataChangedAsync(DataChangeKind kind)
+    {
+        if (kind == DataChangeKind.Tenants)
+        {
+            try { tenants = await TenantRepo.GetAllAsync(); }
+            catch (Exception ex) { Console.WriteLine($"NavMenu: tenant refresh failed — {ex.Message}"); }
+        }
+        await LoadCountsAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            tenants = await TenantRepo.GetAllAsync();
+            await LoadCountsAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            // Sidebar must never crash the layout if the DB is unreachable —
+            // e.g. before setup wizard completes. Log and render the empty state.
+            Console.WriteLine($"NavMenu: failed to load tenants — {ex.Message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        ActiveSystem.OnChangeAsync -= HandleActiveChangedAsync;
+        DataChange.OnChangedAsync -= HandleDataChangedAsync;
+    }
+
+    private async Task HandleActiveChangedAsync()
+    {
+        await LoadCountsAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // Fetches a count-only page (Count=1 keeps the SELECT cheap, totalCount comes
+    // from the COUNT(*) in the same multi-result query). Scope honors the sidebar
+    // selection so the badges reflect "this connector".
+    private async Task LoadCountsAsync()
+    {
+        try
+        {
+            var scope = ActiveSystem.ActiveSystem?.Id;
+            var (_, uTotal) = await UserRepo.GetAllAsync(
+                new ScimQueryOptions { StartIndex = 1, Count = 1 }, tenantIdOverride: scope);
+            var (_, gTotal) = await GroupRepo.GetAllAsync(
+                new ScimQueryOptions { StartIndex = 1, Count = 1 }, tenantIdOverride: scope);
+            userCount = uTotal;
+            groupCount = gTotal;
+        }
+        catch
+        {
+            userCount = null;
+            groupCount = null;
+        }
+    }
+
+    private void ToggleSwitcher() => switcherOpen = !switcherOpen;
+    private void CloseSwitcher() => switcherOpen = false;
+
+    private async Task SelectSystemAsync(Tenant? sys)
+    {
+        switcherOpen = false;
+        await ActiveSystem.SetAsync(sys);
+    }
+
+    private static string GlyphFor(Tenant? t)
+    {
+        if (t == null) return "★";
+        var name = t.Name?.Trim();
+        if (string.IsNullOrEmpty(name)) return "?";
+        return char.ToUpperInvariant(name[0]).ToString();
+    }
+
+    private static string SubtitleFor(Tenant? t)
+    {
+        if (t == null) return "admin · view all";
+        if (!string.IsNullOrWhiteSpace(t.Domain)) return t.Domain!;
+        return t.Slug;
+    }
+}

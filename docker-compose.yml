@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Conduit application
+  conduit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: conduit
+    ports:
+      - "5100:80"
+      - "5101:443"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:80;https://+:443
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=Conduit;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True
+      - Jwt__SecretKey=ThisIsADockerSecretKeyChangeInProduction!
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    networks:
+      - conduit-network
+    volumes:
+      - conduit-logs:/app/logs
+      - conduit-config:/app/config
+
+  # SQL Server database
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: conduit-db
+    ports:
+      - "1533:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong!Passw0rd
+      - MSSQL_PID=Express
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    networks:
+      - conduit-network
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "YourStrong!Passw0rd", "-Q", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Optional: Adminer for database management
+  adminer:
+    image: adminer
+    container_name: conduit-adminer
+    ports:
+      - "8180:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=sqlserver
+    networks:
+      - conduit-network
+    depends_on:
+      - sqlserver
+
+networks:
+  conduit-network:
+    driver: bridge
+
+volumes:
+  sqlserver-data:
+  conduit-logs:
+  conduit-config:

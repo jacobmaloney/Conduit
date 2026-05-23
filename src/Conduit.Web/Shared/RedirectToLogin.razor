@@ -1,0 +1,19 @@
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<p>Redirecting to sign in…</p>
+
+@code {
+    private bool _redirected;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_redirected) return;
+        _redirected = true;
+        var current = new Uri(Navigation.Uri).PathAndQuery;
+        var returnUrl = Uri.EscapeDataString(current);
+        // JS redirect avoids Blazor's NavigationException, which can leak past the render
+        // machinery during prerendering and crash the circuit.
+        await JS.InvokeVoidAsync("eval", $"window.location.href = '/login?ReturnUrl={returnUrl}'");
+    }
+}

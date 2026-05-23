@@ -1,0 +1,50 @@
+@inherits LayoutComponentBase
+
+<PageTitle>Conduit</PageTitle>
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-bar">
+            <div class="top-bar-content">
+                <div class="breadcrumb"></div>
+                <div class="top-bar-actions">
+                    <a href="/api-explorer" class="top-bar-link">
+                        <i class="oi oi-code"></i> API Docs
+                    </a>
+                    <a href="/health" target="_blank" class="top-bar-link">
+                        <i class="oi oi-pulse"></i> Health
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <article class="content">
+            @Body
+        </article>
+    </main>
+</div>
+
+<GenerationStatusIndicator />
+
+<style>
+    /* Grid + sidebar + content layout live in css/design.css. This file only
+       carries layout-component-local tweaks (mobile collapse, top-bar internals). */
+    .top-bar-content {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .top-bar-actions { display: flex; align-items: center; gap: 4px; }
+    .top-bar-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+    .top-bar-link i { font-size: 12px; }
+
+    @@media (max-width: 768px) {
+        .page { grid-template-columns: 1fr !important; }
+        .page > .sidebar { display: none; }
+        .page > main .content { padding: 16px; }
+    }
+</style>

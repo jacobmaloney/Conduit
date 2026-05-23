@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # Development SQL Server only
+  sqlserver-dev:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: conduit-dev-db
+    ports:
+      - "1533:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=Dev!Password123
+      - MSSQL_PID=Developer
+    volumes:
+      - sqlserver-dev-data:/var/opt/mssql
+      - ./Database:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "Dev!Password123", "-Q", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Adminer for database management
+  adminer-dev:
+    image: adminer
+    container_name: conduit-dev-adminer
+    ports:
+      - "8180:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=sqlserver-dev
+    depends_on:
+      - sqlserver-dev
+
+volumes:
+  sqlserver-dev-data:

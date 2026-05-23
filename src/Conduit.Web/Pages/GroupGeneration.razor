@@ -1,0 +1,369 @@
+@page "/group-generation"
+@attribute [Authorize]
+@implements IDisposable
+@using Conduit.Core.Models
+@using Conduit.DataAccess.Repositories
+@using Conduit.Web.Services
+@inject GroupRepository GroupRepository
+@inject UserRepository UserRepository
+@inject TenantRepository TenantRepo
+@inject ActiveSystemState ActiveSystem
+@inject GenerationService GenerationService
+@inject NavigationManager Navigation
+
+<PageTitle>Group Generation - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <PageHeader Title="Group Generation" Subtitle="Generate test groups with random members and owners into the active Connected System." />
+
+    @if (isGenerating)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Generating groups...</span>
+            </div>
+            <p class="mt-3">Generating @numberOfGroups groups, please wait...</p>
+        </div>
+    }
+    else if (generationComplete)
+    {
+        <div class="alert alert-info alert-dismissible fade show" role="alert">
+            <h4 class="alert-heading">Generation Started!</h4>
+            <p>Generating @numberOfGroups groups in the background. You can monitor progress with the status indicator.</p>
+            <hr>
+            <p class="mb-0">
+                <a href="/groups" class="btn btn-primary btn-sm">View Groups</a>
+            </p>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close" @onclick="() => generationComplete = false"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <strong>Error!</strong> @errorMessage
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-header">
+            <h3 class="mb-0">Group Generation Options</h3>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5>Basic Settings</h5>
+
+                    <div class="mb-3">
+                        <label class="form-label">Target System</label>
+                        <div class="p-3" style="background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);">
+                            @if (ActiveSystem.ActiveSystem is not null)
+                            {
+                                <ContextLabel />
+                            }
+                            else
+                            {
+                                <span class="text-muted">No Connected System selected. Pick one in the sidebar — you can't generate to "All".</span>
+                            }
+                        </div>
+                        <small class="form-text text-muted">Generated groups land in whichever Connected System is active in the sidebar.</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Number of Groups</label>
+                        <input type="number" class="form-control" @bind="numberOfGroups" min="1" max="1000" />
+                        <small class="form-text text-muted">How many groups to generate (1-1,000)</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Group Type</label>
+                        <select class="form-select" @bind="groupType">
+                            <option value="mixed">Mixed Types</option>
+                            <option value="department">Departments</option>
+                            <option value="team">Teams</option>
+                            <option value="project">Projects</option>
+                            <option value="role">Roles</option>
+                            <option value="location">Locations</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Group Name Prefix</label>
+                        <input type="text" class="form-control" @bind="namePrefix" placeholder="e.g., TEST-" />
+                        <small class="form-text text-muted">Optional prefix for group names</small>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <h5>Member Settings</h5>
+
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" @bind="addRandomMembers" id="randomMembersCheck" />
+                        <label class="form-check-label" for="randomMembersCheck">
+                            Add random members to groups
+                        </label>
+                    </div>
+
+                    @if (addRandomMembers)
+                    {
+                        <div class="ms-4 mb-3">
+                            <label class="form-label">Members per group</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <span>Min:</span>
+                                <input type="number" class="form-control form-control-sm" style="width: 80px" @bind="minMembers" min="0" max="50" />
+                                <span>Max:</span>
+                                <input type="number" class="form-control form-control-sm" style="width: 80px" @bind="maxMembers" min="1" max="100" />
+                            </div>
+                        </div>
+                    }
+
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" @bind="assignRandomOwners" id="randomOwnersCheck" />
+                        <label class="form-check-label" for="randomOwnersCheck">
+                            Assign random owners to groups
+                        </label>
+                    </div>
+
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" @bind="addDescriptions" id="descriptionsCheck" />
+                        <label class="form-check-label" for="descriptionsCheck">
+                            Generate descriptions for groups
+                        </label>
+                    </div>
+
+                    <hr />
+
+                    <div class="alert alert-info">
+                        <i class="oi oi-info"></i> <strong>Note:</strong> Groups will be created with unique names. If users exist in the system, they can be randomly assigned as members and owners.
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between mt-4">
+                <button type="button" class="btn btn-secondary" @onclick="ResetOptions">Reset to Defaults</button>
+                <button type="button" class="btn btn-primary" @onclick="GenerateGroups" disabled="@isGenerating">
+                    @if (isGenerating)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        <span>Generating...</span>
+                    }
+                    else
+                    {
+                        <i class="oi oi-layers me-2"></i>
+                        <span>Generate Groups</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private int numberOfGroups = 10;
+    private string groupType = "mixed";
+    private string namePrefix = "";
+    private bool addRandomMembers = true;
+    private bool assignRandomOwners = true;
+    private bool addDescriptions = true;
+    private int minMembers = 5;
+    private int maxMembers = 20;
+
+    private bool isGenerating = false;
+    private bool generationComplete = false;
+    private int groupsCreated = 0;
+    private string? errorMessage;
+    private string? currentGenerationId;
+    private Timer? statusCheckTimer;
+    
+    private readonly Random random = new Random();
+    
+    // Group name templates
+    private readonly Dictionary<string, List<string>> groupTemplates = new()
+    {
+        ["department"] = new() { "Engineering", "Sales", "Marketing", "HR", "Finance", "Operations", "IT", "Support", "Product", "Design", "Legal", "Research" },
+        ["team"] = new() { "Alpha Team", "Beta Squad", "Gamma Force", "Delta Unit", "Echo Group", "Fox Team", "Tiger Squad", "Eagle Unit", "Wolf Pack", "Lion Pride" },
+        ["project"] = new() { "Project Phoenix", "Initiative Aurora", "Operation Falcon", "Mission Apollo", "Project Nexus", "Initiative Quantum", "Operation Storm", "Project Titan" },
+        ["role"] = new() { "Administrators", "Developers", "Managers", "Analysts", "Engineers", "Consultants", "Specialists", "Coordinators", "Directors", "Supervisors" },
+        ["location"] = new() { "New York Office", "London Branch", "Tokyo Division", "Sydney Team", "Paris Office", "Berlin Hub", "Singapore Branch", "Toronto Office", "Mumbai Team" }
+    };
+    
+    private readonly List<string> descriptionTemplates = new()
+    {
+        "Group for {0} team members and collaborators",
+        "Central group for all {0} related activities",
+        "Members of the {0} organization",
+        "Collaboration space for {0}",
+        "Official group for {0} personnel",
+        "{0} - Strategic initiatives and operations",
+        "Team responsible for {0} activities",
+        "{0} group for cross-functional collaboration"
+    };
+
+    private async Task GenerateGroups()
+    {
+        if (ActiveSystem.ActiveSystem is null)
+        {
+            errorMessage = "No Connected System in scope — pick one in the sidebar before generating.";
+            return;
+        }
+        var tenantId = ActiveSystem.ActiveSystem.Id;
+
+        isGenerating = true;
+        generationComplete = false;
+        errorMessage = null;
+        groupsCreated = 0;
+
+        try
+        {
+            // Check if users exist when needed
+            if (addRandomMembers || assignRandomOwners)
+            {
+                var (users, _) = await UserRepository.GetAllAsync(new ScimQueryOptions { StartIndex = 1, Count = 10 });
+                if (!users.Any())
+                {
+                    errorMessage = "No users found in the system. Please generate users first if you want to assign members or owners.";
+                    isGenerating = false;
+                    return;
+                }
+            }
+
+            // Create generation options
+            var options = new GroupGenerationOptions
+            {
+                TenantId = tenantId,
+                GroupType = groupType,
+                NamePrefix = namePrefix,
+                AddRandomMembers = addRandomMembers,
+                AssignRandomOwners = assignRandomOwners,
+                AddDescriptions = addDescriptions,
+                MinMembers = minMembers,
+                MaxMembers = maxMembers
+            };
+
+            // Start background generation
+            currentGenerationId = GenerationService.StartGroupGeneration(numberOfGroups, options);
+            
+            // Start checking status
+            StartStatusChecking();
+            
+            // Show success message - no redirect
+            generationComplete = true;
+            groupsCreated = numberOfGroups; // Will be updated by status indicator
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error starting group generation: {ex.Message}";
+            isGenerating = false;
+        }
+    }
+    
+    private string GenerateGroupName(HashSet<string> existingGroups)
+    {
+        string baseName;
+        var templates = groupType == "mixed" 
+            ? groupTemplates.Values.SelectMany(x => x).ToList() 
+            : groupTemplates[groupType];
+            
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            baseName = templates[random.Next(templates.Count)];
+            
+            if (!string.IsNullOrEmpty(namePrefix))
+            {
+                baseName = namePrefix + baseName;
+            }
+            
+            // Add number suffix if needed to ensure uniqueness
+            if (!existingGroups.Contains(baseName.ToLower()))
+            {
+                return baseName;
+            }
+            
+            for (int i = 2; i < 1000; i++)
+            {
+                var numberedName = $"{baseName} {i}";
+                if (!existingGroups.Contains(numberedName.ToLower()))
+                {
+                    return numberedName;
+                }
+            }
+        }
+        
+        // Fallback to GUID-based name
+        return $"{namePrefix}Group-{Guid.NewGuid().ToString().Substring(0, 8)}";
+    }
+    
+    private string GetRandomGroupType()
+    {
+        var types = new[] { "department", "team", "project", "role", "location" };
+        return types[random.Next(types.Length)];
+    }
+    
+    private void ResetOptions()
+    {
+        numberOfGroups = 10;
+        groupType = "mixed";
+        namePrefix = "";
+        addRandomMembers = true;
+        assignRandomOwners = true;
+        addDescriptions = true;
+        minMembers = 5;
+        maxMembers = 20;
+        errorMessage = null;
+        generationComplete = false;
+    }
+
+    protected override Task OnInitializedAsync()
+    {
+        CheckForActiveGeneration();
+        ActiveSystem.OnChangeAsync += HandleActiveChangedAsync;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleActiveChangedAsync() => InvokeAsync(StateHasChanged);
+
+    private void CheckForActiveGeneration()
+    {
+        var activeGenerations = GenerationService.GetActiveGenerations();
+        var groupGeneration = activeGenerations.FirstOrDefault(g => g.Type == "Groups");
+        if (groupGeneration != null)
+        {
+            currentGenerationId = groupGeneration.Id;
+            isGenerating = true;
+            StartStatusChecking();
+        }
+    }
+
+    private void StartStatusChecking()
+    {
+        statusCheckTimer?.Dispose();
+        statusCheckTimer = new Timer(async _ => await CheckGenerationStatus(), null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+    }
+
+    private async Task CheckGenerationStatus()
+    {
+        if (string.IsNullOrEmpty(currentGenerationId))
+            return;
+
+        var status = GenerationService.GetGenerationStatus(currentGenerationId);
+        if (status == null || status.Status != "Running")
+        {
+            isGenerating = false;
+            statusCheckTimer?.Dispose();
+            
+            if (status != null && status.Status == "Completed")
+            {
+                groupsCreated = status.CompletedItems;
+            }
+            
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        statusCheckTimer?.Dispose();
+        ActiveSystem.OnChangeAsync -= HandleActiveChangedAsync;
+    }
+}

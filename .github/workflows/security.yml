@@ -1,0 +1,75 @@
+name: security
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Weekly Sunday 06:00 UTC — picks up newly-disclosed NuGet vulns
+    # without anyone having to push.
+  - cron: '0 6 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  # required by dependency-review-action on PRs
+  pull-requests: read
+
+jobs:
+  vulnerable-packages:
+    name: dotnet list package --vulnerable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore (with transitive lock)
+        run: dotnet restore Conduit.sln
+
+      - name: Direct vulnerable packages
+        run: |
+          set -e
+          OUT=$(dotnet list Conduit.sln package --vulnerable 2>&1 || true)
+          echo "$OUT"
+          if echo "$OUT" | grep -E '^\s+>' >/dev/null; then
+            echo "::error::Vulnerable direct package(s) found."
+            exit 1
+          fi
+
+      - name: Transitive vulnerable packages
+        run: |
+          set -e
+          OUT=$(dotnet list Conduit.sln package --vulnerable --include-transitive 2>&1 || true)
+          echo "$OUT"
+          if echo "$OUT" | grep -E '^\s+>' >/dev/null; then
+            echo "::warning::Vulnerable transitive package(s) found — review and bump."
+          fi
+
+      - name: Deprecated packages
+        run: |
+          dotnet list Conduit.sln package --deprecated 2>&1 || true
+
+      - name: Outdated packages
+        run: |
+          # Informational only — does not fail the build.
+          dotnet list Conduit.sln package --outdated 2>&1 || true
+
+  dependency-review:
+    # Surfaces newly-introduced vulnerable deps in PRs against main.
+    name: PR dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always

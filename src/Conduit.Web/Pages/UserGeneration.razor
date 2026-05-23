@@ -1,0 +1,315 @@
+@page "/user-generation"
+@attribute [Authorize]
+@implements IDisposable
+@using Conduit.Core.Generation
+@using Conduit.Core.Services
+@using Conduit.DataAccess.Repositories
+@using Conduit.Core.Models
+@using Conduit.Web.Services
+@inject UserRepository UserRepository
+@inject GroupRepository GroupRepository
+@inject TenantRepository TenantRepo
+@inject ActiveSystemState ActiveSystem
+@inject GenerationService GenerationService
+@inject NavigationManager Navigation
+
+<PageTitle>User Generation - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <PageHeader Title="User Generation" Subtitle="Generate realistic test users with company organizational structures into the active Connected System." />
+
+    @if (generationStarted)
+    {
+        <div class="alert alert-info alert-dismissible fade show" role="alert">
+            <h4 class="alert-heading">Generation Started!</h4>
+            <p>Generating @options.NumberOfUsers users in the background. You can monitor progress with the status indicator.</p>
+            <hr>
+            <p class="mb-0">
+                <a href="/users" class="btn btn-primary btn-sm">View Users</a>
+            </p>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close" @onclick="() => generationStarted = false"></button>
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-header">
+            <h3 class="mb-0">Generation Options</h3>
+        </div>
+        <div class="card-body">
+            <EditForm Model="@options" OnValidSubmit="@HandleValidSubmit">
+                <DataAnnotationsValidator />
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>Basic Settings</h5>
+
+                        <div class="mb-3">
+                            <label class="form-label">Target System</label>
+                            <div class="p-3" style="background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);">
+                                @if (ActiveSystem.ActiveSystem is { } current)
+                                {
+                                    <ContextLabel />
+                                }
+                                else
+                                {
+                                    <span class="text-muted">No Connected System selected. Pick one in the sidebar — you can't generate to "All".</span>
+                                }
+                            </div>
+                            <small class="form-text text-muted">Generated users land in whichever Connected System is active in the sidebar. Change it there.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Number of Users</label>
+                            <InputNumber class="form-control" @bind-Value="options.NumberOfUsers" min="1" max="10000" />
+                            <small class="form-text text-muted">How many users to generate (1-10,000)</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Company Template</label>
+                            <InputSelect class="form-select" @bind-Value="options.CompanyTemplate">
+                                <option value="TechCompany">Technology Company</option>
+                                <option value="FinancialServices">Financial Services</option>
+                                <option value="Healthcare">Healthcare Organization</option>
+                            </InputSelect>
+                            <small class="form-text text-muted">Pre-configured organizational structures</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Email Pattern</label>
+                            <InputSelect class="form-select" @bind-Value="options.EmailPattern">
+                                <option value="@EmailPattern.FirstLastName">firstname.lastname@domain</option>
+                                <option value="@EmailPattern.FirstName">firstname@domain</option>
+                                <option value="@EmailPattern.FirstInitialLastName">f.lastname@domain</option>
+                                <option value="@EmailPattern.FirstNameLastInitial">firstname.l@domain</option>
+                                <option value="@EmailPattern.FirstInitialLastNameNoSeparator">flastname@domain</option>
+                                <option value="@EmailPattern.Random">Random usernames</option>
+                            </InputSelect>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Active User Percentage</label>
+                            <input type="range" class="form-range" @bind="activePercentage" min="0" max="100" step="5" />
+                            <small class="form-text text-muted">@activePercentage% of users will be active</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Specific Emails (Optional)</label>
+                            <textarea class="form-control" @bind="specificEmailsText" rows="3" 
+                                      placeholder="Enter specific emails, one per line"></textarea>
+                            <small class="form-text text-muted">These emails will be assigned to generated users</small>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <h5>Additional Options</h5>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.GeneratePhoneNumbers" id="phoneCheck" />
+                            <label class="form-check-label" for="phoneCheck">
+                                Generate Phone Numbers
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.GenerateAddresses" id="addressCheck" />
+                            <label class="form-check-label" for="addressCheck">
+                                Generate Addresses
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.AssignManagers" id="managerCheck" />
+                            <label class="form-check-label" for="managerCheck">
+                                Assign Managers (Create Hierarchy)
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.AssignSkills" id="skillsCheck" />
+                            <label class="form-check-label" for="skillsCheck">
+                                Assign Skills
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.AssignCertifications" id="certsCheck" />
+                            <label class="form-check-label" for="certsCheck">
+                                Assign Certifications
+                            </label>
+                        </div>
+
+                        <hr />
+
+                        <h6>Group Creation</h6>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.CreateDepartmentGroups" id="deptGroupCheck" />
+                            <label class="form-check-label" for="deptGroupCheck">
+                                Create Department Groups
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.CreateLocationGroups" id="locGroupCheck" />
+                            <label class="form-check-label" for="locGroupCheck">
+                                Create Location Groups
+                            </label>
+                        </div>
+
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="options.CreateRoleGroups" id="roleGroupCheck" />
+                            <label class="form-check-label" for="roleGroupCheck">
+                                Create Role Groups (Managers, Executives, Remote)
+                            </label>
+                        </div>
+                        
+                        <div class="form-check mb-2">
+                            <InputCheckbox class="form-check-input" @bind-Value="populateGroupsWithRandomMembers" id="randomMembersCheck" />
+                            <label class="form-check-label" for="randomMembersCheck">
+                                Populate groups with random members
+                            </label>
+                        </div>
+
+                        <hr />
+
+                        <div class="mb-3">
+                            <label class="form-label">Random Seed (Optional)</label>
+                            <InputNumber class="form-control" @bind-Value="options.RandomSeed" />
+                            <small class="form-text text-muted">Use the same seed for reproducible results</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between mt-4">
+                    <button type="button" class="btn btn-secondary" @onclick="ResetOptions">Reset to Defaults</button>
+                    <button type="submit" class="btn btn-primary" disabled="@isGenerating">
+                        @if (isGenerating)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                            <span>Generating...</span>
+                        }
+                        else
+                        {
+                            <i class="oi oi-people me-2"></i>
+                            <span>Generate Users</span>
+                        }
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+</div>
+
+@code {
+    private UserGenerationOptions options = new();
+    private bool isGenerating = false;
+    private bool generationStarted = false;
+    private string specificEmailsText = "";
+    private int activePercentage = 95;
+    private bool populateGroupsWithRandomMembers = true;
+    private string? currentGenerationId;
+    private Timer? statusCheckTimer;
+    // Generation target is whichever Connected System is active in the sidebar.
+    // We listen for sidebar changes so the disabled/enabled state of Generate
+    // and the target display under the form update without a manual reload.
+
+    protected override Task OnInitializedAsync()
+    {
+        activePercentage = (int)(options.ActiveUserPercentage * 100);
+        CheckForActiveGeneration();
+        ActiveSystem.OnChangeAsync += HandleActiveChangedAsync;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleActiveChangedAsync() => InvokeAsync(StateHasChanged);
+
+    private void CheckForActiveGeneration()
+    {
+        var activeGenerations = GenerationService.GetActiveGenerations();
+        var userGeneration = activeGenerations.FirstOrDefault(g => g.Type == "Users");
+        if (userGeneration != null)
+        {
+            currentGenerationId = userGeneration.Id;
+            isGenerating = true;
+            StartStatusChecking();
+        }
+    }
+
+    private Task HandleValidSubmit()
+    {
+        if (ActiveSystem.ActiveSystem is null)
+        {
+            Console.WriteLine("No Connected System in scope — pick one in the sidebar before generating.");
+            return Task.CompletedTask;
+        }
+        options.TenantId = ActiveSystem.ActiveSystem.Id;
+        isGenerating = true;
+
+        try
+        {
+            // Update options from UI
+            options.ActiveUserPercentage = activePercentage / 100.0;
+            
+            // Parse specific emails
+            if (!string.IsNullOrWhiteSpace(specificEmailsText))
+            {
+                options.SpecificEmails = specificEmailsText
+                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(e => e.Trim())
+                    .Where(e => !string.IsNullOrEmpty(e))
+                    .ToList();
+            }
+
+            // Start background generation
+            currentGenerationId = GenerationService.StartUserGeneration(options);
+            
+            // Start checking status
+            StartStatusChecking();
+            
+            // Show success message - no redirect
+            generationStarted = true;
+        }
+        catch (Exception ex)
+        {
+            // In a real app, show error message
+            Console.WriteLine($"Error starting generation: {ex.Message}");
+            isGenerating = false;
+        }
+        
+        return Task.CompletedTask;
+    }
+
+    private void ResetOptions()
+    {
+        options = new UserGenerationOptions();
+        activePercentage = 95;
+        specificEmailsText = "";
+        populateGroupsWithRandomMembers = true;
+    }
+
+    private void StartStatusChecking()
+    {
+        statusCheckTimer?.Dispose();
+        statusCheckTimer = new Timer(async _ => await CheckGenerationStatus(), null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+    }
+
+    private async Task CheckGenerationStatus()
+    {
+        if (string.IsNullOrEmpty(currentGenerationId))
+            return;
+
+        var status = GenerationService.GetGenerationStatus(currentGenerationId);
+        if (status == null || status.Status != "Running")
+        {
+            isGenerating = false;
+            statusCheckTimer?.Dispose();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        statusCheckTimer?.Dispose();
+        ActiveSystem.OnChangeAsync -= HandleActiveChangedAsync;
+    }
+}

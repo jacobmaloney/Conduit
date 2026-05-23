@@ -1,0 +1,703 @@
+@page "/groups"
+@attribute [Authorize]
+@using Conduit.Core.Models
+@using Conduit.DataAccess.Repositories
+@using Conduit.Web.Services
+@inject GroupRepository GroupRepository
+@inject UserRepository UserRepository
+@inject TenantRepository TenantRepo
+@inject ActiveSystemState ActiveSystem
+@inject DataChangeNotifier DataChange
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>Groups - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <PageHeader Title="Groups"
+                Subtitle="Manage groups and memberships in the active Connected System."
+                Count="totalCount > 0 ? totalCount : (int?)null"
+                CountLabel="Total groups in this Connected System">
+        <Actions>
+            @if (selectedGroups.Any())
+            {
+                <button class="btn btn-danger" @onclick="BulkDeleteGroups">
+                    <i class="oi oi-trash"></i> Delete Selected (@selectedGroups.Count)
+                </button>
+            }
+            <button class="btn btn-primary" @onclick="ShowCreateGroupModal">
+                <i class="oi oi-plus"></i> Create Group
+            </button>
+        </Actions>
+    </PageHeader>
+
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    }
+    else if (!groups.Any())
+    {
+        <div class="alert alert-info">
+            <h4 class="alert-heading">No Groups Found</h4>
+            <p>There are no groups in the system yet.</p>
+            <hr>
+            <p class="mb-0">
+                <button class="btn btn-primary btn-sm" @onclick="ShowCreateGroupModal">
+                    <i class="oi oi-plus"></i> Create Your First Group
+                </button>
+            </p>
+        </div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="utable">
+                <thead>
+                    <tr>
+                        <th class="check-col">
+                            <input type="checkbox" class="form-check-input" @onchange="ToggleSelectAll" checked="@allSelected" />
+                        </th>
+                        <th>Group</th>
+                        <th>Type</th>
+                        <th>Owner</th>
+                        <th>Members</th>
+                        <th>Created</th>
+                        <th class="act-col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var group in groups)
+                    {
+                        var initials = GroupInitials(group);
+                        <tr class="@(selectedGroups.Contains(group.Id) ? "sel" : "")" @onclick="() => EditGroup(group)">
+                            <td class="check-col" @onclick:stopPropagation="true">
+                                <input type="checkbox" class="form-check-input" value="@group.Id"
+                                       checked="@selectedGroups.Contains(group.Id)"
+                                       @onchange="@(() => ToggleGroupSelection(group.Id))" />
+                            </td>
+                            <td>
+                                <div class="user-cell">
+                                    <span class="avatar avatar-28">@initials</span>
+                                    <div class="user-cell-text">
+                                        <span class="user-cell-name">@group.DisplayName</span>
+                                        @if (!string.IsNullOrEmpty(group.Description))
+                                        {
+                                            <span class="group-row-desc">@group.Description</span>
+                                        }
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="kind-pill">@(group.Type ?? "Group")</span>
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(group.Owner?.Display))
+                                {
+                                    <span style="font-size: 12.5px;">@group.Owner.Display</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted" style="font-size: 12.5px;">No owner</span>
+                                }
+                            </td>
+                            <td @onclick:stopPropagation="true">
+                                <button class="row-act" @onclick="() => ShowMembersModal(group)" title="View members" style="padding: 2px 8px;">
+                                    <span class="member-count">
+                                        <i class="oi oi-people"></i>
+                                        @group.Members.Count
+                                    </span>
+                                </button>
+                            </td>
+                            <td class="mono-date">@group.Meta.Created.ToString("yyyy-MM-dd")</td>
+                            <td class="act-col" @onclick:stopPropagation="true">
+                                <button class="row-act" @onclick="() => ShowMembersModal(group)" title="Manage Members">
+                                    <i class="oi oi-people"></i>
+                                </button>
+                                <button class="row-act" @onclick="() => EditGroup(group)" title="Edit Group">
+                                    <i class="oi oi-pencil"></i>
+                                </button>
+                                <button class="row-act" @onclick="() => DeleteGroup(group)" title="Delete Group">
+                                    <i class="oi oi-trash"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        @if (totalPages > 1)
+        {
+            <nav aria-label="Groups pagination" class="mt-4">
+                <ul class="pagination justify-content-center">
+                    <li class="page-item @(currentPage == 1 ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadGroups(currentPage - 1)" disabled="@(currentPage == 1)">
+                            Previous
+                        </button>
+                    </li>
+                    @for (int i = 1; i <= totalPages; i++)
+                    {
+                        var pageNum = i;
+                        <li class="page-item @(currentPage == pageNum ? "active" : "")">
+                            <button class="page-link" @onclick="() => LoadGroups(pageNum)">
+                                @pageNum
+                            </button>
+                        </li>
+                    }
+                    <li class="page-item @(currentPage == totalPages ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadGroups(currentPage + 1)" disabled="@(currentPage == totalPages)">
+                            Next
+                        </button>
+                    </li>
+                </ul>
+            </nav>
+        }
+    }
+</div>
+
+<!-- Create/Edit Group Modal -->
+<div class="modal @(showGroupModal ? "show d-block" : "")" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">@(editingGroup?.Id != null ? "Edit Group" : "Create Group")</h5>
+                <button type="button" class="btn-close" @onclick="CloseGroupModal"></button>
+            </div>
+            <div class="modal-body">
+                <form>
+                    <div class="mb-3">
+                        <label class="form-label">Display Name *</label>
+                        <input type="text" class="form-control" @bind="editingGroup!.DisplayName" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" rows="3" @bind="editingGroup!.Description"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Type</label>
+                        <select class="form-select" @bind="editingGroup!.Type">
+                            <option value="">Select type...</option>
+                            <option value="Department">Department</option>
+                            <option value="Team">Team</option>
+                            <option value="Project">Project</option>
+                            <option value="Role">Role</option>
+                            <option value="Location">Location</option>
+                            <option value="Security">Security</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Members</label>
+                        <div class="alert alert-info">
+                            <small>Member management will be available after the group is created.</small>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseGroupModal">Cancel</button>
+                <button type="button" class="btn btn-primary" @onclick="SaveGroup">
+                    @(editingGroup?.Id != null ? "Update" : "Create") Group
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (showGroupModal)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+<!-- Members Management Modal -->
+<div class="modal @(showMembersModal ? "show d-block" : "")" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="oi oi-people"></i> Members of @currentGroupForMembers?.DisplayName
+                </h5>
+                <button type="button" class="btn-close" @onclick="CloseMembersModal"></button>
+            </div>
+            <div class="modal-body">
+                @if (currentGroupForMembers != null)
+                {
+                    <!-- Add Member Section -->
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h6 class="card-title">Add Members</h6>
+                            <div class="input-group">
+                                <select class="form-select" @bind="selectedUserToAdd">
+                                    <option value="">Select a user to add...</option>
+                                    @foreach (var user in availableUsers)
+                                    {
+                                        <option value="@user.Id">@user.DisplayName (@user.UserName)</option>
+                                    }
+                                </select>
+                                <button class="btn btn-primary" @onclick="AddMemberToGroup" disabled="@(string.IsNullOrEmpty(selectedUserToAdd))">
+                                    <i class="oi oi-plus"></i> Add Member
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Current Members List -->
+                    <div class="card">
+                        <div class="card-body">
+                            <h6 class="card-title">Current Members (@currentGroupForMembers.Members.Count)</h6>
+                            @if (!currentGroupForMembers.Members.Any())
+                            {
+                                <div class="alert alert-info mb-0">
+                                    <i class="oi oi-info"></i> This group has no members yet.
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="table-responsive">
+                                    <table class="table table-sm">
+                                        <thead>
+                                            <tr>
+                                                <th>Member</th>
+                                                <th>Type</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var member in currentGroupForMembers.Members)
+                                            {
+                                                <tr>
+                                                    <td>
+                                                        @if (!string.IsNullOrEmpty(member.Display))
+                                                        {
+                                                            <span>@member.Display</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="text-muted">User ID: @member.Value</span>
+                                                        }
+                                                    </td>
+                                                    <td>
+                                                        <span class="badge bg-secondary">@(member.Type ?? "User")</span>
+                                                    </td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveMemberFromGroup(member)">
+                                                            <i class="oi oi-x"></i> Remove
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Group Owner -->
+                    @if (currentGroupForMembers.Owner != null)
+                    {
+                        <div class="card mt-3">
+                            <div class="card-body">
+                                <h6 class="card-title">Group Owner</h6>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span>
+                                        <i class="oi oi-person"></i> 
+                                        @(currentGroupForMembers.Owner.Display ?? $"User ID: {currentGroupForMembers.Owner.Value}")
+                                    </span>
+                                    <button class="btn btn-sm btn-outline-warning" @onclick="RemoveOwner">
+                                        <i class="oi oi-x"></i> Remove Owner
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseMembersModal">Close</button>
+                <button type="button" class="btn btn-primary" @onclick="SaveMemberChanges" disabled="@(!memberChangesPresent)">
+                    <i class="oi oi-check"></i> Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (showMembersModal)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private static string GroupInitials(ScimGroup g)
+    {
+        var name = g.DisplayName?.Trim();
+        if (string.IsNullOrEmpty(name)) return "?";
+        // Take first letter of each whitespace-separated word up to 2.
+        var parts = name.Split(new[] { ' ', '-', '_', '·' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2)
+            return string.Concat(char.ToUpperInvariant(parts[0][0]), char.ToUpperInvariant(parts[1][0]));
+        var letters = name.Where(char.IsLetterOrDigit).Take(2).ToArray();
+        if (letters.Length == 0) return "?";
+        return new string(letters.Select(char.ToUpperInvariant).ToArray());
+    }
+
+    private List<ScimGroup> groups = new();
+    private bool loading = true;
+    private int currentPage = 1;
+    private int pageSize = 10;
+    private int totalCount = 0;
+    private int totalPages = 1;
+
+    private HashSet<string> selectedGroups = new();
+    private bool allSelected = false;
+
+    private bool showGroupModal = false;
+    private ScimGroup editingGroup = new() 
+    { 
+        Members = new List<ScimGroupMember>(),
+        Meta = new ScimMetadata()
+    };
+    
+    // Members modal variables
+    private bool showMembersModal = false;
+    private ScimGroup? currentGroupForMembers = null;
+    private ScimGroup? originalGroupForMembers = null;
+    private List<ScimUser> availableUsers = new();
+    private string selectedUserToAdd = "";
+    private bool memberChangesPresent = false;
+
+    // ActiveSystemState (sidebar switcher) is the only source of truth. The
+    // page-level filter dropdown was removed — see ContextLabel in the page
+    // header for the current selection indicator.
+
+    protected override async Task OnInitializedAsync()
+    {
+        ActiveSystem.OnChangeAsync += HandleActiveSystemChangedAsync;
+        await LoadGroups(1);
+    }
+
+    public void Dispose()
+    {
+        ActiveSystem.OnChangeAsync -= HandleActiveSystemChangedAsync;
+    }
+
+    private async Task HandleActiveSystemChangedAsync()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadGroups(1);
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadGroups(int page)
+    {
+        loading = true;
+        currentPage = page;
+
+        try
+        {
+            var options = new ScimQueryOptions
+            {
+                StartIndex = (page - 1) * pageSize + 1,
+                Count = pageSize
+            };
+
+            var override_ = ActiveSystem.ActiveSystem?.Id;
+            var (loadedGroups, count) = await GroupRepository.GetAllAsync(options, tenantIdOverride: override_);
+            groups = loadedGroups;
+            totalCount = count;
+            totalPages = (int)Math.Ceiling((double)totalCount / pageSize);
+        }
+        finally
+        {
+            loading = false;
+        }
+        await DataChange.NotifyAsync(DataChangeKind.Groups);
+    }
+
+    private void ShowCreateGroupModal()
+    {
+        editingGroup = new ScimGroup
+        {
+            Members = new List<ScimGroupMember>(),
+            Meta = new ScimMetadata()
+        };
+        showGroupModal = true;
+    }
+
+    private void EditGroup(ScimGroup group)
+    {
+        editingGroup = group; // In real app, deep clone
+        showGroupModal = true;
+    }
+
+    private void CloseGroupModal()
+    {
+        showGroupModal = false;
+        editingGroup = new ScimGroup 
+        { 
+            Members = new List<ScimGroupMember>(),
+            Meta = new ScimMetadata()
+        };
+    }
+
+    private async Task SaveGroup()
+    {
+        if (string.IsNullOrWhiteSpace(editingGroup.DisplayName))
+        {
+            return;
+        }
+
+        try
+        {
+            if (string.IsNullOrEmpty(editingGroup.Id))
+            {
+                // Create new group
+                await GroupRepository.CreateAsync(editingGroup);
+            }
+            else
+            {
+                // Update existing group
+                await GroupRepository.UpdateAsync(Guid.Parse(editingGroup.Id), editingGroup);
+            }
+            
+            CloseGroupModal();
+            await LoadGroups(currentPage);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving group: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteGroup(ScimGroup group)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete the group '{group.DisplayName}'?"))
+        {
+            return;
+        }
+
+        try
+        {
+            await GroupRepository.DeleteAsync(Guid.Parse(group.Id));
+            await LoadGroups(currentPage);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error deleting group: {ex.Message}");
+        }
+    }
+
+    private void ToggleGroupSelection(string groupId)
+    {
+        if (selectedGroups.Contains(groupId))
+        {
+            selectedGroups.Remove(groupId);
+        }
+        else
+        {
+            selectedGroups.Add(groupId);
+        }
+        
+        allSelected = selectedGroups.Count == groups.Count;
+    }
+
+    private void ToggleSelectAll(ChangeEventArgs e)
+    {
+        if ((bool)(e.Value ?? false))
+        {
+            selectedGroups = new HashSet<string>(groups.Select(g => g.Id));
+            allSelected = true;
+        }
+        else
+        {
+            selectedGroups.Clear();
+            allSelected = false;
+        }
+    }
+
+    private async Task BulkDeleteGroups()
+    {
+        if (!selectedGroups.Any())
+            return;
+
+        var confirmed = await JSRuntime.InvokeAsync<bool>("confirm", 
+            $"Are you sure you want to delete {selectedGroups.Count} selected groups? This action cannot be undone.");
+        
+        if (!confirmed)
+            return;
+
+        loading = true;
+        
+        try
+        {
+            foreach (var groupId in selectedGroups)
+            {
+                await GroupRepository.DeleteAsync(Guid.Parse(groupId));
+            }
+            
+            selectedGroups.Clear();
+            allSelected = false;
+            await LoadGroups(currentPage);
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"Error deleting groups: {ex.Message}");
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task ShowMembersModal(ScimGroup group)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(group?.Id))
+            {
+                await JSRuntime.InvokeVoidAsync("alert", "Invalid group selected.");
+                return;
+            }
+            
+            // Load the full group details with members
+            currentGroupForMembers = await GroupRepository.GetByIdAsync(Guid.Parse(group.Id));
+            if (currentGroupForMembers == null)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", "Failed to load group details.");
+                return;
+            }
+            
+            // Initialize members list if null
+            currentGroupForMembers.Members ??= new List<ScimGroupMember>();
+            
+            // Clone for comparison
+            originalGroupForMembers = new ScimGroup
+            {
+                Id = currentGroupForMembers.Id,
+                DisplayName = currentGroupForMembers.DisplayName,
+                Description = currentGroupForMembers.Description,
+                Type = currentGroupForMembers.Type,
+                Members = currentGroupForMembers.Members?.Select(m => new ScimGroupMember 
+                { 
+                    Value = m?.Value ?? "", 
+                    Display = m?.Display ?? "", 
+                    Type = m?.Type ?? "User" 
+                }).ToList() ?? new List<ScimGroupMember>(),
+                Owner = currentGroupForMembers.Owner != null ? new ScimGroupMember
+                {
+                    Value = currentGroupForMembers.Owner.Value ?? "",
+                    Display = currentGroupForMembers.Owner.Display ?? "",
+                    Type = currentGroupForMembers.Owner.Type ?? "User"
+                } : null,
+                Meta = currentGroupForMembers.Meta ?? new ScimMetadata()
+            };
+            
+            // Load available users (not already in group)
+            await LoadAvailableUsers();
+            
+            memberChangesPresent = false;
+            selectedUserToAdd = "";
+            showMembersModal = true;
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"Error opening member management: {ex.Message}");
+            Console.WriteLine($"ShowMembersModal error: {ex}");
+        }
+    }
+    
+    private async Task LoadAvailableUsers()
+    {
+        try
+        {
+            var (allUsers, _) = await UserRepository.GetAllAsync(new ScimQueryOptions { StartIndex = 1, Count = 1000 });
+            var memberIds = currentGroupForMembers?.Members?.Select(m => m.Value).ToHashSet() ?? new HashSet<string>();
+            availableUsers = allUsers?.Where(u => u?.Id != null && !memberIds.Contains(u.Id)).ToList() ?? new List<ScimUser>();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading available users: {ex.Message}");
+            availableUsers = new List<ScimUser>();
+        }
+    }
+    
+    private async Task AddMemberToGroup()
+    {
+        if (string.IsNullOrEmpty(selectedUserToAdd) || currentGroupForMembers == null)
+            return;
+            
+        var user = availableUsers.FirstOrDefault(u => u.Id == selectedUserToAdd);
+        if (user == null)
+            return;
+            
+        currentGroupForMembers.Members.Add(new ScimGroupMember
+        {
+            Value = user.Id,
+            Display = user.DisplayName ?? user.UserName,
+            Type = "User"
+        });
+        
+        selectedUserToAdd = "";
+        memberChangesPresent = true;
+        await LoadAvailableUsers();
+    }
+    
+    private async Task RemoveMemberFromGroup(ScimGroupMember member)
+    {
+        if (currentGroupForMembers == null)
+            return;
+            
+        currentGroupForMembers.Members.Remove(member);
+        memberChangesPresent = true;
+        await LoadAvailableUsers();
+    }
+    
+    private void RemoveOwner()
+    {
+        if (currentGroupForMembers == null)
+            return;
+            
+        currentGroupForMembers.Owner = null;
+        memberChangesPresent = true;
+    }
+    
+    private void CloseMembersModal()
+    {
+        showMembersModal = false;
+        currentGroupForMembers = null;
+        originalGroupForMembers = null;
+        selectedUserToAdd = "";
+        memberChangesPresent = false;
+    }
+    
+    private async Task SaveMemberChanges()
+    {
+        if (currentGroupForMembers == null || !memberChangesPresent)
+            return;
+            
+        try
+        {
+            await GroupRepository.UpdateAsync(Guid.Parse(currentGroupForMembers.Id), currentGroupForMembers);
+            await JSRuntime.InvokeVoidAsync("alert", "Members updated successfully!");
+            CloseMembersModal();
+            await LoadGroups(currentPage);
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"Error updating members: {ex.Message}");
+        }
+    }
+
+    [Inject]
+    private IJSRuntime JSRuntime { get; set; } = default!;
+}

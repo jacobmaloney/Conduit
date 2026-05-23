@@ -1,0 +1,42 @@
+@page "/login"
+@model Conduit.Web.Pages.LoginModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Sign in - Conduit</title>
+    <base href="~/" />
+    <link rel="stylesheet" href="lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link href="css/site.css" rel="stylesheet" />
+</head>
+<body class="bg-light">
+    <div class="container" style="max-width: 420px; padding-top: 80px;">
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Conduit Sign In</h4>
+            </div>
+            <div class="card-body">
+                @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+                {
+                    <div class="alert alert-danger py-2">@Model.ErrorMessage</div>
+                }
+                <form method="post">
+                    <div class="mb-3">
+                        <label class="form-label" for="Username">Username</label>
+                        <input type="text" class="form-control" id="Username" name="Username" value="@Model.Username" autofocus required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="Password">Password</label>
+                        <input type="password" class="form-control" id="Password" name="Password" required />
+                    </div>
+                    <input type="hidden" name="ReturnUrl" value="@Model.ReturnUrl" />
+                    <button type="submit" class="btn btn-primary w-100">Sign in</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

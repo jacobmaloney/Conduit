@@ -1,0 +1,41 @@
+@using Conduit.Core.Models
+@using Conduit.Web.Services
+@inject ActiveSystemState ActiveSystem
+@implements IDisposable
+
+@{
+    var sys = ActiveSystem.ActiveSystem;
+}
+
+<span class="context-label">
+    @if (sys is null)
+    {
+        <span class="context-label-eyebrow">Showing</span>
+        <span class="kind-pill">All Connected Systems</span>
+        <span class="context-label-hint">— pick one from the sidebar to scope this page.</span>
+    }
+    else
+    {
+        <span class="context-label-eyebrow">Showing</span>
+        <strong class="context-label-name">@sys.Name</strong>
+        <span class="kind-pill @(sys.SystemType == "Real" ? "kind-real" : "kind-emulator")">@sys.SystemType</span>
+        @if (!string.IsNullOrWhiteSpace(sys.Domain))
+        {
+            <span class="context-label-domain">@sys.Domain</span>
+        }
+    }
+</span>
+
+@code {
+    protected override void OnInitialized()
+    {
+        ActiveSystem.OnChangeAsync += HandleChangedAsync;
+    }
+
+    public void Dispose()
+    {
+        ActiveSystem.OnChangeAsync -= HandleChangedAsync;
+    }
+
+    private Task HandleChangedAsync() => InvokeAsync(StateHasChanged);
+}

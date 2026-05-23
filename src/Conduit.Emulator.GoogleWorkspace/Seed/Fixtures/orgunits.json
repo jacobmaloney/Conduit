@@ -1,0 +1,9 @@
+[
+  { "path": "/Executive",                  "parent": "/", "name": "Executive",   "description": "C-suite and direct reports" },
+  { "path": "/Engineering",                "parent": "/", "name": "Engineering", "description": "Engineering organization" },
+  { "path": "/Engineering/Platform",       "parent": "/Engineering", "name": "Platform", "description": "Platform team" },
+  { "path": "/Engineering/Product",        "parent": "/Engineering", "name": "Product",  "description": "Product team" },
+  { "path": "/Sales",                      "parent": "/", "name": "Sales",       "description": "Sales organization" },
+  { "path": "/IT",                         "parent": "/", "name": "IT",          "description": "Information Technology" },
+  { "path": "/Contractors",                "parent": "/", "name": "Contractors", "description": "External contractors" }
+]

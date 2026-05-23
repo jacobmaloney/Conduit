@@ -1,0 +1,382 @@
+@page "/api-explorer"
+@attribute [Authorize]
+@inject NavigationManager Navigation
+@inject IHttpClientFactory HttpFactory
+@inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+@inject Microsoft.JSInterop.IJSRuntime JS
+
+<PageTitle>API Explorer - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <h1>API Explorer</h1>
+    <p class="lead">Explore and test SCIM API endpoints interactively</p>
+
+    <!-- ==================== Test Connection (NEW) ==================== -->
+    <div class="card mb-3 border-primary">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <strong>Test Connection</strong>
+            <small>Verify a bearer token against a tenant — round-trips through the same auth middleware ARS hits</small>
+        </div>
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label">Target tenant</label>
+                    <select class="form-select" @bind="selectedSlug" @bind:after="OnTenantChanged">
+                        <option value="">-- pick a tenant --</option>
+                        @foreach (var t in tenants)
+                        {
+                            <option value="@t.Slug">@t.Name (@t.Slug)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label">Base URL (copy this into ARS workflow param SCIM-&lt;App&gt;-URI)</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control font-monospace" value="@BaseTenantUrl" readonly />
+                        <button class="btn btn-outline-secondary" type="button"
+                                @onclick="() => CopyToClipboard(BaseTenantUrl)"
+                                disabled="@(string.IsNullOrEmpty(selectedSlug))">Copy</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mt-1">
+                <div class="col-md-9">
+                    <label class="form-label">API Token (full mint string, including <code>scim_</code> prefix)</label>
+                    <input type="text" class="form-control font-monospace" @bind="apiToken"
+                           placeholder="scim_xxxxxxxxxxxxxxxxxx" />
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button class="btn btn-primary w-100" @onclick="TestConnection"
+                            disabled="@(testing || string.IsNullOrEmpty(selectedSlug) || string.IsNullOrEmpty(apiToken))">
+                        @(testing ? "Testing..." : "Test Connection")
+                    </button>
+                </div>
+            </div>
+
+            @if (testResult != null)
+            {
+                <hr />
+                <div class="row">
+                    <div class="col-md-3"><strong>Request</strong></div>
+                    <div class="col-md-9 font-monospace small">
+                        GET @testResult.Url<br />
+                        Authorization: Bearer @testResult.BearerSentMasked
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-md-3"><strong>Response</strong></div>
+                    <div class="col-md-9">
+                        <span class="badge @(testResult.StatusCode >= 200 && testResult.StatusCode < 300 ? "bg-success" : testResult.StatusCode == 0 ? "bg-secondary" : "bg-danger")">
+                            @(testResult.StatusCode == 0 ? "no response" : $"{testResult.StatusCode} {testResult.StatusText}")
+                        </span>
+                        <small class="text-muted ms-2">@(testResult.Elapsed)ms</small>
+                        @if (!string.IsNullOrEmpty(testResult.Body))
+                        {
+                            <pre class="bg-light p-2 mt-2 mb-0 small" style="max-height:200px;overflow:auto"><code>@testResult.Body</code></pre>
+                        }
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(testResult.Hint))
+                {
+                    <div class="alert alert-warning mt-2 mb-0">
+                        <strong>Diagnosis:</strong> @testResult.Hint
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(testResult.Error))
+                {
+                    <div class="alert alert-danger mt-2 mb-0">
+                        <strong>Exception:</strong> @testResult.Error
+                    </div>
+                }
+            }
+        </div>
+    </div>
+
+    <!-- ==================== Endpoint Browser ==================== -->
+    <div class="row">
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">SCIM Endpoints</h5>
+                </div>
+                <div class="list-group list-group-flush">
+                    @foreach (var ep in endpoints)
+                    {
+                        <button class="list-group-item list-group-item-action @(selectedEndpoint == ep.Key ? "active" : "")"
+                                @onclick="() => SelectEndpoint(ep.Key)">
+                            <div>
+                                <strong>@ep.PathSuffix</strong>
+                                <br />
+                                <small class="@(selectedEndpoint == ep.Key ? "text-white-50" : "text-muted")">@ep.Description</small>
+                            </div>
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            @{
+                var selected = endpoints.FirstOrDefault(e => e.Key == selectedEndpoint);
+            }
+            @if (selected != null)
+            {
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">@selected.Title</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <strong>Full URL</strong> (for this tenant)
+                            <div class="input-group mt-1">
+                                <input type="text" class="form-control font-monospace small" value="@FullUrlFor(selected.PathSuffix)" readonly />
+                                <button class="btn btn-outline-secondary btn-sm" type="button"
+                                        @onclick="() => CopyToClipboard(FullUrlFor(selected.PathSuffix))">Copy</button>
+                            </div>
+                            @if (string.IsNullOrEmpty(selectedSlug))
+                            {
+                                <small class="text-muted">Pick a tenant above to scope this URL.</small>
+                            }
+                        </div>
+
+                        @if (selected.Key == "users")
+                        {
+                            <h6>Operations</h6>
+                            <ul class="list-group mb-3">
+                                <li class="list-group-item d-flex align-items-center">
+                                    <span class="badge bg-primary me-2" style="width:60px">GET</span>
+                                    <code class="me-2">@FullUrlFor("/Users")</code>
+                                    <small class="text-muted ms-auto">List all users (supports ?filter, ?count, ?startIndex)</small>
+                                </li>
+                                <li class="list-group-item d-flex align-items-center">
+                                    <span class="badge bg-primary me-2" style="width:60px">GET</span>
+                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
+                                    <small class="text-muted ms-auto">Get user by ID</small>
+                                </li>
+                                <li class="list-group-item d-flex align-items-center">
+                                    <span class="badge bg-success me-2" style="width:60px">POST</span>
+                                    <code class="me-2">@FullUrlFor("/Users")</code>
+                                    <small class="text-muted ms-auto">Create user</small>
+                                </li>
+                                <li class="list-group-item d-flex align-items-center">
+                                    <span class="badge bg-warning text-dark me-2" style="width:60px">PUT</span>
+                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
+                                    <small class="text-muted ms-auto">Replace user</small>
+                                </li>
+                                <li class="list-group-item d-flex align-items-center">
+                                    <span class="badge bg-info text-dark me-2" style="width:60px">PATCH</span>
+                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
+                                    <small class="text-muted ms-auto">Partial update (enable/disable via active=false)</small>
+                                </li>
+                                <li class="list-group-item d-flex align-items-center">
+                                    <span class="badge bg-danger me-2" style="width:60px">DELETE</span>
+                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
+                                    <small class="text-muted ms-auto">Delete user</small>
+                                </li>
+                            </ul>
+
+                            <h6>Example: Create User</h6>
+                            <pre class="bg-light p-3 small"><code>POST @FullUrlFor("/Users")
+Authorization: Bearer @(string.IsNullOrEmpty(apiToken) ? "scim_xxx..." : MaskToken(apiToken))
+Content-Type: application/scim+json
+
+{
+  "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+  "userName": "jdoe",
+  "name": { "givenName": "John", "familyName": "Doe" },
+  "emails": [{ "value": "jdoe@example.com", "type": "work", "primary": true }],
+  "active": true
+}</code></pre>
+                        }
+                        else if (selected.Key == "groups")
+                        {
+                            <h6>Operations</h6>
+                            <p>Same verb set as Users (GET/POST/PUT/PATCH/DELETE) on <code>@FullUrlFor("/Groups")</code>.</p>
+                            <h6>Example: Create Group</h6>
+                            <pre class="bg-light p-3 small"><code>POST @FullUrlFor("/Groups")
+Content-Type: application/scim+json
+
+{
+  "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+  "displayName": "Engineering",
+  "members": [
+    { "value": "uuid-of-user", "type": "User" }
+  ]
+}</code></pre>
+                        }
+                        else if (selected.Key == "schemas")
+                        {
+                            <p>Returns the SCIM 2.0 schema definitions this server supports.</p>
+                            <ul>
+                                <li><code>urn:ietf:params:scim:schemas:core:2.0:User</code></li>
+                                <li><code>urn:ietf:params:scim:schemas:core:2.0:Group</code></li>
+                                <li><code>urn:ietf:params:scim:schemas:extension:enterprise:2.0:User</code></li>
+                            </ul>
+                        }
+                        else if (selected.Key == "service-provider")
+                        {
+                            <p>Returns the service provider's configuration: supported auth schemes, bulk, filter, sort, pagination, etc.</p>
+                        }
+                        else if (selected.Key == "resource-types")
+                        {
+                            <p>Returns the resource types this server exposes (User and Group) and their schemas.</p>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-info">
+                    <h4 class="alert-heading">Select an endpoint</h4>
+                    <p class="mb-0">Pick one from the left panel to see its full URL and example payloads. Use the Test Connection card above to verify a token without leaving this page.</p>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<Conduit.Core.Models.Tenant> tenants = new();
+    private string selectedSlug = "";
+    private string apiToken = "";
+    private string selectedEndpoint = "users";
+    private bool testing = false;
+    private TestResult? testResult = null;
+
+    private record EndpointInfo(string Key, string PathSuffix, string Title, string Description);
+
+    private static readonly EndpointInfo[] endpoints = new[]
+    {
+        new EndpointInfo("users",            "/Users",                  "User Endpoints",                "User management"),
+        new EndpointInfo("groups",           "/Groups",                 "Group Endpoints",               "Group management"),
+        new EndpointInfo("schemas",          "/Schemas",                "Schema Definitions",            "SCIM schema metadata"),
+        new EndpointInfo("service-provider", "/ServiceProviderConfig",  "Service Provider Config",       "Server capabilities"),
+        new EndpointInfo("resource-types",   "/ResourceTypes",          "Resource Types",                "User and Group definitions"),
+    };
+
+    private string BaseTenantUrl =>
+        string.IsNullOrEmpty(selectedSlug)
+            ? ""
+            : $"{Navigation.BaseUri.TrimEnd('/')}/scim/v2/t/{selectedSlug}";
+
+    private string FullUrlFor(string suffix) =>
+        string.IsNullOrEmpty(selectedSlug)
+            ? $"{Navigation.BaseUri.TrimEnd('/')}/scim/v2/t/{{slug}}{suffix}"
+            : $"{BaseTenantUrl}{suffix}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        tenants = await TenantRepo.GetAllAsync(includeInactive: false);
+    }
+
+    private void SelectEndpoint(string key) => selectedEndpoint = key;
+
+    private void OnTenantChanged()
+    {
+        // Clear last test result when target changes so stale status doesn't mislead.
+        testResult = null;
+    }
+
+    private async Task TestConnection()
+    {
+        testing = true;
+        testResult = null;
+        var url = $"{BaseTenantUrl}/Users?count=1";
+        var token = (apiToken ?? "").Trim();
+        var bearer = $"Bearer {token}";
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var http = HttpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(10);
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("Authorization", bearer);
+            req.Headers.TryAddWithoutValidation("Accept", "application/scim+json");
+
+            using var resp = await http.SendAsync(req);
+            sw.Stop();
+            var body = await resp.Content.ReadAsStringAsync();
+            if (body.Length > 1500) body = body.Substring(0, 1500) + "...(truncated)";
+
+            testResult = new TestResult
+            {
+                Url = url,
+                BearerSentMasked = MaskToken(token),
+                StatusCode = (int)resp.StatusCode,
+                StatusText = resp.StatusCode.ToString(),
+                Body = TryPrettyJson(body),
+                Elapsed = sw.ElapsedMilliseconds,
+                Hint = Diagnose(token, (int)resp.StatusCode, body)
+            };
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            testResult = new TestResult
+            {
+                Url = url,
+                BearerSentMasked = MaskToken(token),
+                StatusCode = 0,
+                StatusText = "no response",
+                Error = ex.Message,
+                Elapsed = sw.ElapsedMilliseconds,
+                Hint = "No HTTP response — server not reachable, name resolution failure, or TLS error. Confirm Conduit is bound to 0.0.0.0 and the URL host is correct."
+            };
+        }
+        finally { testing = false; }
+    }
+
+    private static string MaskToken(string t)
+    {
+        if (string.IsNullOrEmpty(t)) return "(empty)";
+        if (t.Length <= 8) return new string('*', t.Length);
+        return t.Substring(0, 5) + new string('*', Math.Max(3, t.Length - 9)) + t.Substring(t.Length - 4);
+    }
+
+    private static string TryPrettyJson(string s)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(s);
+            return System.Text.Json.JsonSerializer.Serialize(doc, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch { return s; }
+    }
+
+    private static string? Diagnose(string token, int code, string body)
+    {
+        if (code >= 200 && code < 300) return null;
+        if (code == 401)
+        {
+            if (string.IsNullOrWhiteSpace(token)) return "No token provided. Paste the full 'scim_<value>' mint string from Connected Systems.";
+            if (!token.StartsWith("scim_", StringComparison.OrdinalIgnoreCase))
+                return $"Token does not start with 'scim_'. The middleware requires the bearer to literally start with 'Bearer scim_'. Your token starts with '{token.Substring(0, Math.Min(8, token.Length))}...'. Paste the FULL mint string.";
+            return "Token starts with 'scim_' but its hash does not match an active token on this tenant. Either it was rotated/revoked, or you are using a token from a different tenant. Regenerate in Connected Systems and paste the new mint value.";
+        }
+        if (code == 403) return "Token is valid but scoped to a different tenant. Make sure you minted the token under the same Connected System whose slug is in the URL.";
+        if (code == 404) return "Tenant slug not found in the URL path. Check that the selected slug matches an active Connected System.";
+        if (code == 429) return "Rate limited. Wait a few seconds and retry.";
+        if (code >= 500) return "Server error. Check Conduit application logs.";
+        return null;
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+    }
+
+    public class TestResult
+    {
+        public string Url { get; set; } = "";
+        public string BearerSentMasked { get; set; } = "";
+        public int StatusCode { get; set; }
+        public string StatusText { get; set; } = "";
+        public string? Body { get; set; }
+        public string? Error { get; set; }
+        public long Elapsed { get; set; }
+        public string? Hint { get; set; }
+    }
+}

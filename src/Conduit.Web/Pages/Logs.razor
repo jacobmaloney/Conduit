@@ -1,0 +1,239 @@
+@page "/logs"
+@attribute [Authorize]
+@using Conduit.Web.Services
+@inject ApplicationLogService ApplicationLogService
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Application Logs - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1>Application Logs</h1>
+            <p class="text-muted">Monitor system activities and debug issues</p>
+        </div>
+        <div>
+            <button class="btn btn-outline-secondary me-2" @onclick="RefreshLogs">
+                <i class="oi oi-loop-circular"></i> Refresh
+            </button>
+            <button class="btn btn-outline-danger" @onclick="ClearLogs">
+                <i class="oi oi-trash"></i> Clear
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-3">
+                    <label class="form-label">Log Level</label>
+                    <select class="form-select" @bind="selectedLevel" @bind:after="RefreshLogs">
+                        <option value="">All Levels</option>
+                        <option value="Debug">Debug</option>
+                        <option value="Info">Info</option>
+                        <option value="Warning">Warning</option>
+                        <option value="Error">Error</option>
+                        <option value="Critical">Critical</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Category</label>
+                    <input type="text" class="form-control" @bind="categoryFilter" @bind:after="RefreshLogs" placeholder="e.g., GroupGeneration" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Max Results</label>
+                    <select class="form-select" @bind="maxResults" @bind:after="RefreshLogs">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" @bind="autoRefresh" @bind:after="ToggleAutoRefresh" id="autoRefreshCheck" />
+                        <label class="form-check-label" for="autoRefreshCheck">
+                            Auto-refresh (5s)
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logs Table -->
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    }
+    else if (!logs.Any())
+    {
+        <div class="alert alert-info">
+            <h4 class="alert-heading">No Logs Found</h4>
+            <p>No logs match your current filters or no logs have been generated yet.</p>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm">
+                        <thead>
+                            <tr>
+                                <th style="width: 160px;">Timestamp</th>
+                                <th style="width: 80px;">Level</th>
+                                <th style="width: 150px;">Category</th>
+                                <th>Message</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var log in logs)
+                            {
+                                <tr class="@GetRowClass(log.Level)">
+                                    <td>
+                                        <small>@log.Timestamp.ToString("HH:mm:ss.fff")</small>
+                                    </td>
+                                    <td>
+                                        <span class="badge @GetLevelBadgeClass(log.Level)">
+                                            @log.Level
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <small>@log.Category</small>
+                                    </td>
+                                    <td>
+                                        <small>@log.Message</small>
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(log.Details))
+                                        {
+                                            <small class="text-muted">@log.Details</small>
+                                        }
+                                        @if (log.Exception != null)
+                                        {
+                                            <div class="mt-1">
+                                                <small class="text-danger">
+                                                    <strong>Exception:</strong> @log.Exception.Message
+                                                </small>
+                                                @if (!string.IsNullOrEmpty(log.Exception.StackTrace))
+                                                {
+                                                    <details class="mt-1">
+                                                        <summary><small class="text-muted">Stack Trace</small></summary>
+                                                        <pre class="small text-muted mt-1">@log.Exception.StackTrace</pre>
+                                                    </details>
+                                                }
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<ApplicationLogService.LogEntry> logs = new();
+    private bool loading = true;
+    private string selectedLevel = "";
+    private string categoryFilter = "";
+    private int maxResults = 100;
+    private bool autoRefresh = false;
+    private Timer? refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshLogs();
+    }
+
+    private Task RefreshLogs()
+    {
+        loading = true;
+        
+        try
+        {
+            ApplicationLogService.LogLevel? minLevel = null;
+            if (!string.IsNullOrEmpty(selectedLevel) && Enum.TryParse<ApplicationLogService.LogLevel>(selectedLevel, out var level))
+            {
+                minLevel = level;
+            }
+
+            logs = ApplicationLogService.GetRecentLogs(
+                count: maxResults,
+                minLevel: minLevel,
+                category: string.IsNullOrEmpty(categoryFilter) ? null : categoryFilter
+            );
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading logs: {ex.Message}");
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+        return Task.CompletedTask;
+    }
+
+    private Task ClearLogs()
+    {
+        ApplicationLogService.ClearLogs();
+        return RefreshLogs();
+    }
+
+    private void ToggleAutoRefresh()
+    {
+        if (autoRefresh)
+        {
+            refreshTimer = new Timer(async _ => await InvokeAsync(async () => await RefreshLogs()), 
+                                   null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        }
+        else
+        {
+            refreshTimer?.Dispose();
+            refreshTimer = null;
+        }
+    }
+
+    private string GetLevelBadgeClass(ApplicationLogService.LogLevel level)
+    {
+        return level switch
+        {
+            ApplicationLogService.LogLevel.Debug => "bg-secondary",
+            ApplicationLogService.LogLevel.Info => "bg-primary",
+            ApplicationLogService.LogLevel.Warning => "bg-warning",
+            ApplicationLogService.LogLevel.Error => "bg-danger",
+            ApplicationLogService.LogLevel.Critical => "bg-dark",
+            _ => "bg-light"
+        };
+    }
+
+    private string GetRowClass(ApplicationLogService.LogLevel level)
+    {
+        return level switch
+        {
+            ApplicationLogService.LogLevel.Error => "table-danger",
+            ApplicationLogService.LogLevel.Critical => "table-danger",
+            ApplicationLogService.LogLevel.Warning => "table-warning",
+            _ => ""
+        };
+    }
+
+    public void Dispose()
+    {
+        refreshTimer?.Dispose();
+    }
+}
+
+@implements IDisposable

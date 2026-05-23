@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore Conduit.sln
+
+      - name: Build (Release, warnings-as-errors)
+        # We treat the warning bar as a regression gate. The repo currently builds
+        # warning-free; new warnings should fail CI rather than silently merge.
+        run: dotnet build Conduit.sln --configuration Release --no-restore /warnaserror
+
+      # Tests will be added once the test project lands — keeping the step as a
+      # placeholder so the matrix shape is stable.
+      - name: Test (if any)
+        run: dotnet test Conduit.sln --configuration Release --no-build --no-restore --verbosity normal
+        continue-on-error: true

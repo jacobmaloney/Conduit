@@ -1,0 +1,383 @@
+@page "/audit-log"
+@attribute [Authorize]
+@using Conduit.Web.Services
+@using Conduit.Web.Models
+@inject AuditLogService AuditLogService
+@inject NavigationManager Navigation
+
+<PageTitle>Audit Log - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1>Audit Log</h1>
+            <p class="text-muted">Track all system activities and changes</p>
+        </div>
+        <div>
+            <button class="btn btn-outline-secondary" @onclick="ToggleFilters">
+                <i class="oi oi-filter"></i> @(showFilters ? "Hide" : "Show") Filters
+            </button>
+            <button class="btn btn-outline-primary" @onclick="ExportLogs">
+                <i class="oi oi-data-transfer-download"></i> Export
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    @if (showFilters)
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Date Range</label>
+                        <div class="input-group">
+                            <input type="date" class="form-control" @bind="startDate" />
+                            <span class="input-group-text">to</span>
+                            <input type="date" class="form-control" @bind="endDate" />
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Action</label>
+                        <select class="form-select" @bind="selectedAction">
+                            <option value="">All Actions</option>
+                            <optgroup label="User Actions">
+                                <option value="@AuditActions.UserCreated">User Created</option>
+                                <option value="@AuditActions.UserUpdated">User Updated</option>
+                                <option value="@AuditActions.UserDeleted">User Deleted</option>
+                            </optgroup>
+                            <optgroup label="Group Actions">
+                                <option value="@AuditActions.GroupCreated">Group Created</option>
+                                <option value="@AuditActions.GroupUpdated">Group Updated</option>
+                                <option value="@AuditActions.GroupDeleted">Group Deleted</option>
+                            </optgroup>
+                            <optgroup label="Authentication">
+                                <option value="@AuditActions.LoginSuccess">Login Success</option>
+                                <option value="@AuditActions.LoginFailed">Login Failed</option>
+                                <option value="@AuditActions.TokenCreated">Token Created</option>
+                            </optgroup>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Resource Type</label>
+                        <select class="form-select" @bind="selectedResourceType">
+                            <option value="">All Types</option>
+                            <option value="User">User</option>
+                            <option value="Group">Group</option>
+                            <option value="Token">Token</option>
+                            <option value="System">System</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">User ID</label>
+                        <input type="text" class="form-control" @bind="userId" placeholder="Filter by user ID" />
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button class="btn btn-primary w-100" @onclick="ApplyFilters">Apply Filters</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Statistics -->
+    @if (statistics != null)
+    {
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title">Total Events</h5>
+                        <h2 class="text-primary">@statistics.TotalEvents.ToString("N0")</h2>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title">Unique Users</h5>
+                        <h2 class="text-info">@statistics.UniqueUsers</h2>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title">Unique IPs</h5>
+                        <h2 class="text-warning">@statistics.UniqueIpAddresses</h2>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title">Avg Duration</h5>
+                        <h2 class="text-success">@(statistics.AverageDurationMs?.ToString("F0") ?? "0") ms</h2>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Logs Table -->
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    }
+    else if (!logs.Any())
+    {
+        <div class="alert alert-info">
+            <h4 class="alert-heading">No Audit Logs Found</h4>
+            <p>No audit logs match your current filters.</p>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm">
+                        <thead>
+                            <tr>
+                                <th style="width: 180px;">Timestamp</th>
+                                <th>Action</th>
+                                <th>Resource</th>
+                                <th>User</th>
+                                <th>IP Address</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (Conduit.Web.Models.AuditLog log in logs)
+                            {
+                                <tr>
+                                    <td>
+                                        <small>@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss") UTC</small>
+                                    </td>
+                                    <td>
+                                        <span class="badge @GetActionBadgeClass(log.Action)">
+                                            @GetActionDisplayName(log.Action)
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <small>
+                                            @log.ResourceType
+                                            @if (!string.IsNullOrEmpty(log.ResourceId))
+                                            {
+                                                <br />
+                                                <code>@log.ResourceId</code>
+                                            }
+                                        </small>
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(log.UserName))
+                                        {
+                                            <small>@log.UserName</small>
+                                        }
+                                        else if (!string.IsNullOrEmpty(log.UserId))
+                                        {
+                                            <small><code>@log.UserId</code></small>
+                                        }
+                                        else
+                                        {
+                                            <small class="text-muted">System</small>
+                                        }
+                                    </td>
+                                    <td>
+                                        <small>@(log.IpAddress ?? "-")</small>
+                                    </td>
+                                    <td>
+                                        @if (log.StatusCode.HasValue)
+                                        {
+                                            <span class="badge @GetStatusBadgeClass(log.StatusCode.Value)">
+                                                @log.StatusCode
+                                            </span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (log.Duration.HasValue)
+                                        {
+                                            <small>@log.Duration.Value.TotalMilliseconds.ToString("F0") ms</small>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(log.Details))
+                                        {
+                                            <small class="text-muted">@log.Details</small>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pagination -->
+        @if (totalPages > 1)
+        {
+            <nav aria-label="Audit log pagination" class="mt-4">
+                <ul class="pagination justify-content-center">
+                    <li class="page-item @(currentPage == 1 ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadLogs(currentPage - 1)" disabled="@(currentPage == 1)">
+                            Previous
+                        </button>
+                    </li>
+                    
+                    @for (int i = Math.Max(1, currentPage - 2); i <= Math.Min(totalPages, currentPage + 2); i++)
+                    {
+                        var pageNum = i;
+                        <li class="page-item @(currentPage == pageNum ? "active" : "")">
+                            <button class="page-link" @onclick="() => LoadLogs(pageNum)">
+                                @pageNum
+                            </button>
+                        </li>
+                    }
+                    
+                    <li class="page-item @(currentPage == totalPages ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadLogs(currentPage + 1)" disabled="@(currentPage == totalPages)">
+                            Next
+                        </button>
+                    </li>
+                </ul>
+            </nav>
+        }
+    }
+</div>
+
+@code {
+    private List<Conduit.Web.Models.AuditLog> logs = new();
+    private AuditLogStatistics? statistics;
+    private bool loading = true;
+    private bool showFilters = false;
+    
+    // Pagination
+    private int currentPage = 1;
+    private int pageSize = 50;
+    private int totalCount = 0;
+    private int totalPages = 1;
+    
+    // Filters
+    private DateTime? startDate = DateTime.Today.AddDays(-7);
+    private DateTime? endDate = DateTime.Today.AddDays(1);
+    private string? selectedAction = "";
+    private string? selectedResourceType = "";
+    private string? userId = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLogs(1);
+        await LoadStatistics();
+    }
+
+    private async Task LoadLogs(int page)
+    {
+        loading = true;
+        currentPage = page;
+
+        try
+        {
+            var (loadedLogs, count) = await AuditLogService.GetLogsAsync(
+                startDate: startDate,
+                endDate: endDate,
+                action: string.IsNullOrEmpty(selectedAction) ? null : selectedAction,
+                resourceType: string.IsNullOrEmpty(selectedResourceType) ? null : selectedResourceType,
+                userId: string.IsNullOrEmpty(userId) ? null : userId,
+                page: page,
+                pageSize: pageSize
+            );
+
+            logs = loadedLogs;
+            totalCount = count;
+            totalPages = (int)Math.Ceiling((double)totalCount / pageSize);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading audit logs: {ex.Message}");
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task LoadStatistics()
+    {
+        try
+        {
+            statistics = await AuditLogService.GetStatisticsAsync(startDate, endDate);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading statistics: {ex.Message}");
+        }
+    }
+
+    private void ToggleFilters()
+    {
+        showFilters = !showFilters;
+    }
+
+    private async Task ApplyFilters()
+    {
+        await LoadLogs(1);
+        await LoadStatistics();
+    }
+
+    private async Task ExportLogs()
+    {
+        // In a real app, this would export to CSV or JSON
+        await JSRuntime.InvokeVoidAsync("alert", "Export functionality would be implemented here");
+    }
+
+    private string GetActionBadgeClass(string action)
+    {
+        return action switch
+        {
+            var a when a.StartsWith("SCIM_GET") => "bg-primary",
+            var a when a.StartsWith("SCIM_POST") => "bg-success",
+            var a when a.StartsWith("SCIM_PUT") => "bg-info",
+            var a when a.StartsWith("SCIM_PATCH") => "bg-warning",
+            var a when a.StartsWith("SCIM_DELETE") => "bg-danger",
+            var a when a.Contains("CREATED") => "bg-success",
+            var a when a.Contains("UPDATED") => "bg-info",
+            var a when a.Contains("DELETED") => "bg-danger",
+            var a when a.Contains("FAILED") => "bg-danger",
+            var a when a.Contains("SUCCESS") => "bg-success",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetStatusBadgeClass(int statusCode)
+    {
+        return statusCode switch
+        {
+            >= 200 and < 300 => "bg-success",
+            >= 300 and < 400 => "bg-info",
+            >= 400 and < 500 => "bg-warning",
+            >= 500 => "bg-danger",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetActionDisplayName(string action)
+    {
+        // Special formatting for SCIM connections
+        if (action.StartsWith("SCIM_"))
+        {
+            var method = action.Replace("SCIM_", "");
+            return $"SCIM {method}";
+        }
+        return action.Replace("_", " ");
+    }
+
+    [Inject]
+    private IJSRuntime JSRuntime { get; set; } = default!;
+}

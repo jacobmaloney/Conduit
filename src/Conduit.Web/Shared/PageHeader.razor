@@ -1,0 +1,93 @@
+@using Conduit.Core.Models
+@using Conduit.Web.Services
+@inject ActiveSystemState ActiveSystem
+@inject NavigationManager Navigation
+@implements IDisposable
+
+@*
+    Standard secondary-page header. Renders:
+      - Page title + optional lede
+      - "Connected to" pill so the active system is always visible at the top of every page
+      - Quick Connect button → navigates to /quick-connect (which renders slug-aware examples
+        for whichever Connected System is active in the sidebar)
+      - Optional Actions slot for page-specific buttons
+*@
+
+<div class="page-header">
+    <div class="page-header-left">
+        <h1 class="page-header-title">
+            @Title
+            @if (Count is { } c)
+            {
+                <span class="page-header-count" title="@(CountLabel ?? "Total")">@c.ToString("N0")</span>
+            }
+        </h1>
+        @if (!string.IsNullOrEmpty(Subtitle))
+        {
+            <div class="page-header-subtitle">@Subtitle</div>
+        }
+        else if (SubtitleContent is not null)
+        {
+            <div class="page-header-subtitle">@SubtitleContent</div>
+        }
+    </div>
+    <div class="page-header-right">
+        @{
+            var sys = ActiveSystem.ActiveSystem;
+        }
+        @if (sys is null)
+        {
+            <span class="page-header-conn page-header-conn-empty">
+                <span class="page-header-conn-eyebrow">Connected to</span>
+                <span class="kind-pill">No system — pick one in the sidebar</span>
+            </span>
+        }
+        else
+        {
+            <span class="page-header-conn">
+                <span class="page-header-conn-eyebrow">Connected to</span>
+                <strong class="page-header-conn-name">@sys.Name</strong>
+                <span class="kind-pill @(sys.SystemType == "Real" ? "kind-real" : "kind-emulator")">@sys.SystemType</span>
+                @if (!string.IsNullOrWhiteSpace(sys.Slug))
+                {
+                    <code class="page-header-conn-slug">@sys.Slug</code>
+                }
+            </span>
+        }
+        @if (ShowQuickConnect && sys is not null)
+        {
+            <button type="button" class="btn btn-sm btn-quick-connect" @onclick="GoToQuickConnect" title="Show endpoint URLs and code examples for this Connected System">
+                <i class="oi oi-flash" aria-hidden="true"></i>
+                Quick Connect
+            </button>
+        }
+        @if (Actions is not null)
+        {
+            <span class="page-header-actions">@Actions</span>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public RenderFragment? SubtitleContent { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    [Parameter] public bool ShowQuickConnect { get; set; } = true;
+    [Parameter] public int? Count { get; set; }
+    [Parameter] public string? CountLabel { get; set; }
+
+    protected override void OnInitialized()
+    {
+        ActiveSystem.OnChangeAsync += HandleChangedAsync;
+    }
+
+    private Task HandleChangedAsync() => InvokeAsync(StateHasChanged);
+
+    private void GoToQuickConnect() => Navigation.NavigateTo("/quick-connect");
+
+    public void Dispose()
+    {
+        ActiveSystem.OnChangeAsync -= HandleChangedAsync;
+    }
+}

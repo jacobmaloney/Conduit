@@ -1,0 +1,378 @@
+@page "/configuration"
+@attribute [Authorize]
+@using Microsoft.Extensions.Configuration
+@using Conduit.DataAccess
+@using Conduit.Web.Authentication
+@using Conduit.Web.Services
+@inject IConfiguration Config
+@inject NavigationManager Navigation
+@inject OpenAccessState OpenAccess
+
+<PageTitle>Configuration - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <h1>Configuration</h1>
+    <p class="lead">View and manage SCIM server configuration settings</p>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <!-- Portal Security: open-access toggle -->
+            <div class="card mb-4 @(OpenAccess.IsEnabled ? "border-warning" : "")">
+                <div class="card-header @(OpenAccess.IsEnabled ? "bg-warning bg-opacity-25" : "")">
+                    <h5 class="mb-0"><i class="oi oi-lock-locked"></i> Portal Authentication</h5>
+                </div>
+                <div class="card-body">
+                    <p class="mb-3 text-muted">
+                        Controls whether the portal/web UI requires sign-in. The SCIM, generic REST,
+                        SQL emulator, and ARS proxy surfaces are <strong>unaffected</strong> — they
+                        always require a <code>scim_</code> bearer token regardless of this setting.
+                    </p>
+
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="openAccessToggle"
+                               checked="@OpenAccess.IsEnabled"
+                               @onchange="OnToggleOpenAccess"
+                               disabled="@toggling" />
+                        <label class="form-check-label" for="openAccessToggle">
+                            <strong>Open access</strong>
+                            — skip portal login (for demos / local testing only)
+                        </label>
+                    </div>
+
+                    @if (OpenAccess.IsEnabled)
+                    {
+                        <div class="alert alert-warning small mb-0">
+                            <i class="oi oi-warning"></i>
+                            <strong>Portal authentication is OFF.</strong>
+                            Anyone reaching this server's portal pages is signed in as admin automatically.
+                            Toggle off before exposing the portal to anything but localhost.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="small text-muted">
+                            Portal sign-in is required. Manage credentials in the <code>PortalAdmins</code> table or via the Setup wizard.
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(toggleError))
+                    {
+                        <div class="alert alert-danger small mt-2 mb-0">@toggleError</div>
+                    }
+                </div>
+            </div>
+
+            <!-- Database Configuration -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="oi oi-hard-drive"></i> Database Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Connection String:</dt>
+                        <dd class="col-sm-8">
+                            <code class="text-muted">@MaskConnectionString(Config.GetConnectionString("DefaultConnection") ?? "Not configured")</code>
+                        </dd>
+                        
+                        <dt class="col-sm-4">Database Provider:</dt>
+                        <dd class="col-sm-8">SQL Server</dd>
+                        
+                        <dt class="col-sm-4">Connection Status:</dt>
+                        <dd class="col-sm-8">
+                            @if (databaseConnected)
+                            {
+                                <span class="badge bg-success">Connected</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger">Disconnected</span>
+                            }
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- JWT Configuration -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="oi oi-lock-locked"></i> JWT Authentication Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Issuer:</dt>
+                        <dd class="col-sm-8">@(Config["Jwt:Issuer"] ?? "Not configured")</dd>
+                        
+                        <dt class="col-sm-4">Audience:</dt>
+                        <dd class="col-sm-8">@(Config["Jwt:Audience"] ?? "Not configured")</dd>
+                        
+                        <dt class="col-sm-4">Token Expiration:</dt>
+                        <dd class="col-sm-8">@(Config["Jwt:ExpirationMinutes"] ?? "60") minutes</dd>
+                        
+                        <dt class="col-sm-4">Validate Issuer:</dt>
+                        <dd class="col-sm-8">@(Config["Jwt:ValidateIssuer"] ?? "true")</dd>
+                        
+                        <dt class="col-sm-4">Validate Audience:</dt>
+                        <dd class="col-sm-8">@(Config["Jwt:ValidateAudience"] ?? "true")</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- SCIM Configuration -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="oi oi-share-boxed"></i> SCIM Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">SCIM Version:</dt>
+                        <dd class="col-sm-8">2.0</dd>
+                        
+                        <dt class="col-sm-4">Base URL:</dt>
+                        <dd class="col-sm-8">@Navigation.BaseUri</dd>
+                        
+                        <dt class="col-sm-4">Users Endpoint:</dt>
+                        <dd class="col-sm-8"><code>/scim/v2/Users</code></dd>
+                        
+                        <dt class="col-sm-4">Groups Endpoint:</dt>
+                        <dd class="col-sm-8"><code>/scim/v2/Groups</code></dd>
+                        
+                        <dt class="col-sm-4">Service Provider Config:</dt>
+                        <dd class="col-sm-8"><code>/scim/v2/ServiceProviderConfig</code></dd>
+                        
+                        <dt class="col-sm-4">Resource Types:</dt>
+                        <dd class="col-sm-8"><code>/scim/v2/ResourceTypes</code></dd>
+                        
+                        <dt class="col-sm-4">Schemas:</dt>
+                        <dd class="col-sm-8"><code>/scim/v2/Schemas</code></dd>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Server Configuration -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="oi oi-cog"></i> Server Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Environment:</dt>
+                        <dd class="col-sm-8">@Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")</dd>
+                        
+                        <dt class="col-sm-4">Application Name:</dt>
+                        <dd class="col-sm-8">Conduit</dd>
+                        
+                        <dt class="col-sm-4">Version:</dt>
+                        <dd class="col-sm-8">1.0.0</dd>
+                        
+                        <dt class="col-sm-4">CORS Policy:</dt>
+                        <dd class="col-sm-8">Enabled (Allow All Origins)</dd>
+                        
+                        <dt class="col-sm-4">HTTPS Redirection:</dt>
+                        <dd class="col-sm-8">Enabled</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <!-- Quick Actions -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Quick Actions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-primary" @onclick="TestDatabaseConnection" disabled="@testingConnection">
+                            @if (testingConnection)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                <span>Testing...</span>
+                            }
+                            else
+                            {
+                                <i class="oi oi-pulse me-2"></i>
+                                <span>Test Database Connection</span>
+                            }
+                        </button>
+                        <button class="btn btn-outline-secondary" @onclick="ExportConfiguration">
+                            <i class="oi oi-data-transfer-download"></i> Export Configuration
+                        </button>
+                        <a href="/database-settings" class="btn btn-outline-primary">
+                            <i class="oi oi-hard-drive"></i> Change SQL Server
+                        </a>
+                        <a href="/setup" class="btn btn-outline-warning">
+                            <i class="oi oi-wrench"></i> Re-run Setup
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration Tips -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Configuration Tips</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Security Best Practices:</h6>
+                    <ul class="small">
+                        <li>Always use HTTPS in production</li>
+                        <li>Use strong JWT secret keys</li>
+                        <li>Enable JWT validation</li>
+                        <li>Restrict CORS origins in production</li>
+                        <li>Use encrypted database connections</li>
+                    </ul>
+                    
+                    <h6 class="mt-3">Performance Tips:</h6>
+                    <ul class="small mb-0">
+                        <li>Adjust token expiration based on usage</li>
+                        <li>Enable database connection pooling</li>
+                        <li>Monitor database query performance</li>
+                        <li>Use appropriate page sizes for SCIM queries</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration Files -->
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="oi oi-file"></i> Configuration Files</h5>
+        </div>
+        <div class="card-body">
+            <p>Configuration is loaded from the following sources (in order of precedence):</p>
+            <ol>
+                <li>Environment Variables</li>
+                <li>appsettings.{Environment}.json</li>
+                <li>appsettings.json</li>
+                <li>User Secrets (Development only)</li>
+                <li>Command Line Arguments</li>
+            </ol>
+            
+            <div class="alert alert-info mt-3">
+                <i class="oi oi-info"></i> <strong>Note:</strong> To modify configuration, update the appropriate appsettings.json file or set environment variables. Some changes may require restarting the application.
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool databaseConnected = false;
+    private bool testingConnection = false;
+
+    // Open-access toggle state
+    private bool toggling;
+    private string toggleError = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await TestDatabaseConnection();
+    }
+
+    private async Task OnToggleOpenAccess(ChangeEventArgs e)
+    {
+        if (toggling) return;
+        var enable = e.Value is bool b && b;
+        toggling = true;
+        toggleError = "";
+        StateHasChanged();
+        try
+        {
+            await OpenAccess.SetAsync(enable);
+        }
+        catch (Exception ex)
+        {
+            toggleError = $"Could not save the setting: {ex.Message}";
+        }
+        finally
+        {
+            toggling = false;
+        }
+    }
+
+    private string MaskConnectionString(string connectionString)
+    {
+        if (string.IsNullOrEmpty(connectionString))
+            return connectionString;
+
+        // Mask password in connection string
+        var pattern = @"(Password|Pwd|password|pwd)\s*=\s*([^;]+)";
+        return System.Text.RegularExpressions.Regex.Replace(connectionString, pattern, "$1=****");
+    }
+
+    private async Task TestDatabaseConnection()
+    {
+        testingConnection = true;
+        StateHasChanged();
+
+        try
+        {
+            // Try to connect to database
+            using var connection = new Microsoft.Data.SqlClient.SqlConnection(Config.GetConnectionString("DefaultConnection"));
+            await connection.OpenAsync();
+            databaseConnected = true;
+        }
+        catch
+        {
+            databaseConnected = false;
+        }
+        finally
+        {
+            testingConnection = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ExportConfiguration()
+    {
+        // Create configuration export
+        var config = new
+        {
+            Database = new
+            {
+                Provider = "SQL Server",
+                ConnectionString = MaskConnectionString(Config.GetConnectionString("DefaultConnection") ?? "")
+            },
+            JWT = new
+            {
+                Issuer = Config["Jwt:Issuer"],
+                Audience = Config["Jwt:Audience"],
+                ExpirationMinutes = Config["Jwt:ExpirationMinutes"],
+                ValidateIssuer = Config["Jwt:ValidateIssuer"],
+                ValidateAudience = Config["Jwt:ValidateAudience"]
+            },
+            SCIM = new
+            {
+                Version = "2.0",
+                BaseUrl = Navigation.BaseUri,
+                Endpoints = new
+                {
+                    Users = "/scim/v2/Users",
+                    Groups = "/scim/v2/Groups",
+                    ServiceProviderConfig = "/scim/v2/ServiceProviderConfig",
+                    ResourceTypes = "/scim/v2/ResourceTypes",
+                    Schemas = "/scim/v2/Schemas"
+                }
+            },
+            Server = new
+            {
+                Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+                Version = "1.0.0",
+                CorsEnabled = true,
+                HttpsRedirection = true
+            }
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions 
+        { 
+            WriteIndented = true 
+        });
+
+        // In a real app, you would download this as a file
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", json);
+        await JSRuntime.InvokeVoidAsync("alert", "Configuration exported to clipboard!");
+    }
+
+    [Inject]
+    private IJSRuntime JSRuntime { get; set; } = default!;
+}

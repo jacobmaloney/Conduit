@@ -1,0 +1,262 @@
+@page "/"
+@attribute [Authorize]
+@inject Conduit.DataAccess.Repositories.UserRepository UserRepository
+@inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+
+<PageTitle>Conduit - Enterprise Identity Management</PageTitle>
+
+<div class="hero-section mx-n4 mt-n4">
+    <div class="hero-content">
+        <h1 class="hero-title">Conduit 2.0</h1>
+        <p class="hero-subtitle">Enterprise-ready identity management solution with full SCIM 2.0 compliance</p>
+        <div class="hero-actions">
+            <a href="/users" class="btn btn-hero-primary">
+                <i class="oi oi-people"></i> Get Started
+            </a>
+            <a href="/api-explorer" class="btn btn-hero-secondary">
+                <i class="oi oi-code"></i> Explore API
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid features-section">
+    <div class="section-header">
+        <h2>Powerful Features for Modern Identity Management</h2>
+        <p>Everything you need to manage identities at scale</p>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-primary-gradient">
+                    <i class="oi oi-people"></i>
+                </div>
+                <h3>User Management</h3>
+                <p>Comprehensive user lifecycle management with support for custom attributes and enterprise extensions.</p>
+                <a href="/users" class="feature-link">Manage Users <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-success-gradient">
+                    <i class="oi oi-badge"></i>
+                </div>
+                <h3>Group Management</h3>
+                <p>Create and manage groups with dynamic membership rules and nested group support.</p>
+                <a href="/groups" class="feature-link">Manage Groups <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-warning-gradient">
+                    <i class="oi oi-key"></i>
+                </div>
+                <h3>API Authentication</h3>
+                <p>Secure API access with JWT tokens and comprehensive authentication management.</p>
+                <a href="/tokens" class="feature-link">API Tokens <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-info-gradient">
+                    <i class="oi oi-code"></i>
+                </div>
+                <h3>API Explorer</h3>
+                <p>Interactive API testing interface with real-time request/response visualization.</p>
+                <a href="/api-explorer" class="feature-link">Explore API <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-danger-gradient">
+                    <i class="oi oi-cog"></i>
+                </div>
+                <h3>Configuration</h3>
+                <p>Customize schemas, attributes, and server settings to match your requirements.</p>
+                <a href="/configuration" class="feature-link">Configure <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-purple-gradient">
+                    <i class="oi oi-graph"></i>
+                </div>
+                <h3>Audit Trail</h3>
+                <p>Complete visibility into all SCIM operations with detailed audit logging.</p>
+                <a href="/audit" class="feature-link">View Logs <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="stats-section">
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-3 col-sm-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon text-primary">
+                        <i class="oi oi-people"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>@userCount</h3>
+                        <p>Total Users</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3 col-sm-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon text-success">
+                        <i class="oi oi-check"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>@activeUserCount</h3>
+                        <p>Active Users</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3 col-sm-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon text-warning">
+                        <i class="oi oi-badge"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>@groupCount</h3>
+                        <p>Groups</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3 col-sm-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon text-info">
+                        <i class="oi oi-key"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>@tokenCount</h3>
+                        <p>API Tokens</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid mt-4">
+    <div class="section-header">
+        <h2>Connected Systems</h2>
+        <p>External identity targets this server talks to. <a href="/connected-systems">Manage →</a></p>
+    </div>
+    @if (systemStats.Count == 0)
+    {
+        <div class="alert alert-info">
+            No connected systems configured yet. <a href="/connected-systems">Connect one →</a>
+        </div>
+    }
+    else
+    {
+        <div class="row">
+            @foreach (var s in systemStats)
+            {
+                <div class="col-md-6 col-lg-4 mb-3">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <h5 class="card-title mb-1">@s.Name</h5>
+                                    <small class="text-muted"><code>@s.Slug</code></small>
+                                </div>
+                                @if (s.SystemType == "Real")
+                                {
+                                    <span class="badge bg-success">REAL</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-warning text-dark">EMULATOR</span>
+                                }
+                            </div>
+                            <div class="row text-center mt-3">
+                                <div class="col"><div class="fw-bold">@s.UserCount</div><small class="text-muted">Users</small></div>
+                                <div class="col"><div class="fw-bold">@s.GroupCount</div><small class="text-muted">Groups</small></div>
+                                <div class="col"><div class="fw-bold">@s.TokenCount</div><small class="text-muted">Tokens</small></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<div class="api-section">
+    <div class="container-fluid">
+        <div class="section-header">
+            <h2>RESTful API Endpoints</h2>
+            <p>Full SCIM 2.0 compliant API with comprehensive resource management</p>
+        </div>
+        <div class="api-grid">
+            <div class="api-endpoint">
+                <span class="method get">GET</span>
+                <code>/scim/v2/Users</code>
+                <span class="description">List all users with pagination and filtering</span>
+            </div>
+            <div class="api-endpoint">
+                <span class="method post">POST</span>
+                <code>/scim/v2/Users</code>
+                <span class="description">Create a new user resource</span>
+            </div>
+            <div class="api-endpoint">
+                <span class="method get">GET</span>
+                <code>/scim/v2/Users/{id}</code>
+                <span class="description">Retrieve a specific user by ID</span>
+            </div>
+            <div class="api-endpoint">
+                <span class="method put">PUT</span>
+                <code>/scim/v2/Users/{id}</code>
+                <span class="description">Replace an entire user resource</span>
+            </div>
+            <div class="api-endpoint">
+                <span class="method patch">PATCH</span>
+                <code>/scim/v2/Users/{id}</code>
+                <span class="description">Partially update a user resource</span>
+            </div>
+            <div class="api-endpoint">
+                <span class="method delete">DELETE</span>
+                <code>/scim/v2/Users/{id}</code>
+                <span class="description">Remove a user from the system</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private int userCount = 0;
+    private int activeUserCount = 0;
+    private int groupCount = 0;
+    private int tokenCount = 0;
+    private List<Conduit.DataAccess.Repositories.TenantStats> systemStats = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var (users, count) = await UserRepository.GetAllAsync(new Conduit.Core.Models.ScimQueryOptions { Count = 1 });
+            userCount = count;
+            activeUserCount = users.Count(u => u.Active);
+        }
+        catch
+        {
+            userCount = 0;
+            activeUserCount = 0;
+        }
+        try
+        {
+            systemStats = await TenantRepo.GetStatsAsync();
+            groupCount = systemStats.Sum(s => s.GroupCount);
+            tokenCount = systemStats.Sum(s => s.TokenCount);
+        }
+        catch
+        {
+            systemStats = new();
+        }
+    }
+}

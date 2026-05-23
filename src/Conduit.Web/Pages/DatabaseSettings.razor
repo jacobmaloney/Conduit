@@ -1,0 +1,322 @@
+@page "/database-settings"
+@attribute [Authorize]
+@using Microsoft.Extensions.Configuration
+@using Conduit.Web.Services
+@inject SetupService SetupService
+@inject IConfiguration Configuration
+@inject NavigationManager Navigation
+
+<PageTitle>Database Settings - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <h1>Database Settings</h1>
+    <p class="lead">Change the SQL Server / database this application uses.</p>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="oi oi-hard-drive"></i> Current Connection</h5>
+                </div>
+                <div class="card-body">
+                    <code class="text-muted">@MaskConnectionString(currentConnectionString)</code>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Choose SQL Server</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Database Type</label>
+                        <select class="form-select" @bind="databaseType">
+                            <option value="localdb">SQL Server LocalDB (Development)</option>
+                            <option value="sqlexpress">SQL Server Express</option>
+                            <option value="sqlserver">SQL Server</option>
+                            <option value="custom">Custom Connection String</option>
+                        </select>
+                    </div>
+
+                    @if (databaseType == "sqlexpress" || databaseType == "sqlserver")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Server Name</label>
+                            <input type="text" class="form-control" @bind="serverName"
+                                   placeholder="@(databaseType == "sqlexpress" ? ".\\SQLEXPRESS" : "localhost")" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Database Name</label>
+                            <input type="text" class="form-control" @bind="databaseName" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Authentication</label>
+                            <select class="form-select" @bind="authType">
+                                <option value="windows">Windows Authentication</option>
+                                <option value="sql">SQL Server Authentication</option>
+                            </select>
+                        </div>
+
+                        @if (authType == "sql")
+                        {
+                            <div class="mb-3">
+                                <label class="form-label">Username</label>
+                                <input type="text" class="form-control" @bind="dbUsername" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Password</label>
+                                <input type="password" class="form-control" @bind="dbPassword" />
+                            </div>
+                        }
+
+                        <div class="form-check mb-2">
+                            <input type="checkbox" class="form-check-input" id="trustCert" @bind="trustServerCertificate" />
+                            <label class="form-check-label" for="trustCert">Trust server certificate</label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input type="checkbox" class="form-check-input" id="encryptConn" @bind="encryptConnection" />
+                            <label class="form-check-label" for="encryptConn">Encrypt connection</label>
+                        </div>
+                    }
+                    else if (databaseType == "localdb")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Database Name</label>
+                            <input type="text" class="form-control" @bind="databaseName" />
+                        </div>
+                    }
+                    else if (databaseType == "custom")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Connection String</label>
+                            <textarea class="form-control" rows="3" @bind="customConnectionString"
+                                      placeholder="Server=localhost;Database=Conduit;..."></textarea>
+                        </div>
+                    }
+
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-secondary" @onclick="TestConnection" disabled="@testingConnection">
+                            @if (testingConnection)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                            }
+                            Test Connection
+                        </button>
+                        <button type="button" class="btn btn-primary" @onclick="SaveConnection" disabled="@(!CanSave())">
+                            @if (saving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                            }
+                            Save
+                        </button>
+                    </div>
+
+                    @if (connectionTest != null)
+                    {
+                        var alertClass = GetTestAlertClass();
+                        <div class="mt-3 alert @alertClass py-2">
+                            @GetTestMessage()
+                            @if (connectionTest.ServerReachable && !connectionTest.DatabaseExists && !string.IsNullOrWhiteSpace(connectionTest.DatabaseName))
+                            {
+                                <hr class="my-2" />
+                                <button type="button" class="btn btn-sm btn-warning" @onclick="CreateDatabaseNow" disabled="@creatingDatabase">
+                                    @if (creatingDatabase)
+                                    {
+                                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                    }
+                                    Create Database Now
+                                </button>
+                                @if (!string.IsNullOrEmpty(createDatabaseMessage))
+                                {
+                                    <div class="small mt-2 @(createDatabaseSuccess ? "text-success" : "text-danger")">
+                                        @createDatabaseMessage
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(saveMessage))
+                    {
+                        <div class="alert @(saveSuccess ? "alert-success" : "alert-danger") mt-3 py-2">
+                            @saveMessage
+                            @if (saveSuccess)
+                            {
+                                <hr class="my-2" />
+                                <small>The new connection has been written to <code>@configFileName</code>. Restart the application for all services to pick up the change.</small>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Notes</h5>
+                </div>
+                <div class="card-body small">
+                    <ul class="mb-0 ps-3">
+                        <li>Test the connection before saving.</li>
+                        <li>If the database does not exist, you'll get a "Create Database Now" button.</li>
+                        <li>Saved settings go to <code>@configFileName</code>.</li>
+                        <li>Some services cache the connection at startup — restart the app to be safe.</li>
+                        <li>If you lose connectivity and the app won't load, the <a href="/setup">setup wizard</a> is always reachable.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string currentConnectionString = "";
+    private string configFileName = "";
+
+    private string databaseType = "sqlserver";
+    private string serverName = "localhost";
+    private string databaseName = "Conduit";
+    private string authType = "sql";
+    private string dbUsername = "sa";
+    private string dbPassword = "";
+    private bool trustServerCertificate = true;
+    private bool encryptConnection = false;
+    private string customConnectionString = "";
+
+    private bool testingConnection;
+    private ConnectionTestResult? connectionTest;
+
+    private bool creatingDatabase;
+    private string createDatabaseMessage = "";
+    private bool createDatabaseSuccess;
+
+    private bool saving;
+    private string saveMessage = "";
+    private bool saveSuccess;
+
+    protected override void OnInitialized()
+    {
+        currentConnectionString = Configuration.GetConnectionString("DefaultConnection") ?? "";
+        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+        configFileName = environment == "Development" ? "appsettings.Development.json" : "appsettings.Production.json";
+    }
+
+    private string BuildConnectionString()
+    {
+        if (databaseType == "custom")
+        {
+            return customConnectionString?.Trim() ?? "";
+        }
+        if (databaseType == "localdb")
+        {
+            return $"Server=(localdb)\\mssqllocaldb;Database={databaseName};Trusted_Connection=True;";
+        }
+        var server = string.IsNullOrWhiteSpace(serverName)
+            ? (databaseType == "sqlexpress" ? ".\\SQLEXPRESS" : "localhost")
+            : serverName;
+        var cs = authType == "windows"
+            ? $"Server={server};Database={databaseName};Trusted_Connection=True;"
+            : $"Server={server};Database={databaseName};User Id={dbUsername};Password={dbPassword};";
+        if (!encryptConnection) cs += "Encrypt=False;";
+        if (trustServerCertificate) cs += "TrustServerCertificate=True;";
+        return cs;
+    }
+
+    private async Task TestConnection()
+    {
+        testingConnection = true;
+        saveMessage = "";
+        createDatabaseMessage = "";
+        try
+        {
+            connectionTest = await SetupService.TestConnectionAsync(BuildConnectionString());
+        }
+        finally
+        {
+            testingConnection = false;
+        }
+    }
+
+    private async Task CreateDatabaseNow()
+    {
+        creatingDatabase = true;
+        createDatabaseMessage = "";
+        try
+        {
+            var (success, message) = await SetupService.CreateDatabaseAsync(BuildConnectionString());
+            createDatabaseSuccess = success;
+            createDatabaseMessage = message;
+            if (success)
+            {
+                connectionTest = await SetupService.TestConnectionAsync(BuildConnectionString());
+            }
+        }
+        finally
+        {
+            creatingDatabase = false;
+        }
+    }
+
+    private bool CanSave()
+    {
+        if (saving) return false;
+        if (connectionTest == null) return false;
+        if (!connectionTest.ServerReachable) return false;
+        return connectionTest.DatabaseExists;
+    }
+
+    private async Task SaveConnection()
+    {
+        saving = true;
+        saveMessage = "";
+        try
+        {
+            var (success, message) = await SetupService.UpdateConnectionStringAsync(BuildConnectionString());
+            saveSuccess = success;
+            saveMessage = message;
+            if (success)
+            {
+                currentConnectionString = BuildConnectionString();
+            }
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private string GetTestAlertClass()
+    {
+        if (connectionTest == null) return "alert-secondary";
+        if (!connectionTest.ServerReachable) return "alert-danger";
+        if (!connectionTest.DatabaseExists) return "alert-warning";
+        return "alert-success";
+    }
+
+    private string GetTestMessage()
+    {
+        if (connectionTest == null) return "";
+        if (!connectionTest.ServerReachable)
+        {
+            return $"Connection failed: {connectionTest.ErrorMessage}";
+        }
+        if (!connectionTest.DatabaseExists)
+        {
+            return $"Connected to server, but database '{connectionTest.DatabaseName}' does not exist.";
+        }
+        if (!connectionTest.SchemaExists)
+        {
+            return $"Connected. Database '{connectionTest.DatabaseName}' exists but has no schema. Run setup or restart the app to migrate.";
+        }
+        return $"Connection successful. Database '{connectionTest.DatabaseName}' is ready.";
+    }
+
+    private static string MaskConnectionString(string cs)
+    {
+        if (string.IsNullOrEmpty(cs)) return "Not configured";
+        return System.Text.RegularExpressions.Regex.Replace(cs, @"(Password|Pwd|password|pwd)\s*=\s*([^;]+)", "$1=****");
+    }
+}
