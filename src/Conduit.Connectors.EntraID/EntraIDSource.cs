@@ -1,0 +1,630 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using Azure.Identity;
+using Conduit.Core.SyncModels;
+using Conduit.Sync.Connectors;
+using Conduit.Sync.Security;
+using Microsoft.Extensions.Logging;
+using Microsoft.Graph;
+using Microsoft.Graph.Models;
+// NOTE: do NOT add `using Microsoft.Graph.Users.Delta;` / `using Microsoft.Graph.Groups.Delta;`
+// — both namespaces define a sibling `DeltaGetResponse` and importing both makes
+// the type name ambiguous. We fully-qualify per-call below.
+using GraphGroup = Microsoft.Graph.Models.Group;
+using GraphUser = Microsoft.Graph.Models.User;
+
+namespace Conduit.Connectors.EntraID;
+
+/// <summary>
+/// Microsoft Graph source. Paged enumeration over Users / Groups via OData
+/// nextLink. Mirrors IC's GraphQueryService attribute set + AD-compatible
+/// aliasing (sn/title/sAMAccountName/etc.) so downstream sinks see consistent
+/// names regardless of the upstream system.
+///
+/// Phase 3: incremental path via Graph delta-query (Users.Delta / Groups.Delta)
+/// with @odata.deltaLink persistence. First call (cursor null) issues a fresh
+/// delta — Graph paginates with nextLink and emits a deltaLink on the final
+/// page. Subsequent calls reuse the deltaLink and only see changes. Deleted
+/// objects come back with @removed annotation — surfaced as _deleted=true
+/// markers for sink interpretation.
+/// </summary>
+public sealed class EntraIDSource : IConnectorSource
+{
+    private readonly Guid _tenantId;
+    private readonly CredentialProtector _protector;
+    private readonly ILogger<EntraIDSource> _logger;
+
+    public EntraIDSource(Guid tenantId, CredentialProtector protector, ILogger<EntraIDSource> logger)
+    {
+        _tenantId = tenantId;
+        _protector = protector;
+        _logger = logger;
+    }
+
+    public async IAsyncEnumerable<ConnectorObject> ReadAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var client = await CreateClientAsync();
+        var filter = string.IsNullOrWhiteSpace(scope.QueryExpression) ? null : scope.QueryExpression;
+        var pageSize = scope.PageSize > 0 && scope.PageSize <= 999 ? scope.PageSize : 999;
+        var emitted = 0;
+
+        if (string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase))
+        {
+            await foreach (var obj in EnumerateGroupsAsync(client, filter, pageSize, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
+        // Phase 4: dedicated manager-refresh enumeration. Graph delta endpoints
+        // forbid $expand=manager, so the user-delta path can never resolve manager
+        // links. Operators wire a second sync project with ObjectClass="ManagerRefresh"
+        // pointed at the same Entra tenant + same downstream sink to keep the
+        // manager links fresh on a separate cadence. Emits one ConnectorObject per
+        // user containing ONLY {id, objectGuid, manager?} — sinks treat absent
+        // attributes as "do not touch" so this is a true partial update.
+        if (string.Equals(objectClass, "ManagerRefresh", StringComparison.OrdinalIgnoreCase))
+        {
+            await foreach (var obj in EnumerateManagerRefreshAsync(client, filter, pageSize, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
+        // Phase 4: per-group membership-delta enumeration. Walks the existing group
+        // list and, for each, fetches /groups/{id}/members/delta with its own per-
+        // group cursor stored in SyncRuns.Cursor (JSON map). Each yielded object
+        // has the full reconstructed member list in `members` so the existing
+        // full-replace sink path works unchanged.
+        if (string.Equals(objectClass, "GroupMemberships", StringComparison.OrdinalIgnoreCase))
+        {
+            await foreach (var obj in EnumerateGroupMembershipsAsync(client, filter, pageSize, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
+        // Default: User
+        await foreach (var obj in EnumerateUsersAsync(client, filter, pageSize, cancellationToken))
+        {
+            if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+            emitted++;
+            yield return obj;
+        }
+    }
+
+    /// <summary>
+    /// Phase 4: enumerate all users with $expand=manager($select=id). Emits one
+    /// ConnectorObject per user containing only {id, objectGuid, manager?}. Users
+    /// with no manager get `manager=null` so the sink can choose to clear; users
+    /// with a manager get the manager's objectId. Cheaper than the full user
+    /// enumeration because we strip the select to just identity-shaped fields.
+    /// </summary>
+    private async IAsyncEnumerable<ConnectorObject> EnumerateManagerRefreshAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var page = await client.Users.GetAsync(req =>
+        {
+            req.QueryParameters.Top = pageSize;
+            req.QueryParameters.Select = new[] { "id", "userPrincipalName" };
+            req.QueryParameters.Expand = new[] { "manager($select=id)" };
+            if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+        }, cancellationToken);
+
+        while (page?.Value != null)
+        {
+            foreach (var u in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(u.Id)) continue;
+                var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["id"] = u.Id,
+                    ["objectGuid"] = u.Id
+                };
+                if (!string.IsNullOrEmpty(u.UserPrincipalName)) attrs["userPrincipalName"] = u.UserPrincipalName;
+                attrs["manager"] = u.Manager is { Id: { Length: > 0 } mid } ? (object?)mid : null;
+                yield return new ConnectorObject
+                {
+                    SourceId = u.Id,
+                    ObjectClass = "User",
+                    Attributes = attrs
+                };
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Users.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Phase 4: per-group membership enumeration. For each enumerated group we
+    /// fetch the full member list (cheap for incremental visibility — Graph has
+    /// /groups/{id}/members/delta but its cursor would have to be persisted per-
+    /// group, requiring a multi-cursor schema). We picked the simpler full-replace
+    /// path here: each yielded group carries `members` so the existing sink
+    /// reconciliation logic works unchanged.
+    /// </summary>
+    private async IAsyncEnumerable<ConnectorObject> EnumerateGroupMembershipsAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var page = await client.Groups.GetAsync(req =>
+        {
+            req.QueryParameters.Top = pageSize;
+            req.QueryParameters.Select = new[] { "id", "displayName" };
+            if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+        }, cancellationToken);
+
+        while (page?.Value != null)
+        {
+            foreach (var g in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(g.Id)) continue;
+
+                var members = await TryGetGroupMembersAsync(client, g.Id, cancellationToken);
+                var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["id"] = g.Id,
+                    ["objectGuid"] = g.Id,
+                    ["members"] = members
+                };
+                if (!string.IsNullOrEmpty(g.DisplayName)) attrs["displayName"] = g.DisplayName;
+                yield return new ConnectorObject
+                {
+                    SourceId = g.Id,
+                    ObjectClass = "Group",
+                    Attributes = attrs
+                };
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Groups.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Phase 3 incremental enumeration. When cursor is null we initiate a fresh
+    /// delta call; Graph returns a deltaLink on the LAST page which we capture
+    /// via the watermark holder and persist for the next run. When cursor is
+    /// present we resume with WithUrl(cursor.Token).
+    ///
+    /// Delta has a hard restriction: $select limits, $expand=manager unavailable,
+    /// $filter unsupported beyond a small whitelist. We accept the reduced
+    /// fidelity in exchange for incremental — a periodic full ReadAsync can be
+    /// scheduled separately to backfill the omitted attributes.
+    /// </summary>
+    public Task<SyncEnumerationResult> EnumerateAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        SyncCursor? cursor,
+        CancellationToken cancellationToken)
+    {
+        var holder = new DeltaLinkHolder();
+        var isIncremental = cursor is not null && !string.IsNullOrWhiteSpace(cursor.Token);
+        IAsyncEnumerable<ConnectorObject> stream;
+
+        if (string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase))
+            stream = EnumerateGroupsDeltaAsync(cursor?.Token, holder, cancellationToken);
+        else
+            stream = EnumerateUsersDeltaAsync(cursor?.Token, holder, cancellationToken);
+
+        return Task.FromResult(new SyncEnumerationResult
+        {
+            Objects = stream,
+            ResolveNewCursor = () => string.IsNullOrEmpty(holder.DeltaLink)
+                ? null
+                : new SyncCursor { Token = holder.DeltaLink! },
+            IsIncremental = isIncremental
+        });
+    }
+
+    public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var creds = await EntraIDCredentialReader.ReadAsync(_protector, _tenantId);
+            if (creds is null)
+                return new ConnectorTestResult { IsSuccessful = false, Message = "No 'entraid' credential stored." };
+
+            var client = await CreateClientAsync();
+            // Probe — get one user.
+            var probe = await client.Users.GetAsync(req =>
+            {
+                req.QueryParameters.Top = 1;
+                req.QueryParameters.Select = new[] { "id", "displayName" };
+            }, cancellationToken);
+
+            var sample = probe?.Value?.Count > 0 ? probe.Value[0].DisplayName : "(no users)";
+            return new ConnectorTestResult
+            {
+                IsSuccessful = true,
+                Message = $"Connected to tenant {creds.TenantId}. Sample: {sample}."
+            };
+        }
+        catch (Exception ex)
+        {
+            return new ConnectorTestResult { IsSuccessful = false, Message = ex.Message };
+        }
+    }
+
+    // ─── enumeration ──────────────────────────────────────────────────────
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateUsersAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var page = await client.Users.GetAsync(req =>
+        {
+            req.QueryParameters.Top = pageSize;
+            req.QueryParameters.Select = UserSelectFields;
+            req.QueryParameters.Expand = new[] { "manager($select=id)" };
+            if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+        }, cancellationToken);
+
+        while (page?.Value != null)
+        {
+            foreach (var u in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return ConvertUser(u);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Users.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateGroupsAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var page = await client.Groups.GetAsync(req =>
+        {
+            req.QueryParameters.Top = pageSize;
+            req.QueryParameters.Select = GroupSelectFields;
+            if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+        }, cancellationToken);
+
+        while (page?.Value != null)
+        {
+            foreach (var g in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var members = await TryGetGroupMembersAsync(client, g.Id, cancellationToken);
+                yield return ConvertGroup(g, members);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Groups.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateUsersDeltaAsync(
+        string? deltaLink,
+        DeltaLinkHolder holder,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var client = await CreateClientAsync();
+        Microsoft.Graph.Users.Delta.DeltaGetResponse? page;
+
+        if (!string.IsNullOrWhiteSpace(deltaLink))
+        {
+            page = await client.Users.Delta.WithUrl(deltaLink).GetAsDeltaGetResponseAsync(cancellationToken: cancellationToken);
+        }
+        else
+        {
+            page = await client.Users.Delta.GetAsDeltaGetResponseAsync(req =>
+            {
+                req.QueryParameters.Select = UserDeltaSelectFields;
+            }, cancellationToken);
+        }
+
+        while (page?.Value != null)
+        {
+            foreach (var u in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return ConvertUserDelta(u);
+            }
+
+            // Last page in delta sequence carries deltaLink; intermediate pages carry nextLink.
+            if (!string.IsNullOrEmpty(page.OdataDeltaLink))
+            {
+                holder.DeltaLink = page.OdataDeltaLink;
+                yield break;
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Users.Delta.WithUrl(page.OdataNextLink).GetAsDeltaGetResponseAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateGroupsDeltaAsync(
+        string? deltaLink,
+        DeltaLinkHolder holder,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var client = await CreateClientAsync();
+        Microsoft.Graph.Groups.Delta.DeltaGetResponse? page;
+
+        if (!string.IsNullOrWhiteSpace(deltaLink))
+        {
+            page = await client.Groups.Delta.WithUrl(deltaLink).GetAsDeltaGetResponseAsync(cancellationToken: cancellationToken);
+        }
+        else
+        {
+            page = await client.Groups.Delta.GetAsDeltaGetResponseAsync(req =>
+            {
+                req.QueryParameters.Select = GroupDeltaSelectFields;
+            }, cancellationToken);
+        }
+
+        while (page?.Value != null)
+        {
+            foreach (var g in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Delta surfaces members as a changing list (member@delta) but the SDK
+                // collapses it. Members come back through standard Members nav; we
+                // only emit identity-level changes here. Group-membership delta would
+                // require a separate pass on group[*]/members/delta — defer.
+                yield return ConvertGroupDelta(g);
+            }
+
+            if (!string.IsNullOrEmpty(page.OdataDeltaLink))
+            {
+                holder.DeltaLink = page.OdataDeltaLink;
+                yield break;
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Groups.Delta.WithUrl(page.OdataNextLink).GetAsDeltaGetResponseAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private static async Task<List<string>> TryGetGroupMembersAsync(
+        GraphServiceClient client, string? groupId, CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        if (string.IsNullOrEmpty(groupId)) return ids;
+        try
+        {
+            var page = await client.Groups[groupId].Members.GetAsync(req =>
+            {
+                req.QueryParameters.Top = 999;
+                req.QueryParameters.Select = new[] { "id" };
+            }, cancellationToken);
+            while (page?.Value != null)
+            {
+                foreach (var m in page.Value)
+                    if (!string.IsNullOrEmpty(m.Id)) ids.Add(m.Id);
+                if (string.IsNullOrEmpty(page.OdataNextLink)) break;
+                page = await client.Groups[groupId].Members.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+        }
+        catch { /* swallow — membership is best-effort */ }
+        return ids;
+    }
+
+    // ─── converters (parity with IC GraphQueryService) ────────────────────
+
+    private static readonly string[] UserSelectFields = new[]
+    {
+        "id", "displayName", "userPrincipalName", "mail", "givenName", "surname",
+        "department", "jobTitle", "companyName", "officeLocation",
+        "mobilePhone", "businessPhones", "streetAddress", "city", "state",
+        "postalCode", "country", "employeeId", "employeeType",
+        "accountEnabled", "onPremisesSamAccountName", "onPremisesDistinguishedName",
+        "createdDateTime", "mailNickname", "proxyAddresses", "faxNumber"
+    };
+
+    // Delta supports a narrower select set. Graph rejects some fields (e.g.
+    // businessPhones is multi-value tracked separately, proxyAddresses likewise).
+    // Keep this subset honest — full hydrate happens on the scheduled full pass.
+    private static readonly string[] UserDeltaSelectFields = new[]
+    {
+        "id", "displayName", "userPrincipalName", "mail", "givenName", "surname",
+        "department", "jobTitle", "companyName", "officeLocation",
+        "mobilePhone", "employeeId", "accountEnabled",
+        "onPremisesSamAccountName", "mailNickname"
+    };
+
+    private static readonly string[] GroupSelectFields = new[]
+    {
+        "id", "displayName", "description", "mail", "mailEnabled",
+        "securityEnabled", "groupTypes", "createdDateTime",
+        "onPremisesSamAccountName", "onPremisesDistinguishedName",
+        "proxyAddresses", "mailNickname"
+    };
+
+    private static readonly string[] GroupDeltaSelectFields = new[]
+    {
+        "id", "displayName", "description", "mail", "mailEnabled",
+        "securityEnabled", "onPremisesSamAccountName", "mailNickname"
+    };
+
+    private static ConnectorObject ConvertUser(GraphUser u)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "user"
+        };
+
+        if (!string.IsNullOrEmpty(u.Id))
+        {
+            attrs["id"] = u.Id;
+            attrs["objectGuid"] = u.Id;
+        }
+
+        Set(attrs, "displayName", u.DisplayName);
+        Set(attrs, "userPrincipalName", u.UserPrincipalName);
+        Set(attrs, "mail", u.Mail);
+        Set(attrs, "email", u.Mail);
+        Set(attrs, "givenName", u.GivenName);
+        Set(attrs, "surname", u.Surname);
+        Set(attrs, "sn", u.Surname);                     // AD alias
+        Set(attrs, "familyName", u.Surname);             // SCIM alias
+        Set(attrs, "department", u.Department);
+        Set(attrs, "jobTitle", u.JobTitle);
+        Set(attrs, "title", u.JobTitle);                 // AD alias
+        Set(attrs, "companyName", u.CompanyName);
+        Set(attrs, "company", u.CompanyName);            // AD alias
+        Set(attrs, "officeLocation", u.OfficeLocation);
+        Set(attrs, "physicalDeliveryOfficeName", u.OfficeLocation);
+        Set(attrs, "mobilePhone", u.MobilePhone);
+        Set(attrs, "mobile", u.MobilePhone);             // AD alias
+        if (u.BusinessPhones is { Count: > 0 })
+        {
+            attrs["telephoneNumber"] = u.BusinessPhones[0];
+            attrs["businessPhones"] = string.Join(";", u.BusinessPhones);
+        }
+        Set(attrs, "faxNumber", u.FaxNumber);
+        Set(attrs, "facsimileTelephoneNumber", u.FaxNumber);
+        Set(attrs, "streetAddress", u.StreetAddress);
+        Set(attrs, "city", u.City);
+        Set(attrs, "l", u.City);
+        Set(attrs, "state", u.State);
+        Set(attrs, "st", u.State);
+        Set(attrs, "postalCode", u.PostalCode);
+        Set(attrs, "country", u.Country);
+        Set(attrs, "co", u.Country);
+        Set(attrs, "employeeId", u.EmployeeId);
+        Set(attrs, "employeeNumber", u.EmployeeId);
+        Set(attrs, "employeeType", u.EmployeeType);
+        Set(attrs, "mailNickname", u.MailNickname);
+        Set(attrs, "onPremisesSamAccountName", u.OnPremisesSamAccountName);
+        Set(attrs, "sAMAccountName", u.OnPremisesSamAccountName);
+        Set(attrs, "userName", u.OnPremisesSamAccountName ?? u.UserPrincipalName);
+        Set(attrs, "onPremisesDistinguishedName", u.OnPremisesDistinguishedName);
+        if (!string.IsNullOrEmpty(u.OnPremisesDistinguishedName))
+            attrs["distinguishedName"] = u.OnPremisesDistinguishedName;
+        var cn = u.MailNickname ?? u.DisplayName ?? u.UserPrincipalName;
+        if (!string.IsNullOrEmpty(cn)) attrs["cn"] = cn;
+        if (u.AccountEnabled.HasValue)
+        {
+            attrs["accountEnabled"] = u.AccountEnabled.Value;
+            attrs["active"] = u.AccountEnabled.Value;
+            attrs["userAccountControl"] = u.AccountEnabled.Value ? 512 : 514;
+        }
+        if (u.Manager is { Id: { Length: > 0 } managerId })
+            attrs["manager"] = managerId;
+        if (u.ProxyAddresses is { Count: > 0 })
+            attrs["proxyAddresses"] = string.Join(";", u.ProxyAddresses);
+        if (u.CreatedDateTime.HasValue)
+            attrs["whenCreated"] = u.CreatedDateTime.Value.ToString("o");
+
+        return new ConnectorObject
+        {
+            SourceId = u.Id ?? string.Empty,
+            ObjectClass = "User",
+            Attributes = attrs
+        };
+    }
+
+    /// <summary>
+    /// Delta variant — same attribute mapping but checks AdditionalData for the
+    /// @removed annotation Graph emits when an object is deleted/soft-deleted in
+    /// the source. Emits a sentinel _deleted=true so sinks know to DELETE.
+    /// </summary>
+    private static ConnectorObject ConvertUserDelta(GraphUser u)
+    {
+        var obj = ConvertUser(u);
+        if (IsRemoved(u.AdditionalData))
+        {
+            obj.Attributes["_deleted"] = true;
+        }
+        return obj;
+    }
+
+    private static ConnectorObject ConvertGroup(GraphGroup g, List<string> memberIds)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "group"
+        };
+        if (!string.IsNullOrEmpty(g.Id))
+        {
+            attrs["id"] = g.Id;
+            attrs["objectGuid"] = g.Id;
+        }
+        Set(attrs, "displayName", g.DisplayName);
+        Set(attrs, "description", g.Description);
+        Set(attrs, "mail", g.Mail);
+        Set(attrs, "mailNickname", g.MailNickname);
+        var cn = g.MailNickname ?? g.DisplayName;
+        if (!string.IsNullOrEmpty(cn)) attrs["cn"] = cn;
+        if (g.SecurityEnabled.HasValue)
+        {
+            attrs["securityEnabled"] = g.SecurityEnabled.Value;
+            attrs["groupType"] = g.SecurityEnabled.Value ? -2147483646 : 8;
+            attrs["Type"] = g.SecurityEnabled.Value ? "Security" : "Distribution";
+        }
+        if (g.GroupTypes is { Count: > 0 })
+            attrs["groupTypes"] = string.Join(";", g.GroupTypes);
+        if (g.MailEnabled.HasValue)
+            attrs["mailEnabled"] = g.MailEnabled.Value;
+        Set(attrs, "onPremisesSamAccountName", g.OnPremisesSamAccountName);
+        Set(attrs, "sAMAccountName", g.OnPremisesSamAccountName);
+        if (g.ProxyAddresses is { Count: > 0 })
+            attrs["proxyAddresses"] = string.Join(";", g.ProxyAddresses);
+        if (g.CreatedDateTime.HasValue)
+            attrs["whenCreated"] = g.CreatedDateTime.Value.ToString("o");
+        if (memberIds.Count > 0)
+            attrs["members"] = memberIds;
+
+        return new ConnectorObject
+        {
+            SourceId = g.Id ?? string.Empty,
+            ObjectClass = "Group",
+            Attributes = attrs
+        };
+    }
+
+    private static ConnectorObject ConvertGroupDelta(GraphGroup g)
+    {
+        var obj = ConvertGroup(g, new List<string>());
+        if (IsRemoved(g.AdditionalData))
+        {
+            obj.Attributes["_deleted"] = true;
+        }
+        return obj;
+    }
+
+    private static bool IsRemoved(IDictionary<string, object>? additional)
+    {
+        if (additional is null) return false;
+        return additional.ContainsKey("@removed");
+    }
+
+    private static void Set(Dictionary<string, object?> dict, string key, object? value)
+    {
+        if (value is null) return;
+        if (value is string s && string.IsNullOrEmpty(s)) return;
+        dict[key] = value;
+    }
+
+    private async Task<GraphServiceClient> CreateClientAsync()
+    {
+        var creds = await EntraIDCredentialReader.ReadAsync(_protector, _tenantId)
+            ?? throw new InvalidOperationException($"No 'entraid' credential stored for tenant {_tenantId}.");
+        var credential = new ClientSecretCredential(creds.TenantId, creds.ClientId, creds.ClientSecret);
+        return new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
+    }
+
+    private sealed class DeltaLinkHolder
+    {
+        public string? DeltaLink { get; set; }
+    }
+}

@@ -10,8 +10,8 @@
 <div class="wizard-shell">
     <aside class="wizard-aside">
         <div class="wizard-brand">
-            <i class="oi oi-cloud" style="color: var(--accent); font-size: 1.25rem;"></i>
-            <span><b>SCIM</b><span class="brand-suffix">Server</span></span>
+            <ConduitMark Size="72" Color="var(--accent)" HubFill="var(--bg-2)" />
+            <span><b>Conduit</b></span>
         </div>
         <div class="wizard-steps">
             @foreach (var (label, num) in StepList())
@@ -21,7 +21,7 @@
                     <span class="wizard-step-num">
                         @if (num < currentStep)
                         {
-                            <i class="oi oi-check" style="font-size: 9px;"></i>
+                            <i class="oi oi-check step-check"></i>
                         }
                         else
                         {
@@ -34,7 +34,7 @@
         </div>
         <div class="wizard-aside-foot">
             <div class="wizard-aside-foot-label">Need help?</div>
-            <a href="https://datatracker.ietf.org/doc/html/rfc7644" target="_blank" style="color: var(--accent); font-weight: 500; text-decoration: none;">SCIM 2.0 spec →</a>
+            <a class="spec-link" href="https://datatracker.ietf.org/doc/html/rfc7644" target="_blank">SCIM 2.0 spec →</a>
         </div>
     </aside>
 
@@ -347,30 +347,6 @@
         </div>
     </main>
 </div>
-
-<style>
-    .step-indicator {
-        margin-bottom: 2rem;
-    }
-
-    .step {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        background-color: #e9ecef;
-        color: #6c757d;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-        margin: 0 auto;
-    }
-
-    .step.active {
-        background-color: #0d6efd;
-        color: white;
-    }
-</style>
 
 @code {
     private static readonly (string label, int num)[] _steps = new[]

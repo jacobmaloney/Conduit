@@ -12,11 +12,13 @@
             <div class="top-bar-content">
                 <div class="breadcrumb"></div>
                 <div class="top-bar-actions">
-                    <a href="/api-explorer" class="top-bar-link">
+                    @* Mono-uppercase right-aligned utility links, per design.
+                       .health adds the green dot affordance with the ring. *@
+                    <a href="/api-explorer" class="top-bar-link mono">
                         <i class="oi oi-code"></i> API Docs
                     </a>
-                    <a href="/health" target="_blank" class="top-bar-link">
-                        <i class="oi oi-pulse"></i> Health
+                    <a href="/health" target="_blank" class="top-bar-link mono health">
+                        Health
                     </a>
                 </div>
             </div>
@@ -29,22 +31,3 @@
 </div>
 
 <GenerationStatusIndicator />
-
-<style>
-    /* Grid + sidebar + content layout live in css/design.css. This file only
-       carries layout-component-local tweaks (mobile collapse, top-bar internals). */
-    .top-bar-content {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-    .top-bar-actions { display: flex; align-items: center; gap: 4px; }
-    .top-bar-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
-    .top-bar-link i { font-size: 12px; }
-
-    @@media (max-width: 768px) {
-        .page { grid-template-columns: 1fr !important; }
-        .page > .sidebar { display: none; }
-        .page > main .content { padding: 16px; }
-    }
-</style>

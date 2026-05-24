@@ -1,0 +1,215 @@
+using System;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Conduit.Core.SyncModels;
+using Conduit.Sync.Connectors;
+using Conduit.Sync.Security;
+using Microsoft.Extensions.Logging;
+
+namespace Conduit.Connectors.IdentityCenter;
+
+/// <summary>
+/// IdentityCenter source. Pages through <c>GET /api/objects/query</c>, builds
+/// a <see cref="ConnectorObject"/> per item, and stamps an incremental cursor
+/// off the highest <c>modifiedAt</c> seen in the run.
+/// </summary>
+public sealed class IdentityCenterSource : IConnectorSource
+{
+    private readonly Guid _tenantId;
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly CredentialProtector _protector;
+    private readonly ILogger<IdentityCenterSource> _logger;
+
+    public IdentityCenterSource(Guid tenantId, IHttpClientFactory httpFactory, CredentialProtector protector, ILogger<IdentityCenterSource> logger)
+    {
+        _tenantId = tenantId;
+        _httpFactory = httpFactory;
+        _protector = protector;
+        _logger = logger;
+    }
+
+    public IAsyncEnumerable<ConnectorObject> ReadAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        CancellationToken cancellationToken)
+        => EnumerateInternalAsync(objectClass, scope, null, new Watermark(), cancellationToken);
+
+    public Task<SyncEnumerationResult> EnumerateAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        SyncCursor? cursor,
+        CancellationToken cancellationToken)
+    {
+        var watermark = new Watermark();
+        var isIncremental = cursor is not null && !string.IsNullOrWhiteSpace(cursor.Token);
+        var stream = EnumerateInternalAsync(objectClass, scope, cursor?.Token, watermark, cancellationToken);
+        return Task.FromResult(new SyncEnumerationResult
+        {
+            Objects = stream,
+            ResolveNewCursor = () => new SyncCursor
+            {
+                Token = watermark.IsoSafeOrNow(),
+                IssuedAt = DateTime.UtcNow
+            },
+            IsIncremental = isIncremental
+        });
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateInternalAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        string? modifiedSinceIso,
+        Watermark watermark,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId)
+            ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
+        var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+
+        // Translate Conduit's "User" / "Group" to IC's lowercased ObjectClass.
+        var icClass = objectClass.ToLowerInvariant();
+
+        // QueryExpression on the project scope (if set) overrides class.
+        // scope.PageSize bounded to [1, 1000] (IC controller caps at 1000).
+        var pageSize = scope.PageSize > 0 && scope.PageSize <= 1000 ? scope.PageSize : 200;
+        var maxObjects = scope.MaxObjects ?? int.MaxValue;
+        var emitted = 0;
+        var page = 1;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var url = $"{creds.BaseUrl}/api/objects/query?objectClass={Uri.EscapeDataString(icClass)}&page={page}&pageSize={pageSize}";
+            if (!string.IsNullOrWhiteSpace(modifiedSinceIso))
+                url += $"&modifiedSince={Uri.EscapeDataString(modifiedSinceIso)}";
+
+            var resp = await client.GetAsync(url, cancellationToken);
+            resp.EnsureSuccessStatusCode();
+            var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var hasMore = root.TryGetProperty("hasMore", out var hmEl) && hmEl.ValueKind == JsonValueKind.True;
+            if (!root.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+                yield break;
+
+            var pageEmitted = 0;
+            foreach (var item in itemsEl.EnumerateArray())
+            {
+                if (emitted >= maxObjects) yield break;
+                var converted = Convert(item, icClass, watermark);
+                if (converted is null) continue;
+                emitted++;
+                pageEmitted++;
+                yield return converted;
+            }
+
+            if (!hasMore || pageEmitted == 0) yield break;
+            page++;
+        }
+    }
+
+    public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId);
+            if (creds is null)
+                return new ConnectorTestResult { IsSuccessful = false, Message = "No 'identitycenter' credential stored." };
+            var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+            var resp = await client.GetAsync($"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1", cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+                return new ConnectorTestResult { IsSuccessful = false, Message = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}" };
+            return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl}." };
+        }
+        catch (Exception ex)
+        {
+            return new ConnectorTestResult { IsSuccessful = false, Message = ex.Message };
+        }
+    }
+
+    private static ConnectorObject? Convert(JsonElement item, string icClass, Watermark watermark)
+    {
+        var sourceUniqueId = Str(item, "sourceUniqueId");
+        if (string.IsNullOrEmpty(sourceUniqueId)) return null;
+
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = icClass,
+            ["sourceUniqueId"] = sourceUniqueId,
+            ["objectGuid"] = sourceUniqueId
+        };
+
+        Set(attrs, "id",                Str(item, "id"));
+        Set(attrs, "displayName",       Str(item, "displayName"));
+        Set(attrs, "cn",                Str(item, "cn"));
+        Set(attrs, "dn",                Str(item, "dn"));
+        Set(attrs, "userName",          Str(item, "username"));
+        Set(attrs, "sAMAccountName",    Str(item, "username"));
+        Set(attrs, "userPrincipalName", Str(item, "userPrincipalName"));
+        if (item.TryGetProperty("isActive", out var actEl))
+        {
+            var active = actEl.ValueKind == JsonValueKind.True;
+            attrs["isActive"] = active;
+            attrs["accountEnabled"] = active;
+        }
+
+        // ModifiedAt feeds the watermark for cursor stamping.
+        if (item.TryGetProperty("modifiedAt", out var mEl)
+            && mEl.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(mEl.GetString(), null,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var mDt))
+        {
+            attrs["whenChanged"] = mDt.ToString("o");
+            watermark.Observe(mDt);
+        }
+
+        // Merge in sparse ObjectAttributes returned by IC.
+        if (item.TryGetProperty("attributes", out var attrEl) && attrEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in attrEl.EnumerateObject())
+            {
+                var v = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.ToString();
+                if (!string.IsNullOrEmpty(v)) attrs[prop.Name] = v;
+            }
+        }
+
+        // Conduit's ConnectorObject uses ObjectClass casing "User"/"Group" — match
+        // what the rest of the sink ecosystem expects.
+        var canonical = icClass switch
+        {
+            "user" => "User",
+            "group" => "Group",
+            _ => icClass
+        };
+
+        return new ConnectorObject
+        {
+            SourceId = sourceUniqueId!,
+            ObjectClass = canonical,
+            Attributes = attrs
+        };
+    }
+
+    private static string? Str(JsonElement el, string name) =>
+        el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static void Set(Dictionary<string, object?> dict, string key, object? value)
+    {
+        if (value is null) return;
+        if (value is string s && string.IsNullOrEmpty(s)) return;
+        dict[key] = value;
+    }
+
+    internal sealed class Watermark
+    {
+        public DateTime? Max { get; private set; }
+        public void Observe(DateTime dt) { if (Max is null || dt > Max.Value) Max = dt; }
+        public string IsoSafeOrNow() => (Max ?? DateTime.UtcNow).ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+    }
+}

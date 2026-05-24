@@ -566,6 +566,339 @@ END;
 "
             });
 
+            // Migration 14: V002 — Sync metadata (the symmetric-router schema).
+            // Conduit owns five tables from V002 forward: SyncProjects, SyncRuns,
+            // SyncRunLogs, AttributeMappings, ConnectionCredentials. Plus a sixth,
+            // SyncProjectScopes, that holds per-project source-side scope filters
+            // (e.g. LDAP base DN + filter for AD). Every table is workspace-capable
+            // via WorkspaceId (nullable for now — single-workspace installer).
+            //
+            // Per the conduit-symmetric-router-architecture decision:
+            //   - NO Objects table in Conduit ever.
+            //   - Connector tenants don't persist row data; data flows through to the sink.
+            //   - Emulator tenants keep using the existing Users/Groups/GroupMembers tables.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 14,
+                Name = "V002 sync metadata",
+                Description = "Adds the five sync-metadata tables (SyncProjects, SyncRuns, SyncRunLogs, AttributeMappings, ConnectionCredentials) plus SyncProjectScopes for source-side filters.",
+                SqlScript = @"
+-- 1. SyncProjects — every project flows SourceTenantId → SinkTenantId.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SyncProjects')
+BEGIN
+    CREATE TABLE [dbo].[SyncProjects] (
+        [Id]               UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [WorkspaceId]      UNIQUEIDENTIFIER NULL,
+        [Name]             NVARCHAR(200)    NOT NULL,
+        [Description]      NVARCHAR(1000)   NULL,
+        [SourceTenantId]   UNIQUEIDENTIFIER NOT NULL,
+        [SinkTenantId]     UNIQUEIDENTIFIER NOT NULL,
+        [ObjectClass]      NVARCHAR(50)     NOT NULL CONSTRAINT [DF_SyncProjects_ObjectClass] DEFAULT 'User',
+        [CronSchedule]     NVARCHAR(100)    NULL,
+        [IsEnabled]        BIT              NOT NULL CONSTRAINT [DF_SyncProjects_IsEnabled] DEFAULT 1,
+        [IsRunning]        BIT              NOT NULL CONSTRAINT [DF_SyncProjects_IsRunning] DEFAULT 0,
+        [LastRunAt]        DATETIME2        NULL,
+        [LastRunStatus]    NVARCHAR(50)     NULL,
+        [LastRunId]        UNIQUEIDENTIFIER NULL,
+        [NextScheduledRunAt] DATETIME2      NULL,
+        [TotalRuns]        INT              NOT NULL CONSTRAINT [DF_SyncProjects_TotalRuns] DEFAULT 0,
+        [SuccessfulRuns]   INT              NOT NULL CONSTRAINT [DF_SyncProjects_SuccessfulRuns] DEFAULT 0,
+        [FailedRuns]       INT              NOT NULL CONSTRAINT [DF_SyncProjects_FailedRuns] DEFAULT 0,
+        [CreatedAt]        DATETIME2        NOT NULL CONSTRAINT [DF_SyncProjects_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [LastModified]     DATETIME2        NOT NULL CONSTRAINT [DF_SyncProjects_LastModified] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_SyncProjects] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_SyncProjects_SourceTenant] FOREIGN KEY ([SourceTenantId]) REFERENCES [Tenants]([Id]),
+        CONSTRAINT [FK_SyncProjects_SinkTenant]   FOREIGN KEY ([SinkTenantId])   REFERENCES [Tenants]([Id])
+    );
+    CREATE INDEX [IX_SyncProjects_SourceTenantId] ON [SyncProjects]([SourceTenantId]);
+    CREATE INDEX [IX_SyncProjects_SinkTenantId]   ON [SyncProjects]([SinkTenantId]);
+    CREATE INDEX [IX_SyncProjects_IsEnabled]      ON [SyncProjects]([IsEnabled]) WHERE [IsEnabled] = 1;
+    CREATE INDEX [IX_SyncProjects_WorkspaceId]    ON [SyncProjects]([WorkspaceId]);
+END;
+
+-- 2. SyncRuns — one row per execution attempt. Lives forever (history).
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SyncRuns')
+BEGIN
+    CREATE TABLE [dbo].[SyncRuns] (
+        [Id]               UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [WorkspaceId]      UNIQUEIDENTIFIER NULL,
+        [SyncProjectId]    UNIQUEIDENTIFIER NOT NULL,
+        [Status]           NVARCHAR(50)     NOT NULL CONSTRAINT [DF_SyncRuns_Status] DEFAULT 'Running',
+        [TriggeredBy]      NVARCHAR(100)    NOT NULL CONSTRAINT [DF_SyncRuns_TriggeredBy] DEFAULT 'Manual',
+        [StartedAt]        DATETIME2        NOT NULL CONSTRAINT [DF_SyncRuns_StartedAt] DEFAULT SYSUTCDATETIME(),
+        [CompletedAt]      DATETIME2        NULL,
+        [DurationMs]       BIGINT           NULL,
+        [ObjectsRead]      INT              NOT NULL CONSTRAINT [DF_SyncRuns_ObjectsRead] DEFAULT 0,
+        [ObjectsCreated]   INT              NOT NULL CONSTRAINT [DF_SyncRuns_ObjectsCreated] DEFAULT 0,
+        [ObjectsUpdated]   INT              NOT NULL CONSTRAINT [DF_SyncRuns_ObjectsUpdated] DEFAULT 0,
+        [ObjectsSkipped]   INT              NOT NULL CONSTRAINT [DF_SyncRuns_ObjectsSkipped] DEFAULT 0,
+        [ObjectsFailed]    INT              NOT NULL CONSTRAINT [DF_SyncRuns_ObjectsFailed] DEFAULT 0,
+        [ErrorMessage]     NVARCHAR(MAX)    NULL,
+        CONSTRAINT [PK_SyncRuns] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_SyncRuns_SyncProjects] FOREIGN KEY ([SyncProjectId]) REFERENCES [SyncProjects]([Id])
+    );
+    CREATE INDEX [IX_SyncRuns_SyncProjectId] ON [SyncRuns]([SyncProjectId]);
+    CREATE INDEX [IX_SyncRuns_StartedAt]     ON [SyncRuns]([StartedAt] DESC);
+    CREATE INDEX [IX_SyncRuns_Status]        ON [SyncRuns]([Status]);
+END;
+
+-- 3. SyncRunLogs — per-run line log. One row per log entry.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SyncRunLogs')
+BEGIN
+    CREATE TABLE [dbo].[SyncRunLogs] (
+        [Id]          BIGINT           IDENTITY(1,1) NOT NULL,
+        [SyncRunId]   UNIQUEIDENTIFIER NOT NULL,
+        [Level]       NVARCHAR(20)     NOT NULL CONSTRAINT [DF_SyncRunLogs_Level] DEFAULT 'Info',
+        [Message]     NVARCHAR(MAX)    NOT NULL,
+        [Timestamp]   DATETIME2        NOT NULL CONSTRAINT [DF_SyncRunLogs_Timestamp] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_SyncRunLogs] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_SyncRunLogs_SyncRuns] FOREIGN KEY ([SyncRunId]) REFERENCES [SyncRuns]([Id]) ON DELETE CASCADE
+    );
+    CREATE INDEX [IX_SyncRunLogs_SyncRunId]  ON [SyncRunLogs]([SyncRunId], [Id]);
+END;
+
+-- 4. AttributeMappings — per-project source-attr → sink-attr mapping.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AttributeMappings')
+BEGIN
+    CREATE TABLE [dbo].[AttributeMappings] (
+        [Id]              UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [SyncProjectId]   UNIQUEIDENTIFIER NOT NULL,
+        [SourceAttribute] NVARCHAR(200)    NOT NULL,
+        [SinkAttribute]   NVARCHAR(200)    NOT NULL,
+        [TransformExpr]   NVARCHAR(MAX)    NULL,
+        [IsRequired]      BIT              NOT NULL CONSTRAINT [DF_AttributeMappings_IsRequired] DEFAULT 0,
+        [SortOrder]       INT              NOT NULL CONSTRAINT [DF_AttributeMappings_SortOrder] DEFAULT 0,
+        CONSTRAINT [PK_AttributeMappings] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_AttributeMappings_SyncProjects] FOREIGN KEY ([SyncProjectId]) REFERENCES [SyncProjects]([Id]) ON DELETE CASCADE
+    );
+    CREATE INDEX [IX_AttributeMappings_SyncProjectId] ON [AttributeMappings]([SyncProjectId]);
+END;
+
+-- 5. ConnectionCredentials — AES-GCM ciphertext keyed by TenantId.
+-- One row per (TenantId, CredentialName). The ciphertext blob is opaque to SQL;
+-- the encryption key comes from configuration at runtime (see CredentialProtector).
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ConnectionCredentials')
+BEGIN
+    CREATE TABLE [dbo].[ConnectionCredentials] (
+        [Id]               UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [TenantId]         UNIQUEIDENTIFIER NOT NULL,
+        [CredentialName]   NVARCHAR(100)    NOT NULL,
+        [Ciphertext]       VARBINARY(MAX)   NOT NULL,
+        [Nonce]            VARBINARY(12)    NOT NULL,
+        [Tag]              VARBINARY(16)    NOT NULL,
+        [CreatedAt]        DATETIME2        NOT NULL CONSTRAINT [DF_ConnectionCredentials_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [LastModified]     DATETIME2        NOT NULL CONSTRAINT [DF_ConnectionCredentials_LastModified] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_ConnectionCredentials] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_ConnectionCredentials_Tenants] FOREIGN KEY ([TenantId]) REFERENCES [Tenants]([Id]) ON DELETE CASCADE,
+        CONSTRAINT [UQ_ConnectionCredentials_TenantName] UNIQUE ([TenantId], [CredentialName])
+    );
+    CREATE INDEX [IX_ConnectionCredentials_TenantId] ON [ConnectionCredentials]([TenantId]);
+END;
+
+-- 6. SyncProjectScopes — per-project source-side scope filters.
+-- For AD: BaseDN + LdapFilter. For SCIM/HTTP connectors: query expression.
+-- Single row per project for now; a future migration can multi-row this if multiple scopes are needed.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SyncProjectScopes')
+BEGIN
+    CREATE TABLE [dbo].[SyncProjectScopes] (
+        [Id]             UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [SyncProjectId]  UNIQUEIDENTIFIER NOT NULL,
+        [BaseDN]         NVARCHAR(2000)   NULL,
+        [LdapFilter]     NVARCHAR(2000)   NULL,
+        [QueryExpression] NVARCHAR(MAX)   NULL,
+        [PageSize]       INT              NOT NULL CONSTRAINT [DF_SyncProjectScopes_PageSize] DEFAULT 1000,
+        [MaxObjects]     INT              NULL,
+        [IncludeDeleted] BIT              NOT NULL CONSTRAINT [DF_SyncProjectScopes_IncludeDeleted] DEFAULT 0,
+        [CreatedAt]      DATETIME2        NOT NULL CONSTRAINT [DF_SyncProjectScopes_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [LastModified]   DATETIME2        NOT NULL CONSTRAINT [DF_SyncProjectScopes_LastModified] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_SyncProjectScopes] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_SyncProjectScopes_SyncProjects] FOREIGN KEY ([SyncProjectId]) REFERENCES [SyncProjects]([Id]) ON DELETE CASCADE,
+        CONSTRAINT [UQ_SyncProjectScopes_SyncProjectId] UNIQUE ([SyncProjectId])
+    );
+END;
+"
+            });
+
+            // Migration 15: Phase 2 — incremental sync (cursors) + multi-credential
+            // selection on SyncProjects. Additive only; existing rows default cleanly.
+            //   - SyncRuns.Cursor + IsIncremental: opaque resume token persisted at
+            //     end of run; orchestrator passes back to source on next run.
+            //   - SyncProjects.SourceCredentialName / SinkCredentialName: optional
+            //     pointer into ConnectionCredentials(TenantId, CredentialName) so a
+            //     tenant can host multiple credentials (e.g. AWS IAM + AWS SSO).
+            migrations.Add(new SchemaMigration
+            {
+                Version = 15,
+                Name = "Phase 2 cursor + multi-credential pointers",
+                Description = "Adds SyncRuns.Cursor + IsIncremental for delta sync; SyncProjects.SourceCredentialName + SinkCredentialName for multi-credential-per-tenant UX.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.SyncRuns','Cursor') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncRuns] ADD [Cursor] NVARCHAR(MAX) NULL;
+END;
+IF COL_LENGTH('dbo.SyncRuns','IsIncremental') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncRuns] ADD [IsIncremental] BIT NOT NULL CONSTRAINT [DF_SyncRuns_IsIncremental] DEFAULT 0;
+END;
+IF COL_LENGTH('dbo.SyncProjects','SourceCredentialName') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [SourceCredentialName] NVARCHAR(100) NULL;
+END;
+IF COL_LENGTH('dbo.SyncProjects','SinkCredentialName') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [SinkCredentialName] NVARCHAR(100) NULL;
+END;
+"
+            });
+
+            // Migration 16: Phase 4 — async-job framework. Some sinks (notably AWS SSO
+            // Admin's CreateAccountAssignment) return an opaque RequestId instead of
+            // acting synchronously. The orchestrator persists a row here per submission;
+            // AsyncJobPollerService advances each row to Succeeded/Failed by calling the
+            // adapter's IConnectorAsyncJobResolver.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 16,
+                Name = "Phase 4 async-job framework",
+                Description = "Adds SyncRunAsyncJobs table for tracking adapter-submitted async jobs (e.g. AWS SSO assignment creations) that the AsyncJobPollerService advances out-of-band.",
+                SqlScript = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SyncRunAsyncJobs')
+BEGIN
+    CREATE TABLE [dbo].[SyncRunAsyncJobs] (
+        [Id]               BIGINT IDENTITY(1,1) NOT NULL,
+        [SyncRunId]        UNIQUEIDENTIFIER NOT NULL,
+        [SyncProjectId]    UNIQUEIDENTIFIER NOT NULL,
+        [TenantId]         UNIQUEIDENTIFIER NOT NULL,
+        [SystemType]       NVARCHAR(100)    NOT NULL,
+        [JobType]          NVARCHAR(100)    NOT NULL,
+        [JobId]            NVARCHAR(500)    NOT NULL,
+        [ObjectExternalId] NVARCHAR(500)    NULL,
+        [State]            NVARCHAR(20)     NOT NULL CONSTRAINT [DF_SyncRunAsyncJobs_State] DEFAULT 'Pending',
+        [ErrorMessage]     NVARCHAR(MAX)    NULL,
+        [PayloadJson]      NVARCHAR(MAX)    NULL,
+        [ResultJson]       NVARCHAR(MAX)    NULL,
+        [SubmittedAt]      DATETIME2        NOT NULL CONSTRAINT [DF_SyncRunAsyncJobs_SubmittedAt] DEFAULT SYSUTCDATETIME(),
+        [LastPolledAt]     DATETIME2        NULL,
+        [CompletedAt]      DATETIME2        NULL,
+        [PollAttempts]     INT              NOT NULL CONSTRAINT [DF_SyncRunAsyncJobs_PollAttempts] DEFAULT 0,
+        CONSTRAINT [PK_SyncRunAsyncJobs] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_SyncRunAsyncJobs_SyncRuns] FOREIGN KEY ([SyncRunId]) REFERENCES [SyncRuns]([Id])
+    );
+END;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SyncRunAsyncJobs_State_SubmittedAt' AND object_id = OBJECT_ID('dbo.SyncRunAsyncJobs'))
+BEGIN
+    CREATE INDEX [IX_SyncRunAsyncJobs_State_SubmittedAt] ON [dbo].[SyncRunAsyncJobs]([State], [SubmittedAt]);
+END;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SyncRunAsyncJobs_SyncRunId' AND object_id = OBJECT_ID('dbo.SyncRunAsyncJobs'))
+BEGIN
+    CREATE INDEX [IX_SyncRunAsyncJobs_SyncRunId] ON [dbo].[SyncRunAsyncJobs]([SyncRunId]);
+END;
+"
+            });
+
+            // Migration 17: Phase 7 — Workflows + WorkflowSteps tree per Sync Project.
+            // Adds a workflow/step hierarchy (mirrors IC's SyncProjectWizard model) on
+            // top of the existing SyncProjects table. AttributeMappings + SyncProjectScopes
+            // get an optional WorkflowStepId so a mapping/scope can attach to a specific
+            // step rather than the project as a whole.
+            //
+            // Backfill: every existing SyncProject gets ONE Default workflow and ONE
+            // Default Mapping step. Existing AttributeMappings + SyncProjectScopes are
+            // re-pointed at that step so projects keep working unchanged after upgrade.
+            // The orchestrator's step-routing walk treats a one-workflow / one-step
+            // project as identical to the Phase 6 source→mapping→sink loop.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 17,
+                Name = "Phase 7 workflows + steps tree",
+                Description = "Adds Workflows + WorkflowSteps tables, optional WorkflowStepId FK on AttributeMappings + SyncProjectScopes, and backfills a Default workflow + step per existing SyncProject.",
+                SqlScript = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Workflows')
+BEGIN
+    CREATE TABLE [dbo].[Workflows] (
+        [Id]            UNIQUEIDENTIFIER NOT NULL,
+        [SyncProjectId] UNIQUEIDENTIFIER NOT NULL,
+        [Name]          NVARCHAR(200)    NOT NULL,
+        [Description]   NVARCHAR(1000)   NULL,
+        [Ordinal]       INT              NOT NULL CONSTRAINT [DF_Workflows_Ordinal] DEFAULT 0,
+        [Enabled]       BIT              NOT NULL CONSTRAINT [DF_Workflows_Enabled] DEFAULT 1,
+        [CreatedAt]     DATETIME2        NOT NULL CONSTRAINT [DF_Workflows_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [ModifiedAt]    DATETIME2        NOT NULL CONSTRAINT [DF_Workflows_ModifiedAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_Workflows] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_Workflows_SyncProjects] FOREIGN KEY ([SyncProjectId]) REFERENCES [SyncProjects]([Id])
+    );
+END;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Workflows_SyncProjectId' AND object_id = OBJECT_ID('dbo.Workflows'))
+BEGIN
+    CREATE INDEX [IX_Workflows_SyncProjectId] ON [dbo].[Workflows]([SyncProjectId], [Ordinal]);
+END;
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'WorkflowSteps')
+BEGIN
+    CREATE TABLE [dbo].[WorkflowSteps] (
+        [Id]              UNIQUEIDENTIFIER NOT NULL,
+        [WorkflowId]      UNIQUEIDENTIFIER NOT NULL,
+        [Name]            NVARCHAR(200)    NOT NULL,
+        [StepType]        NVARCHAR(50)     NOT NULL CONSTRAINT [DF_WorkflowSteps_StepType] DEFAULT 'Mapping',
+        [Ordinal]         INT              NOT NULL CONSTRAINT [DF_WorkflowSteps_Ordinal] DEFAULT 0,
+        [Enabled]         BIT              NOT NULL CONSTRAINT [DF_WorkflowSteps_Enabled] DEFAULT 1,
+        [Configuration]   NVARCHAR(MAX)    NULL,
+        [CreatedAt]       DATETIME2        NOT NULL CONSTRAINT [DF_WorkflowSteps_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [ModifiedAt]      DATETIME2        NOT NULL CONSTRAINT [DF_WorkflowSteps_ModifiedAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_WorkflowSteps] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_WorkflowSteps_Workflows] FOREIGN KEY ([WorkflowId]) REFERENCES [Workflows]([Id])
+    );
+END;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WorkflowSteps_WorkflowId' AND object_id = OBJECT_ID('dbo.WorkflowSteps'))
+BEGIN
+    CREATE INDEX [IX_WorkflowSteps_WorkflowId] ON [dbo].[WorkflowSteps]([WorkflowId], [Ordinal]);
+END;
+
+-- Optional per-step FKs. Null = legacy/project-scoped (Phase 6 and earlier).
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE Name = 'WorkflowStepId' AND Object_ID = Object_ID('dbo.AttributeMappings'))
+BEGIN
+    ALTER TABLE [dbo].[AttributeMappings] ADD [WorkflowStepId] UNIQUEIDENTIFIER NULL;
+END;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AttributeMappings_WorkflowStepId' AND object_id = OBJECT_ID('dbo.AttributeMappings'))
+BEGIN
+    CREATE INDEX [IX_AttributeMappings_WorkflowStepId] ON [dbo].[AttributeMappings]([WorkflowStepId]);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE Name = 'WorkflowStepId' AND Object_ID = Object_ID('dbo.SyncProjectScopes'))
+BEGIN
+    ALTER TABLE [dbo].[SyncProjectScopes] ADD [WorkflowStepId] UNIQUEIDENTIFIER NULL;
+END;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SyncProjectScopes_WorkflowStepId' AND object_id = OBJECT_ID('dbo.SyncProjectScopes'))
+BEGIN
+    CREATE INDEX [IX_SyncProjectScopes_WorkflowStepId] ON [dbo].[SyncProjectScopes]([WorkflowStepId]);
+END;
+
+-- Backfill: one Default workflow + one Default Mapping step per existing project
+-- that doesn't already have one. Re-points existing mappings + scopes at the
+-- backfilled step. Idempotent — re-running this migration manually is a no-op.
+DECLARE @projId UNIQUEIDENTIFIER;
+DECLARE proj_cur CURSOR LOCAL FAST_FORWARD FOR
+    SELECT p.Id FROM dbo.SyncProjects p
+    WHERE NOT EXISTS (SELECT 1 FROM dbo.Workflows w WHERE w.SyncProjectId = p.Id);
+OPEN proj_cur;
+FETCH NEXT FROM proj_cur INTO @projId;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    DECLARE @wfId UNIQUEIDENTIFIER = NEWID();
+    DECLARE @stepId UNIQUEIDENTIFIER = NEWID();
+    INSERT INTO dbo.Workflows (Id, SyncProjectId, Name, Description, Ordinal, Enabled, CreatedAt, ModifiedAt)
+        VALUES (@wfId, @projId, N'Default', N'Backfilled by V17 migration.', 0, 1, SYSUTCDATETIME(), SYSUTCDATETIME());
+    INSERT INTO dbo.WorkflowSteps (Id, WorkflowId, Name, StepType, Ordinal, Enabled, Configuration, CreatedAt, ModifiedAt)
+        VALUES (@stepId, @wfId, N'Default', N'Mapping', 0, 1, NULL, SYSUTCDATETIME(), SYSUTCDATETIME());
+    UPDATE dbo.AttributeMappings   SET WorkflowStepId = @stepId WHERE SyncProjectId = @projId AND WorkflowStepId IS NULL;
+    UPDATE dbo.SyncProjectScopes  SET WorkflowStepId = @stepId WHERE SyncProjectId = @projId AND WorkflowStepId IS NULL;
+    FETCH NEXT FROM proj_cur INTO @projId;
+END;
+CLOSE proj_cur;
+DEALLOCATE proj_cur;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

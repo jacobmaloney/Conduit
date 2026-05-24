@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Conduit.Connectors.GoogleWorkspace</AssemblyName>
+    <RootNamespace>Conduit.Connectors.GoogleWorkspace</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Apis.Admin.Directory.directory_v1" Version="1.68.0.3533" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Conduit.Core\Conduit.Core.csproj" />
+    <ProjectReference Include="..\Conduit.Sync\Conduit.Sync.csproj" />
+  </ItemGroup>
+
+</Project>

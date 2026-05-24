@@ -89,23 +89,27 @@ namespace Conduit.DataAccess
             if (missingEssentialTables.Any())
             {
                 _logger.LogInformation($"Missing essential tables: {string.Join(", ", missingEssentialTables)}. Running initial schema creation.");
-                using var connection = new SqlConnection(_config.ConnectionString);
-                await connection.OpenAsync();
-                await RunInitialSchemaAsync(connection);
+                using (var connection = new SqlConnection(_config.ConnectionString))
+                {
+                    await connection.OpenAsync();
+                    await RunInitialSchemaAsync(connection);
+                }
+
+                // Re-analyze and apply v2+ migrations on top of the fresh v1 baseline.
+                // The bootstrap is intentionally minimal; migrations carry everything else.
+                analysis = await migrator.AnalyzeSchemaAsync();
+            }
+
+            // Apply any pending migrations (covers both fresh-bootstrap and existing-DB paths).
+            var migrations = migrator.GetRequiredMigrations(analysis);
+            if (migrations.Any())
+            {
+                _logger.LogInformation($"Found {migrations.Count} migrations to apply");
+                await migrator.ApplyMigrationsAsync(migrations);
             }
             else
             {
-                // Apply any pending migrations
-                var migrations = migrator.GetRequiredMigrations(analysis);
-                if (migrations.Any())
-                {
-                    _logger.LogInformation($"Found {migrations.Count} migrations to apply");
-                    await migrator.ApplyMigrationsAsync(migrations);
-                }
-                else
-                {
-                    _logger.LogInformation("Database schema is up to date");
-                }
+                _logger.LogInformation("Database schema is up to date");
             }
         }
 

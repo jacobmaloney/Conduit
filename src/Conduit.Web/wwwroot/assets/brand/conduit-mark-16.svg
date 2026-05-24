@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 160" fill="none">
+  <!-- Simplified 16px mark: hub + output only, no side nodes -->
+  <circle cx="60" cy="80" r="24" fill="#0B1424" stroke="#22D3EE" stroke-width="8"/>
+  <circle cx="60" cy="80" r="10" fill="#22D3EE"/>
+  <rect x="88" y="68" width="72" height="24" rx="12" fill="#22D3EE"/>
+  <polygon points="160,52 178,80 160,108" fill="#22D3EE"/>
+</svg>

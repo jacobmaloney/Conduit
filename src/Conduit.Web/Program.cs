@@ -8,6 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 using Conduit.Core.Services;
 using Conduit.DataAccess;
 using Conduit.DataAccess.Repositories;
+using Conduit.Web;
 using Conduit.Web.Authentication;
 using Conduit.Web.Services;
 using Conduit.Web.Middleware;
@@ -287,6 +288,63 @@ builder.Services.AddRateLimiter(opts =>
 
 // Conduit lightweight scheduler
 builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob, Conduit.Scheduling.Jobs.ConnectorHealthCheckJob>();
+
+// Sync engine — repositories, orchestrator, connector adapters, credential protector.
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncProjectRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunAsyncJobRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.WorkflowRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.ConnectionCredentialRepository>();
+builder.Services.AddScoped<Conduit.Sync.Security.CredentialProtector>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.ActiveDirectory.ActiveDirectoryAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Emulator.EmulatorAdapter>();
+// Phase 1.5 connectors
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.EntraID.EntraIDAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Okta.OktaAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.GoogleWorkspace.GoogleWorkspaceAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.GenericLdap.GenericLdapAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Scim.ScimAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Database.DatabaseAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Csv.CsvAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Aws.AwsAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Aws.AwsSsoAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SharePoint.SharePointAdapter>();
+// Phase 2 — IdentityCenter as a Conduit connector (paired with IC's /api/objects/{query,bulk}).
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.IdentityCenterAdapter>();
+builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
+builder.Services.AddScoped<Conduit.Sync.Orchestration.SyncProjectOrchestrator>();
+
+// Scheduled sync runner is Scoped-by-dependency but the scheduler instantiates
+// IScheduledJob singletons; wire it as a transient that resolves its scoped deps
+// from a per-execute scope. Simpler approach: register as singleton with an
+// IServiceScopeFactory shim — but for Phase 1A we instead register it as singleton
+// directly because all its dependencies (repos, orchestrator) are also stateless
+// per-call. SqlConnection is created per BaseRepository call.
+builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob>(sp =>
+{
+    // Build a scope on each tick by capturing the IServiceScopeFactory. The job
+    // ExecuteAsync method runs sync work which itself opens DB connections.
+    var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+    return new ScheduledJobScopedWrapper(scopeFactory,
+        s => new Conduit.Sync.Orchestration.ScheduledSyncRunnerJob(
+            s.GetRequiredService<Conduit.DataAccess.Repositories.SyncProjectRepository>(),
+            s.GetRequiredService<Conduit.Sync.Orchestration.SyncProjectOrchestrator>(),
+            s.GetRequiredService<ILogger<Conduit.Sync.Orchestration.ScheduledSyncRunnerJob>>()));
+});
+
+// Phase 4: AsyncJobPollerService — advances SyncRunAsyncJobs rows out-of-band.
+// Registered through the same scoped wrapper so per-tick repositories are fresh.
+builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob>(sp =>
+{
+    var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+    return new ScheduledJobScopedWrapper(scopeFactory,
+        s => new Conduit.Sync.Orchestration.AsyncJobPollerService(
+            s.GetRequiredService<Conduit.DataAccess.Repositories.SyncRunAsyncJobRepository>(),
+            s.GetRequiredService<Conduit.DataAccess.Repositories.SyncRunRepository>(),
+            s.GetRequiredService<Conduit.Sync.Connectors.ConnectorRegistry>(),
+            s.GetRequiredService<ILogger<Conduit.Sync.Orchestration.AsyncJobPollerService>>()));
+});
+
 builder.Services.AddHostedService<Conduit.Scheduling.SchedulerService>();
 
 var app = builder.Build();

@@ -57,7 +57,7 @@
 
                     <div class="mb-3">
                         <label class="form-label">Target System</label>
-                        <div class="p-3" style="background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);">
+                        <div class="target-system-tile">
                             @if (ActiveSystem.ActiveSystem is not null)
                             {
                                 <ContextLabel />
@@ -111,9 +111,9 @@
                             <label class="form-label">Members per group</label>
                             <div class="d-flex align-items-center gap-2">
                                 <span>Min:</span>
-                                <input type="number" class="form-control form-control-sm" style="width: 80px" @bind="minMembers" min="0" max="50" />
+                                <input type="number" class="form-control form-control-sm input-numeric-sm" @bind="minMembers" min="0" max="50" />
                                 <span>Max:</span>
-                                <input type="number" class="form-control form-control-sm" style="width: 80px" @bind="maxMembers" min="1" max="100" />
+                                <input type="number" class="form-control form-control-sm input-numeric-sm" @bind="maxMembers" min="1" max="100" />
                             </div>
                         </div>
                     }

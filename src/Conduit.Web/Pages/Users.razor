@@ -13,7 +13,7 @@
 
 <PageTitle>User Management</PageTitle>
 
-<div class="container-fluid">
+<div class="container-fluid page-paged">
     <PageHeader Title="User Management"
                 Subtitle="Browse, edit, and provision users in the active Connected System."
                 Count="totalCount > 0 ? totalCount : (int?)null"
@@ -95,7 +95,7 @@
                                     <span class="status-pill muted">Suspended</span>
                                 }
                             </td>
-                            <td class="text-muted" style="font-size: 12.5px;">@(user.EnterpriseExtension?.Manager?.DisplayName ?? "—")</td>
+                            <td class="text-muted row-meta-sm">@(user.EnterpriseExtension?.Manager?.DisplayName ?? "—")</td>
                             <td class="mono-date">@user.Meta.Created.ToString("yyyy-MM-dd")</td>
                             <td class="act-col" @onclick:stopPropagation="true">
                                 <button class="row-act" @onclick="() => ShowUserGroupsModal(user)" title="Manage Groups">
@@ -114,23 +114,25 @@
             </table>
         </div>
 
-        <nav>
-            <ul class="pagination">
-                <li class="page-item @(currentPage == 1 ? "disabled" : "")">
-                    <button class="page-link" @onclick="() => LoadUsers(currentPage - 1)">Previous</button>
-                </li>
-                @for (int i = 1; i <= totalPages; i++)
-                {
-                    var pageNum = i;
-                    <li class="page-item @(currentPage == pageNum ? "active" : "")">
-                        <button class="page-link" @onclick="() => LoadUsers(pageNum)">@pageNum</button>
+        <div class="pager-bar">
+            <nav>
+                <ul class="pagination">
+                    <li class="page-item @(currentPage == 1 ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadUsers(currentPage - 1)">Previous</button>
                     </li>
-                }
-                <li class="page-item @(currentPage == totalPages ? "disabled" : "")">
-                    <button class="page-link" @onclick="() => LoadUsers(currentPage + 1)">Next</button>
-                </li>
-            </ul>
-        </nav>
+                    @for (int i = 1; i <= totalPages; i++)
+                    {
+                        var pageNum = i;
+                        <li class="page-item @(currentPage == pageNum ? "active" : "")">
+                            <button class="page-link" @onclick="() => LoadUsers(pageNum)">@pageNum</button>
+                        </li>
+                    }
+                    <li class="page-item @(currentPage == totalPages ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadUsers(currentPage + 1)">Next</button>
+                    </li>
+                </ul>
+            </nav>
+        </div>
     }
 </div>
 
@@ -171,7 +173,7 @@
                 }
                 @if (!string.IsNullOrWhiteSpace(ext?.EmployeeNumber))
                 {
-                    <span class="badge mono" style="background: var(--bg-2); color: var(--ink-2); padding: 2px 6px; font-family: var(--font-mono); font-size: 10.5px;">@ext.EmployeeNumber</span>
+                    <span class="badge-mono-id">@ext.EmployeeNumber</span>
                 }
             </div>
         </div>
@@ -441,7 +443,7 @@
                     <i class="oi oi-warning"></i> <strong>Warning:</strong> These operations cannot be undone. Please be careful.
                 </div>
 
-                <div class="card mb-3" style="border-left: 3px solid var(--accent);">
+                <div class="card card-accent-left mb-3">
                     <div class="card-body">
                         <h6 class="card-title mb-2">Scope</h6>
                         <div class="form-check">

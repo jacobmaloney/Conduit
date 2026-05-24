@@ -73,7 +73,7 @@
                         <small class="text-muted ms-2">@(testResult.Elapsed)ms</small>
                         @if (!string.IsNullOrEmpty(testResult.Body))
                         {
-                            <pre class="bg-light p-2 mt-2 mb-0 small" style="max-height:200px;overflow:auto"><code>@testResult.Body</code></pre>
+                            <pre class="code-preview small mt-2"><code>@testResult.Body</code></pre>
                         }
                     </div>
                 </div>
@@ -145,32 +145,32 @@
                             <h6>Operations</h6>
                             <ul class="list-group mb-3">
                                 <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-primary me-2" style="width:60px">GET</span>
+                                    <span class="badge bg-primary verb-fixed me-2">GET</span>
                                     <code class="me-2">@FullUrlFor("/Users")</code>
                                     <small class="text-muted ms-auto">List all users (supports ?filter, ?count, ?startIndex)</small>
                                 </li>
                                 <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-primary me-2" style="width:60px">GET</span>
+                                    <span class="badge bg-primary verb-fixed me-2">GET</span>
                                     <code class="me-2">@FullUrlFor("/Users/{id}")</code>
                                     <small class="text-muted ms-auto">Get user by ID</small>
                                 </li>
                                 <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-success me-2" style="width:60px">POST</span>
+                                    <span class="badge bg-success verb-fixed me-2">POST</span>
                                     <code class="me-2">@FullUrlFor("/Users")</code>
                                     <small class="text-muted ms-auto">Create user</small>
                                 </li>
                                 <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-warning text-dark me-2" style="width:60px">PUT</span>
+                                    <span class="badge bg-warning text-dark verb-fixed me-2">PUT</span>
                                     <code class="me-2">@FullUrlFor("/Users/{id}")</code>
                                     <small class="text-muted ms-auto">Replace user</small>
                                 </li>
                                 <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-info text-dark me-2" style="width:60px">PATCH</span>
+                                    <span class="badge bg-info text-dark verb-fixed me-2">PATCH</span>
                                     <code class="me-2">@FullUrlFor("/Users/{id}")</code>
                                     <small class="text-muted ms-auto">Partial update (enable/disable via active=false)</small>
                                 </li>
                                 <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-danger me-2" style="width:60px">DELETE</span>
+                                    <span class="badge bg-danger verb-fixed me-2">DELETE</span>
                                     <code class="me-2">@FullUrlFor("/Users/{id}")</code>
                                     <small class="text-muted ms-auto">Delete user</small>
                                 </li>

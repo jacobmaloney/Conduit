@@ -18,11 +18,12 @@
                 
                 <div class="status-progress">
                     <div class="progress">
-                        <div class="progress-bar @(generation.Status == "Failed" ? "bg-danger" : "progress-bar-striped progress-bar-animated")" 
-                             role="progressbar" 
-                             style="width: @generation.ProgressPercentage%"
-                             aria-valuenow="@generation.ProgressPercentage" 
-                             aria-valuemin="0" 
+                        @* Width comes from the --pct CSS variable so we avoid an inline style="" attribute. *@
+                        <div class="progress-bar progress-bar-pct @(generation.Status == "Failed" ? "bg-danger" : "progress-bar-striped progress-bar-animated")"
+                             role="progressbar"
+                             data-pct="@generation.ProgressPercentage"
+                             aria-valuenow="@generation.ProgressPercentage"
+                             aria-valuemin="0"
                              aria-valuemax="100">
                         </div>
                     </div>
@@ -49,78 +50,6 @@
         }
     </div>
 }
-
-<style>
-    .generation-status-container {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        z-index: 1050;
-        max-width: 350px;
-    }
-    
-    .generation-status-item {
-        background: white;
-        border: 1px solid #dee2e6;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        margin-bottom: 0.5rem;
-        box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.1);
-        animation: slideIn 0.3s ease-out;
-    }
-    
-    .generation-status-item.status-failed {
-        border-color: #dc3545;
-    }
-    
-    .status-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0.5rem;
-        font-weight: 600;
-    }
-    
-    .status-type i {
-        margin-right: 0.25rem;
-    }
-    
-    .status-time {
-        font-size: 0.875rem;
-        color: #6c757d;
-    }
-    
-    .status-progress {
-        margin-bottom: 0.25rem;
-    }
-    
-    .progress {
-        height: 8px;
-        margin-bottom: 0.25rem;
-    }
-    
-    .progress-text {
-        font-size: 0.75rem;
-        color: #6c757d;
-        text-align: center;
-    }
-    
-    .status-message {
-        margin-top: 0.5rem;
-        color: #6c757d;
-    }
-    
-    @@keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-</style>
 
 @code {
     private List<Conduit.Web.Services.GenerationStatus> activeGenerations = new();

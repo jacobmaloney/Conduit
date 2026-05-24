@@ -9,14 +9,21 @@
     <meta charset="utf-8" />
     <title>Sign in - Conduit</title>
     <base href="~/" />
-    <link rel="stylesheet" href="lib/bootstrap/dist/css/bootstrap.min.css" />
-    <link href="css/site.css" rel="stylesheet" />
+    <link rel="icon" type="image/svg+xml" href="~/assets/brand/conduit-mark.svg" />
+    <link rel="alternate icon" href="~/favicon.ico" />
+    <meta name="theme-color" content="#22D3EE" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
+    <link href="css/conduit.css" rel="stylesheet" />
 </head>
-<body class="bg-light">
-    <div class="container" style="max-width: 420px; padding-top: 80px;">
-        <div class="card shadow">
+<body>
+    <div class="login-shell">
+        <div class="login-card card shadow">
             <div class="card-header bg-primary text-white">
-                <h4 class="mb-0">Conduit Sign In</h4>
+                <h4 class="mb-0">Conduit sign in</h4>
             </div>
             <div class="card-body">
                 @if (!string.IsNullOrEmpty(Model.ErrorMessage))

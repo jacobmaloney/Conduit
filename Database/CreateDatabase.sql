@@ -1,19 +1,18 @@
 /*
- * Conduit Database Schema (canonical bootstrap)
+ * Conduit Database Schema (v1 baseline)
  *
- * This is the single source of truth for the initial database schema. It is
- * embedded into Conduit.DataAccess.dll and executed by DatabaseInitializer
- * on first run. It is also the file a DBA would run to manually provision a
- * database.
- *
- * Incremental schema changes after this baseline are applied by
- * Conduit.DataAccess.DatabaseMigrator (Migration v2+). Migrations are
- * idempotent, so running this script and then starting the app is safe.
+ * This script creates the v1 baseline schema only. After it runs on a fresh
+ * database, DatabaseInitializer.RunMigrationsAsync immediately invokes the
+ * full migration chain (v2..vN) from DatabaseMigrator.cs so the database
+ * lands at the current head version. This baseline is intentionally MINIMAL
+ * and does NOT duplicate anything the migrations add — duplication is what
+ * caused the v8/v13 TenantId-column-doesn't-exist bug on 2026-05-23.
  *
  * If you need to add a column or table:
- *   1. Add it here so fresh databases get it.
- *   2. Add a corresponding Migration entry in DatabaseMigrator.cs so
- *      existing databases pick it up on next startup.
+ *   1. Add a new Migration entry in DatabaseMigrator.cs (idempotent, with
+ *      IF NOT EXISTS guards). That's it.
+ *   2. Do NOT add it here. The bootstrap stays frozen at v1; migrations
+ *      layer everything else on top on every startup.
  */
 
 -- Users Table
@@ -57,11 +56,11 @@ CREATE TABLE [dbo].[Users] (
     CONSTRAINT [FK_Users_Manager] FOREIGN KEY ([ManagerId]) REFERENCES [Users]([Id])
 );
 
--- userName is unique PER TENANT, not globally. Different tenants are independent
--- SCIM identity stores; the same userName can legitimately exist in two of them.
-CREATE UNIQUE NONCLUSTERED INDEX [UQ_Users_TenantId_UserName] ON [Users]([TenantId], [UserName]);
+-- Global UNIQUE on UserName is intentional at v1; migration v13 drops it and
+-- replaces it with the tenant-scoped composite index UQ_Users_TenantId_UserName
+-- once Users.TenantId has been added by migration v8.
+CREATE UNIQUE NONCLUSTERED INDEX [UQ_Users_UserName] ON [Users]([UserName]);
 
-CREATE INDEX [IX_Users_UserName] ON [Users]([UserName]);
 CREATE INDEX [IX_Users_ExternalId] ON [Users]([ExternalId]);
 CREATE INDEX [IX_Users_Active] ON [Users]([Active]);
 CREATE INDEX [IX_Users_ManagerId] ON [Users]([ManagerId]);

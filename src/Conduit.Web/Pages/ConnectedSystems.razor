@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @using Conduit.Core.Models
 @using Conduit.DataAccess.Repositories
+@using Conduit.Sync.Connectors
 @using Conduit.Web.Services
 @inject TenantRepository TenantRepo
 @inject ApiTokenService Tokens
@@ -14,25 +15,39 @@
 @inject IHttpContextAccessor HttpCtx
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject Conduit.Sync.Security.CredentialProtector CredentialProtector
+@inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
+@inject Conduit.DataAccess.Repositories.ConnectionCredentialRepository CredRepo
+@inject Conduit.DataAccess.Repositories.SyncProjectRepository ProjectRepo
+@inject Conduit.Sync.Orchestration.SyncProjectOrchestrator Orchestrator
 
 <PageTitle>Connected Systems - Conduit</PageTitle>
 
 <div class="container-fluid">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
+    @* Connected Systems landed the new card design 2026-05-23. .head-row +
+       .cards + .sys-card classes mirror the design source so the page reads
+       close to the spec. Other pages still use the older .page-header /
+       .tenant-card patterns and migrate when touched. *@
+    <div class="head-row">
+        <div class="head-title">
             <h1>Connected Systems</h1>
-            <p class="text-muted">External identity targets this SCIM server connects to.</p>
+            <div class="head-sub">External identity targets this SCIM server connects to.</div>
         </div>
-        <div>
-            <button class="btn btn-outline-secondary me-2" @onclick="SeedDemo" disabled="@seeding">
+        <div class="head-actions">
+            <button class="btn" @onclick="SeedDemo" disabled="@seeding">
                 @if (seeding)
                 {
-                    <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                    <span class="spinner-border spinner-border-sm" role="status"></span>
                 }
-                <i class="oi oi-data-transfer-download"></i> Seed Demo Data
+                else
+                {
+                    <i class="oi oi-data-transfer-download"></i>
+                }
+                <span>Seed Demo Data</span>
             </button>
             <button class="btn btn-primary" @onclick="ShowCreateModal">
-                <i class="oi oi-plus"></i> + Connect a system
+                <i class="oi oi-plus"></i>
+                <span>Connect a system</span>
             </button>
         </div>
     </div>
@@ -83,73 +98,88 @@
     }
     else
     {
-        <div class="tenant-grid">
+        <div class="cards">
             @foreach (var s in stats)
             {
-                <div class="tenant-card @(s.IsActive ? "" : "is-inactive")">
-                    <div class="tenant-card-head">
-                        <span class="avatar avatar-40">@GlyphFor(s)</span>
-                        <div class="tenant-card-title">
-                            <div class="tenant-card-name">@s.Name</div>
-                            <div class="tenant-card-domain">@(string.IsNullOrWhiteSpace(s.Domain) ? s.Slug : s.Domain)</div>
+                <div class="sys-card @(s.IsActive ? "" : "is-inactive")">
+                    <div class="sys-head">
+                        <span class="sys-avatar">@GlyphFor(s)</span>
+                        <div class="sys-titles">
+                            <div class="sys-name">@s.Name</div>
+                            <div class="sys-meta">@(string.IsNullOrWhiteSpace(s.Domain) ? s.Slug : s.Domain)</div>
                         </div>
-                        <span class="kind-pill @(s.SystemType == "Real" ? "kind-real" : "kind-emulator")">@s.SystemType</span>
+                        <span class="sys-tag @(s.SystemType == "Real" ? "real" : "emulator")">@s.SystemType.ToUpperInvariant()</span>
                     </div>
 
-                    <div class="tenant-card-stats">
-                        <div>
-                            <span class="tenant-stat-label">Users</span>
-                            <span class="tenant-stat-value">@s.UserCount</span>
-                        </div>
-                        <div>
-                            <span class="tenant-stat-label">Groups</span>
-                            <span class="tenant-stat-value">@s.GroupCount</span>
-                        </div>
-                        <div>
-                            <span class="tenant-stat-label">Tokens</span>
-                            <span class="tenant-stat-value">@s.TokenCount</span>
-                        </div>
+                    <div class="stats">
+                        <div class="stat"><div class="l">USERS</div><div class="v">@s.UserCount</div></div>
+                        <div class="stat"><div class="l">GROUPS</div><div class="v">@s.GroupCount</div></div>
+                        <div class="stat"><div class="l">TOKENS</div><div class="v">@s.TokenCount</div></div>
                     </div>
 
-                    <div class="tenant-card-foot">
-                        <div class="d-flex align-items-center gap-2">
-                            @if (!s.IsActive)
+                    <div class="sys-foot">
+                        @if (s.IsActive)
+                        {
+                            <span class="status">Active</span>
+                        }
+                        else
+                        {
+                            <span class="status inactive">Inactive</span>
+                        }
+                        @{
+                            // Phase 6: warn when a card's tenant is missing a required
+                            // adapter field (today: AD with empty Domain). The badge
+                            // is read-only — clicking the pencil opens Edit on the
+                            // offending field via the form's existing rendering.
+                            var missing = GetMissingRequiredTenantFields(s);
+                        }
+                        @if (missing.Count > 0)
+                        {
+                            <span class="status warn" title="@($"Configuration incomplete — missing: {string.Join(", ", missing)}. Open Edit to fix.")">
+                                Config incomplete
+                            </span>
+                        }
+                        <div class="sys-actions">
+                            @if (IsConnectorType(s.SystemType))
                             {
-                                <span class="kind-pill">Inactive</span>
+                                <button class="ic-btn quicksync" @onclick="() => ShowQuickSyncModal(s)" title="Quick Sync — clone this system into a local browser tenant">
+                                    <i class="oi oi-data-transfer-download"></i>
+                                    <span>Quick Sync</span>
+                                </button>
                             }
-                            else
-                            {
-                                <span class="status-dot ok"></span>
-                                <span class="text-muted" style="font-size: 11.5px;">Active</span>
-                            }
-                        </div>
-                        <div class="d-flex align-items-center gap-1">
-                            <button class="btn btn-sm btn-outline-primary" @onclick="() => ShowEndpoints(s)">
-                                <i class="oi oi-link-intact"></i> Endpoints
+                            <button class="ic-btn endpoint" @onclick="() => ShowEndpoints(s)" title="View endpoints + tokens">
+                                <i class="oi oi-external-link"></i>
+                                <span>Endpoints</span>
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => EditSystem(s.TenantId)">
+                            @if (s.SystemType == "ActiveDirectory")
+                            {
+                                <button class="ic-btn" @onclick="() => ShowCredentialsModal(s)" title="Credentials & test (LDAP bind)">
+                                    <i class="oi oi-key"></i>
+                                </button>
+                            }
+                            <button class="ic-btn" @onclick="() => EditSystem(s.TenantId)" title="Edit">
                                 <i class="oi oi-pencil"></i>
                             </button>
-                            <button class="btn btn-sm @(s.LegalHold ? "btn-warning" : "btn-outline-secondary")"
+                            <button class="ic-btn @(s.LegalHold ? "held" : "")"
                                     @onclick="() => ToggleLegalHold(s)"
-                                    title="@(s.LegalHold ? "Legal hold ON — destructive actions are refused. Click to release." : "Put this system on legal hold — refuses Clear/Deactivate/Delete until released.")">
+                                    title="@(s.LegalHold ? "Legal hold ON — destructive actions are refused. Click to release." : "Put on legal hold — refuses Clear/Deactivate/Delete.")">
                                 <i class="oi @(s.LegalHold ? "oi-lock-locked" : "oi-lock-unlocked")"></i>
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary"
+                            <button class="ic-btn warn"
                                     @onclick="() => ClearData(s)"
                                     disabled="@(clearInProgress || s.LegalHold)"
-                                    title="@(s.LegalHold ? "Refused — system is on legal hold." : "Clear users + groups in this system (keeps the system, its tokens, and its config)")">
+                                    title="@(s.LegalHold ? "Refused — system is on legal hold." : "Clear users + groups (keeps the system, tokens, config)")">
                                 <i class="oi oi-eraser"></i>
                             </button>
                             @if (s.TenantId != TenantRepository.DefaultTenantId)
                             {
-                                <button class="btn btn-sm btn-outline-warning"
+                                <button class="ic-btn warn"
                                         @onclick="() => DeactivateSystem(s)"
                                         disabled="@s.LegalHold"
-                                        title="@(s.LegalHold ? "Refused — system is on legal hold." : "Deactivate (soft delete — data stays in the database)")">
+                                        title="@(s.LegalHold ? "Refused — system is on legal hold." : "Deactivate (soft delete — data stays)")">
                                     <i class="oi oi-ban"></i>
                                 </button>
-                                <button class="btn btn-sm btn-outline-danger"
+                                <button class="ic-btn danger"
                                         @onclick="() => ShowDeleteModal(s)"
                                         disabled="@s.LegalHold"
                                         title="@(s.LegalHold ? "Refused — system is on legal hold." : "Delete forever (purges users, groups, tokens, memberships)")">
@@ -161,9 +191,9 @@
                 </div>
             }
 
-            <button class="tenant-card-add" @onclick="ShowCreateModal">
-                <i class="oi oi-plus" style="font-size: 24px;"></i>
-                Connect a system
+            <button class="sys-card empty" @onclick="ShowCreateModal" type="button">
+                <div class="plus">＋</div>
+                <div class="l">Connect a system</div>
             </button>
         </div>
     }
@@ -191,17 +221,44 @@
                     <input class="form-control" @bind="form.Slug" placeholder="it-helpdesk" />
                     <small class="form-text text-muted">URL-safe identifier. Auto-derived from the name; edit if needed. Unique across all systems.</small>
                 </div>
+                @{
+                    // Phase 6: per-connector required-field enforcement. The adapter
+                    // for the currently-selected SystemType tells the form which
+                    // Tenant fields it cares about. AD requires Domain; most others
+                    // declare nothing (their requirements live in credentials).
+                    var domainReq = GetTenantFieldRequirement(form.SystemType, "Domain");
+                    var domainRequired = domainReq?.Required == true;
+                    var domainPlaceholder = domainReq?.Placeholder ?? "e.g. it.demo.local (optional)";
+                    var domainHelp = domainReq?.HelpText;
+                }
                 <div class="mb-3">
-                    <label class="form-label">Domain</label>
-                    <input class="form-control" @bind="form.Domain" placeholder="e.g. it.demo.local (optional)" />
+                    <label class="form-label">
+                        Domain@(domainRequired ? " *" : string.Empty)
+                    </label>
+                    <input class="form-control" @bind="form.Domain" placeholder="@domainPlaceholder" />
+                    @if (!string.IsNullOrEmpty(domainHelp))
+                    {
+                        <small class="form-text text-muted">@domainHelp</small>
+                    }
                 </div>
                 <div class="mb-3">
                     <label class="form-label">System Type *</label>
                     <select class="form-select" @bind="form.SystemType">
                         <option value="Emulator">Emulator (test/demo target)</option>
-                        <option value="Real">Real (production target)</option>
+                        <option value="ActiveDirectory">Active Directory</option>
+                        <option value="EntraID">Entra ID (Microsoft 365)</option>
+                        <option value="Okta">Okta</option>
+                        <option value="GoogleWorkspace">Google Workspace</option>
+                        <option value="GenericLdap">Generic LDAP</option>
+                        <option value="Scim">SCIM 2.0</option>
+                        <option value="Database">Database (SQL)</option>
+                        <option value="CSV">CSV File</option>
+                        <option value="AWS">AWS IAM</option>
+                        <option value="SharePoint">SharePoint Online</option>
+                        <option value="IdentityCenter">IdentityCenter</option>
+                        <option value="Real">Real (legacy / generic)</option>
                     </select>
-                    <small class="form-text text-muted">Emulator systems show an amber badge. Real systems are green.</small>
+                    <small class="form-text text-muted">Emulator systems show an amber badge. Real connectors are green.</small>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Description</label>
@@ -259,7 +316,7 @@
                     <div class="table-responsive">
                         <table class="endpoints-table">
                             <thead>
-                                <tr><th style="width: 24%">Surface</th><th>URL</th><th style="width: 16%">Method</th><th style="width: 14%">Scope</th></tr>
+                                <tr><th class="col-pct-24">Surface</th><th>URL</th><th class="col-pct-16">Method</th><th class="col-pct-14">Scope</th></tr>
                             </thead>
                             <tbody>
                                 @{
@@ -367,7 +424,7 @@
                                             }
                                         </td>
                                         <td><span class="kind-pill">@(string.IsNullOrEmpty(t.Scope) ? "Tenant" : t.Scope)</span></td>
-                                        <td class="mono" style="font-size: 11.5px; color: var(--muted);">@t.CreatedAt.ToString("yyyy-MM-dd")</td>
+                                        <td class="mono-date">@t.CreatedAt.ToString("yyyy-MM-dd")</td>
                                         <td>
                                             @if (demoRaw != null)
                                             {
@@ -453,7 +510,7 @@
                     <div class="table-responsive mb-3">
                         <table class="endpoints-table">
                             <thead>
-                                <tr><th style="width: 60%">Surface</th><th>Rows</th></tr>
+                                <tr><th class="col-pct-60">Surface</th><th>Rows</th></tr>
                             </thead>
                             <tbody>
                                 <tr><td>Users (with their emails, phone numbers, addresses)</td><td><code>@deletingFor.UserCount</code></td></tr>
@@ -560,6 +617,414 @@
     <div class="modal-backdrop fade show"></div>
 }
 
+@if (credentialsFor is not null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Credentials & test — @credentialsFor.Name</h5>
+                    <button class="btn-close" @onclick="CloseCredentialsModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">
+                        Credentials are stored as AES-GCM ciphertext, keyed by a credential
+                        name. A single tenant can hold multiple credentials (e.g. read-only
+                        + read-write, or IAM + Identity Center) — pick the name in a Sync
+                        Project to choose which one a run uses.
+                    </p>
+                    @if (storedCredentialNames.Count > 0)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Existing credentials</label>
+                            <div>
+                                @foreach (var name in storedCredentialNames)
+                                {
+                                    <span class="badge bg-secondary me-2">@name</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                    <div class="mb-3">
+                        <label class="form-label">Credential name</label>
+                        <input class="form-control" @bind="credForm.CredentialName"
+                               placeholder="@CredentialNameFor(credentialsFor.SystemType)" />
+                        <small class="text-muted">
+                            Default = <code>@CredentialNameFor(credentialsFor.SystemType)</code>.
+                            Override to store a second credential under a different name.
+                        </small>
+                    </div>
+                    @* Phase 3: prefer the generic renderer when the adapter declares CredentialTypes.
+                       Falls through to the legacy per-type @@switch when not. Eventually every connector
+                       declares its types and the switch can be deleted. *@
+                    @{
+                        var adapterForRender = ConnectorRegistry.Get(credentialsFor.SystemType);
+                        var credTypes = adapterForRender?.CredentialTypes;
+                        var useGenericRenderer = credTypes is { Count: > 0 };
+                    }
+                    @if (useGenericRenderer)
+                    {
+                        @* Single-type adapters render directly; multi-type adapters (e.g. AWS later) would pick first. *@
+                        var type = credTypes![0];
+                        @foreach (var field in type.Fields)
+                        {
+                            <div class="@(field.IsBoolean ? "form-check mb-3" : "mb-3")">
+                                @if (field.IsBoolean)
+                                {
+                                    <input class="form-check-input" type="checkbox" id="@($"cf_{field.Key}")"
+                                           checked="@GetGenericBool(field.Key, field.DefaultValue == "true")"
+                                           @onchange="e => SetGenericBool(field.Key, (bool)(e.Value ?? false))" />
+                                    <label class="form-check-label" for="@($"cf_{field.Key}")">@field.Label</label>
+                                }
+                                else
+                                {
+                                    <label class="form-label">@field.Label@(field.IsRequired ? " *" : string.Empty)</label>
+                                    @if (field.IsMultiline)
+                                    {
+                                        <textarea class="form-control" rows="6"
+                                                  placeholder="@field.Placeholder"
+                                                  value="@GetGenericString(field.Key, field.DefaultValue ?? string.Empty)"
+                                                  @oninput="e => SetGenericString(field.Key, e.Value?.ToString() ?? string.Empty)"></textarea>
+                                    }
+                                    else
+                                    {
+                                        <input class="form-control"
+                                               type="@(field.IsSecret ? "password" : "text")"
+                                               autocomplete="@(field.IsSecret ? "new-password" : "off")"
+                                               placeholder="@field.Placeholder"
+                                               value="@GetGenericString(field.Key, field.DefaultValue ?? string.Empty)"
+                                               @oninput="e => SetGenericString(field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                    }
+                                    @if (!string.IsNullOrEmpty(field.Help))
+                                    {
+                                        <small class="text-muted">@field.Help</small>
+                                    }
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                    @* Legacy hardcoded path — kept for adapters that haven't declared CredentialTypes yet. *@
+                    @switch (credentialsFor.SystemType)
+                    {
+                        case "ActiveDirectory":
+                        case "Real":
+                            <div class="mb-3">
+                                <label class="form-label">Username</label>
+                                <input class="form-control" @bind="credForm.Username" placeholder="DEMO\sync-svc" autocomplete="off" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Password</label>
+                                <input class="form-control" type="password" @bind="credForm.Password" autocomplete="new-password" />
+                            </div>
+                            break;
+                        case "EntraID":
+                        case "SharePoint":
+                            <div class="mb-3">
+                                <label class="form-label">Tenant ID</label>
+                                <input class="form-control" @bind="credForm.TenantId" placeholder="00000000-0000-0000-0000-000000000000" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Client ID (Application ID)</label>
+                                <input class="form-control" @bind="credForm.ClientId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Client Secret</label>
+                                <input class="form-control" type="password" @bind="credForm.ClientSecret" autocomplete="new-password" />
+                            </div>
+                            break;
+                        case "Okta":
+                            <div class="mb-3">
+                                <label class="form-label">Org URL</label>
+                                <input class="form-control" @bind="credForm.OrgUrl" placeholder="https://your-org.okta.com" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">API Token (SSWS)</label>
+                                <input class="form-control" type="password" @bind="credForm.ApiToken" autocomplete="new-password" />
+                            </div>
+                            break;
+                        case "GoogleWorkspace":
+                            <div class="mb-3">
+                                <label class="form-label">Service Account JSON</label>
+                                <textarea class="form-control" rows="6" @bind="credForm.ServiceAccountJson" placeholder='{"type":"service_account",...}'></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Admin Email (impersonation target)</label>
+                                <input class="form-control" @bind="credForm.AdminEmail" placeholder="admin@your-domain.com" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Domain (optional, leave blank for my_customer)</label>
+                                <input class="form-control" @bind="credForm.Domain" />
+                            </div>
+                            break;
+                        case "GenericLdap":
+                            <div class="mb-3">
+                                <label class="form-label">Server URL</label>
+                                <input class="form-control" @bind="credForm.ServerUrl" placeholder="ldap://host:389 or ldaps://host:636" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Bind DN</label>
+                                <input class="form-control" @bind="credForm.BindDN" placeholder="cn=admin,dc=example,dc=org" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Bind Password</label>
+                                <input class="form-control" type="password" @bind="credForm.BindPassword" autocomplete="new-password" />
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="useTls" @bind="credForm.UseTls" />
+                                <label class="form-check-label" for="useTls">Use StartTLS</label>
+                            </div>
+                            break;
+                        case "Scim":
+                            <div class="mb-3">
+                                <label class="form-label">Base URL</label>
+                                <input class="form-control" @bind="credForm.BaseUrl" placeholder="https://target.example.com/scim/v2" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Bearer Token</label>
+                                <input class="form-control" type="password" @bind="credForm.BearerToken" autocomplete="new-password" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">User Endpoint (default <code>/Users</code>)</label>
+                                <input class="form-control" @bind="credForm.UserEndpoint" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Group Endpoint (default <code>/Groups</code>)</label>
+                                <input class="form-control" @bind="credForm.GroupEndpoint" />
+                            </div>
+                            break;
+                        case "Database":
+                            <div class="mb-3">
+                                <label class="form-label">Connection String</label>
+                                <input class="form-control" type="password" @bind="credForm.ConnectionString" autocomplete="new-password" placeholder="Server=...;Database=...;User Id=...;Password=...;Encrypt=true;" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">User Query (SELECT, must yield objectGuid)</label>
+                                <textarea class="form-control" rows="3" @bind="credForm.UserQuery"></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Group Query (optional)</label>
+                                <textarea class="form-control" rows="2" @bind="credForm.GroupQuery"></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Upsert User Statement (optional — sink)</label>
+                                <textarea class="form-control" rows="2" @bind="credForm.UpsertUserStatement" placeholder="MERGE / INSERT / UPDATE with @@objectGuid, @@userName, ..."></textarea>
+                            </div>
+                            break;
+                        case "CSV":
+                            <div class="mb-3">
+                                <label class="form-label">File Path</label>
+                                <input class="form-control" @bind="credForm.FilePath" placeholder="C:\path\to\users.csv" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Delimiter</label>
+                                <input class="form-control" @bind="credForm.Delimiter" placeholder="," />
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="hasHeader" @bind="credForm.HasHeader" />
+                                <label class="form-check-label" for="hasHeader">First row is header</label>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">ID Column (column to use as objectGuid)</label>
+                                <input class="form-control" @bind="credForm.IdColumn" placeholder="EmployeeId" />
+                            </div>
+                            break;
+                        case "AWS":
+                            <div class="mb-3">
+                                <label class="form-label">Access Key ID</label>
+                                <input class="form-control" @bind="credForm.AccessKeyId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Secret Access Key</label>
+                                <input class="form-control" type="password" @bind="credForm.SecretAccessKey" autocomplete="new-password" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Region</label>
+                                <input class="form-control" @bind="credForm.Region" placeholder="us-east-1" />
+                            </div>
+                            break;
+                        case "AWSIdentityCenter":
+                            <div class="mb-3">
+                                <label class="form-label">Access Key ID</label>
+                                <input class="form-control" @bind="credForm.AccessKeyId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Secret Access Key</label>
+                                <input class="form-control" type="password" @bind="credForm.SecretAccessKey" autocomplete="new-password" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Region</label>
+                                <input class="form-control" @bind="credForm.Region" placeholder="us-east-1" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Identity Store ID <span class="text-muted">(auto-discover if blank)</span></label>
+                                <input class="form-control" @bind="credForm.IdentityStoreId" placeholder="d-xxxxxxxxxx" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">SSO Instance ARN <span class="text-muted">(auto-discover if blank)</span></label>
+                                <input class="form-control" @bind="credForm.SSOInstanceArn" placeholder="arn:aws:sso:::instance/ssoins-..." />
+                            </div>
+                            break;
+                        case "IdentityCenter":
+                            <div class="mb-3">
+                                <label class="form-label">Base URL</label>
+                                <input class="form-control" @bind="credForm.BaseUrl" placeholder="https://identitycenter.local:7048" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">API Key (X-API-Key, admin scope)</label>
+                                <input class="form-control" type="password" @bind="credForm.ApiKey" autocomplete="new-password" />
+                            </div>
+                            break;
+                        default:
+                            <div class="alert alert-warning">No credential fields configured for system type <code>@credentialsFor.SystemType</code>.</div>
+                            break;
+                    }
+                    }
+                    @if (!string.IsNullOrEmpty(credSaveMessage))
+                    {
+                        <div class="alert alert-success py-2">@credSaveMessage</div>
+                    }
+                    @if (!string.IsNullOrEmpty(credTestMessage))
+                    {
+                        <div class="alert @(credTestSuccess ? "alert-success" : "alert-danger") py-2">@credTestMessage</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-primary" @onclick="TestCredentialsAsync" disabled="@credBusy">
+                        @if (credBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Save & Test
+                    </button>
+                    <button class="btn btn-secondary" @onclick="CloseCredentialsModal" disabled="@credBusy">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ─── Quick Sync modal ──────────────────────────────────────────────────
+   Connector-tenant operator wants to "just see what's in this system" without
+   wiring an explicit sink. We auto-mint (or reuse) a local Emulator tenant
+   named "<source> Local Cache" and create one sync project per checked object
+   class with passthrough mapping, then kick off Run Now. *@
+@if (quickSyncFor is not null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        Sync @quickSyncFor.Name into a local browser
+                    </h5>
+                    <button class="btn-close" @onclick="CloseQuickSyncModal" disabled="@quickSyncInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">
+                        Creates a local Emulator tenant called
+                        <code>@QuickSyncLocalCacheName(quickSyncFor.Name)</code>,
+                        wires sync projects from <strong>@quickSyncFor.Name</strong> into it
+                        with passthrough mappings, and runs them now. Use this when you want
+                        to browse what's in this connector without configuring a separate
+                        destination. Re-running is safe — the local tenant is reused if it
+                        already exists.
+                    </p>
+
+                    <div class="section-eyebrow">Object classes</div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="qsClassUser"
+                               @bind="quickSyncIncludeUser" />
+                        <label class="form-check-label" for="qsClassUser">User</label>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="qsClassGroup"
+                               @bind="quickSyncIncludeGroup"
+                               disabled="@(!QuickSyncSupportsGroup(quickSyncFor.SystemType))" />
+                        <label class="form-check-label" for="qsClassGroup">
+                            Group
+                            @if (!QuickSyncSupportsGroup(quickSyncFor.SystemType))
+                            {
+                                <span class="text-muted">(not available for @quickSyncFor.SystemType)</span>
+                            }
+                        </label>
+                    </div>
+
+                    @if (quickSyncAvailableCredNames.Count > 1)
+                    {
+                        <div class="section-eyebrow">Credential</div>
+                        <div class="mb-3">
+                            <label class="form-label">Pick a stored credential</label>
+                            <select class="form-select" @bind="quickSyncSelectedCredName">
+                                @foreach (var n in quickSyncAvailableCredNames)
+                                {
+                                    <option value="@n">@n</option>
+                                }
+                            </select>
+                            <small class="text-muted">This tenant has more than one stored credential. The picked one will be set as the source credential on the new sync projects.</small>
+                        </div>
+                    }
+                    else if (quickSyncAvailableCredNames.Count == 1
+                             && !string.Equals(quickSyncAvailableCredNames[0],
+                                               CredentialNameFor(quickSyncFor.SystemType),
+                                               StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div class="alert alert-info py-2 mb-3">
+                            Using stored credential <code>@quickSyncAvailableCredNames[0]</code>.
+                        </div>
+                    }
+
+                    <div class="section-eyebrow">Schedule</div>
+                    <div class="mb-3">
+                        <label class="form-label">Cron preset</label>
+                        <select class="form-select" @bind="quickSyncCronPreset" @bind:after="ApplyQuickSyncPreset">
+                            <option value="">Manual only (run on demand)</option>
+                            <option value="@("@hourly")">Hourly</option>
+                            <option value="0 */4 * * *">Every 4 hours</option>
+                            <option value="0 2 * * *">Daily at 02:00 UTC</option>
+                            <option value="*/15 * * * *">Every 15 minutes</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Cron expression</label>
+                        <input class="form-control" @bind="quickSyncCronSchedule"
+                               placeholder="Leave blank for manual-only" />
+                        <small class="text-muted">5-field cron or <code>@@hourly</code> / <code>@@every:Nm</code>.</small>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(quickSyncError))
+                    {
+                        <div class="alert alert-danger py-2 mb-0">@quickSyncError</div>
+                    }
+                    @if (!string.IsNullOrEmpty(quickSyncStatus))
+                    {
+                        <div class="alert alert-info py-2 mb-0">@quickSyncStatus</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseQuickSyncModal" disabled="@quickSyncInProgress">Cancel</button>
+                    <button class="btn btn-primary" @onclick="ConfirmQuickSync"
+                            disabled="@(quickSyncInProgress || (!quickSyncIncludeUser && !quickSyncIncludeGroup))">
+                        @if (quickSyncInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <span>Setting up…</span>
+                        }
+                        else
+                        {
+                            <i class="oi oi-data-transfer-download"></i>
+                            <span class="ms-1">Create + Run Now</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
 @code {
     private List<TenantStats> stats = new();
     private bool loading = true;
@@ -576,6 +1041,271 @@
         var name = s.Name?.Trim();
         if (string.IsNullOrEmpty(name)) return "?";
         return char.ToUpperInvariant(name[0]).ToString();
+    }
+
+    // ─── Quick Sync support ────────────────────────────────────────────────
+    // A connector-type tenant is anything that pulls from an external system —
+    // basically everything except the Emulator (no upstream to pull from) and
+    // the IdentityCenter sink-only target (Phase 2 governance endpoint, not a
+    // browse-it cache source). Quick Sync clones the source into a fresh
+    // Emulator tenant so the operator can browse what's in there immediately.
+    private static readonly HashSet<string> NonQuickSyncTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Emulator",
+        "IdentityCenter"
+    };
+
+    private static bool IsConnectorType(string? systemType) =>
+        !string.IsNullOrEmpty(systemType) && !NonQuickSyncTypes.Contains(systemType);
+
+    // Connectors that don't speak Group natively. CSV and SharePoint are user/
+    // membership-light surfaces today — keep the Group checkbox disabled.
+    private static readonly HashSet<string> NoGroupTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CSV",
+        "SharePoint"
+    };
+
+    private static bool QuickSyncSupportsGroup(string? systemType) =>
+        !string.IsNullOrEmpty(systemType) && !NoGroupTypes.Contains(systemType);
+
+    private static string QuickSyncLocalCacheName(string sourceName) =>
+        $"{sourceName} Local Cache";
+
+    private TenantStats? quickSyncFor;
+    private bool quickSyncIncludeUser = true;
+    private bool quickSyncIncludeGroup = true;
+    private string quickSyncCronSchedule = string.Empty;
+    private string quickSyncCronPreset = string.Empty;
+    private bool quickSyncInProgress;
+    private string quickSyncError = string.Empty;
+    private string quickSyncStatus = string.Empty;
+    // Phase 6: stored credentials for the source tenant, populated on modal open.
+    // When count == 1, we silently fill SourceCredentialName on the new projects.
+    // When count > 1, we render a picker so the operator chooses explicitly.
+    private List<string> quickSyncAvailableCredNames = new();
+    private string quickSyncSelectedCredName = string.Empty;
+
+    // Phase 6 helpers — connector adapters expose TenantFieldRequirements; the
+    // form + Save + Quick Sync all consult the same source of truth.
+    private TenantFieldRequirement? GetTenantFieldRequirement(string? systemType, string fieldName)
+    {
+        if (string.IsNullOrEmpty(systemType)) return null;
+        var adapter = ConnectorRegistry.Get(systemType);
+        if (adapter is null) return null;
+        return adapter.TenantFieldRequirements
+            .FirstOrDefault(r => string.Equals(r.FieldName, fieldName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private List<string> GetMissingRequiredTenantFieldsForForm()
+    {
+        var missing = new List<string>();
+        var adapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
+        if (adapter is null) return missing;
+        foreach (var req in adapter.TenantFieldRequirements)
+        {
+            if (!req.Required) continue;
+            if (string.Equals(req.FieldName, "Domain", StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(form.Domain))
+            {
+                missing.Add("Domain");
+            }
+        }
+        return missing;
+    }
+
+    private List<string> GetMissingRequiredTenantFields(TenantStats s)
+    {
+        var missing = new List<string>();
+        var adapter = string.IsNullOrEmpty(s.SystemType) ? null : ConnectorRegistry.Get(s.SystemType);
+        if (adapter is null) return missing;
+        foreach (var req in adapter.TenantFieldRequirements)
+        {
+            if (!req.Required) continue;
+            if (string.Equals(req.FieldName, "Domain", StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(s.Domain))
+            {
+                missing.Add("Domain");
+            }
+        }
+        return missing;
+    }
+
+    private async Task ShowQuickSyncModal(TenantStats s)
+    {
+        quickSyncFor = s;
+        quickSyncIncludeUser = true;
+        quickSyncIncludeGroup = QuickSyncSupportsGroup(s.SystemType);
+        quickSyncCronSchedule = string.Empty;
+        quickSyncCronPreset = string.Empty;
+        quickSyncError = string.Empty;
+        quickSyncStatus = string.Empty;
+        quickSyncInProgress = false;
+        quickSyncAvailableCredNames = new();
+        quickSyncSelectedCredName = string.Empty;
+
+        // Phase 6 pre-flight 1: refuse Quick Sync on a tenant the adapter would
+        // reject — show the message in the modal before the operator commits.
+        var missing = GetMissingRequiredTenantFields(s);
+        if (missing.Count > 0)
+        {
+            quickSyncError = $"{s.SystemType} requires {string.Join(", ", missing)} to be set on this Connected System before Quick Sync can run. Click Edit on the card to fix it.";
+            return;
+        }
+
+        // Phase 6 pre-flight 2: smart credential auto-pick. Pull stored cred
+        // names; with one we'll just stamp it on the new projects; with more we
+        // render a picker (default selection = first).
+        try
+        {
+            quickSyncAvailableCredNames = await CredRepo.ListNamesByTenantAsync(s.TenantId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Quick Sync cred lookup failed for tenant {s.TenantId}: {ex.Message}");
+            quickSyncAvailableCredNames = new();
+        }
+        if (quickSyncAvailableCredNames.Count > 0)
+        {
+            quickSyncSelectedCredName = quickSyncAvailableCredNames[0];
+        }
+    }
+
+    private void CloseQuickSyncModal()
+    {
+        if (quickSyncInProgress) return;
+        quickSyncFor = null;
+    }
+
+    private void ApplyQuickSyncPreset()
+    {
+        if (!string.IsNullOrEmpty(quickSyncCronPreset))
+        {
+            quickSyncCronSchedule = quickSyncCronPreset;
+        }
+    }
+
+    private async Task ConfirmQuickSync()
+    {
+        if (quickSyncFor is null) return;
+        if (!quickSyncIncludeUser && !quickSyncIncludeGroup)
+        {
+            quickSyncError = "Pick at least one object class.";
+            return;
+        }
+
+        // Phase 6 belt-and-suspenders: re-check the missing-fields gate at click
+        // time too. Catches the case where the card was edited between modal
+        // open and Confirm.
+        var missing = GetMissingRequiredTenantFields(quickSyncFor);
+        if (missing.Count > 0)
+        {
+            quickSyncError = $"{quickSyncFor.SystemType} requires {string.Join(", ", missing)} to be set on this Connected System before Quick Sync can run.";
+            return;
+        }
+
+        quickSyncInProgress = true;
+        quickSyncError = string.Empty;
+        quickSyncStatus = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var sourceTenantId = quickSyncFor.TenantId;
+            var sourceName = quickSyncFor.Name;
+            var cacheName = QuickSyncLocalCacheName(sourceName);
+            var cacheSlug = Slugify(cacheName);
+
+            // Idempotent emulator tenant: look up by slug, create if missing.
+            var cacheTenant = await TenantRepo.GetBySlugAsync(cacheSlug);
+            if (cacheTenant is null)
+            {
+                cacheTenant = await TenantRepo.CreateAsync(new Tenant
+                {
+                    Name = cacheName,
+                    Slug = cacheSlug,
+                    SystemType = "Emulator",
+                    Description = $"Local browser cache auto-created by Quick Sync from '{sourceName}'.",
+                    IsActive = true
+                });
+                quickSyncStatus = $"Created local cache tenant '{cacheName}'.";
+            }
+            else
+            {
+                quickSyncStatus = $"Reusing existing local cache tenant '{cacheName}'.";
+            }
+            StateHasChanged();
+
+            var classes = new List<string>();
+            if (quickSyncIncludeUser) classes.Add("User");
+            if (quickSyncIncludeGroup && QuickSyncSupportsGroup(quickSyncFor.SystemType)) classes.Add("Group");
+
+            var firstProjectId = Guid.Empty;
+            var cron = string.IsNullOrWhiteSpace(quickSyncCronSchedule) ? null : quickSyncCronSchedule.Trim();
+            // Phase 6: smart credential auto-pick. Use the picker's choice when
+            // present; otherwise the single stored cred name when exactly one;
+            // otherwise null so the adapter falls back to its default name.
+            string? credForProject;
+            if (quickSyncAvailableCredNames.Count > 1
+                && !string.IsNullOrWhiteSpace(quickSyncSelectedCredName))
+            {
+                credForProject = quickSyncSelectedCredName.Trim();
+            }
+            else if (quickSyncAvailableCredNames.Count == 1)
+            {
+                credForProject = quickSyncAvailableCredNames[0];
+            }
+            else
+            {
+                credForProject = null;
+            }
+            foreach (var oc in classes)
+            {
+                var p = new Conduit.Core.SyncModels.SyncProject
+                {
+                    Name = $"Quick Sync: {sourceName} → {cacheName} ({oc})",
+                    Description = $"Auto-generated by Quick Sync. Pulls {oc} objects from {sourceName} into the local browser cache.",
+                    SourceTenantId = sourceTenantId,
+                    SinkTenantId = cacheTenant.Id,
+                    SourceCredentialName = credForProject,
+                    ObjectClass = oc,
+                    IsEnabled = true,
+                    CronSchedule = cron
+                };
+                var saved = await ProjectRepo.CreateAsync(p);
+                await ProjectRepo.UpsertScopeAsync(new Conduit.Core.SyncModels.SyncProjectScope { SyncProjectId = saved.Id, PageSize = 1000 });
+                await ProjectRepo.ReplaceMappingsAsync(saved.Id, Array.Empty<Conduit.Core.SyncModels.AttributeMapping>());
+                if (firstProjectId == Guid.Empty) firstProjectId = saved.Id;
+
+                // Fire-and-forget Run Now — the History page will render the live run.
+                _ = Task.Run(async () =>
+                {
+                    try { await Orchestrator.ExecuteAsync(saved.Id, "QuickSync", CancellationToken.None); }
+                    catch (Exception ex) { Console.WriteLine($"Quick Sync run failed for project {saved.Id}: {ex.Message}"); }
+                });
+            }
+
+            await DataChange.NotifyAsync(DataChangeKind.Tenants);
+            quickSyncFor = null;
+            // Land the operator on the runs page watching the first project complete.
+            if (firstProjectId != Guid.Empty)
+            {
+                Navigation.NavigateTo($"/sync-history?project={firstProjectId}");
+            }
+            else
+            {
+                Navigation.NavigateTo("/sync-history");
+            }
+        }
+        catch (Exception ex)
+        {
+            quickSyncError = $"Quick Sync failed: {ex.Message}";
+        }
+        finally
+        {
+            quickSyncInProgress = false;
+            StateHasChanged();
+        }
     }
 
     // Endpoints modal state
@@ -801,6 +1531,15 @@
             errorMessage = "Name and Slug are required.";
             return;
         }
+        // Phase 6: per-connector required-field gate. AD's Domain is the headline
+        // case — the form's Save button can't ship a tenant the adapter would
+        // throw on the first time someone tried to run a sync against it.
+        var missing = GetMissingRequiredTenantFieldsForForm();
+        if (missing.Count > 0)
+        {
+            errorMessage = $"{form.SystemType} requires: {string.Join(", ", missing)}.";
+            return;
+        }
         saving = true;
         errorMessage = "";
         try
@@ -1018,6 +1757,277 @@
         deletingFor = null;
         deleteConfirmText = "";
         deleteError = "";
+    }
+
+    // ─── Connector credentials modal ──────────────────────────────────────
+
+    // Phase 3 generic-renderer backing store. Keyed by FieldSpec.Key. Value is
+    // string or bool depending on field type. BuildCredentialJson reads this
+    // dictionary when the adapter declares CredentialTypes.
+    private System.Collections.Generic.Dictionary<string, object?> genericCredValues =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private string GetGenericString(string key, string fallback) =>
+        genericCredValues.TryGetValue(key, out var v) && v is string s ? s : fallback;
+
+    private void SetGenericString(string key, string value) => genericCredValues[key] = value;
+
+    private bool GetGenericBool(string key, bool fallback) =>
+        genericCredValues.TryGetValue(key, out var v) && v is bool b ? b : fallback;
+
+    private void SetGenericBool(string key, bool value) => genericCredValues[key] = value;
+
+    private sealed class CredentialFormModel
+    {
+        // AD / Real
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+        // EntraID / SharePoint (M365)
+        public string TenantId { get; set; } = string.Empty;
+        public string ClientId { get; set; } = string.Empty;
+        public string ClientSecret { get; set; } = string.Empty;
+        // Okta
+        public string OrgUrl { get; set; } = string.Empty;
+        public string ApiToken { get; set; } = string.Empty;
+        // Google
+        public string ServiceAccountJson { get; set; } = string.Empty;
+        public string AdminEmail { get; set; } = string.Empty;
+        public string Domain { get; set; } = string.Empty;
+        // Generic LDAP
+        public string ServerUrl { get; set; } = string.Empty;
+        public string BindDN { get; set; } = string.Empty;
+        public string BindPassword { get; set; } = string.Empty;
+        public bool UseTls { get; set; }
+        // SCIM
+        public string BaseUrl { get; set; } = string.Empty;
+        public string BearerToken { get; set; } = string.Empty;
+        public string UserEndpoint { get; set; } = string.Empty;
+        public string GroupEndpoint { get; set; } = string.Empty;
+        // Database
+        public string ConnectionString { get; set; } = string.Empty;
+        public string UserQuery { get; set; } = string.Empty;
+        public string GroupQuery { get; set; } = string.Empty;
+        public string UpsertUserStatement { get; set; } = string.Empty;
+        // CSV
+        public string FilePath { get; set; } = string.Empty;
+        public string Delimiter { get; set; } = ",";
+        public bool HasHeader { get; set; } = true;
+        public string IdColumn { get; set; } = string.Empty;
+        // AWS
+        public string AccessKeyId { get; set; } = string.Empty;
+        public string SecretAccessKey { get; set; } = string.Empty;
+        public string Region { get; set; } = "us-east-1";
+        // AWS Identity Center (in addition to the AWS fields above)
+        public string IdentityStoreId { get; set; } = string.Empty;
+        public string SSOInstanceArn { get; set; } = string.Empty;
+        // IdentityCenter (reuses BaseUrl above)
+        public string ApiKey { get; set; } = string.Empty;
+        // Phase 2 multi-cred override
+        public string CredentialName { get; set; } = string.Empty;
+    }
+
+    private static string CredentialNameFor(string systemType) => systemType switch
+    {
+        "ActiveDirectory" or "Real" or "GenericLdap" => "ldap",
+        "EntraID" => "entraid",
+        "Okta" => "okta",
+        "GoogleWorkspace" => "google",
+        "Scim" => "scim",
+        "Database" => "database",
+        "CSV" => "csv",
+        "AWS" => "aws",
+        "AWSIdentityCenter" => "awssso",
+        "SharePoint" => "sharepoint",
+        "IdentityCenter" => "identitycenter",
+        _ => "credential"
+    };
+
+    private string BuildCredentialJson()
+    {
+        if (credentialsFor is null) return "{}";
+
+        // Phase 3: prefer generic when the adapter declares CredentialTypes.
+        var adapter = ConnectorRegistry.Get(credentialsFor.SystemType);
+        var credTypes = adapter?.CredentialTypes;
+        if (credTypes is { Count: > 0 })
+        {
+            var goj = new System.Text.Json.Nodes.JsonObject();
+            foreach (var field in credTypes[0].Fields)
+            {
+                if (field.IsBoolean)
+                {
+                    goj[field.Key] = GetGenericBool(field.Key, field.DefaultValue == "true");
+                }
+                else
+                {
+                    var val = GetGenericString(field.Key, field.DefaultValue ?? string.Empty);
+                    // Omit empty optional strings (match legacy behavior for Database/CSV).
+                    if (!field.IsRequired && string.IsNullOrWhiteSpace(val)) continue;
+                    goj[field.Key] = val;
+                }
+            }
+            return goj.ToJsonString();
+        }
+
+        var jo = new System.Text.Json.Nodes.JsonObject();
+        switch (credentialsFor.SystemType)
+        {
+            case "ActiveDirectory":
+            case "Real":
+                jo["Username"] = credForm.Username;
+                jo["Password"] = credForm.Password;
+                break;
+            case "GenericLdap":
+                jo["ServerUrl"] = credForm.ServerUrl;
+                jo["BindDN"] = credForm.BindDN;
+                jo["BindPassword"] = credForm.BindPassword;
+                jo["UseTls"] = credForm.UseTls;
+                break;
+            case "EntraID":
+            case "SharePoint":
+                jo["TenantId"] = credForm.TenantId;
+                jo["ClientId"] = credForm.ClientId;
+                jo["ClientSecret"] = credForm.ClientSecret;
+                break;
+            case "Okta":
+                jo["OrgUrl"] = credForm.OrgUrl;
+                jo["ApiToken"] = credForm.ApiToken;
+                break;
+            case "GoogleWorkspace":
+                jo["ServiceAccountJson"] = credForm.ServiceAccountJson;
+                jo["AdminEmail"] = credForm.AdminEmail;
+                if (!string.IsNullOrWhiteSpace(credForm.Domain)) jo["Domain"] = credForm.Domain;
+                break;
+            case "Scim":
+                jo["BaseUrl"] = credForm.BaseUrl;
+                jo["BearerToken"] = credForm.BearerToken;
+                if (!string.IsNullOrWhiteSpace(credForm.UserEndpoint)) jo["UserEndpoint"] = credForm.UserEndpoint;
+                if (!string.IsNullOrWhiteSpace(credForm.GroupEndpoint)) jo["GroupEndpoint"] = credForm.GroupEndpoint;
+                break;
+            case "Database":
+                jo["ConnectionString"] = credForm.ConnectionString;
+                if (!string.IsNullOrWhiteSpace(credForm.UserQuery)) jo["UserQuery"] = credForm.UserQuery;
+                if (!string.IsNullOrWhiteSpace(credForm.GroupQuery)) jo["GroupQuery"] = credForm.GroupQuery;
+                if (!string.IsNullOrWhiteSpace(credForm.UpsertUserStatement)) jo["UpsertUserStatement"] = credForm.UpsertUserStatement;
+                break;
+            case "CSV":
+                jo["FilePath"] = credForm.FilePath;
+                if (!string.IsNullOrWhiteSpace(credForm.Delimiter)) jo["Delimiter"] = credForm.Delimiter;
+                jo["HasHeader"] = credForm.HasHeader;
+                if (!string.IsNullOrWhiteSpace(credForm.IdColumn)) jo["IdColumn"] = credForm.IdColumn;
+                break;
+            case "AWS":
+                jo["AccessKeyId"] = credForm.AccessKeyId;
+                jo["SecretAccessKey"] = credForm.SecretAccessKey;
+                jo["Region"] = string.IsNullOrWhiteSpace(credForm.Region) ? "us-east-1" : credForm.Region;
+                break;
+            case "AWSIdentityCenter":
+                jo["AccessKeyId"] = credForm.AccessKeyId;
+                jo["SecretAccessKey"] = credForm.SecretAccessKey;
+                jo["Region"] = string.IsNullOrWhiteSpace(credForm.Region) ? "us-east-1" : credForm.Region;
+                if (!string.IsNullOrWhiteSpace(credForm.IdentityStoreId)) jo["IdentityStoreId"] = credForm.IdentityStoreId;
+                if (!string.IsNullOrWhiteSpace(credForm.SSOInstanceArn)) jo["SSOInstanceArn"] = credForm.SSOInstanceArn;
+                break;
+            case "IdentityCenter":
+                jo["BaseUrl"] = credForm.BaseUrl;
+                jo["ApiKey"] = credForm.ApiKey;
+                break;
+        }
+        return jo.ToJsonString();
+    }
+
+    private System.Collections.Generic.List<string> storedCredentialNames = new();
+
+    private TenantStats? credentialsFor;
+    private CredentialFormModel credForm = new();
+    private string credSaveMessage = string.Empty;
+    private string credTestMessage = string.Empty;
+    private bool credTestSuccess;
+    private bool credBusy;
+
+    private async Task ShowCredentialsModal(TenantStats s)
+    {
+        credentialsFor = s;
+        credForm = new CredentialFormModel();
+        genericCredValues = new(StringComparer.OrdinalIgnoreCase);
+        credSaveMessage = string.Empty;
+        credTestMessage = string.Empty;
+        credTestSuccess = false;
+        credBusy = false;
+        try
+        {
+            storedCredentialNames = await CredRepo.ListNamesByTenantAsync(s.TenantId);
+        }
+        catch
+        {
+            storedCredentialNames = new();
+        }
+    }
+
+    private void CloseCredentialsModal()
+    {
+        if (credBusy) return;
+        credentialsFor = null;
+    }
+
+    private async Task TestCredentialsAsync()
+    {
+        if (credentialsFor is null) return;
+        credBusy = true;
+        credSaveMessage = string.Empty;
+        credTestMessage = string.Empty;
+        try
+        {
+            // Phase 2: per-form credential-name override; default to per-system name.
+            var credName = string.IsNullOrWhiteSpace(credForm.CredentialName)
+                ? CredentialNameFor(credentialsFor.SystemType)
+                : credForm.CredentialName!.Trim();
+            var json = BuildCredentialJson();
+            await CredentialProtector.StoreAsync(credentialsFor.TenantId, credName, json);
+            credSaveMessage = $"Credentials saved (AES-GCM under name '{credName}').";
+            try
+            {
+                storedCredentialNames = await CredRepo.ListNamesByTenantAsync(credentialsFor.TenantId);
+            }
+            catch { /* non-fatal */ }
+
+            var adapter = ConnectorRegistry.Get(credentialsFor.SystemType);
+            if (adapter is null)
+            {
+                credTestMessage = $"No connector adapter registered for '{credentialsFor.SystemType}'.";
+                credTestSuccess = false;
+                return;
+            }
+            // Prefer source for testing; fall back to sink for sink-only adapters.
+            var probe = adapter.CreateSource(credentialsFor.TenantId)
+                     ?? (Conduit.Sync.Connectors.IConnectorSource?)null;
+            if (probe is not null)
+            {
+                var test = await probe.TestConnectionAsync(CancellationToken.None);
+                credTestMessage = test.Message;
+                credTestSuccess = test.IsSuccessful;
+                return;
+            }
+            var sink = adapter.CreateSink(credentialsFor.TenantId);
+            if (sink is null)
+            {
+                credTestMessage = $"Adapter for '{credentialsFor.SystemType}' exposes neither source nor sink — cannot test.";
+                credTestSuccess = false;
+                return;
+            }
+            var sinkTest = await sink.TestConnectionAsync(CancellationToken.None);
+            credTestMessage = sinkTest.Message;
+            credTestSuccess = sinkTest.IsSuccessful;
+        }
+        catch (Exception ex)
+        {
+            credTestMessage = $"Test failed: {ex.Message}";
+            credTestSuccess = false;
+        }
+        finally
+        {
+            credBusy = false;
+        }
     }
 
     private async Task ConfirmDeleteSystem()

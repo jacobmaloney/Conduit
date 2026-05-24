@@ -3,18 +3,18 @@
 @inject Conduit.DataAccess.Repositories.UserRepository UserRepository
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
 
-<PageTitle>Conduit - Enterprise Identity Management</PageTitle>
+<PageTitle>Conduit — identity data, normalized.</PageTitle>
 
 <div class="hero-section mx-n4 mt-n4">
     <div class="hero-content">
-        <h1 class="hero-title">Conduit 2.0</h1>
-        <p class="hero-subtitle">Enterprise-ready identity management solution with full SCIM 2.0 compliance</p>
+        <h1 class="hero-title">Conduit</h1>
+        <p class="hero-subtitle">Identity data, normalized. SCIM 2.0 in, one clean schema out.</p>
         <div class="hero-actions">
             <a href="/users" class="btn btn-hero-primary">
-                <i class="oi oi-people"></i> Get Started
+                <i class="oi oi-people"></i> View users
             </a>
             <a href="/api-explorer" class="btn btn-hero-secondary">
-                <i class="oi oi-code"></i> Explore API
+                <i class="oi oi-code"></i> API explorer
             </a>
         </div>
     </div>
@@ -22,8 +22,8 @@
 
 <div class="container-fluid features-section">
     <div class="section-header">
-        <h2>Powerful Features for Modern Identity Management</h2>
-        <p>Everything you need to manage identities at scale</p>
+        <h2>What Conduit does</h2>
+        <p>Move identity, accounts, and entitlements across connected systems.</p>
     </div>
 
     <div class="row">
@@ -32,9 +32,9 @@
                 <div class="feature-icon bg-primary-gradient">
                     <i class="oi oi-people"></i>
                 </div>
-                <h3>User Management</h3>
-                <p>Comprehensive user lifecycle management with support for custom attributes and enterprise extensions.</p>
-                <a href="/users" class="feature-link">Manage Users <i class="oi oi-arrow-right"></i></a>
+                <h3>Users</h3>
+                <p>Create, read, update, and deactivate user records. Custom attributes and the SCIM enterprise extension are supported.</p>
+                <a href="/users" class="feature-link">Manage users <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
@@ -42,9 +42,9 @@
                 <div class="feature-icon bg-success-gradient">
                     <i class="oi oi-badge"></i>
                 </div>
-                <h3>Group Management</h3>
-                <p>Create and manage groups with dynamic membership rules and nested group support.</p>
-                <a href="/groups" class="feature-link">Manage Groups <i class="oi oi-arrow-right"></i></a>
+                <h3>Groups</h3>
+                <p>Manage groups and membership. Nested groups and owner references work as expected.</p>
+                <a href="/groups" class="feature-link">Manage groups <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
@@ -52,9 +52,9 @@
                 <div class="feature-icon bg-warning-gradient">
                     <i class="oi oi-key"></i>
                 </div>
-                <h3>API Authentication</h3>
-                <p>Secure API access with JWT tokens and comprehensive authentication management.</p>
-                <a href="/tokens" class="feature-link">API Tokens <i class="oi oi-arrow-right"></i></a>
+                <h3>API tokens</h3>
+                <p>Mint and rotate bearer tokens. Each token scopes to one connected system.</p>
+                <a href="/tokens" class="feature-link">API tokens <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
@@ -62,9 +62,9 @@
                 <div class="feature-icon bg-info-gradient">
                     <i class="oi oi-code"></i>
                 </div>
-                <h3>API Explorer</h3>
-                <p>Interactive API testing interface with real-time request/response visualization.</p>
-                <a href="/api-explorer" class="feature-link">Explore API <i class="oi oi-arrow-right"></i></a>
+                <h3>API explorer</h3>
+                <p>Test endpoints in the browser. Paste a token, run a request, read the response.</p>
+                <a href="/api-explorer" class="feature-link">Open explorer <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
@@ -73,7 +73,7 @@
                     <i class="oi oi-cog"></i>
                 </div>
                 <h3>Configuration</h3>
-                <p>Customize schemas, attributes, and server settings to match your requirements.</p>
+                <p>Schemas, attributes, and server settings. Edit them where you need to.</p>
                 <a href="/configuration" class="feature-link">Configure <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
@@ -82,9 +82,9 @@
                 <div class="feature-icon bg-purple-gradient">
                     <i class="oi oi-graph"></i>
                 </div>
-                <h3>Audit Trail</h3>
-                <p>Complete visibility into all SCIM operations with detailed audit logging.</p>
-                <a href="/audit" class="feature-link">View Logs <i class="oi oi-arrow-right"></i></a>
+                <h3>Audit trail</h3>
+                <p>Every SCIM operation is logged: who, what, when, and the request body.</p>
+                <a href="/audit" class="feature-link">View logs <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
     </div>
@@ -143,7 +143,7 @@
 
 <div class="container-fluid mt-4">
     <div class="section-header">
-        <h2>Connected Systems</h2>
+        <h2>Connected systems</h2>
         <p>External identity targets this server talks to. <a href="/connected-systems">Manage →</a></p>
     </div>
     @if (systemStats.Count == 0)
@@ -190,8 +190,8 @@
 <div class="api-section">
     <div class="container-fluid">
         <div class="section-header">
-            <h2>RESTful API Endpoints</h2>
-            <p>Full SCIM 2.0 compliant API with comprehensive resource management</p>
+            <h2>SCIM 2.0 endpoints</h2>
+            <p>Standard verb set on Users and Groups. RFC 7644 compliant.</p>
         </div>
         <div class="api-grid">
             <div class="api-endpoint">

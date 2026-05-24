@@ -13,7 +13,7 @@
 
 <PageTitle>Groups - Conduit</PageTitle>
 
-<div class="container-fluid">
+<div class="container-fluid page-paged">
     <PageHeader Title="Groups"
                 Subtitle="Manage groups and memberships in the active Connected System."
                 Count="totalCount > 0 ? totalCount : (int?)null"
@@ -97,15 +97,15 @@
                             <td>
                                 @if (!string.IsNullOrEmpty(group.Owner?.Display))
                                 {
-                                    <span style="font-size: 12.5px;">@group.Owner.Display</span>
+                                    <span class="row-meta-sm">@group.Owner.Display</span>
                                 }
                                 else
                                 {
-                                    <span class="text-muted" style="font-size: 12.5px;">No owner</span>
+                                    <span class="text-muted row-meta-sm">No owner</span>
                                 }
                             </td>
                             <td @onclick:stopPropagation="true">
-                                <button class="row-act" @onclick="() => ShowMembersModal(group)" title="View members" style="padding: 2px 8px;">
+                                <button class="row-act row-act-compact" @onclick="() => ShowMembersModal(group)" title="View members">
                                     <span class="member-count">
                                         <i class="oi oi-people"></i>
                                         @group.Members.Count
@@ -130,17 +130,15 @@
             </table>
         </div>
 
-        <!-- Pagination -->
-        @if (totalPages > 1)
-        {
-            <nav aria-label="Groups pagination" class="mt-4">
-                <ul class="pagination justify-content-center">
+        <div class="pager-bar">
+            <nav aria-label="Groups pagination">
+                <ul class="pagination">
                     <li class="page-item @(currentPage == 1 ? "disabled" : "")">
-                        <button class="page-link" @onclick="() => LoadGroups(currentPage - 1)" disabled="@(currentPage == 1)">
+                        <button class="page-link" @onclick="() => LoadGroups(currentPage - 1)" disabled="@(currentPage <= 1)">
                             Previous
                         </button>
                     </li>
-                    @for (int i = 1; i <= totalPages; i++)
+                    @for (int i = 1; i <= Math.Max(totalPages, 1); i++)
                     {
                         var pageNum = i;
                         <li class="page-item @(currentPage == pageNum ? "active" : "")">
@@ -149,14 +147,14 @@
                             </button>
                         </li>
                     }
-                    <li class="page-item @(currentPage == totalPages ? "disabled" : "")">
-                        <button class="page-link" @onclick="() => LoadGroups(currentPage + 1)" disabled="@(currentPage == totalPages)">
+                    <li class="page-item @(currentPage >= totalPages ? "disabled" : "")">
+                        <button class="page-link" @onclick="() => LoadGroups(currentPage + 1)" disabled="@(currentPage >= totalPages)">
                             Next
                         </button>
                     </li>
                 </ul>
             </nav>
-        }
+        </div>
     }
 </div>
 

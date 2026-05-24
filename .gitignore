@@ -462,3 +462,5 @@ dist/
 
 # Setup marker is per-install state, not source
 setup.complete
+# Picard scratch-build dirs (compile-only verification leftovers)
+**/bin-verify/

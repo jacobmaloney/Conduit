@@ -1,0 +1,2431 @@
+@page "/sync-projects"
+@attribute [Authorize]
+@using Conduit.Core.Models
+@using Conduit.Core.SyncModels
+@using Conduit.DataAccess.Repositories
+@using Conduit.Sync.Orchestration
+@using Conduit.Sync.Templates
+@inject SyncProjectRepository ProjectRepo
+@inject SyncRunRepository RunRepo
+@inject TenantRepository TenantRepo
+@inject ConnectionCredentialRepository CredRepo
+@inject WorkflowRepository WorkflowRepo
+@inject SyncProjectOrchestrator Orchestrator
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@*
+    Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjects.razor —
+        Target System Projects tab + Internal Projects tab (Conduit has no
+            internal-only projects today, so the second tab shows an empty-state
+            with a forward-looking message; the tab stays so the UX matches IC),
+        Summary metric cards via CcStatRow,
+        Project cards with badges (Connection / Enabled / Scheduled / Stats)
+            and action buttons (Run Now / Schedule / History / Manage / Delete),
+        Auto-Generate-from-connection modal (User + Group project, source→sink),
+        Run-now confirmation modal (Conduit projects have a single flow, not a
+            multi-workflow tree, so this is a "Run All" + "Cancel" pair),
+        Delete-confirmation modal with typed-DELETE guard,
+        Schedule modal (cron presets, preview, manual clear),
+        Edit / Create modal (Setup + Scope + Mappings — Schedule sits inline
+            because IC's Schedule tab is just a cron field, no need for a tab).
+
+    Visuals come from CenturyCity (CcTemplate1 / CcStatRow / CcListPanel /
+    CcConfirmationModal) and conduit.css classes. No inline style= attributes.
+*@
+
+<PageTitle>Sync Projects - Conduit</PageTitle>
+
+<div class="container-fluid sync-page-container">
+    <CcTemplate1 Title="Sync Projects"
+                 Subtitle="Pump data between Connected Systems. Source → mapping → sink, on a schedule or on demand."
+                 Icon="fas fa-exchange-alt"
+                 IconAccent="cyan">
+        <PrimaryAction>
+            <button class="btn btn-success me-2" @onclick="ShowAutoGenerateModal">
+                <i class="fas fa-magic me-1"></i>
+                Auto-Generate
+            </button>
+            <button class="btn btn-primary" @onclick="ShowCreateModal">
+                <i class="fas fa-plus me-1"></i>
+                New Sync Project
+            </button>
+        </PrimaryAction>
+    </CcTemplate1>
+
+    @if (!string.IsNullOrEmpty(toastSuccess))
+    {
+        <div class="alert alert-success alert-dismissible">
+            <i class="fas fa-check-circle me-2"></i>@toastSuccess
+            <button type="button" class="btn-close" @onclick="() => toastSuccess = string.Empty"></button>
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(toastError))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            <i class="fas fa-exclamation-circle me-2"></i>@toastError
+            <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
+        </div>
+    }
+
+    <ul class="nav nav-pills sync-tabs mb-3">
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "target" ? "active" : "")" @onclick='() => activeTab = "target"'>
+                <i class="fas fa-cloud-upload-alt me-2"></i>Target System Projects
+                <span class="badge bg-secondary ms-2">@targetProjects.Count</span>
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "internal" ? "active" : "")" @onclick='() => activeTab = "internal"'>
+                <i class="fas fa-exchange-alt me-2"></i>Internal Projects
+                <span class="badge bg-secondary ms-2">@internalProjects.Count</span>
+            </button>
+        </li>
+    </ul>
+
+    <CcStatRow Stats="@statRows" />
+
+    <div class="row sync-page-split">
+        <div class="col-md-4 sync-page-list-col">
+            <CcListPanel TItem="SyncProject"
+                         Items="@filteredProjects"
+                         TotalCount="@filteredProjects.Count"
+                         SelectedItem="@selectedProject"
+                         OnSelect="HandleSelect"
+                         SearchPlaceholder="Search projects..."
+                         SearchValue="@searchTerm"
+                         OnSearchChanged="HandleSearchChanged"
+                         ShowPaging="false"
+                         Width="100%">
+                <RowTemplate>
+                    <div class="sync-project-row @(selectedProject?.Id == context.Id ? "active" : "")">
+                        <div class="sync-project-row-name">@context.Name</div>
+                        <div class="sync-project-row-meta">
+                            @TenantName(context.SourceTenantId) <i class="fas fa-arrow-right mx-1"></i> @TenantName(context.SinkTenantId)
+                        </div>
+                        <div class="sync-project-row-foot">
+                            <span class="badge bg-@StatusBadgeColor(context.LastRunStatus)">@(context.LastRunStatus ?? "Never run")</span>
+                            @if (context.IsRunning)
+                            {
+                                <span class="badge bg-info ms-1">Running</span>
+                            }
+                            @if (!context.IsEnabled)
+                            {
+                                <span class="badge bg-secondary ms-1">Disabled</span>
+                            }
+                            @if (!string.IsNullOrEmpty(context.CronSchedule))
+                            {
+                                <span class="badge bg-light text-dark ms-1" title="@context.CronSchedule">
+                                    <i class="fas fa-clock me-1"></i>Scheduled
+                                </span>
+                            }
+                        </div>
+                    </div>
+                </RowTemplate>
+                <EmptyTemplate>
+                    <div class="sync-empty">
+                        <i class="fas fa-exchange-alt fa-2x mb-2"></i>
+                        @if (activeTab == "internal")
+                        {
+                            <p>No internal projects yet. Internal-only flows (Object↔Identity matching) live in the governance product — they will appear here when that integration lands.</p>
+                        }
+                        else
+                        {
+                            <p>No sync projects yet. Click "Auto-Generate" for a one-click User+Group pair, or "New Sync Project" to build one from scratch.</p>
+                        }
+                    </div>
+                </EmptyTemplate>
+            </CcListPanel>
+        </div>
+
+        <div class="col-md-8 sync-page-detail-col">
+            @if (selectedProject is null)
+            {
+                <div class="sync-detail-empty">
+                    <i class="fas fa-arrow-left me-2"></i>
+                    Select a project on the left, or create a new one.
+                </div>
+            }
+            else
+            {
+                <div class="sync-project-card">
+                    <div class="sync-project-card-header">
+                        <div>
+                            <h3 class="sync-project-card-title">
+                                <i class="fas fa-sync-alt me-2"></i>
+                                @selectedProject.Name
+                            </h3>
+                            @if (!string.IsNullOrWhiteSpace(selectedProject.Description))
+                            {
+                                <div class="sync-project-card-desc">@selectedProject.Description</div>
+                            }
+                        </div>
+                        <div class="sync-project-card-meta">
+                            @if (selectedProject.LastRunAt.HasValue)
+                            {
+                                <span><i class="fas fa-history me-1"></i>Last Run: @selectedProject.LastRunAt.Value.ToString("MMM dd, yyyy HH:mm")</span>
+                            }
+                            else
+                            {
+                                <span><i class="fas fa-history me-1"></i>Never executed</span>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="sync-project-badges">
+                        <span class="sync-badge sync-badge-connection">
+                            <i class="fas fa-plug me-1"></i>
+                            @TenantName(selectedProject.SourceTenantId) <i class="fas fa-arrow-right mx-1"></i> @TenantName(selectedProject.SinkTenantId)
+                        </span>
+                        <span class="sync-badge sync-badge-workflows">
+                            <i class="fas fa-layer-group me-1"></i>
+                            @selectedProject.ObjectClass
+                        </span>
+                        @if (selectedProject.IsRunning)
+                        {
+                            <span class="sync-badge sync-badge-running">
+                                <i class="fas fa-spinner fa-spin me-1"></i>Running
+                            </span>
+                        }
+                        else if (selectedProject.IsEnabled)
+                        {
+                            <span class="sync-badge sync-badge-enabled">
+                                <i class="fas fa-check-circle me-1"></i>Enabled
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="sync-badge sync-badge-disabled">
+                                <i class="fas fa-pause-circle me-1"></i>Disabled
+                            </span>
+                        }
+                        @if (!string.IsNullOrEmpty(selectedProject.CronSchedule))
+                        {
+                            <span class="sync-badge sync-badge-scheduled sync-badge-clickable"
+                                  title="@selectedProject.CronSchedule"
+                                  @onclick="OpenScheduleModal">
+                                <i class="fas fa-clock me-1"></i>
+                                @(string.IsNullOrEmpty(selectedProject.CronSchedule) ? "Scheduled" : selectedProject.CronSchedule)
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="sync-badge sync-badge-setschedule sync-badge-clickable" @onclick="OpenScheduleModal">
+                                <i class="fas fa-calendar-plus me-1"></i>Set Schedule
+                            </span>
+                        }
+                        <span class="sync-stat sync-stat-success">
+                            <i class="fas fa-check me-1"></i>
+                            @selectedProject.SuccessfulRuns/@selectedProject.TotalRuns runs
+                        </span>
+                        @if (selectedProject.FailedRuns > 0)
+                        {
+                            <span class="sync-stat sync-stat-failed">
+                                <i class="fas fa-times me-1"></i>@selectedProject.FailedRuns failed
+                            </span>
+                        }
+                    </div>
+
+                    <div class="sync-project-actions">
+                        @if (selectedProject.IsRunning)
+                        {
+                            <button class="btn btn-warning" disabled>
+                                <i class="fas fa-spinner fa-spin me-1"></i>Running…
+                            </button>
+                            <a href="/sync-history" class="btn btn-info">
+                                <i class="fas fa-chart-line me-1"></i>View Progress
+                            </a>
+                        }
+                        else
+                        {
+                            <button class="btn btn-success" @onclick="ShowRunConfirmModal" disabled="@(!selectedProject.IsEnabled || runNowInProgress)">
+                                @if (runNowInProgress)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                else
+                                {
+                                    <i class="fas fa-play me-1"></i>
+                                }
+                                Run Now
+                            </button>
+                        }
+                        <button class="btn @(string.IsNullOrEmpty(selectedProject.CronSchedule) ? "btn-outline-secondary" : "btn-outline-primary")"
+                                @onclick="OpenScheduleModal">
+                            <i class="fas fa-clock me-1"></i>
+                            @(string.IsNullOrEmpty(selectedProject.CronSchedule) ? "Set Schedule" : "Edit Schedule")
+                        </button>
+                        <a href="/sync-history?project=@selectedProject.Id" class="btn btn-outline-secondary">
+                            <i class="fas fa-history me-1"></i>History
+                        </a>
+                        <button class="btn btn-outline-primary" @onclick="EditCurrent">
+                            <i class="fas fa-cog me-1"></i>Manage
+                        </button>
+                        <button class="btn btn-outline-danger" @onclick="ShowDeleteModal" disabled="@selectedProject.IsRunning">
+                            <i class="fas fa-trash me-1"></i>Delete
+                        </button>
+                    </div>
+
+                    <div class="sync-detail-grid">
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">SOURCE</div>
+                            <div class="sync-detail-value">
+                                @TenantName(selectedProject.SourceTenantId)
+                                <span class="sync-detail-tag">@TenantType(selectedProject.SourceTenantId)</span>
+                            </div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">SINK</div>
+                            <div class="sync-detail-value">
+                                @TenantName(selectedProject.SinkTenantId)
+                                <span class="sync-detail-tag">@TenantType(selectedProject.SinkTenantId)</span>
+                            </div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">OBJECT CLASS</div>
+                            <div class="sync-detail-value">@selectedProject.ObjectClass</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">SCHEDULE</div>
+                            <div class="sync-detail-value">@(string.IsNullOrEmpty(selectedProject.CronSchedule) ? "Manual" : selectedProject.CronSchedule)</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">LAST RUN</div>
+                            <div class="sync-detail-value">@(selectedProject.LastRunAt?.ToString("yyyy-MM-dd HH:mm 'UTC'") ?? "Never")</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">RUNS</div>
+                            <div class="sync-detail-value">@selectedProject.TotalRuns total, @selectedProject.SuccessfulRuns ok, @selectedProject.FailedRuns failed</div>
+                        </div>
+                    </div>
+
+                    <div class="sync-detail-section">
+                        <div class="sync-detail-section-title">Recent runs</div>
+                        @if (recentRuns.Count == 0)
+                        {
+                            <div class="sync-detail-empty-row">No runs yet. Click "Run Now" to start one.</div>
+                        }
+                        else
+                        {
+                            <table class="sync-runs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Started</th>
+                                        <th>Status</th>
+                                        <th>Trigger</th>
+                                        <th>Duration</th>
+                                        <th>Counts (R/C/U/S/F)</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var r in recentRuns)
+                                    {
+                                        <tr>
+                                            <td>@r.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                            <td><span class="badge bg-@StatusBadgeColor(r.Status)">@r.Status</span></td>
+                                            <td>@r.TriggeredBy</td>
+                                            <td>@(r.DurationMs.HasValue ? $"{r.DurationMs.Value / 1000.0:0.00}s" : "—")</td>
+                                            <td><code>@r.ObjectsRead / @r.ObjectsCreated / @r.ObjectsUpdated / @r.ObjectsSkipped / @r.ObjectsFailed</code></td>
+                                            <td><a href="/sync-history/@r.Id">Details</a></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@* ───────── Auto-Generate Modal — IC-shape (template / connection / schedule) ───────── *@
+@if (showAutoGenerateModal)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-success">
+                    <h5 class="modal-title">
+                        <i class="fas fa-magic me-2"></i>Auto-Generate Sync Project
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseAutoGenerateModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(autoGenError))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle me-2"></i>@autoGenError
+                        </div>
+                    }
+
+                    <p class="text-muted">
+                        Pick a source and a sink. We'll create a sync project pair —
+                        one for <strong>Users</strong>, one for <strong>Groups</strong> —
+                        with passthrough attribute mapping and your chosen schedule.
+                        Conduit's symmetric-router model recognises User and Group as
+                        the canonical object classes; per-class governance attributes
+                        are an IC concern.
+                    </p>
+
+                    <label class="form-label fw-bold mt-2">Template</label>
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-6">
+                            <div class="sync-template-card @(autoGenTemplate == "Core" ? "active" : "")"
+                                 @onclick='() => autoGenTemplate = "Core"'>
+                                <div class="d-flex align-items-center mb-1">
+                                    <span class="fw-bold sync-template-card-label">Core</span>
+                                    <span class="badge bg-success ms-auto">Recommended</span>
+                                </div>
+                                <div class="small text-muted">2 projects: User + Group</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="sync-template-card @(autoGenTemplate == "UserOnly" ? "active" : "")"
+                                 @onclick='() => autoGenTemplate = "UserOnly"'>
+                                <div class="fw-bold sync-template-card-label-amber mb-1">User only</div>
+                                <div class="small text-muted">1 project: User</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Source Connected System</label>
+                        <select class="form-select" @bind="autoGenSourceId">
+                            <option value="@Guid.Empty">-- Pick a source --</option>
+                            @foreach (var t in allTenants)
+                            {
+                                <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Sink Connected System</label>
+                        <select class="form-select" @bind="autoGenSinkId">
+                            <option value="@Guid.Empty">-- Pick a sink --</option>
+                            @foreach (var t in allTenants)
+                            {
+                                <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Schedule</label>
+                        <select class="form-select" @bind="autoGenCronSchedule">
+                            <option value="">No schedule (manual only)</option>
+                            <option value="0 * * * *">Every hour</option>
+                            <option value="0 */6 * * *">Every 6 hours</option>
+                            <option value="0 2 * * *">Daily at 02:00</option>
+                            <option value="0 2 * * 0">Weekly Sunday 02:00</option>
+                        </select>
+                    </div>
+
+                    <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox" id="autoGenEnabled" @bind="autoGenEnable" />
+                        <label class="form-check-label" for="autoGenEnabled">Enable projects by default</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseAutoGenerateModal">Cancel</button>
+                    <button type="button" class="btn btn-success"
+                            @onclick="GenerateAutoSyncProject"
+                            disabled="@(autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty || autoGenInProgress)">
+                        @if (autoGenInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-magic me-1"></i>
+                        }
+                        Auto-Generate
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ───────── Run-confirmation Modal ───────── *@
+@if (showRunConfirmModal && selectedProject != null)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-primary">
+                    <h5 class="modal-title">
+                        <i class="fas fa-play me-2"></i>Run Sync Project
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseRunConfirmModal" disabled="@runNowInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    <h6 class="mb-3">
+                        <i class="fas fa-sync-alt me-2"></i>@selectedProject.Name
+                    </h6>
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        Triggering a manual run will read from <strong>@TenantName(selectedProject.SourceTenantId)</strong>,
+                        apply the project's attribute mappings, and push the results to
+                        <strong>@TenantName(selectedProject.SinkTenantId)</strong>.
+                        Group memberships are full-replaced (not delta).
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseRunConfirmModal" disabled="@runNowInProgress">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="RunNowConfirmed" disabled="@runNowInProgress">
+                        @if (runNowInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-play me-1"></i>
+                        }
+                        Run All
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ───────── Delete-confirmation Modal (typed DELETE) ───────── *@
+@if (showDeleteModal && selectedProject != null)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-danger">
+                    <h5 class="modal-title">
+                        <i class="fas fa-exclamation-triangle me-2"></i>Delete Sync Project
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseDeleteModal" disabled="@deleteInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger">
+                        <i class="fas fa-radiation me-2"></i>
+                        <strong>Warning:</strong> This action is irreversible.
+                    </div>
+                    <p>You are about to delete the sync project:</p>
+                    <div class="sync-project-summary">
+                        <strong>@selectedProject.Name</strong>
+                        @if (!string.IsNullOrEmpty(selectedProject.Description))
+                        {
+                            <br /><small class="text-muted">@selectedProject.Description</small>
+                        }
+                    </div>
+                    <p class="mb-2 mt-3">This will permanently delete:</p>
+                    <ul class="text-danger">
+                        <li>The project, its scope, and its attribute mappings</li>
+                        <li>All run history and log lines</li>
+                    </ul>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">To confirm, type <code>DELETE</code> below:</label>
+                        <input type="text"
+                               class="form-control @(deleteConfirmText == "DELETE" ? "is-valid" : (deleteConfirmText.Length > 0 ? "is-invalid" : ""))"
+                               @bind="deleteConfirmText"
+                               @bind:event="oninput"
+                               placeholder="Type DELETE to confirm"
+                               autocomplete="off" />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseDeleteModal" disabled="@deleteInProgress">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-danger"
+                            @onclick="DeleteConfirmed"
+                            disabled="@(deleteConfirmText != "DELETE" || deleteInProgress)">
+                        @if (deleteInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-trash me-1"></i>
+                        }
+                        Permanently Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ───────── Schedule Modal ───────── *@
+@if (showScheduleModal && selectedProject != null)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-primary">
+                    <h5 class="modal-title">
+                        <i class="fas fa-clock me-2"></i>Schedule: @selectedProject.Name
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseScheduleModal" disabled="@scheduleSaving"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(scheduleError))
+                    {
+                        <div class="alert alert-danger">@scheduleError</div>
+                    }
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Preset</label>
+                        <select class="form-select" @bind="scheduleForm" @bind:after="OnSchedulePresetPicked">
+                            <option value="">No schedule (manual only)</option>
+                            <option value="*/15 * * * *">Every 15 minutes</option>
+                            <option value="0 * * * *">Every hour</option>
+                            <option value="0 */6 * * *">Every 6 hours</option>
+                            <option value="0 2 * * *">Daily at 02:00</option>
+                            <option value="0 2 * * 0">Weekly Sunday 02:00</option>
+                            <option value="0 2 1 * *">Monthly 1st 02:00</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Cron expression</label>
+                        <input class="form-control" @bind="scheduleForm" placeholder="@cronPlaceholder" />
+                        <small class="form-text text-muted">
+                            Standard 5-field cron, or legacy <code>@hourlyToken</code> / <code>@everyToken</code>. Blank = manual only.
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseScheduleModal" disabled="@scheduleSaving">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveSchedule" disabled="@scheduleSaving">
+                        @if (scheduleSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Save Schedule
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ───────── Create / Edit Modal (Setup + Scope + Mappings) ───────── *@
+@if (showFormModal)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-default">
+                    <h5 class="modal-title">
+                        <i class="fas @(editingId.HasValue ? "fa-edit" : "fa-magic") me-2"></i>
+                        @(editingId.HasValue ? "Edit Sync Project" : "Create New Sync Project")
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseFormModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(formError))
+                    {
+                        <div class="alert alert-danger py-2">@formError</div>
+                    }
+
+                    <ul class="nav nav-tabs mb-3">
+                        <li class="nav-item">
+                            <button class="nav-link @(formTab == "setup" ? "active" : "")" @onclick='() => formTab = "setup"'>
+                                <i class="fas fa-cog me-1"></i>Setup
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link @(formTab == "scope" ? "active" : "")" @onclick='() => formTab = "scope"'>
+                                <i class="fas fa-filter me-1"></i>Scope
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link @(formTab == "mappings" ? "active" : "")" @onclick='() => formTab = "mappings"'>
+                                <i class="fas fa-arrows-alt-h me-1"></i>Mappings
+                                @if (mappingForm.Count > 0)
+                                {
+                                    <span class="badge bg-primary ms-1">@mappingForm.Count</span>
+                                }
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link @(formTab == "workflows" ? "active" : "")" @onclick="OpenWorkflowsTab" disabled="@(!editingId.HasValue)">
+                                <i class="fas fa-project-diagram me-1"></i>Workflows
+                                @if (workflowsForm.Count > 0)
+                                {
+                                    <span class="badge bg-primary ms-1">@workflowsForm.Count</span>
+                                }
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link @(formTab == "schedule" ? "active" : "")" @onclick='() => formTab = "schedule"'>
+                                <i class="fas fa-clock me-1"></i>Schedule
+                            </button>
+                        </li>
+                    </ul>
+
+                    @if (formTab == "setup")
+                    {
+                        <div class="row g-3">
+                            <div class="col-md-8">
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Project Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control form-control-lg" @bind="form.Name" placeholder="e.g., AD → Emulator User Sync" />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Description</label>
+                                    <textarea class="form-control" rows="2" @bind="form.Description"
+                                              placeholder="Optional description of what this project synchronizes"></textarea>
+                                </div>
+                                @* Phase 8: workflow template picker. Only shown on create — on edit the
+                                   project's workflow tree is already persisted and the operator manages
+                                   it from the Workflows tab. *@
+                                @if (!editingId.HasValue)
+                                {
+                                    <div class="mb-3">
+                                        <label class="form-label fw-semibold">Workflow Template</label>
+                                        <select class="form-select" value="@selectedTemplateId" @onchange="OnTemplateChanged">
+                                            @foreach (var tpl in WorkflowTemplateCatalog.All)
+                                            {
+                                                <option value="@tpl.Id">@tpl.DisplayName</option>
+                                            }
+                                        </select>
+                                        <small class="form-text text-muted">@SelectedTemplate.Description</small>
+                                    </div>
+                                }
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Source Connected System <span class="text-danger">*</span></label>
+                                        <select class="form-select" @bind="form.SourceTenantId" disabled="@editingId.HasValue">
+                                            <option value="@Guid.Empty">-- Pick a source --</option>
+                                            @foreach (var t in allTenants)
+                                            {
+                                                <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                            }
+                                        </select>
+                                        @if (editingId.HasValue)
+                                        {
+                                            <small class="form-text text-muted">Source cannot change after creation.</small>
+                                        }
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Sink Connected System <span class="text-danger">*</span></label>
+                                        <select class="form-select" @bind="form.SinkTenantId" disabled="@editingId.HasValue">
+                                            <option value="@Guid.Empty">-- Pick a sink --</option>
+                                            @foreach (var t in allTenants)
+                                            {
+                                                <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                            }
+                                        </select>
+                                        @if (editingId.HasValue)
+                                        {
+                                            <small class="form-text text-muted">Sink cannot change after creation.</small>
+                                        }
+                                    </div>
+                                </div>
+                                @* Self-sync banner — surfaces the mastered-identity pattern (e.g. AD → AD
+                                   with a default:* transform) without blocking save. *@
+                                @if (form.SourceTenantId != Guid.Empty
+                                     && form.SourceTenantId == form.SinkTenantId
+                                     && tenantById.TryGetValue(form.SourceTenantId, out var selfTenant))
+                                {
+                                    <div class="alert alert-info mt-3 mb-0 py-2">
+                                        <i class="fas fa-info-circle me-1"></i>
+                                        <strong>Self-sync:</strong> this project will pull from
+                                        <strong>@selfTenant.Name</strong> and write back to the same system.
+                                        Common pattern for mastered identity transforms.
+                                    </div>
+                                }
+                                <div class="row g-3 mt-1">
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Source Credential <span class="text-muted">(optional)</span></label>
+                                        <select class="form-select" @bind="form.SourceCredentialName">
+                                            <option value="">(default)</option>
+                                            @foreach (var name in sourceCredentialNames)
+                                            {
+                                                <option value="@name">@name</option>
+                                            }
+                                        </select>
+                                        <small class="form-text text-muted">Override when the source tenant holds multiple credentials.</small>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Sink Credential <span class="text-muted">(optional)</span></label>
+                                        <select class="form-select" @bind="form.SinkCredentialName">
+                                            <option value="">(default)</option>
+                                            @foreach (var name in sinkCredentialNames)
+                                            {
+                                                <option value="@name">@name</option>
+                                            }
+                                        </select>
+                                        <small class="form-text text-muted">Override when the sink tenant holds multiple credentials.</small>
+                                    </div>
+                                </div>
+                                <div class="row g-3 mt-1">
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Object Class</label>
+                                        <select class="form-select" @bind="form.ObjectClass">
+                                            <option value="User">User</option>
+                                            <option value="Group">Group</option>
+                                            @if (SinkIsAwsSso)
+                                            {
+                                                <option value="Assignment">Assignment (AWS SSO)</option>
+                                                <option value="GroupMembership">Group Membership</option>
+                                            }
+                                            else if (SinkIsEntraID)
+                                            {
+                                                <option value="GroupMemberships">Group Memberships</option>
+                                                <option value="ManagerRefresh">Manager Refresh</option>
+                                            }
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="sync-form-aside">
+                                    <h6 class="sync-form-aside-title">
+                                        <i class="fas fa-sliders-h me-2"></i>Status
+                                    </h6>
+                                    <div class="form-check form-switch mb-3">
+                                        <input class="form-check-input sync-form-switch" type="checkbox" id="formIsEnabled" @bind="form.IsEnabled" />
+                                        <label class="form-check-label ms-2" for="formIsEnabled">
+                                            <span class="badge @(form.IsEnabled ? "bg-success" : "bg-secondary")">
+                                                @(form.IsEnabled ? "Enabled" : "Disabled")
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <p class="small text-muted mb-0">
+                                        Disabled projects keep their config and run history but are skipped by the scheduler and the orchestrator's queue.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (formTab == "scope")
+                    {
+                        <p class="text-muted">
+                            For an LDAP / AD source, Base DN bounds the read. Leave blank to use the source's
+                            <code>RootDSE.defaultNamingContext</code> (matches IC's behavior). The orchestrator
+                            also stamps a default LDAP filter per object class — only override when you need to narrow.
+                        </p>
+                        <div class="row g-3">
+                            <div class="col-md-7">
+                                <label class="form-label fw-semibold">Base DN</label>
+                                <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label fw-semibold">Page size</label>
+                                <input class="form-control" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-9">
+                                <label class="form-label fw-semibold">LDAP filter override</label>
+                                <input class="form-control" @bind="scopeForm.LdapFilter" placeholder="(leave blank for default for object class)" />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-semibold">Max objects</label>
+                                <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                            </div>
+                        </div>
+                    }
+                    else if (formTab == "mappings")
+                    {
+                        @if (ShowAssignmentTemplatePanel)
+                        {
+                            <div class="assignment-template-panel">
+                                <div class="assignment-template-panel-title">
+                                    <i class="fab fa-aws"></i>
+                                    AWS SSO Assignment template
+                                </div>
+                                <div class="assignment-template-panel-hint">
+                                    Each row from the source becomes one assignment with the values you choose below.
+                                    Pick <strong>Source-mapped</strong> when the assignment fields come from source columns;
+                                    pick <strong>Constant</strong> when every row should target the same account + permission set.
+                                </div>
+                                <div class="assignment-template-mode-row">
+                                    <label>
+                                        <input type="radio" name="assignTemplate"
+                                               checked="@(assignTemplateMode == "source")"
+                                               @onchange="@(() => assignTemplateMode = "source")" />
+                                        Source-mapped (edit rows below)
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="assignTemplate"
+                                               checked="@(assignTemplateMode == "constant")"
+                                               @onchange="@(() => assignTemplateMode = "constant")" />
+                                        Constant values
+                                    </label>
+                                </div>
+                                @if (assignTemplateMode == "constant")
+                                {
+                                    <div class="assignment-template-fields">
+                                        <div>
+                                            <label class="form-label fw-semibold">Account id <span class="text-danger">*</span></label>
+                                            <input class="form-control" @bind="assignAccountId" placeholder="123456789012" />
+                                        </div>
+                                        <div>
+                                            <label class="form-label fw-semibold">Permission set ARN <span class="text-danger">*</span></label>
+                                            <input class="form-control" @bind="assignPermissionSetArn" placeholder="arn:aws:sso:::permissionSet/ssoins-xxxx/ps-xxxx" />
+                                        </div>
+                                        <div>
+                                            <label class="form-label fw-semibold">Principal type</label>
+                                            <select class="form-select" @bind="assignPrincipalType">
+                                                <option value="USER">USER</option>
+                                                <option value="GROUP">GROUP</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="form-label fw-semibold">Principal id (source attribute)</label>
+                                            <input class="form-control" @bind="assignPrincipalIdSource"
+                                                   placeholder="e.g. id, externalId, sAMAccountName" />
+                                            <small class="form-text text-muted">
+                                                Source attribute holding the IdentityStore UserId / GroupId — required because it varies per row.
+                                            </small>
+                                        </div>
+                                    </div>
+                                    <div class="mt-3">
+                                        <button type="button" class="btn btn-outline-primary btn-sm" @onclick="ApplyAssignmentTemplate">
+                                            <i class="fas fa-magic me-1"></i>Apply template to mappings
+                                        </button>
+                                        @if (!string.IsNullOrEmpty(assignTemplateMessage))
+                                        {
+                                            <span class="ms-3 small text-success">
+                                                <i class="fas fa-check-circle me-1"></i>@assignTemplateMessage
+                                            </span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+
+                        <div class="mapping-editor-toolbar">
+                            <h6 class="form-section-title mb-0">Attribute mappings (optional — blank = passthrough)</h6>
+                            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddMappingRow">
+                                <i class="fas fa-plus me-1"></i>Add rule
+                            </button>
+                        </div>
+                        @if (mappingForm.Count == 0)
+                        {
+                            <div class="mapping-editor-empty">
+                                No mappings yet. Without rules the orchestrator passes source attributes through unchanged.
+                            </div>
+                        }
+                        else
+                        {
+                            <table class="mapping-editor-table">
+                                <thead>
+                                    <tr>
+                                        <th>Source attribute</th>
+                                        <th>Sink attribute</th>
+                                        <th>Transform (optional)</th>
+                                        <th class="text-center">Req</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @for (int i = 0; i < mappingForm.Count; i++)
+                                    {
+                                        var idx = i;
+                                        var rule = mappingForm[idx];
+                                        <tr>
+                                            <td><input class="form-control" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
+                                            <td><input class="form-control" @bind="rule.SinkAttribute" placeholder="userName" /></td>
+                                            <td><input class="form-control" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
+                                            <td class="text-center"><input type="checkbox" class="form-check-input" @bind="rule.IsRequired" /></td>
+                                            <td>
+                                                <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => RemoveMappingRow(idx)" title="Remove">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        <div class="mapping-transform-hint">
+                            Transforms: <code>upper</code>, <code>lower</code>, <code>trim</code>, <code>prefix:X</code>, <code>suffix:X</code>,
+                            <code>substring:N</code>, <code>substring:N:M</code>, <code>replace:OLD:NEW</code>, <code>default:VAL</code>.
+                            Chain with <code>|</code> (e.g. <code>trim | lower | prefix:user_</code>).
+                        </div>
+                    }
+                    else if (formTab == "workflows")
+                    {
+                        @* ────────── Phase 7 Workflow tree editor ──────────
+                           Tree on the left (Workflows → Steps), detail panel on the right.
+                           Mapping steps reuse the existing AttributeMapping + Scope shape
+                           via per-step versions; person-aware steps just need name + enable. *@
+                        <div class="row g-3">
+                            <div class="col-md-4 workflow-tree-col">
+                                <div class="workflow-tree-toolbar">
+                                    <h6 class="form-section-title mb-0">Workflows</h6>
+                                    <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddWorkflow">
+                                        <i class="fas fa-plus me-1"></i>Add workflow
+                                    </button>
+                                </div>
+                                @if (workflowsForm.Count == 0)
+                                {
+                                    <div class="workflow-tree-empty">
+                                        No workflows yet. Add one to compose multi-step pipelines (Mapping → PersonMatch → PersonCreate → AssignManager).
+                                    </div>
+                                }
+                                else
+                                {
+                                    <ul class="workflow-tree">
+                                        @foreach (var wf in workflowsForm)
+                                        {
+                                            var wfRef = wf;
+                                            <li class="workflow-tree-wf @(selectedWorkflowId == wfRef.Id ? "selected" : "")">
+                                                <div class="workflow-tree-wf-head" @onclick="() => SelectWorkflow(wfRef.Id)">
+                                                    <i class="fas @(wfRef.Enabled ? "fa-toggle-on text-success" : "fa-toggle-off text-muted") me-2"></i>
+                                                    <span class="workflow-tree-wf-name">@wfRef.Name</span>
+                                                </div>
+                                                <ul class="workflow-tree-steps">
+                                                    @foreach (var st in StepsFor(wfRef.Id))
+                                                    {
+                                                        var stRef = st;
+                                                        <li class="workflow-tree-step @(selectedStepId == stRef.Id ? "selected" : "")"
+                                                            @onclick="() => SelectStep(stRef.Id)">
+                                                            <i class="fas fa-circle-notch me-2 text-muted"></i>
+                                                            <span class="workflow-tree-step-name">@stRef.Name</span>
+                                                            <span class="badge bg-secondary ms-2">@stRef.StepType</span>
+                                                        </li>
+                                                    }
+                                                    <li class="workflow-tree-add-step">
+                                                        <button type="button" class="btn btn-link btn-sm" @onclick="() => AddStep(wfRef.Id)">
+                                                            <i class="fas fa-plus me-1"></i>Add step
+                                                        </button>
+                                                    </li>
+                                                </ul>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <div class="col-md-8 workflow-detail-col">
+                                @if (SelectedStep is not null)
+                                {
+                                    var st = SelectedStep;
+                                    <div class="workflow-detail-panel">
+                                        <div class="workflow-detail-head">
+                                            <h6 class="form-section-title mb-0">Step</h6>
+                                            <div class="workflow-detail-actions">
+                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveStepUp" title="Move up">
+                                                    <i class="fas fa-arrow-up"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveStepDown" title="Move down">
+                                                    <i class="fas fa-arrow-down"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-link btn-sm text-danger" @onclick="DeleteStep" title="Delete">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="row g-3 mt-1">
+                                            <div class="col-md-7">
+                                                <label class="form-label fw-semibold">Name</label>
+                                                <input class="form-control" @bind="st.Name" />
+                                            </div>
+                                            <div class="col-md-5">
+                                                <label class="form-label fw-semibold">Type</label>
+                                                <select class="form-select" @bind="st.StepType">
+                                                    <option value="Mapping">Mapping (source → sink)</option>
+                                                    <option value="PersonMatch">PersonMatch</option>
+                                                    <option value="PersonCreate">PersonCreate</option>
+                                                    <option value="AssignManager">AssignManager</option>
+                                                    <option value="AssignGroupOwner">AssignGroupOwner</option>
+                                                    <option value="Custom">Custom (no-op)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{st.Id}")" @bind="st.Enabled" />
+                                            <label class="form-check-label" for="@($"stepEnabled_{st.Id}")">
+                                                <span class="badge @(st.Enabled ? "bg-success" : "bg-secondary")">@(st.Enabled ? "Enabled" : "Disabled")</span>
+                                            </label>
+                                        </div>
+                                        <p class="text-muted small mt-3 mb-0">
+                                            @switch (st.StepType)
+                                            {
+                                                case "Mapping":
+                                                    <text>Runs the source→mapping→sink pump. By default this step inherits the project-level Mappings + Scope; uncheck either toggle below to override just for this step.</text>
+                                                    break;
+                                                case "PersonMatch":
+                                                    <text>Calls the sink's MatchPerson against each upstream object. Only the IC sink implements this today.</text>
+                                                    break;
+                                                case "PersonCreate":
+                                                    <text>Creates a person record on the sink for any upstream object that the prior PersonMatch missed.</text>
+                                                    break;
+                                                case "AssignManager":
+                                                    <text>Sets the manager link on each upstream object. AD writes <code>manager</code>; Entra calls Graph Manager.Ref; IC patches the Identity row. Okta, Google, and SCIM also wired in Phase 8.</text>
+                                                    break;
+                                                case "AssignGroupOwner":
+                                                    <text>Sets the owner / managedBy on each upstream group. Same per-sink wiring as AssignManager.</text>
+                                                    break;
+                                                default:
+                                                    <text>Reserved.</text>
+                                                    break;
+                                            }
+                                        </p>
+
+                                        @* ───── Phase 8: per-step Mapping + Scope editors ───── *@
+                                        @if (string.Equals(st.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            var stepId = st.Id;
+                                            var inheritMappings = !stepMappingsInherit.TryGetValue(stepId, out var inhM) || inhM;
+                                            var inheritScope = !stepScopeInherit.TryGetValue(stepId, out var inhS) || inhS;
+
+                                            <div class="workflow-step-section">
+                                                <div class="workflow-step-section-head">
+                                                    <h6 class="form-section-title mb-0">
+                                                        <i class="fas fa-filter me-2"></i>Step Scope
+                                                    </h6>
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" id="@($"scopeInherit_{stepId}")"
+                                                               checked="@inheritScope"
+                                                               @onchange="@(e => OnStepScopeInheritChanged(stepId, e))" />
+                                                        <label class="form-check-label small" for="@($"scopeInherit_{stepId}")">
+                                                            Inherit from project Scope tab
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                @if (!inheritScope)
+                                                {
+                                                    var scope = GetStepScope(stepId);
+                                                    <div class="row g-3 mt-1">
+                                                        <div class="col-md-7">
+                                                            <label class="form-label fw-semibold">Base DN</label>
+                                                            <input class="form-control" @bind="scope.BaseDN" placeholder="DC=demo,DC=local — or blank for source's defaultNamingContext" />
+                                                        </div>
+                                                        <div class="col-md-5">
+                                                            <label class="form-label fw-semibold">Page size</label>
+                                                            <input class="form-control" type="number" min="1" max="10000" @bind="scope.PageSize" />
+                                                        </div>
+                                                    </div>
+                                                    <div class="row g-3 mt-1">
+                                                        <div class="col-md-9">
+                                                            <label class="form-label fw-semibold">LDAP filter override</label>
+                                                            <input class="form-control" @bind="scope.LdapFilter" placeholder="(leave blank for default for object class)" />
+                                                        </div>
+                                                        <div class="col-md-3">
+                                                            <label class="form-label fw-semibold">Max objects</label>
+                                                            <input class="form-control" type="number" min="0" @bind="scope.MaxObjects" />
+                                                        </div>
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    <p class="text-muted small mt-2 mb-0">
+                                                        This step uses the project-level Scope. Uncheck the toggle above to override only for this step.
+                                                    </p>
+                                                }
+                                            </div>
+
+                                            <div class="workflow-step-section">
+                                                <div class="workflow-step-section-head">
+                                                    <h6 class="form-section-title mb-0">
+                                                        <i class="fas fa-exchange-alt me-2"></i>Step Mappings
+                                                    </h6>
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" id="@($"mappingsInherit_{stepId}")"
+                                                               checked="@inheritMappings"
+                                                               @onchange="@(e => OnStepMappingsInheritChanged(stepId, e))" />
+                                                        <label class="form-check-label small" for="@($"mappingsInherit_{stepId}")">
+                                                            Inherit from project Mappings tab
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                @if (!inheritMappings)
+                                                {
+                                                    var rows = GetStepMappings(stepId);
+                                                    <div class="mapping-editor-toolbar mt-1">
+                                                        <span class="small text-muted">
+                                                            @rows.Count rule@(rows.Count == 1 ? "" : "s") — blank = passthrough at runtime.
+                                                        </span>
+                                                        <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => AddStepMappingRow(stepId)">
+                                                            <i class="fas fa-plus me-1"></i>Add rule
+                                                        </button>
+                                                    </div>
+                                                    @if (rows.Count == 0)
+                                                    {
+                                                        <div class="mapping-editor-empty">
+                                                            No step-scoped mappings. Add a rule or re-check "Inherit from project Mappings tab".
+                                                        </div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <table class="mapping-editor-table">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th>Source attribute</th>
+                                                                    <th>Sink attribute</th>
+                                                                    <th>Transform (optional)</th>
+                                                                    <th class="text-center">Req</th>
+                                                                    <th></th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                @for (int i = 0; i < rows.Count; i++)
+                                                                {
+                                                                    var idx = i;
+                                                                    var rule = rows[idx];
+                                                                    <tr>
+                                                                        <td><input class="form-control" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
+                                                                        <td><input class="form-control" @bind="rule.SinkAttribute" placeholder="userName" /></td>
+                                                                        <td><input class="form-control" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
+                                                                        <td class="text-center"><input type="checkbox" class="form-check-input" @bind="rule.IsRequired" /></td>
+                                                                        <td>
+                                                                            <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => RemoveStepMappingRow(stepId, idx)" title="Remove">
+                                                                                <i class="fas fa-times"></i>
+                                                                            </button>
+                                                                        </td>
+                                                                    </tr>
+                                                                }
+                                                            </tbody>
+                                                        </table>
+                                                    }
+                                                    <div class="mapping-transform-hint">
+                                                        Transforms: <code>upper</code>, <code>lower</code>, <code>trim</code>, <code>prefix:X</code>, <code>suffix:X</code>,
+                                                        <code>substring:N</code>, <code>substring:N:M</code>, <code>replace:OLD:NEW</code>, <code>default:VAL</code>.
+                                                        Chain with <code>|</code>.
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    <p class="text-muted small mt-2 mb-0">
+                                                        This step uses the project-level Mappings. Uncheck the toggle above to override only for this step.
+                                                    </p>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else if (SelectedWorkflow is not null)
+                                {
+                                    var wf = SelectedWorkflow;
+                                    <div class="workflow-detail-panel">
+                                        <div class="workflow-detail-head">
+                                            <h6 class="form-section-title mb-0">Workflow</h6>
+                                            <div class="workflow-detail-actions">
+                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveWorkflowUp" title="Move up">
+                                                    <i class="fas fa-arrow-up"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveWorkflowDown" title="Move down">
+                                                    <i class="fas fa-arrow-down"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-link btn-sm text-danger" @onclick="DeleteWorkflow" title="Delete">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="row g-3 mt-1">
+                                            <div class="col-md-12">
+                                                <label class="form-label fw-semibold">Name</label>
+                                                <input class="form-control" @bind="wf.Name" />
+                                            </div>
+                                            <div class="col-md-12">
+                                                <label class="form-label fw-semibold">Description</label>
+                                                <textarea class="form-control" rows="2" @bind="wf.Description"></textarea>
+                                            </div>
+                                        </div>
+                                        <div class="form-check form-switch mt-3">
+                                            <input class="form-check-input" type="checkbox" id="@($"wfEnabled_{wf.Id}")" @bind="wf.Enabled" />
+                                            <label class="form-check-label" for="@($"wfEnabled_{wf.Id}")">
+                                                <span class="badge @(wf.Enabled ? "bg-success" : "bg-secondary")">@(wf.Enabled ? "Enabled" : "Disabled")</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="workflow-detail-empty">
+                                        Select a workflow or step on the left to edit it.
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                        <p class="text-muted small mt-3 mb-0">
+                            Workflows are saved when you click <strong>Save changes</strong>. Mapping steps inherit the project-level
+                            Mappings + Scope tabs by default; expand any Mapping step to override per-step.
+                        </p>
+                    }
+                    else if (formTab == "schedule")
+                    {
+                        <div class="row g-3">
+                            <div class="col-md-7">
+                                <label class="form-label fw-semibold">Cron expression</label>
+                                <div class="cron-input-group">
+                                    <input class="form-control" @bind="form.CronSchedule" placeholder="@cronPlaceholder" />
+                                    <select class="form-select" @bind="cronPreset" @bind:after="ApplyCronPreset">
+                                        <option value="">Presets...</option>
+                                        <option value="*/15 * * * *">Every 15 min</option>
+                                        <option value="0 * * * *">Hourly</option>
+                                        <option value="0 2 * * *">Daily 02:00</option>
+                                        <option value="0 2 * * 0">Weekly Sun 02:00</option>
+                                        <option value="0 2 1 * *">Monthly 1st 02:00</option>
+                                    </select>
+                                </div>
+                                <small class="form-text text-muted">
+                                    Standard 5-field cron, or legacy <code>@hourlyToken</code> / <code>@everyToken</code>. Blank = manual only.
+                                </small>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseFormModal">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveForm" disabled="@saving">
+                        @if (saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        @(editingId.HasValue ? "Save changes" : "Create")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    // Literal @hourly / @every:Nm shown to the user — the Razor parser would otherwise
+    // try to treat @ as a transition, so we hold them in fields with the bare characters.
+    private const string cronPlaceholder = "@hourly  or  @every:15m  (blank = manual only)";
+    private const string hourlyToken = "@hourly";
+    private const string everyToken = "@every:Nm";
+
+    private List<SyncProject> allProjects = new();
+    private List<SyncProject> filteredProjects = new();
+    private List<Tenant> allTenants = new();
+    private Dictionary<Guid, Tenant> tenantById = new();
+    private SyncProject? selectedProject;
+    private List<Conduit.Core.SyncModels.SyncRun> recentRuns = new();
+    private string searchTerm = string.Empty;
+    private string activeTab = "target";
+    private string toastSuccess = string.Empty;
+    private string toastError = string.Empty;
+
+    // Form modal state
+    private bool showFormModal;
+    private bool saving;
+    private Guid? editingId;
+    private SyncProject form = new();
+    private SyncProjectScope scopeForm = new() { PageSize = 1000 };
+    private List<AttributeMapping> mappingForm = new();
+    private string cronPreset = string.Empty;
+    private string formError = string.Empty;
+    private string formTab = "setup";
+    // Phase 2 multi-cred UX: credential names available for the current source / sink tenant.
+    private List<string> sourceCredentialNames = new();
+    private List<string> sinkCredentialNames = new();
+
+    // Phase 8: workflow template picker (create-modal only). Operator picks a
+    // template; ObjectClass is suggested + the tree is materialized on Save.
+    private string selectedTemplateId = WorkflowTemplateCatalog.EmptyId;
+    private WorkflowTemplate SelectedTemplate => WorkflowTemplateCatalog.GetById(selectedTemplateId);
+
+    // Phase 8: per-step Mapping editor state. Keyed by WorkflowStep.Id, populated
+    // on demand when the operator opens a Mapping step's detail panel. The
+    // "inherit from project" flag is just "do we have any persisted rows?" —
+    // empty per-step row set means the orchestrator falls through to project-level.
+    private Dictionary<Guid, List<AttributeMapping>> stepMappings = new();
+    private Dictionary<Guid, SyncProjectScope?> stepScopes = new();
+    // Operator-facing toggles. True = inherit from project; false = step owns its own.
+    private Dictionary<Guid, bool> stepMappingsInherit = new();
+    private Dictionary<Guid, bool> stepScopeInherit = new();
+    private HashSet<Guid> stepMappingsLoaded = new();
+    private HashSet<Guid> stepScopesLoaded = new();
+
+    // Phase 7: workflow tree editor state. Loaded on Workflows-tab open; persisted on Save.
+    private List<Workflow> workflowsForm = new();
+    private Dictionary<Guid, List<WorkflowStep>> stepsByWorkflow = new();
+    private Guid? selectedWorkflowId;
+    private Guid? selectedStepId;
+    private bool workflowsDirty;
+    // Track deletions so SaveForm can issue the cascading repo calls without
+    // having to diff old vs new state.
+    private readonly HashSet<Guid> workflowsDeleted = new();
+    private readonly HashSet<Guid> stepsDeleted = new();
+
+    private Workflow? SelectedWorkflow =>
+        selectedWorkflowId is { } id ? workflowsForm.FirstOrDefault(w => w.Id == id) : null;
+
+    private WorkflowStep? SelectedStep
+    {
+        get
+        {
+            if (selectedStepId is not { } id) return null;
+            foreach (var (_, list) in stepsByWorkflow)
+            {
+                var hit = list.FirstOrDefault(s => s.Id == id);
+                if (hit is not null) return hit;
+            }
+            return null;
+        }
+    }
+
+    private IReadOnlyList<WorkflowStep> StepsFor(Guid workflowId) =>
+        stepsByWorkflow.TryGetValue(workflowId, out var s) ? s : Array.Empty<WorkflowStep>();
+
+    private async Task OpenWorkflowsTab()
+    {
+        formTab = "workflows";
+        if (!editingId.HasValue) return;
+        if (workflowsForm.Count > 0) return; // already loaded this session
+        try
+        {
+            workflowsForm = await WorkflowRepo.GetByProjectAsync(editingId.Value);
+            stepsByWorkflow.Clear();
+            foreach (var wf in workflowsForm)
+            {
+                stepsByWorkflow[wf.Id] = await WorkflowRepo.GetStepsAsync(wf.Id);
+            }
+            workflowsDeleted.Clear();
+            stepsDeleted.Clear();
+            workflowsDirty = false;
+            selectedWorkflowId = workflowsForm.FirstOrDefault()?.Id;
+            selectedStepId = selectedWorkflowId is { } wid && stepsByWorkflow.TryGetValue(wid, out var list)
+                ? list.FirstOrDefault()?.Id
+                : null;
+        }
+        catch (Exception ex)
+        {
+            formError = $"Could not load workflows: {ex.Message}";
+        }
+    }
+
+    private void AddWorkflow()
+    {
+        if (!editingId.HasValue) return;
+        var wf = new Workflow
+        {
+            Id = Guid.NewGuid(),
+            SyncProjectId = editingId.Value,
+            Name = $"Workflow {workflowsForm.Count + 1}",
+            Ordinal = workflowsForm.Count,
+            Enabled = true
+        };
+        workflowsForm.Add(wf);
+        stepsByWorkflow[wf.Id] = new List<WorkflowStep>();
+        selectedWorkflowId = wf.Id;
+        selectedStepId = null;
+        workflowsDirty = true;
+    }
+
+    private void SelectWorkflow(Guid id)
+    {
+        selectedWorkflowId = id;
+        selectedStepId = null;
+    }
+
+    private async Task SelectStep(Guid id)
+    {
+        selectedStepId = id;
+        // Find parent workflow so detail panel breadcrumbs stay coherent.
+        foreach (var (wfId, list) in stepsByWorkflow)
+        {
+            if (list.Any(s => s.Id == id)) { selectedWorkflowId = wfId; break; }
+        }
+        // Phase 8: lazy-load per-step mapping + scope state when a Mapping step
+        // is opened. Skip for transient (just-added, not-yet-persisted) steps;
+        // their per-step rows can only exist after Save anyway.
+        var step = SelectedStep;
+        if (step is not null && string.Equals(step.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
+        {
+            await EnsureStepMappingsLoadedAsync(step.Id);
+            await EnsureStepScopeLoadedAsync(step.Id);
+        }
+    }
+
+    /// <summary>
+    /// Phase 8. Lazy-load this step's persisted mappings on first open. Empty
+    /// row set + no persisted record = "inherit from project" (toggle defaults
+    /// to true). Non-empty = "step owns its own" (toggle defaults to false).
+    /// </summary>
+    private async Task EnsureStepMappingsLoadedAsync(Guid stepId)
+    {
+        if (stepMappingsLoaded.Contains(stepId)) return;
+        stepMappingsLoaded.Add(stepId);
+        try
+        {
+            // GetMappingsByStepAsync returns rows scoped to this WorkflowStep.Id.
+            // Transient (Guid.NewGuid in-memory) steps return empty; that's fine.
+            var rows = await WorkflowRepo.GetMappingsByStepAsync(stepId);
+            stepMappings[stepId] = rows;
+            stepMappingsInherit[stepId] = rows.Count == 0;
+        }
+        catch
+        {
+            stepMappings[stepId] = new List<AttributeMapping>();
+            stepMappingsInherit[stepId] = true;
+        }
+    }
+
+    private async Task EnsureStepScopeLoadedAsync(Guid stepId)
+    {
+        if (stepScopesLoaded.Contains(stepId)) return;
+        stepScopesLoaded.Add(stepId);
+        try
+        {
+            var sc = await WorkflowRepo.GetScopeByStepAsync(stepId);
+            stepScopes[stepId] = sc;
+            stepScopeInherit[stepId] = sc is null;
+        }
+        catch
+        {
+            stepScopes[stepId] = null;
+            stepScopeInherit[stepId] = true;
+        }
+    }
+
+    private List<AttributeMapping> GetStepMappings(Guid stepId)
+    {
+        if (!stepMappings.TryGetValue(stepId, out var list))
+        {
+            list = new List<AttributeMapping>();
+            stepMappings[stepId] = list;
+        }
+        return list;
+    }
+
+    private SyncProjectScope GetStepScope(Guid stepId)
+    {
+        if (stepScopes.TryGetValue(stepId, out var sc) && sc is not null) return sc;
+        var fresh = new SyncProjectScope { PageSize = 1000 };
+        stepScopes[stepId] = fresh;
+        return fresh;
+    }
+
+    private void AddStepMappingRow(Guid stepId)
+    {
+        var list = GetStepMappings(stepId);
+        list.Add(new AttributeMapping { Id = Guid.NewGuid(), SortOrder = list.Count });
+        workflowsDirty = true;
+    }
+
+    private void RemoveStepMappingRow(Guid stepId, int index)
+    {
+        var list = GetStepMappings(stepId);
+        if (index < 0 || index >= list.Count) return;
+        list.RemoveAt(index);
+        workflowsDirty = true;
+    }
+
+    /// <summary>
+    /// Phase 8. Operator flipped the "inherit from project" toggle for a step's
+    /// mappings. When checked → we'll write zero rows on Save (orchestrator
+    /// falls through to project-level). When unchecked → preserve whatever the
+    /// operator typed; if the list is empty, seed one blank row to make the
+    /// table visible.
+    /// </summary>
+    private void OnStepMappingsInheritChanged(Guid stepId, ChangeEventArgs e)
+    {
+        var inherit = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+        stepMappingsInherit[stepId] = inherit;
+        if (!inherit && GetStepMappings(stepId).Count == 0)
+        {
+            AddStepMappingRow(stepId);
+        }
+        workflowsDirty = true;
+    }
+
+    private void OnStepScopeInheritChanged(Guid stepId, ChangeEventArgs e)
+    {
+        var inherit = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+        stepScopeInherit[stepId] = inherit;
+        // GetStepScope materializes a fresh blank scope on first edit when needed.
+        workflowsDirty = true;
+    }
+
+    private void AddStep(Guid workflowId)
+    {
+        if (!stepsByWorkflow.TryGetValue(workflowId, out var list))
+        {
+            list = new List<WorkflowStep>();
+            stepsByWorkflow[workflowId] = list;
+        }
+        var step = new WorkflowStep
+        {
+            Id = Guid.NewGuid(),
+            WorkflowId = workflowId,
+            Name = $"Step {list.Count + 1}",
+            StepType = WorkflowStepTypes.Mapping,
+            Ordinal = list.Count,
+            Enabled = true
+        };
+        list.Add(step);
+        selectedWorkflowId = workflowId;
+        selectedStepId = step.Id;
+        workflowsDirty = true;
+    }
+
+    private void DeleteStep()
+    {
+        if (SelectedStep is null) return;
+        var st = SelectedStep;
+        if (stepsByWorkflow.TryGetValue(st.WorkflowId, out var list))
+        {
+            list.Remove(st);
+            stepsDeleted.Add(st.Id);
+            workflowsDirty = true;
+            selectedStepId = list.FirstOrDefault()?.Id;
+        }
+    }
+
+    private void DeleteWorkflow()
+    {
+        if (SelectedWorkflow is null) return;
+        var wf = SelectedWorkflow;
+        workflowsForm.Remove(wf);
+        if (stepsByWorkflow.Remove(wf.Id, out var steps))
+        {
+            foreach (var s in steps) stepsDeleted.Add(s.Id);
+        }
+        workflowsDeleted.Add(wf.Id);
+        workflowsDirty = true;
+        selectedWorkflowId = workflowsForm.FirstOrDefault()?.Id;
+        selectedStepId = null;
+    }
+
+    private void MoveStepUp() => ReorderStep(-1);
+    private void MoveStepDown() => ReorderStep(+1);
+    private void ReorderStep(int delta)
+    {
+        if (SelectedStep is null) return;
+        var st = SelectedStep;
+        if (!stepsByWorkflow.TryGetValue(st.WorkflowId, out var list)) return;
+        var idx = list.IndexOf(st);
+        var target = idx + delta;
+        if (target < 0 || target >= list.Count) return;
+        list[idx] = list[target];
+        list[target] = st;
+        for (int i = 0; i < list.Count; i++) list[i].Ordinal = i;
+        workflowsDirty = true;
+    }
+
+    private void MoveWorkflowUp() => ReorderWorkflow(-1);
+    private void MoveWorkflowDown() => ReorderWorkflow(+1);
+    private void ReorderWorkflow(int delta)
+    {
+        if (SelectedWorkflow is null) return;
+        var wf = SelectedWorkflow;
+        var idx = workflowsForm.IndexOf(wf);
+        var target = idx + delta;
+        if (target < 0 || target >= workflowsForm.Count) return;
+        workflowsForm[idx] = workflowsForm[target];
+        workflowsForm[target] = wf;
+        for (int i = 0; i < workflowsForm.Count; i++) workflowsForm[i].Ordinal = i;
+        workflowsDirty = true;
+    }
+
+    /// <summary>
+    /// Phase 7. Called from SaveForm to persist the workflow tree on Save. Idempotent —
+    /// uses Insert-or-Update via repo per row, then issues deletes for anything dropped.
+    /// </summary>
+    private async Task PersistWorkflowsAsync(Guid projectId)
+    {
+        if (!workflowsDirty && workflowsForm.Count == 0) return;
+
+        // Deletions first so a re-add with the same name doesn't collide.
+        foreach (var id in stepsDeleted)        await WorkflowRepo.DeleteStepAsync(id);
+        foreach (var id in workflowsDeleted)    await WorkflowRepo.DeleteAsync(id);
+        stepsDeleted.Clear();
+        workflowsDeleted.Clear();
+
+        for (int i = 0; i < workflowsForm.Count; i++)
+        {
+            var wf = workflowsForm[i];
+            wf.SyncProjectId = projectId;
+            wf.Ordinal = i;
+            var existing = await WorkflowRepo.GetByIdAsync(wf.Id);
+            if (existing is null) await WorkflowRepo.CreateAsync(wf);
+            else                  await WorkflowRepo.UpdateAsync(wf);
+
+            if (stepsByWorkflow.TryGetValue(wf.Id, out var steps))
+            {
+                for (int j = 0; j < steps.Count; j++)
+                {
+                    var s = steps[j];
+                    s.WorkflowId = wf.Id;
+                    s.Ordinal = j;
+                    var existingStep = await WorkflowRepo.GetStepByIdAsync(s.Id);
+                    if (existingStep is null) await WorkflowRepo.CreateStepAsync(s);
+                    else                       await WorkflowRepo.UpdateStepAsync(s);
+
+                    // Phase 8: per-step mapping + scope persistence. Only flush
+                    // what the operator actually opened in the editor — untouched
+                    // steps stay as-is (the loaded-set guards keep this cheap).
+                    if (string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase)
+                        && stepMappingsLoaded.Contains(s.Id))
+                    {
+                        var inherit = !stepMappingsInherit.TryGetValue(s.Id, out var inhM) || inhM;
+                        // Inherit-from-project → write zero rows (orchestrator falls through).
+                        // Otherwise → push cleaned-up rows.
+                        if (inherit)
+                        {
+                            await WorkflowRepo.ReplaceMappingsForStepAsync(projectId, s.Id, Array.Empty<AttributeMapping>());
+                        }
+                        else
+                        {
+                            var rows = GetStepMappings(s.Id)
+                                .Where(m => !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute))
+                                .ToList();
+                            await WorkflowRepo.ReplaceMappingsForStepAsync(projectId, s.Id, rows);
+                        }
+                    }
+
+                    if (string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase)
+                        && stepScopesLoaded.Contains(s.Id))
+                    {
+                        var inherit = !stepScopeInherit.TryGetValue(s.Id, out var inhS) || inhS;
+                        if (!inherit)
+                        {
+                            await WorkflowRepo.UpsertScopeForStepAsync(projectId, s.Id, GetStepScope(s.Id));
+                        }
+                        // Inherit path intentionally leaves the per-step scope row
+                        // alone — repo wipes happen only if the operator explicitly
+                        // edited then re-checked inherit. Simpler to leave a stale
+                        // row (orchestrator only consults it when present) than to
+                        // forge a DELETE here. If staleness becomes a problem we
+                        // can add WorkflowRepository.DeleteScopeForStepAsync later.
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 5: AWS SSO assignment template panel state.
+    private string assignTemplateMode = "source";
+    private string assignAccountId = string.Empty;
+    private string assignPermissionSetArn = string.Empty;
+    private string assignPrincipalType = "USER";
+    private string assignPrincipalIdSource = string.Empty;
+    private string assignTemplateMessage = string.Empty;
+
+    private bool SinkIsAwsSso =>
+        form.SinkTenantId != Guid.Empty
+        && tenantById.TryGetValue(form.SinkTenantId, out var t)
+        && string.Equals(t.SystemType, "AWSIdentityCenter", StringComparison.OrdinalIgnoreCase);
+
+    private bool SinkIsEntraID =>
+        form.SinkTenantId != Guid.Empty
+        && tenantById.TryGetValue(form.SinkTenantId, out var t)
+        && string.Equals(t.SystemType, "EntraID", StringComparison.OrdinalIgnoreCase);
+
+    private bool ShowAssignmentTemplatePanel =>
+        SinkIsAwsSso
+        && string.Equals(form.ObjectClass, "Assignment", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Phase 5. "Constant mode" lower: rewrite mappingForm so the orchestrator
+    /// stamps the three constant attributes via the transform DSL's `default:`
+    /// op + leaves principalId as a source-attribute passthrough. No schema
+    /// change; the existing AttributeTransformer interprets these at sync time.
+    /// </summary>
+    private void ApplyAssignmentTemplate()
+    {
+        assignTemplateMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(assignAccountId)
+            || string.IsNullOrWhiteSpace(assignPermissionSetArn)
+            || string.IsNullOrWhiteSpace(assignPrincipalIdSource))
+        {
+            formError = "Assignment template requires accountId, permissionSetArn, and principalId source attribute.";
+            return;
+        }
+
+        // Replace any existing assignment-attribute rows so a second Apply
+        // doesn't dogpile duplicates. We only strip the three keys we own.
+        var keep = mappingForm
+            .Where(m => !IsAssignmentAttr(m.SinkAttribute))
+            .ToList();
+
+        var nextOrder = keep.Count;
+        keep.Add(new AttributeMapping
+        {
+            Id = Guid.NewGuid(),
+            SortOrder = nextOrder++,
+            SourceAttribute = string.Empty,
+            SinkAttribute = "accountId",
+            TransformExpr = $"default:{assignAccountId.Trim()}",
+            IsRequired = true
+        });
+        keep.Add(new AttributeMapping
+        {
+            Id = Guid.NewGuid(),
+            SortOrder = nextOrder++,
+            SourceAttribute = string.Empty,
+            SinkAttribute = "permissionSetArn",
+            TransformExpr = $"default:{assignPermissionSetArn.Trim()}",
+            IsRequired = true
+        });
+        keep.Add(new AttributeMapping
+        {
+            Id = Guid.NewGuid(),
+            SortOrder = nextOrder++,
+            SourceAttribute = string.Empty,
+            SinkAttribute = "principalType",
+            TransformExpr = $"default:{assignPrincipalType}",
+            IsRequired = false
+        });
+        keep.Add(new AttributeMapping
+        {
+            Id = Guid.NewGuid(),
+            SortOrder = nextOrder++,
+            SourceAttribute = assignPrincipalIdSource.Trim(),
+            SinkAttribute = "principalId",
+            TransformExpr = string.Empty,
+            IsRequired = true
+        });
+
+        mappingForm = keep;
+        formError = string.Empty;
+        assignTemplateMessage = "Template applied. Review the four assignment rows below before saving.";
+    }
+
+    private static bool IsAssignmentAttr(string? sink) =>
+        !string.IsNullOrEmpty(sink) && (
+            sink.Equals("accountId", StringComparison.OrdinalIgnoreCase)
+            || sink.Equals("permissionSetArn", StringComparison.OrdinalIgnoreCase)
+            || sink.Equals("principalType", StringComparison.OrdinalIgnoreCase)
+            || sink.Equals("principalId", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Refresh the source + sink credential dropdowns from the current form's
+    /// tenant selections. Called when the form opens (create or edit) and after
+    /// the user changes either tenant picker.
+    /// </summary>
+    private async Task LoadCredentialsForFormAsync()
+    {
+        try
+        {
+            sourceCredentialNames = form.SourceTenantId != Guid.Empty
+                ? await CredRepo.ListNamesByTenantAsync(form.SourceTenantId)
+                : new();
+        }
+        catch { sourceCredentialNames = new(); }
+        try
+        {
+            sinkCredentialNames = form.SinkTenantId != Guid.Empty
+                ? await CredRepo.ListNamesByTenantAsync(form.SinkTenantId)
+                : new();
+        }
+        catch { sinkCredentialNames = new(); }
+    }
+
+    // Run-now / delete / schedule modal state
+    private bool runNowInProgress;
+    private bool showRunConfirmModal;
+    private bool showDeleteModal;
+    private string deleteConfirmText = string.Empty;
+    private bool deleteInProgress;
+    private bool showScheduleModal;
+    private string scheduleForm = string.Empty;
+    private bool scheduleSaving;
+    private string scheduleError = string.Empty;
+
+    // Auto-generate modal state
+    private bool showAutoGenerateModal;
+    private string autoGenTemplate = "Core";
+    private Guid autoGenSourceId = Guid.Empty;
+    private Guid autoGenSinkId = Guid.Empty;
+    private string autoGenCronSchedule = string.Empty;
+    private bool autoGenEnable = true;
+    private bool autoGenInProgress;
+    private string autoGenError = string.Empty;
+
+    // Filtered project lists by tab.
+    // Conduit has no "internal" projects today — symmetric router means every project
+    // has a source + sink Tenant. The internal tab is kept for UX parity with IC and
+    // shows an empty-state explaining where those flows live.
+    private List<SyncProject> targetProjects => filteredProjects;
+    private List<SyncProject> internalProjects => new();
+
+    private IReadOnlyList<CcStatRow.StatItem> statRows = Array.Empty<CcStatRow.StatItem>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        try
+        {
+            allTenants = await TenantRepo.GetAllAsync(includeInactive: true);
+            tenantById = allTenants.ToDictionary(t => t.Id);
+            allProjects = await ProjectRepo.GetAllAsync();
+            ApplyFilter();
+            RecomputeStats();
+            if (selectedProject is not null)
+            {
+                selectedProject = allProjects.FirstOrDefault(p => p.Id == selectedProject.Id);
+                if (selectedProject is not null) await LoadRecentRuns();
+            }
+        }
+        catch (Exception ex)
+        {
+            toastError = $"Reload failed: {ex.Message}";
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        if (string.IsNullOrWhiteSpace(searchTerm))
+        {
+            filteredProjects = allProjects;
+            return;
+        }
+        var q = searchTerm.Trim();
+        filteredProjects = allProjects
+            .Where(p => (p.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                     || (p.Description?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToList();
+    }
+
+    private void RecomputeStats()
+    {
+        statRows = new[]
+        {
+            new CcStatRow.StatItem("Projects",  allProjects.Count.ToString("N0")),
+            new CcStatRow.StatItem("Enabled",   allProjects.Count(p => p.IsEnabled).ToString("N0")),
+            new CcStatRow.StatItem("Running",   allProjects.Count(p => p.IsRunning).ToString("N0"),  ValueColor: "text-info"),
+            new CcStatRow.StatItem("Scheduled", allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule)).ToString("N0"))
+        };
+    }
+
+    private async Task HandleSearchChanged(string value)
+    {
+        searchTerm = value;
+        ApplyFilter();
+        await Task.CompletedTask;
+    }
+
+    private async Task HandleSelect(SyncProject p)
+    {
+        selectedProject = p;
+        await LoadRecentRuns();
+    }
+
+    private async Task LoadRecentRuns()
+    {
+        if (selectedProject is null) { recentRuns = new(); return; }
+        try { recentRuns = await RunRepo.GetByProjectAsync(selectedProject.Id, take: 10); }
+        catch (Exception ex)
+        {
+            toastError = $"Run history load failed: {ex.Message}";
+            recentRuns = new();
+        }
+    }
+
+    private string TenantName(Guid id) =>
+        tenantById.TryGetValue(id, out var t) ? t.Name : "(unknown)";
+
+    private string TenantType(Guid id) =>
+        tenantById.TryGetValue(id, out var t) ? t.SystemType : "?";
+
+    private static string StatusBadgeColor(string? status) => status switch
+    {
+        "Succeeded" => "success",
+        "Running"   => "info",
+        "Failed"    => "danger",
+        "Cancelled" => "warning",
+        _           => "secondary"
+    };
+
+    // ─── Form modal ─────────────────────────────────────────────────────────
+
+    private async Task ShowCreateModal()
+    {
+        editingId = null;
+        form = new SyncProject { ObjectClass = "User", IsEnabled = true };
+
+        // IC-as-default-sink pattern. The IC mental model is "I add an AD
+        // connection and just create a sync project" — source picks AD, sink
+        // picks IC. Default Sink to the most-recently-active IC tenant (via
+        // SyncRuns) when more than one IC tenant exists; first IC otherwise.
+        // Default Source to the first non-IC, non-Emulator tenant. Leave
+        // either unset when no candidate exists.
+        var icTenants = allTenants
+            .Where(t => string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (icTenants.Count == 1)
+        {
+            form.SinkTenantId = icTenants[0].Id;
+        }
+        else if (icTenants.Count > 1)
+        {
+            Guid? mostRecent = null;
+            try
+            {
+                mostRecent = await RunRepo.GetMostRecentlyActiveTenantIdAsync(icTenants.Select(t => t.Id));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Most-recently-active IC lookup failed; falling back to first: {ex.Message}");
+            }
+            form.SinkTenantId = mostRecent ?? icTenants[0].Id;
+        }
+        var sourceCandidate = allTenants.FirstOrDefault(t =>
+            !string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(t.SystemType, "Emulator", StringComparison.OrdinalIgnoreCase));
+        if (sourceCandidate is not null)
+        {
+            form.SourceTenantId = sourceCandidate.Id;
+        }
+
+        scopeForm = new SyncProjectScope { PageSize = 1000 };
+        mappingForm = new List<AttributeMapping>();
+        cronPreset = string.Empty;
+        formError = string.Empty;
+        formTab = "setup";
+        sourceCredentialNames = new();
+        sinkCredentialNames = new();
+        ResetAssignmentTemplateForm();
+        ResetWorkflowFormState();
+        showFormModal = true;
+    }
+
+    private void ResetWorkflowFormState()
+    {
+        workflowsForm = new List<Workflow>();
+        stepsByWorkflow = new Dictionary<Guid, List<WorkflowStep>>();
+        selectedWorkflowId = null;
+        selectedStepId = null;
+        workflowsDirty = false;
+        workflowsDeleted.Clear();
+        stepsDeleted.Clear();
+        selectedTemplateId = WorkflowTemplateCatalog.EmptyId;
+        // Phase 8: per-step mapping + scope state.
+        stepMappings = new Dictionary<Guid, List<AttributeMapping>>();
+        stepScopes = new Dictionary<Guid, SyncProjectScope?>();
+        stepMappingsInherit = new Dictionary<Guid, bool>();
+        stepScopeInherit = new Dictionary<Guid, bool>();
+        stepMappingsLoaded = new HashSet<Guid>();
+        stepScopesLoaded = new HashSet<Guid>();
+    }
+
+    /// <summary>
+    /// Phase 8. Operator picked a workflow template in the create modal. Pre-fill
+    /// the ObjectClass so the form's Object Class dropdown reflects the choice;
+    /// the workflow tree itself is materialized later by SaveForm (after the
+    /// project has a persisted Id). We don't pre-name the project from the
+    /// template — the operator-chosen name wins.
+    /// </summary>
+    private void OnTemplateChanged(ChangeEventArgs e)
+    {
+        selectedTemplateId = e.Value?.ToString() ?? WorkflowTemplateCatalog.EmptyId;
+        var tpl = SelectedTemplate;
+        if (!string.IsNullOrEmpty(tpl.SuggestedObjectClass))
+        {
+            form.ObjectClass = tpl.SuggestedObjectClass;
+        }
+    }
+
+    /// <summary>
+    /// Phase 8. After the new project's Id is known, materialize the picked
+    /// template into Workflows + Steps via the repository. Only fires on create
+    /// + when a non-Empty template is selected.
+    /// </summary>
+    private async Task ApplyTemplateAsync(Guid projectId)
+    {
+        var tpl = SelectedTemplate;
+        if (tpl.Id == WorkflowTemplateCatalog.EmptyId) return;
+        if (tpl.Workflows.Count == 0) return;
+        var (wfs, stepsMap) = WorkflowTemplateCatalog.Materialize(tpl, projectId);
+        foreach (var wf in wfs)
+        {
+            await WorkflowRepo.CreateAsync(wf);
+            if (stepsMap.TryGetValue(wf.Id, out var steps))
+            {
+                foreach (var s in steps) await WorkflowRepo.CreateStepAsync(s);
+            }
+        }
+    }
+
+    private void ResetAssignmentTemplateForm()
+    {
+        assignTemplateMode = "source";
+        assignAccountId = string.Empty;
+        assignPermissionSetArn = string.Empty;
+        assignPrincipalType = "USER";
+        assignPrincipalIdSource = string.Empty;
+        assignTemplateMessage = string.Empty;
+    }
+
+    private async Task EditCurrent()
+    {
+        if (selectedProject is null) return;
+        editingId = selectedProject.Id;
+        form = new SyncProject
+        {
+            Id = selectedProject.Id,
+            Name = selectedProject.Name,
+            Description = selectedProject.Description,
+            SourceTenantId = selectedProject.SourceTenantId,
+            SinkTenantId = selectedProject.SinkTenantId,
+            SourceCredentialName = selectedProject.SourceCredentialName,
+            SinkCredentialName = selectedProject.SinkCredentialName,
+            ObjectClass = selectedProject.ObjectClass,
+            CronSchedule = selectedProject.CronSchedule,
+            IsEnabled = selectedProject.IsEnabled
+        };
+        await LoadCredentialsForFormAsync();
+        scopeForm = await ProjectRepo.GetScopeAsync(selectedProject.Id)
+                    ?? new SyncProjectScope { SyncProjectId = selectedProject.Id, PageSize = 1000 };
+        mappingForm = await ProjectRepo.GetMappingsAsync(selectedProject.Id);
+        cronPreset = string.Empty;
+        formError = string.Empty;
+        formTab = "setup";
+        ResetAssignmentTemplateForm();
+        ResetWorkflowFormState();
+        // Pre-fill constant fields from existing default:* mappings when present so the
+        // template panel is editable in-place on already-templated projects.
+        TryHydrateAssignmentTemplateFromMappings();
+        showFormModal = true;
+    }
+
+    private void TryHydrateAssignmentTemplateFromMappings()
+    {
+        var acct = mappingForm.FirstOrDefault(m => string.Equals(m.SinkAttribute, "accountId", StringComparison.OrdinalIgnoreCase));
+        var ps   = mappingForm.FirstOrDefault(m => string.Equals(m.SinkAttribute, "permissionSetArn", StringComparison.OrdinalIgnoreCase));
+        var pt   = mappingForm.FirstOrDefault(m => string.Equals(m.SinkAttribute, "principalType", StringComparison.OrdinalIgnoreCase));
+        var pid  = mappingForm.FirstOrDefault(m => string.Equals(m.SinkAttribute, "principalId", StringComparison.OrdinalIgnoreCase));
+
+        string? Default(AttributeMapping? m) =>
+            (m?.TransformExpr ?? "").StartsWith("default:", StringComparison.OrdinalIgnoreCase)
+                ? m!.TransformExpr!.Substring("default:".Length)
+                : null;
+
+        var acctVal = Default(acct);
+        var psVal   = Default(ps);
+        var ptVal   = Default(pt);
+
+        if (acctVal is not null) assignAccountId = acctVal;
+        if (psVal   is not null) assignPermissionSetArn = psVal;
+        if (!string.IsNullOrEmpty(ptVal)) assignPrincipalType = ptVal;
+        if (pid is not null && !string.IsNullOrWhiteSpace(pid.SourceAttribute))
+            assignPrincipalIdSource = pid.SourceAttribute;
+
+        if (acctVal is not null && psVal is not null)
+            assignTemplateMode = "constant";
+    }
+
+    private void AddMappingRow()
+    {
+        mappingForm.Add(new AttributeMapping
+        {
+            Id = Guid.NewGuid(),
+            SortOrder = mappingForm.Count
+        });
+    }
+
+    private void RemoveMappingRow(int index)
+    {
+        if (index < 0 || index >= mappingForm.Count) return;
+        mappingForm.RemoveAt(index);
+    }
+
+    private void ApplyCronPreset()
+    {
+        if (!string.IsNullOrEmpty(cronPreset))
+        {
+            form.CronSchedule = cronPreset;
+            cronPreset = string.Empty;
+        }
+    }
+
+    private void CloseFormModal()
+    {
+        showFormModal = false;
+        formError = string.Empty;
+    }
+
+    private async Task SaveForm()
+    {
+        formError = string.Empty;
+        if (string.IsNullOrWhiteSpace(form.Name))
+        {
+            formError = "Name is required.";
+            formTab = "setup";
+            return;
+        }
+        if (form.SourceTenantId == Guid.Empty || form.SinkTenantId == Guid.Empty)
+        {
+            formError = "Both source and sink Connected Systems are required.";
+            formTab = "setup";
+            return;
+        }
+        // Self-sync is allowed — a project can pull from a system and write back
+        // to the same system (the "default:transformed" mastered-identity pattern).
+        // The symmetric-router contract doesn't care; the soft banner above the
+        // Source/Sink picker tells the operator what they're doing.
+        if (!ScheduledSyncRunnerJob.TryValidate(form.CronSchedule, out var cronError))
+        {
+            formError = cronError ?? "Invalid schedule.";
+            formTab = "schedule";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            SyncProject persisted;
+            bool isCreate = !editingId.HasValue;
+            if (editingId.HasValue)
+            {
+                form.Id = editingId.Value;
+                await ProjectRepo.UpdateAsync(form);
+                persisted = form;
+            }
+            else
+            {
+                persisted = await ProjectRepo.CreateAsync(form);
+            }
+
+            // Phase 8: materialize the chosen workflow template on first save.
+            // Empty template is a no-op; the orchestrator's V17 backfill will
+            // stamp a Default workflow on the first run if nothing else exists.
+            if (isCreate)
+            {
+                await ApplyTemplateAsync(persisted.Id);
+            }
+
+            scopeForm.SyncProjectId = persisted.Id;
+            await ProjectRepo.UpsertScopeAsync(scopeForm);
+
+            var cleanedMappings = mappingForm
+                .Where(m => !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute))
+                .ToList();
+            await ProjectRepo.ReplaceMappingsAsync(persisted.Id, cleanedMappings);
+
+            // Phase 7: persist the workflow tree if the operator opened the tab.
+            await PersistWorkflowsAsync(persisted.Id);
+
+            showFormModal = false;
+            toastSuccess = editingId.HasValue
+                ? $"Sync project '{persisted.Name}' saved."
+                : $"Sync project '{persisted.Name}' created.";
+            await Reload();
+            selectedProject = allProjects.FirstOrDefault(p => p.Id == persisted.Id);
+            await LoadRecentRuns();
+        }
+        catch (Exception ex)
+        {
+            formError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    // ─── Delete modal ───────────────────────────────────────────────────────
+
+    private void ShowDeleteModal()
+    {
+        if (selectedProject is null) return;
+        deleteConfirmText = string.Empty;
+        showDeleteModal = true;
+    }
+
+    private void CloseDeleteModal()
+    {
+        if (deleteInProgress) return;
+        showDeleteModal = false;
+        deleteConfirmText = string.Empty;
+    }
+
+    private async Task DeleteConfirmed()
+    {
+        if (selectedProject is null || deleteConfirmText != "DELETE") return;
+        deleteInProgress = true;
+        try
+        {
+            var name = selectedProject.Name;
+            await ProjectRepo.DeleteAsync(selectedProject.Id);
+            selectedProject = null;
+            recentRuns = new();
+            showDeleteModal = false;
+            toastSuccess = $"Sync project '{name}' deleted.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            toastError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            deleteInProgress = false;
+        }
+    }
+
+    // ─── Run-now modal ──────────────────────────────────────────────────────
+
+    private void ShowRunConfirmModal()
+    {
+        if (selectedProject is null || !selectedProject.IsEnabled || selectedProject.IsRunning) return;
+        showRunConfirmModal = true;
+    }
+
+    private void CloseRunConfirmModal()
+    {
+        if (runNowInProgress) return;
+        showRunConfirmModal = false;
+    }
+
+    private async Task RunNowConfirmed()
+    {
+        if (selectedProject is null || selectedProject.IsRunning) return;
+        runNowInProgress = true;
+        try
+        {
+            var runId = await Orchestrator.ExecuteAsync(selectedProject.Id, "Manual", CancellationToken.None);
+            showRunConfirmModal = false;
+            await Reload();
+            Navigation.NavigateTo($"/sync-history/{runId}");
+        }
+        catch (Exception ex)
+        {
+            toastError = $"Run failed: {ex.Message}";
+        }
+        finally
+        {
+            runNowInProgress = false;
+        }
+    }
+
+    // ─── Schedule modal ─────────────────────────────────────────────────────
+
+    private void OpenScheduleModal()
+    {
+        if (selectedProject is null) return;
+        scheduleForm = selectedProject.CronSchedule ?? string.Empty;
+        scheduleError = string.Empty;
+        showScheduleModal = true;
+    }
+
+    private void CloseScheduleModal()
+    {
+        if (scheduleSaving) return;
+        showScheduleModal = false;
+        scheduleError = string.Empty;
+    }
+
+    private void OnSchedulePresetPicked()
+    {
+        // scheduleForm is bound to the select; nothing else to do — keeping the
+        // hook so the @bind:after expression compiles and future post-pick logic
+        // (e.g. preview-of-next-run) has a place to land.
+    }
+
+    private async Task SaveSchedule()
+    {
+        if (selectedProject is null) return;
+        if (!ScheduledSyncRunnerJob.TryValidate(scheduleForm, out var err))
+        {
+            scheduleError = err ?? "Invalid schedule.";
+            return;
+        }
+        scheduleSaving = true;
+        try
+        {
+            var copy = new SyncProject
+            {
+                Id = selectedProject.Id,
+                Name = selectedProject.Name,
+                Description = selectedProject.Description,
+                SourceTenantId = selectedProject.SourceTenantId,
+                SinkTenantId = selectedProject.SinkTenantId,
+                ObjectClass = selectedProject.ObjectClass,
+                CronSchedule = string.IsNullOrWhiteSpace(scheduleForm) ? null : scheduleForm.Trim(),
+                IsEnabled = selectedProject.IsEnabled
+            };
+            await ProjectRepo.UpdateAsync(copy);
+            showScheduleModal = false;
+            toastSuccess = $"Schedule saved for '{selectedProject.Name}'.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            scheduleError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            scheduleSaving = false;
+        }
+    }
+
+    // ─── Auto-generate modal ────────────────────────────────────────────────
+
+    private void ShowAutoGenerateModal()
+    {
+        autoGenTemplate = "Core";
+        autoGenSourceId = Guid.Empty;
+        autoGenSinkId = Guid.Empty;
+        autoGenCronSchedule = string.Empty;
+        autoGenEnable = true;
+        autoGenError = string.Empty;
+        showAutoGenerateModal = true;
+    }
+
+    private void CloseAutoGenerateModal()
+    {
+        if (autoGenInProgress) return;
+        showAutoGenerateModal = false;
+    }
+
+    private async Task GenerateAutoSyncProject()
+    {
+        autoGenError = string.Empty;
+        if (autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty)
+        {
+            autoGenError = "Both source and sink are required.";
+            return;
+        }
+        // Self-sync is allowed for auto-generation too — useful for mastered
+        // transforms (e.g. AD → AD with a default:* stamp).
+        autoGenInProgress = true;
+        try
+        {
+            var sourceName = TenantName(autoGenSourceId);
+            var sinkName = TenantName(autoGenSinkId);
+            var classes = autoGenTemplate == "UserOnly"
+                ? new[] { "User" }
+                : new[] { "User", "Group" };
+            var created = 0;
+            foreach (var oc in classes)
+            {
+                var p = new SyncProject
+                {
+                    Name = $"{sourceName} → {sinkName} ({oc})",
+                    Description = $"Auto-generated: pulls {oc} objects from {sourceName} and pushes to {sinkName}.",
+                    SourceTenantId = autoGenSourceId,
+                    SinkTenantId = autoGenSinkId,
+                    ObjectClass = oc,
+                    IsEnabled = autoGenEnable,
+                    CronSchedule = string.IsNullOrWhiteSpace(autoGenCronSchedule) ? null : autoGenCronSchedule
+                };
+                var saved = await ProjectRepo.CreateAsync(p);
+                await ProjectRepo.UpsertScopeAsync(new SyncProjectScope { SyncProjectId = saved.Id, PageSize = 1000 });
+                await ProjectRepo.ReplaceMappingsAsync(saved.Id, Array.Empty<AttributeMapping>()); // passthrough
+                created++;
+            }
+            showAutoGenerateModal = false;
+            toastSuccess = $"Auto-generated {created} sync project(s) from {sourceName} to {sinkName}.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            autoGenError = $"Auto-generate failed: {ex.Message}";
+        }
+        finally
+        {
+            autoGenInProgress = false;
+        }
+    }
+}

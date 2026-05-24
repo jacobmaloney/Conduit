@@ -1,0 +1,663 @@
+@page "/sync-history"
+@page "/sync-history/{RunId:guid}"
+@attribute [Authorize]
+@using Conduit.Core.SyncModels
+@using Conduit.DataAccess.Repositories
+@using Microsoft.AspNetCore.WebUtilities
+@inject SyncRunRepository RunRepo
+@inject SyncProjectRepository ProjectRepo
+@inject SyncRunAsyncJobRepository AsyncJobRepo
+@inject NavigationManager Navigation
+@implements IDisposable
+
+@*
+    Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjectRuns.razor
+    + SyncProjectRunDetails.razor combined into a single split-pane experience.
+    Differences from IC (intentional):
+        - One page, not two. The right pane IS the "run detail" view.
+        - No per-step boxes / post-sync tasks / pre-sync optimization. Conduit's
+          orchestrator is one source → mapping → sink loop; there are no steps.
+          IC's step-box rendering belongs to its governance steps (PersonMatch,
+          IdentityManagerAssignment, etc.) which stay in IC.
+        - 2-second polling for any "Running" run (matches IC).
+        - ?project=GUID query-string filter so the SyncProjects "History" link
+          deep-links into the relevant subset.
+
+    Visuals: CcTemplate1 header + CcStatRow + CcFilterTabs + CcListPanel.
+    Zero inline style= attributes.
+*@
+
+<PageTitle>Sync History - Conduit</PageTitle>
+
+<div class="container-fluid sync-page-container">
+    <CcTemplate1 Title="Sync History"
+                 Subtitle="Every sync project run, every log line, kept forever."
+                 Icon="fas fa-history"
+                 IconAccent="violet" />
+
+    <CcStatRow Stats="@statRows" />
+
+    <CcFilterTabs Tabs="@statusTabs"
+                  ActiveTab="@activeStatusTab"
+                  OnTabChanged="HandleStatusTabChanged" />
+
+    <div class="row sync-page-split">
+        <div class="col-md-4 sync-page-list-col">
+            <div class="sync-history-filter">
+                <label class="form-label mb-1 small">Project filter</label>
+                <select class="form-select form-select-sm" @bind="selectedProjectIdRaw" @bind:after="ReloadList">
+                    <option value="">All projects</option>
+                    @foreach (var p in allProjects)
+                    {
+                        <option value="@p.Id">@p.Name</option>
+                    }
+                </select>
+            </div>
+            <CcListPanel TItem="Conduit.Core.SyncModels.SyncRun"
+                         Items="@filteredRuns"
+                         TotalCount="@filteredRuns.Count"
+                         SelectedItem="@selectedRun"
+                         OnSelect="HandleSelect"
+                         ShowSearch="false"
+                         ShowPaging="false"
+                         Width="100%">
+                <RowTemplate>
+                    <div class="sync-run-row @(selectedRun?.Id == context.Id ? "active" : "")">
+                        <div class="sync-run-row-head">
+                            <span class="badge bg-@StatusBadgeColor(context.Status)">
+                                @if (context.Status == "Running")
+                                {
+                                    <i class="fas fa-spinner fa-spin me-1"></i>
+                                }
+                                @context.Status
+                            </span>
+                            <span class="sync-run-row-when">@context.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</span>
+                        </div>
+                        <div class="sync-run-row-name">@ProjectName(context.SyncProjectId)</div>
+                        <div class="sync-run-row-counts">
+                            R @context.ObjectsRead · C @context.ObjectsCreated · U @context.ObjectsUpdated · F @context.ObjectsFailed
+                            @if (context.DurationMs.HasValue)
+                            {
+                                <span class="sync-run-row-dur"> · @($"{context.DurationMs.Value / 1000.0:0.0}s")</span>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(context.ErrorMessage))
+                        {
+                            <div class="sync-run-row-err">
+                                <i class="fas fa-exclamation-triangle me-1"></i>@TruncateErr(context.ErrorMessage!)
+                            </div>
+                        }
+                    </div>
+                </RowTemplate>
+                <EmptyTemplate>
+                    <div class="sync-empty">
+                        <i class="fas fa-history fa-2x mb-2"></i>
+                        <p>No runs match the current filters.</p>
+                    </div>
+                </EmptyTemplate>
+            </CcListPanel>
+        </div>
+
+        <div class="col-md-8 sync-page-detail-col">
+            @if (selectedRun is null)
+            {
+                <div class="sync-detail-empty">
+                    <i class="fas fa-arrow-left me-2"></i>
+                    Select a run on the left to see its log.
+                </div>
+            }
+            else
+            {
+                <div class="sync-detail-card">
+                    <div class="sync-detail-header">
+                        <div>
+                            <h3 class="sync-detail-title">
+                                @ProjectName(selectedRun.SyncProjectId)
+                                <span class="badge bg-@StatusBadgeColor(selectedRun.Status) ms-2">
+                                    @if (selectedRun.Status == "Running")
+                                    {
+                                        <i class="fas fa-spinner fa-spin me-1"></i>
+                                    }
+                                    @selectedRun.Status
+                                </span>
+                                @if (isPolling)
+                                {
+                                    <span class="badge bg-success ms-2"><i class="fas fa-circle live-indicator me-1"></i>Live</span>
+                                }
+                            </h3>
+                            <div class="sync-detail-subtitle">
+                                Run started @selectedRun.StartedAt.ToString("yyyy-MM-dd HH:mm:ss 'UTC'")
+                                @if (selectedRun.CompletedAt.HasValue)
+                                {
+                                    <span> · completed @selectedRun.CompletedAt.Value.ToString("HH:mm:ss") · @(selectedRun.DurationMs.HasValue ? $"{selectedRun.DurationMs.Value / 1000.0:0.00}s" : "—")</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sync-detail-grid">
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">TRIGGER</div>
+                            <div class="sync-detail-value">@selectedRun.TriggeredBy</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">READ</div>
+                            <div class="sync-detail-value">@selectedRun.ObjectsRead</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">CREATED</div>
+                            <div class="sync-detail-value text-success">@selectedRun.ObjectsCreated</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">UPDATED</div>
+                            <div class="sync-detail-value text-info">@selectedRun.ObjectsUpdated</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">SKIPPED</div>
+                            <div class="sync-detail-value text-muted">@selectedRun.ObjectsSkipped</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">FAILED</div>
+                            <div class="sync-detail-value text-danger">@selectedRun.ObjectsFailed</div>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(selectedRun.ErrorMessage))
+                    {
+                        <div class="sync-detail-section">
+                            <div class="sync-detail-section-title">Error</div>
+                            <pre class="sync-error-block">@selectedRun.ErrorMessage</pre>
+                        </div>
+                    }
+
+                    <div class="sync-detail-section">
+                        <CcFilterTabs Tabs="@detailTabs"
+                                      ActiveTab="@activeDetailTab"
+                                      OnTabChanged="HandleDetailTabChanged" />
+
+                        @if (activeDetailTab == "log")
+                        {
+                            <div class="sync-detail-section-title">
+                                Log (@logs.Count lines)
+                                @if (selectedRun.Status == "Running")
+                                {
+                                    <small class="sync-log-streaming"><i class="fas fa-sync fa-spin me-1"></i>Streaming…</small>
+                                }
+                            </div>
+                            @if (logs.Count == 0)
+                            {
+                                <div class="sync-detail-empty-row">No log lines.</div>
+                            }
+                            else
+                            {
+                                <div class="sync-log-block">
+                                    @foreach (var line in logs)
+                                    {
+                                        <div class="sync-log-line sync-log-@line.Level.ToLowerInvariant()">
+                                            <span class="sync-log-ts">@line.Timestamp.ToString("HH:mm:ss")</span>
+                                            <span class="sync-log-level">@line.Level</span>
+                                            <span class="sync-log-msg">@line.Message</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                        else if (activeDetailTab == "asyncjobs")
+                        {
+                            <div class="sync-asyncjobs-toolbar">
+                                <CcFilterTabs Tabs="@asyncJobStateTabs"
+                                              ActiveTab="@activeAsyncJobState"
+                                              OnTabChanged="HandleAsyncJobStateChanged" />
+                                @if (asyncJobTypes.Count > 1)
+                                {
+                                    <select class="form-select form-select-sm sync-asyncjobs-jobtype"
+                                            @bind="asyncJobTypeFilter" @bind:after="RefilterAsyncJobs">
+                                        <option value="">All job types</option>
+                                        @foreach (var jt in asyncJobTypes)
+                                        {
+                                            <option value="@jt">@jt</option>
+                                        }
+                                    </select>
+                                }
+                                @if (!string.IsNullOrEmpty(asyncJobToast))
+                                {
+                                    <span class="sync-asyncjobs-toast text-success">
+                                        <i class="fas fa-check-circle me-1"></i>@asyncJobToast
+                                    </span>
+                                }
+                                @if (!string.IsNullOrEmpty(asyncJobError))
+                                {
+                                    <span class="sync-asyncjobs-toast text-danger">
+                                        <i class="fas fa-exclamation-triangle me-1"></i>@asyncJobError
+                                    </span>
+                                }
+                            </div>
+
+                            @if (filteredAsyncJobs.Count == 0)
+                            {
+                                <div class="sync-detail-empty-row">
+                                    @if (allAsyncJobs.Count == 0)
+                                    {
+                                        <span>No async jobs were submitted by this run.</span>
+                                    }
+                                    else
+                                    {
+                                        <span>No async jobs match the current filters.</span>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <table class="sync-asyncjobs-table">
+                                    <thead>
+                                        <tr>
+                                            <th>State</th>
+                                            <th>Job type</th>
+                                            <th>External id</th>
+                                            <th>Submitted</th>
+                                            <th>Last poll</th>
+                                            <th class="text-center">Attempts</th>
+                                            <th>Error</th>
+                                            <th class="text-end">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var job in filteredAsyncJobs)
+                                        {
+                                            var jobId = job.Id;
+                                            var state = job.State;
+                                            <tr>
+                                                <td>
+                                                    <span class="badge bg-@AsyncJobStateBadge(state)">@state</span>
+                                                </td>
+                                                <td><code>@job.JobType</code></td>
+                                                <td class="sync-asyncjobs-cell-extid">@(job.ObjectExternalId ?? "—")</td>
+                                                <td>@job.SubmittedAt.ToString("HH:mm:ss")</td>
+                                                <td>@(job.LastPolledAt?.ToString("HH:mm:ss") ?? "—")</td>
+                                                <td class="text-center">@job.PollAttempts</td>
+                                                <td class="sync-asyncjobs-cell-err">@(job.ErrorMessage ?? "")</td>
+                                                <td class="text-end">
+                                                    @if (state == "Pending")
+                                                    {
+                                                        <button class="btn btn-sm btn-outline-warning"
+                                                                disabled="@asyncJobMutating"
+                                                                @onclick="() => CancelAsyncJob(jobId)">
+                                                            <i class="fas fa-ban me-1"></i>Cancel
+                                                        </button>
+                                                    }
+                                                    else if (state == "Failed" || state == "Cancelled")
+                                                    {
+                                                        <button class="btn btn-sm btn-outline-primary"
+                                                                disabled="@asyncJobMutating"
+                                                                @onclick="() => RetryAsyncJob(jobId)">
+                                                            <i class="fas fa-redo me-1"></i>Retry
+                                                        </button>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public Guid? RunId { get; set; }
+
+    private List<Conduit.Core.SyncModels.SyncRun> allRuns = new();
+    private List<Conduit.Core.SyncModels.SyncRun> filteredRuns = new();
+    private List<Conduit.Core.SyncModels.SyncRunLog> logs = new();
+    private List<SyncProject> allProjects = new();
+    private Dictionary<Guid, SyncProject> projectById = new();
+    private Conduit.Core.SyncModels.SyncRun? selectedRun;
+
+    private string activeStatusTab = "all";
+    private string selectedProjectIdRaw = string.Empty;
+
+    private IReadOnlyList<CcFilterTabs.Tab> statusTabs = Array.Empty<CcFilterTabs.Tab>();
+    private IReadOnlyList<CcStatRow.StatItem> statRows = Array.Empty<CcStatRow.StatItem>();
+
+    // Phase 5: detail-pane sub-tabs (Log / Async Jobs).
+    private string activeDetailTab = "log";
+    private IReadOnlyList<CcFilterTabs.Tab> detailTabs = Array.Empty<CcFilterTabs.Tab>();
+
+    // Phase 5: async-job admin state for the currently selected run.
+    private List<Conduit.Core.SyncModels.SyncRunAsyncJob> allAsyncJobs = new();
+    private List<Conduit.Core.SyncModels.SyncRunAsyncJob> filteredAsyncJobs = new();
+    private List<string> asyncJobTypes = new();
+    private string activeAsyncJobState = "all";
+    private string asyncJobTypeFilter = string.Empty;
+    private IReadOnlyList<CcFilterTabs.Tab> asyncJobStateTabs = Array.Empty<CcFilterTabs.Tab>();
+    private bool asyncJobMutating;
+    private string asyncJobToast = string.Empty;
+    private string asyncJobError = string.Empty;
+
+    // Auto-refresh polling for running runs. Mirrors IC's SyncProjectRuns.razor
+    // (2-second timer; stops once nothing is running).
+    private System.Threading.Timer? pollTimer;
+    private bool isPolling;
+    private bool isRefreshing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // ?project=GUID — entry point from SyncProjects "History" link.
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("project", out var pidStr) && Guid.TryParse(pidStr, out var pid))
+        {
+            selectedProjectIdRaw = pid.ToString();
+        }
+
+        allProjects = await ProjectRepo.GetAllAsync();
+        projectById = allProjects.ToDictionary(p => p.Id);
+        await ReloadList();
+        if (RunId.HasValue)
+        {
+            selectedRun = allRuns.FirstOrDefault(r => r.Id == RunId.Value)
+                          ?? await RunRepo.GetByIdAsync(RunId.Value);
+            if (selectedRun is not null)
+            {
+                await LoadLogs();
+                await LoadAsyncJobs();
+            }
+        }
+        RebuildDetailTabs();
+        StartPollingIfNeeded();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (RunId.HasValue && (selectedRun is null || selectedRun.Id != RunId.Value))
+        {
+            selectedRun = await RunRepo.GetByIdAsync(RunId.Value);
+            if (selectedRun is not null)
+            {
+                await LoadLogs();
+                await LoadAsyncJobs();
+            }
+            StartPollingIfNeeded();
+        }
+    }
+
+    private async Task ReloadList()
+    {
+        Guid? projectFilter = null;
+        if (Guid.TryParse(selectedProjectIdRaw, out var pg)) projectFilter = pg;
+
+        string? statusFilter = activeStatusTab == "all" ? null : activeStatusTab;
+
+        allRuns = await RunRepo.GetRecentAsync(take: 200, projectId: projectFilter, status: statusFilter);
+        filteredRuns = allRuns;
+        RebuildStatusTabs();
+        RecomputeStats();
+    }
+
+    private void RebuildStatusTabs()
+    {
+        statusTabs = new[]
+        {
+            new CcFilterTabs.Tab("all",       "All",       allRuns.Count),
+            new CcFilterTabs.Tab("Running",   "Running",   allRuns.Count(r => r.Status == "Running")),
+            new CcFilterTabs.Tab("Succeeded", "Succeeded", allRuns.Count(r => r.Status == "Succeeded")),
+            new CcFilterTabs.Tab("Failed",    "Failed",    allRuns.Count(r => r.Status == "Failed")),
+            new CcFilterTabs.Tab("Cancelled", "Cancelled", allRuns.Count(r => r.Status == "Cancelled"))
+        };
+    }
+
+    private void RecomputeStats()
+    {
+        // Mirror IC SyncProjectRunDetails Created / Updated / Deleted / Errors —
+        // adapted for Conduit's counter shape (Created / Updated / Skipped / Failed).
+        statRows = new[]
+        {
+            new CcStatRow.StatItem("Created", filteredRuns.Sum(r => r.ObjectsCreated).ToString("N0"), ValueColor: "text-success"),
+            new CcStatRow.StatItem("Updated", filteredRuns.Sum(r => r.ObjectsUpdated).ToString("N0"), ValueColor: "text-info"),
+            new CcStatRow.StatItem("Skipped", filteredRuns.Sum(r => r.ObjectsSkipped).ToString("N0"), ValueColor: "text-muted"),
+            new CcStatRow.StatItem("Failed",  filteredRuns.Sum(r => r.ObjectsFailed).ToString("N0"),  ValueColor: "text-danger", Emphasize: filteredRuns.Any(r => r.ObjectsFailed > 0))
+        };
+    }
+
+    private async Task HandleStatusTabChanged(string key)
+    {
+        activeStatusTab = key;
+        await ReloadList();
+        StartPollingIfNeeded();
+    }
+
+    private async Task HandleSelect(Conduit.Core.SyncModels.SyncRun r)
+    {
+        selectedRun = r;
+        await LoadLogs();
+        await LoadAsyncJobs();
+        StartPollingIfNeeded();
+    }
+
+    private async Task LoadLogs()
+    {
+        if (selectedRun is null) { logs = new(); return; }
+        try { logs = await RunRepo.GetLogsAsync(selectedRun.Id, take: 2000); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"LoadLogs failed: {ex.Message}");
+            logs = new();
+        }
+    }
+
+    private async Task LoadAsyncJobs()
+    {
+        if (selectedRun is null)
+        {
+            allAsyncJobs = new();
+            filteredAsyncJobs = new();
+            asyncJobTypes = new();
+            RebuildDetailTabs();
+            return;
+        }
+        try
+        {
+            allAsyncJobs = await AsyncJobRepo.GetByRunAsync(selectedRun.Id);
+            asyncJobTypes = allAsyncJobs.Select(j => j.JobType).Distinct().OrderBy(s => s).ToList();
+            RefilterAsyncJobs();
+            RebuildDetailTabs();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"LoadAsyncJobs failed: {ex.Message}");
+            allAsyncJobs = new();
+            filteredAsyncJobs = new();
+            asyncJobTypes = new();
+            RebuildDetailTabs();
+        }
+    }
+
+    private void RebuildDetailTabs()
+    {
+        detailTabs = new[]
+        {
+            new CcFilterTabs.Tab("log", "Log", logs.Count),
+            new CcFilterTabs.Tab("asyncjobs", "Async jobs", allAsyncJobs.Count)
+        };
+
+        var pending   = allAsyncJobs.Count(j => j.State == "Pending");
+        var succeeded = allAsyncJobs.Count(j => j.State == "Succeeded");
+        var failed    = allAsyncJobs.Count(j => j.State == "Failed");
+        var cancelled = allAsyncJobs.Count(j => j.State == "Cancelled");
+
+        asyncJobStateTabs = new[]
+        {
+            new CcFilterTabs.Tab("all",       "All",       allAsyncJobs.Count),
+            new CcFilterTabs.Tab("Pending",   "Pending",   pending),
+            new CcFilterTabs.Tab("Succeeded", "Succeeded", succeeded),
+            new CcFilterTabs.Tab("Failed",    "Failed",    failed),
+            new CcFilterTabs.Tab("Cancelled", "Cancelled", cancelled)
+        };
+    }
+
+    private void RefilterAsyncJobs()
+    {
+        IEnumerable<Conduit.Core.SyncModels.SyncRunAsyncJob> q = allAsyncJobs;
+        if (activeAsyncJobState != "all")
+            q = q.Where(j => j.State == activeAsyncJobState);
+        if (!string.IsNullOrEmpty(asyncJobTypeFilter))
+            q = q.Where(j => j.JobType == asyncJobTypeFilter);
+        filteredAsyncJobs = q.OrderByDescending(j => j.SubmittedAt).ToList();
+    }
+
+    private async Task HandleDetailTabChanged(string key)
+    {
+        activeDetailTab = key;
+        if (key == "asyncjobs") await LoadAsyncJobs();
+    }
+
+    private async Task HandleAsyncJobStateChanged(string key)
+    {
+        activeAsyncJobState = key;
+        RefilterAsyncJobs();
+        await Task.CompletedTask;
+    }
+
+    private async Task CancelAsyncJob(long jobId)
+    {
+        asyncJobMutating = true;
+        asyncJobToast = string.Empty;
+        asyncJobError = string.Empty;
+        try
+        {
+            var ok = await AsyncJobRepo.CancelAsync(jobId);
+            asyncJobToast = ok ? "Job cancelled." : "Job state already changed — refresh to see latest.";
+            await LoadAsyncJobs();
+        }
+        catch (Exception ex)
+        {
+            asyncJobError = $"Cancel failed: {ex.Message}";
+        }
+        finally
+        {
+            asyncJobMutating = false;
+        }
+    }
+
+    private async Task RetryAsyncJob(long jobId)
+    {
+        asyncJobMutating = true;
+        asyncJobToast = string.Empty;
+        asyncJobError = string.Empty;
+        try
+        {
+            var ok = await AsyncJobRepo.RetryAsync(jobId);
+            asyncJobToast = ok ? "Job re-queued — the poller will pick it up shortly." : "Job not in a re-tryable state — refresh to see latest.";
+            await LoadAsyncJobs();
+        }
+        catch (Exception ex)
+        {
+            asyncJobError = $"Retry failed: {ex.Message}";
+        }
+        finally
+        {
+            asyncJobMutating = false;
+        }
+    }
+
+    private static string AsyncJobStateBadge(string? state) => state switch
+    {
+        "Succeeded" => "success",
+        "Failed"    => "danger",
+        "Cancelled" => "warning",
+        "Pending"   => "info",
+        _           => "secondary"
+    };
+
+    // Polling: start a 2s timer whenever the list OR the selected run contains
+    // a "Running" entry. Stop automatically when everything settles.
+    private void StartPollingIfNeeded()
+    {
+        var anythingRunning =
+            allRuns.Any(r => r.Status == "Running") ||
+            (selectedRun?.Status == "Running") ||
+            allAsyncJobs.Any(j => j.State == "Pending");
+
+        if (anythingRunning && pollTimer is null)
+        {
+            isPolling = true;
+            pollTimer = new System.Threading.Timer(async _ => await PollAsync(), null, 2000, 2000);
+        }
+        else if (!anythingRunning && pollTimer is not null)
+        {
+            isPolling = false;
+            pollTimer.Dispose();
+            pollTimer = null;
+        }
+    }
+
+    private async Task PollAsync()
+    {
+        if (isRefreshing) return;
+        isRefreshing = true;
+        try
+        {
+            await ReloadList();
+            if (selectedRun is not null)
+            {
+                var refreshed = await RunRepo.GetByIdAsync(selectedRun.Id);
+                if (refreshed is not null)
+                {
+                    selectedRun = refreshed;
+                    await LoadLogs();
+                    // Phase 5: keep async-job rows live while jobs are pending —
+                    // the poller may advance them out of band on a 30s tick.
+                    if (activeDetailTab == "asyncjobs" || allAsyncJobs.Any(j => j.State == "Pending"))
+                    {
+                        await LoadAsyncJobs();
+                    }
+                }
+            }
+            await InvokeAsync(StateHasChanged);
+
+            var stillRunning =
+                allRuns.Any(r => r.Status == "Running") ||
+                (selectedRun?.Status == "Running");
+            if (!stillRunning && pollTimer is not null)
+            {
+                isPolling = false;
+                pollTimer.Dispose();
+                pollTimer = null;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"SyncHistory poll failed: {ex.Message}");
+        }
+        finally
+        {
+            isRefreshing = false;
+        }
+    }
+
+    private string ProjectName(Guid id) =>
+        projectById.TryGetValue(id, out var p) ? p.Name : "(deleted project)";
+
+    private static string StatusBadgeColor(string? status) => status switch
+    {
+        "Succeeded" => "success",
+        "Running"   => "info",
+        "Failed"    => "danger",
+        "Cancelled" => "warning",
+        _           => "secondary"
+    };
+
+    private static string TruncateErr(string s) =>
+        s.Length <= 120 ? s : s.Substring(0, 117) + "…";
+
+    public void Dispose()
+    {
+        pollTimer?.Dispose();
+        pollTimer = null;
+    }
+}

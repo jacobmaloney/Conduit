@@ -4,6 +4,20 @@
     <ProjectReference Include="..\Conduit.Core\Conduit.Core.csproj" />
     <ProjectReference Include="..\Conduit.DataAccess\Conduit.DataAccess.csproj" />
     <ProjectReference Include="..\Conduit.Scheduling\Conduit.Scheduling.csproj" />
+    <ProjectReference Include="..\Conduit.Sync\Conduit.Sync.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.ActiveDirectory\Conduit.Connectors.ActiveDirectory.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.Emulator\Conduit.Connectors.Emulator.csproj" />
+    <ProjectReference Include="..\..\..\CenturyCity.Design\src\CenturyCity.Design\CenturyCity.Design.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.EntraID\Conduit.Connectors.EntraID.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.Okta\Conduit.Connectors.Okta.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.GoogleWorkspace\Conduit.Connectors.GoogleWorkspace.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.GenericLdap\Conduit.Connectors.GenericLdap.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.Scim\Conduit.Connectors.Scim.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.Database\Conduit.Connectors.Database.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.Csv\Conduit.Connectors.Csv.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.Aws\Conduit.Connectors.Aws.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.SharePoint\Conduit.Connectors.SharePoint.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.IdentityCenter\Conduit.Connectors.IdentityCenter.csproj" />
   </ItemGroup>
 
   <ItemGroup>
