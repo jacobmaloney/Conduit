@@ -464,3 +464,6 @@ dist/
 setup.complete
 # Picard scratch-build dirs (compile-only verification leftovers)
 **/bin-verify/
+
+# Picard scratch build outputs (avoid bin/obj locks during background runs)
+**/obj-headless/
