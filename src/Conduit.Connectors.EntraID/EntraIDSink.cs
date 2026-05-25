@@ -449,6 +449,102 @@ public sealed class EntraIDSink : IConnectorSink
         catch { return null; }
     }
 
+    // ─── Phase 5 provisioning step methods ──────────────────────────────────
+    //
+    // CreateAsync — Graph Users.PostAsync. MoveAsync stays NotSupported (Entra
+    // has no container concept). ResetPasswordAsync — Graph user PATCH with
+    // PasswordProfile (the older but universally supported reset path; the
+    // newer Authentication.PasswordMethods.ResetPassword API requires elevated
+    // privileges and an SSPR-enabled tenant).
+
+    public async Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var client = await CreateClientAsync();
+            var upn = GetStr(newObject, "userPrincipalName") ?? GetStr(newObject, "upn");
+            if (string.IsNullOrWhiteSpace(upn))
+                return ProvisionResult.Failed("Cannot create Entra user without userPrincipalName.");
+            var displayName = GetStr(newObject, "displayName");
+            if (string.IsNullOrWhiteSpace(displayName))
+                return ProvisionResult.Failed("Cannot create Entra user without displayName.");
+            var mailNickname = GetStr(newObject, "mailNickname")
+                            ?? GetStr(newObject, "sAMAccountName")
+                            ?? GetStr(newObject, "userName")
+                            ?? upn.Split('@')[0];
+
+            // Refuse if a user with this UPN already exists — explicit create
+            // semantics (matching AD sink behavior).
+            try
+            {
+                var existing = await client.Users[upn].GetAsync(req => req.QueryParameters.Select = new[] { "id" }, cancellationToken);
+                if (existing is not null)
+                    return ProvisionResult.Failed($"Entra user with UPN='{upn}' already exists (id={existing.Id}).");
+            }
+            catch { /* not found is the desired path */ }
+
+            var patch = BuildUserPatch(newObject);
+            patch.UserPrincipalName = upn;
+            patch.DisplayName = displayName;
+            patch.MailNickname = mailNickname;
+            patch.AccountEnabled = patch.AccountEnabled ?? true;
+
+            // Initial password: use supplied 'password' if present, otherwise a
+            // random one (force-change-on-next-signin in both cases). The Worker
+            // typically provisions disabled then runs reset-password — but if a
+            // caller wants a one-shot, supply 'password' on the request.
+            var supplied = GetStr(newObject, "password");
+            patch.PasswordProfile = new PasswordProfile
+            {
+                ForceChangePasswordNextSignIn = true,
+                Password = supplied ?? (Guid.NewGuid().ToString("N") + "Aa1!")
+            };
+
+            var created = await client.Users.PostAsync(patch, cancellationToken: cancellationToken);
+            if (created is null || string.IsNullOrEmpty(created.Id))
+                return ProvisionResult.Failed("Graph returned null on user create.");
+            return ProvisionResult.Success(externalId: created.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Entra CreateAsync failed (tenant={TenantId})", _tenantId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
+    // MoveAsync intentionally NOT overridden — defaults to NotSupportedException.
+    // Entra has no OU concept; the controller will surface ProvisionOutcome.NotSupported.
+
+    public async Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(newPassword))
+                return ProvisionResult.Failed("ResetPasswordAsync requires a non-empty newPassword.");
+
+            var client = await CreateClientAsync();
+            var userId = await ResolveUserIdAsync(client, externalId, cancellationToken);
+            if (userId is null) return ProvisionResult.Failed($"Entra user '{externalId}' not found.");
+
+            var patch = new GraphUser
+            {
+                PasswordProfile = new PasswordProfile
+                {
+                    Password = newPassword,
+                    ForceChangePasswordNextSignIn = requireChangeAtNextLogin
+                }
+            };
+            await client.Users[userId].PatchAsync(patch, cancellationToken: cancellationToken);
+            return ProvisionResult.Success(externalId: userId);
+        }
+        catch (Exception ex)
+        {
+            // Never include newPassword in the log payload.
+            _logger.LogError(ex, "Entra ResetPasswordAsync failed (tenant={TenantId}, target={Target})", _tenantId, externalId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
     private static async Task<string?> ResolveGroupIdAsync(GraphServiceClient client, string externalId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(externalId)) return null;

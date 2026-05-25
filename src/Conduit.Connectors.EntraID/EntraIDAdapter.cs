@@ -30,7 +30,12 @@ public sealed class EntraIDAdapter : IConnectorAdapter
         SupportsIncremental = true,
         // Phase 7: Graph Manager + Owner $ref endpoints. No Person concept in Entra.
         SupportsAssignManager = true,
-        SupportsAssignGroupOwner = true
+        SupportsAssignGroupOwner = true,
+        // Phase 5: Entra supports user create (Users.PostAsync) and password reset
+        // (PATCH with PasswordProfile). Move stays unsupported — no OU concept.
+        SupportsCreate = true,
+        SupportsMove = false,
+        SupportsResetPassword = true
     };
 
     public IReadOnlyList<CredentialTypeInfo> CredentialTypes { get; } = new[]

@@ -202,6 +202,47 @@ public interface IConnectorSink
     /// </summary>
     Task<SinkWriteResult> AssignGroupOwnerAsync(string groupExternalId, string ownerExternalId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This sink does not implement AssignGroupOwnerAsync.");
+
+    // ─── Phase 5: provisioning step methods ─────────────────────────────────
+    //
+    // The /api/v1/provision, /api/v1/users/{id}/move, and /api/v1/users/{id}/reset-password
+    // endpoints route here. CenturyCity's Worker (and any other governance-layer
+    // caller) hits these via the HTTP surface. Default implementations throw
+    // NotSupportedException so existing sinks that don't provision keep compiling
+    // unchanged; the controller layer translates the exception into a clean
+    // ProvisioningOutcome.NotSupported response so the caller can mark the
+    // workflow step Failed instead of silently completed.
+    //
+    // Per-sink capability flags (SupportsCreate / SupportsMove / SupportsResetPassword)
+    // let the controller short-circuit before instantiating connector machinery.
+
+    /// <summary>
+    /// Create a new object in the target system. The <paramref name="newObject"/>
+    /// carries the desired attributes; SourceId may be empty (new account). Sinks
+    /// that support creation return the assigned external id (DN / Graph id / etc.)
+    /// in <see cref="ProvisionResult.ExternalId"/>. Sinks that do not should leave
+    /// the default <see cref="NotSupportedException"/> in place.
+    /// </summary>
+    Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This sink does not implement CreateAsync.");
+
+    /// <summary>
+    /// Move an existing object to a new container. AD-shaped in practice but the
+    /// contract is generic — Entra-style sinks that have no container concept
+    /// throw NotSupported. <paramref name="externalId"/> may be a DN, GUID, UPN
+    /// or whatever the sink natively resolves; the sink does its own lookup.
+    /// </summary>
+    Task<ProvisionResult> MoveAsync(string externalId, string newContainer, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This sink does not implement MoveAsync.");
+
+    /// <summary>
+    /// Reset a user's password. Sinks that need a secure channel (e.g. AD's
+    /// unicodePwd over LDAPS) should fail-fast with a clear error when the
+    /// channel isn't secure. <paramref name="requireChangeAtNextLogin"/> hints
+    /// to set the force-change flag where the target supports it.
+    /// </summary>
+    Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This sink does not implement ResetPasswordAsync.");
 }
 
 /// <summary>
@@ -234,7 +275,53 @@ public sealed class ConnectorCapabilities
     /// <summary>Sink implements <see cref="IConnectorSink.AssignGroupOwnerAsync"/>.</summary>
     public bool SupportsAssignGroupOwner { get; init; }
 
+    // ─── Phase 5 provisioning support ───────────────────────────────────────
+    /// <summary>Sink implements <see cref="IConnectorSink.CreateAsync"/>.</summary>
+    public bool SupportsCreate { get; init; }
+    /// <summary>Sink implements <see cref="IConnectorSink.MoveAsync"/>.</summary>
+    public bool SupportsMove { get; init; }
+    /// <summary>Sink implements <see cref="IConnectorSink.ResetPasswordAsync"/>.</summary>
+    public bool SupportsResetPassword { get; init; }
+
     public static readonly ConnectorCapabilities Default = new();
+}
+
+/// <summary>
+/// Phase 5. Result of a provisioning call (<see cref="IConnectorSink.CreateAsync"/>,
+/// <see cref="IConnectorSink.MoveAsync"/>, <see cref="IConnectorSink.ResetPasswordAsync"/>).
+///
+/// Distinct from <see cref="SinkWriteResult"/> because provisioning has a richer
+/// outcome vocabulary — specifically, NotSupported (sink doesn't implement) and
+/// Accepted (async — caller polls later) which Upsert doesn't surface.
+/// </summary>
+public sealed class ProvisionResult
+{
+    public ProvisionOutcome Outcome { get; init; }
+    /// <summary>Set when Outcome=Success / Accepted: the assigned external id.</summary>
+    public string? ExternalId { get; init; }
+    /// <summary>Set when Outcome=Accepted: opaque task handle the caller can poll.</summary>
+    public string? TaskId { get; init; }
+    public string? ErrorMessage { get; init; }
+
+    public static ProvisionResult Success(string? externalId = null) =>
+        new() { Outcome = ProvisionOutcome.Success, ExternalId = externalId };
+
+    public static ProvisionResult Accepted(string taskId, string? externalId = null) =>
+        new() { Outcome = ProvisionOutcome.Accepted, TaskId = taskId, ExternalId = externalId };
+
+    public static ProvisionResult Failed(string message) =>
+        new() { Outcome = ProvisionOutcome.Failed, ErrorMessage = message };
+
+    public static ProvisionResult NotSupported(string message) =>
+        new() { Outcome = ProvisionOutcome.NotSupported, ErrorMessage = message };
+}
+
+public enum ProvisionOutcome
+{
+    Success,
+    Accepted,
+    Failed,
+    NotSupported,
 }
 
 /// <summary>

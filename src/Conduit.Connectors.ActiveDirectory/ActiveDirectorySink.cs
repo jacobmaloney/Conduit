@@ -380,6 +380,190 @@ public sealed class ActiveDirectorySink : IConnectorSink
         }
     }
 
+    // ─── Phase 5 provisioning step methods ──────────────────────────────────
+    //
+    // CreateAsync — explicit create path (vs. UpsertAsync's create-or-update).
+    // MoveAsync   — ModifyDNRequest to relocate the object under a new parent.
+    // ResetPasswordAsync — unicodePwd write; requires LDAPS.
+
+    public async Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException($"Tenant {_tenantId} not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException(
+                    $"No 'ldap' credential stored for tenant {_tenantId}. Save credentials before running.");
+
+            using var conn = Bind(tenant.Domain, creds, out var isSecure);
+
+            string? sam = GetStr(newObject, "sAMAccountName") ?? GetStr(newObject, "userName") ?? GetStr(newObject, "UserName");
+            if (string.IsNullOrWhiteSpace(sam))
+                return ProvisionResult.Failed("Cannot create AD user without a sAMAccountName / userName mapping.");
+
+            // Refuse to silently update if the object already exists. CreateAsync
+            // is explicit — callers asked to create, not upsert. Return Failed so
+            // the workflow doesn't claim a create that didn't happen.
+            var dupe = FindDnByFilter(conn, $"(sAMAccountName={EscapeFilter(sam!)})");
+            if (dupe is not null)
+                return ProvisionResult.Failed($"AD user with sAMAccountName='{sam}' already exists at {dupe}.");
+
+            string? upn = GetStr(newObject, "userPrincipalName") ?? GetStr(newObject, "UserPrincipalName");
+            var baseDn = ResolveBaseDn(conn, newObject);
+            if (string.IsNullOrWhiteSpace(baseDn))
+                return ProvisionResult.Failed(
+                    "Cannot create AD user: no target Base DN. Supply targetOU on the request, set a scope BaseDN, " +
+                    "or ensure RootDSE.defaultNamingContext is reachable on this connection.");
+
+            var cn = GetStr(newObject, "cn") ?? GetStr(newObject, "displayName") ?? sam!;
+            var newDn = $"CN={EscapeDnComponent(cn)},{baseDn}";
+
+            var add = new AddRequest(newDn,
+                new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "user" }));
+            add.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam));
+            if (!string.IsNullOrEmpty(upn)) add.Attributes.Add(new DirectoryAttribute("userPrincipalName", upn));
+            AppendIfPresent(add, newObject, "displayName");
+            AppendIfPresent(add, newObject, "givenName");
+            AppendIfPresent(add, newObject, "sn", "familyName");
+            AppendIfPresent(add, newObject, "mail", "email");
+            AppendIfPresent(add, newObject, "title");
+            AppendIfPresent(add, newObject, "department");
+            AppendIfPresent(add, newObject, "company");
+            AppendIfPresent(add, newObject, "employeeID", "employeeNumber");
+            AppendIfPresent(add, newObject, "telephoneNumber", "phoneNumber");
+
+            // Disabled until a password lands — same policy as UpsertUser's create path.
+            var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
+            add.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
+
+            conn.SendRequest(add);
+
+            // Optional initial password — same LDAPS guard as upsert path.
+            var password = GetStr(newObject, "password") ?? GetStr(newObject, "userPassword");
+            if (!string.IsNullOrEmpty(password))
+            {
+                RequireSecureForPasswordWrite(isSecure);
+                SetPassword(conn, newDn, password!);
+
+                var requestedEnabled = !TryGetBool(newObject, "active", out var a) || a;
+                if (requestedEnabled)
+                    SetUacFlag(conn, newDn, ADS_UF_ACCOUNTDISABLE, set: false);
+            }
+
+            // Manager hint — provisioning callers often pass managerExternalId.
+            var managerDn = GetStr(newObject, "manager") ?? GetStr(newObject, "managerExternalId");
+            if (!string.IsNullOrEmpty(managerDn))
+            {
+                var resolved = ResolveToDn(conn, managerDn!);
+                if (resolved is not null)
+                {
+                    var mod = new DirectoryAttributeModification { Name = "manager", Operation = DirectoryAttributeOperation.Replace };
+                    mod.Add(resolved);
+                    try { conn.SendRequest(new ModifyRequest(newDn, mod)); }
+                    catch (Exception ex)
+                    {
+                        // Manager link is best-effort on create — log and continue. The
+                        // account is created; a follow-up AssignManager call can retry.
+                        _logger.LogWarning(ex, "AD create succeeded but manager link failed for {Dn}", newDn);
+                    }
+                }
+            }
+
+            return ProvisionResult.Success(externalId: newDn);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD CreateAsync failed for tenant {TenantId}", _tenantId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
+    public async Task<ProvisionResult> MoveAsync(string externalId, string newContainer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(newContainer))
+                return ProvisionResult.Failed("MoveAsync requires a non-empty newContainer (target parent DN).");
+
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException("Tenant not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException("No 'ldap' credential.");
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var sourceDn = ResolveToDn(conn, externalId);
+            if (sourceDn is null) return ProvisionResult.Failed($"AD object '{externalId}' not found.");
+
+            // ModifyDNRequest: new RDN keeps the same CN; new parent is the supplied container.
+            // Extract the leading RDN from sourceDn so the object name is preserved.
+            var rdnEnd = sourceDn.IndexOf(',');
+            if (rdnEnd <= 0) return ProvisionResult.Failed($"Cannot parse RDN from '{sourceDn}'.");
+            var rdn = sourceDn.Substring(0, rdnEnd);
+
+            var modDn = new ModifyDNRequest(sourceDn, newContainer, rdn) { DeleteOldRdn = true };
+            conn.SendRequest(modDn);
+
+            var newDn = $"{rdn},{newContainer}";
+            return ProvisionResult.Success(externalId: newDn);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD MoveAsync failed (tenant={TenantId}, target={Target}, newContainer={NewContainer})",
+                _tenantId, externalId, newContainer);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
+    public async Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(newPassword))
+                return ProvisionResult.Failed("ResetPasswordAsync requires a non-empty newPassword.");
+
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException("Tenant not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException("No 'ldap' credential.");
+            using var conn = Bind(tenant.Domain, creds, out var isSecure);
+
+            RequireSecureForPasswordWrite(isSecure);
+
+            var dn = ResolveToDn(conn, externalId);
+            if (dn is null) return ProvisionResult.Failed($"AD user '{externalId}' not found.");
+
+            SetPassword(conn, dn, newPassword);
+
+            if (requireChangeAtNextLogin)
+            {
+                // pwdLastSet=0 forces change at next logon. (pwdLastSet=-1 means "now / don't force".)
+                var mod = new DirectoryAttributeModification
+                {
+                    Name = "pwdLastSet",
+                    Operation = DirectoryAttributeOperation.Replace
+                };
+                mod.Add("0");
+                try { conn.SendRequest(new ModifyRequest(dn, mod)); }
+                catch (Exception ex)
+                {
+                    // Password landed; the force-change flag is best-effort.
+                    _logger.LogWarning(ex, "AD password reset succeeded but pwdLastSet=0 write failed for {Dn}", dn);
+                }
+            }
+
+            return ProvisionResult.Success(externalId: dn);
+        }
+        catch (Exception ex)
+        {
+            // Deliberately do NOT include newPassword in the log payload — same
+            // discipline as CenturyCity's ConduitClient.
+            _logger.LogError(ex, "AD ResetPasswordAsync failed (tenant={TenantId}, target={Target})",
+                _tenantId, externalId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
     /// <summary>
     /// Resolve a free-form external id (DN, objectGUID, sAMAccountName, UPN)
     /// to an actual DN string. Mirrors the lookup chain in UpsertUser.

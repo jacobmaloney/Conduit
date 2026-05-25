@@ -33,7 +33,12 @@ public sealed class ActiveDirectoryAdapter : IConnectorAdapter
         // Phase 7: AD writes manager/managedBy as LDAP attributes. No PersonMatch/
         // PersonCreate — AD has no IC-shaped Person concept.
         SupportsAssignManager = true,
-        SupportsAssignGroupOwner = true
+        SupportsAssignGroupOwner = true,
+        // Phase 5: AD supports the full provisioning trifecta (Add / ModifyDN /
+        // unicodePwd over LDAPS).
+        SupportsCreate = true,
+        SupportsMove = true,
+        SupportsResetPassword = true
     };
 
     /// <summary>
