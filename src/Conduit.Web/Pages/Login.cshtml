@@ -30,6 +30,25 @@
                 {
                     <div class="alert alert-danger py-2">@Model.ErrorMessage</div>
                 }
+                @if (Model.SsoError)
+                {
+                    @* Generic, non-enumerating message: never reveals whether the
+                       federated identity exists, only that sign-in did not complete. *@
+                    <div class="alert alert-danger py-2">Single sign-on could not complete. Contact your administrator or sign in below.</div>
+                }
+                @if (Model.ExternalProviders.Count > 0)
+                {
+                    <div class="d-grid gap-2 mb-3">
+                        @foreach (var idp in Model.ExternalProviders)
+                        {
+                            <a class="btn btn-outline-primary w-100"
+                               href="@($"/login/sso?provider={Uri.EscapeDataString(idp.Name)}&returnUrl={Uri.EscapeDataString(Model.ReturnUrl ?? "/")}")">
+                                Sign in with @idp.Name
+                            </a>
+                        }
+                    </div>
+                    <div class="text-center text-muted mb-3"><small>or sign in with a local account</small></div>
+                }
                 <form method="post">
                     <div class="mb-3">
                         <label class="form-label" for="Username">Username</label>

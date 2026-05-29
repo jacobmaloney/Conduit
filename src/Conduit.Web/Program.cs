@@ -1,5 +1,6 @@
 using System.Text;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
@@ -48,6 +49,27 @@ builder.Services.AddSingleton<DatabaseConfig>(sp =>
     return config;
 });
 
+// Data Protection — persist the keyring to disk so secrets encrypted at rest
+// (notably OIDC ClientSecrets in IdentityProviders.Configuration) remain decryptable
+// across restarts. Without persistence the keyring is per-process and stored secrets
+// become unrecoverable on restart. Key directory is overridable via DataProtection:KeyPath.
+var dpKeyPath = builder.Configuration["DataProtection:KeyPath"];
+if (string.IsNullOrWhiteSpace(dpKeyPath))
+{
+    dpKeyPath = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "dp-keys");
+}
+Directory.CreateDirectory(dpKeyPath);
+var dpBuilder = builder.Services.AddDataProtection()
+    .SetApplicationName("Conduit")
+    .PersistKeysToFileSystem(new DirectoryInfo(dpKeyPath));
+// Encrypt the keyring at rest with Windows DPAPI so the stored keys (and thus every
+// ClientSecret they protect) aren't readable as plaintext by anyone with file access.
+// Windows-only deployment; on a non-Windows run skip DPAPI and keep plain file persistence.
+if (OperatingSystem.IsWindows())
+{
+    dpBuilder.ProtectKeysWithDpapi();
+}
+
 // Configure JWT
 builder.Services.Configure<JwtConfig>(builder.Configuration.GetSection("Jwt"));
 var jwtConfig = new JwtConfig();
@@ -70,7 +92,7 @@ if (string.IsNullOrEmpty(jwtConfig.SecretKey))
 // header forward to JWT. The SmartAuth policy scheme picks per-request based on headers,
 // so existing [Authorize] controllers continue to validate JWTs unchanged.
 const string SmartAuthScheme = "SmartAuth";
-builder.Services.AddAuthentication(options =>
+var authBuilder = builder.Services.AddAuthentication(options =>
 {
     options.DefaultScheme = SmartAuthScheme;
     options.DefaultChallengeScheme = SmartAuthScheme;
@@ -144,6 +166,34 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
+// Optional external-IdP (SSO): register one OpenIdConnect scheme per ENABLED row in
+// the IdentityProviders table. These are ADDITIONAL named schemes — they are NOT the
+// default and NOT a fallback, so the SmartAuth Bearer→JWT / else→Cookie selector and
+// the SCIM/JWT API surface are untouched. OIDC is only ever entered via an explicit
+// challenge on /login/sso. A missing/empty table just logs and continues (local login).
+// Restart-required model after enabling/changing a provider (no hot reload) — acceptable.
+{
+    using var ssoLoggerFactory = LoggerFactory.Create(lb => lb.AddConsole());
+    var ssoLogger = ssoLoggerFactory.CreateLogger("SSO.Registrar");
+    // Build a standalone Data Protection provider over the SAME persisted key directory
+    // and application name as the app's keyring, so secrets encrypted by the running app
+    // can be decrypted here at startup. Avoids BuildServiceProvider (no duplicate-singleton
+    // warning) while sharing the identical key material.
+    var ssoProtector = new Conduit.Web.Authentication.DataProtectionSecretProtector(
+        DataProtectionProvider.Create(new DirectoryInfo(dpKeyPath),
+            configure =>
+            {
+                configure.SetApplicationName("Conduit");
+                // Must match the app's keyring protection (above) so this standalone provider
+                // can decrypt the now-DPAPI-encrypted keyring and unprotect stored ClientSecrets.
+                if (OperatingSystem.IsWindows())
+                {
+                    configure.ProtectKeysWithDpapi();
+                }
+            }));
+    authBuilder.AddDynamicExternalProviders(ssoProtector, builder.Configuration, ssoLogger);
+}
+
 // NOTE: No FallbackPolicy here. A fallback "require auth" policy also applies to /_blazor
 // (the Blazor Server SignalR hub), which would break the interactive circuit on anonymous
 // pages like /setup and /login. Each Blazor page uses @attribute [Authorize] explicitly;
@@ -160,6 +210,11 @@ builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<GroupRepository>();
 builder.Services.AddScoped<TenantSnapshotService>();
 builder.Services.AddScoped<PortalAdminRepository>();
+// Optional external-IdP (SSO) support. Repository + secret-at-rest protector.
+// SSO is OPTIONAL — zero enabled providers means local login only.
+builder.Services.AddScoped<IdentityProviderRepository>();
+builder.Services.AddSingleton<Conduit.Web.Authentication.ISecretProtector,
+    Conduit.Web.Authentication.DataProtectionSecretProtector>();
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<ApiTokenService>();
 builder.Services.AddScoped<AuditLogService>();
@@ -276,14 +331,37 @@ builder.Services.AddRateLimiter(opts =>
             }));
 
     opts.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+    {
+        // The SSO OIDC callback (/signin-oidc/*) is handled inside UseAuthentication, before
+        // endpoint routing resolves an endpoint, so the SsoController's [EnableRateLimiting("auth")]
+        // attribute never attaches to it. Bound the callback here at the global layer with the
+        // SAME strict per-IP window local login uses, so an attacker can't hammer the token
+        // exchange + OnTokenValidated gate. /login/sso (the challenge) is additionally bounded by
+        // the controller attribute. Everything else (SCIM, /api, etc.) keeps the 600/min guardrail.
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var path = httpContext.Request.Path.Value ?? string.Empty;
+        var isSso = path.StartsWith("/signin-oidc", StringComparison.OrdinalIgnoreCase)
+                 || path.StartsWith("/login/sso", StringComparison.OrdinalIgnoreCase);
+        if (isSso)
+        {
+            return RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: "sso:" + ip,
+                factory: _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0
+                });
+        }
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ip,
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 600,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0
-            }));
+            });
+    });
 });
 
 // Conduit lightweight scheduler

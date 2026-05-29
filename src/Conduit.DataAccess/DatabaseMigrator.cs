@@ -899,6 +899,44 @@ DEALLOCATE proj_cur;
 "
             });
 
+            // Migration 18: External identity providers (optional SSO). Mirrors
+            // IdentityCenter's IdentityProviders table shape so the admin CRUD + the
+            // dynamic startup registration line up with the IC pattern. SSO is OPTIONAL:
+            // an empty table means the portal keeps using local username/password only.
+            //
+            //   - Name doubles as the OIDC auth-scheme name (unique).
+            //   - Type is 'OIDC' | 'AzureAD' | 'OAuth'.
+            //   - Configuration is a JSON blob; the ClientSecret field inside it is
+            //     encrypted at rest by ISecretProtector (ASP.NET Core Data Protection)
+            //     before it is ever written here. SQL never sees plaintext secrets.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 18,
+                Name = "IdentityProviders (optional SSO)",
+                Description = "Adds the IdentityProviders table backing optional external-IdP (OIDC/AzureAD) portal sign-in. ClientSecret in Configuration JSON is encrypted at rest.",
+                SqlScript = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'IdentityProviders')
+BEGIN
+    CREATE TABLE [dbo].[IdentityProviders] (
+        [Id]            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        [Name]          NVARCHAR(128)    NOT NULL,
+        [Type]          NVARCHAR(40)     NOT NULL CONSTRAINT [DF_IdentityProviders_Type] DEFAULT 'OIDC',
+        [IsEnabled]     BIT              NOT NULL CONSTRAINT [DF_IdentityProviders_IsEnabled] DEFAULT 0,
+        [IsPrimary]     BIT              NOT NULL CONSTRAINT [DF_IdentityProviders_IsPrimary] DEFAULT 0,
+        [Configuration] NVARCHAR(MAX)    NOT NULL CONSTRAINT [DF_IdentityProviders_Configuration] DEFAULT '{}',
+        [Metadata]      NVARCHAR(MAX)    NULL,
+        [CreatedAt]     DATETIME2        NOT NULL CONSTRAINT [DF_IdentityProviders_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [CreatedBy]     NVARCHAR(256)    NULL,
+        [ModifiedAt]    DATETIME2        NOT NULL CONSTRAINT [DF_IdentityProviders_ModifiedAt] DEFAULT SYSUTCDATETIME(),
+        [ModifiedBy]    NVARCHAR(256)    NULL,
+        CONSTRAINT [PK_IdentityProviders] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [UQ_IdentityProviders_Name] UNIQUE ([Name])
+    );
+    CREATE INDEX [IX_IdentityProviders_IsEnabled] ON [IdentityProviders]([IsEnabled]) WHERE [IsEnabled] = 1;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

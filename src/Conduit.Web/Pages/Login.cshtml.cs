@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Conduit.Web.Services;
+using Conduit.DataAccess.Repositories;
 
 namespace Conduit.Web.Pages
 {
@@ -16,11 +17,33 @@ namespace Conduit.Web.Pages
     {
         private readonly LoginService _loginService;
         private readonly OpenAccessState _openAccess;
+        private readonly IdentityProviderRepository _providers;
 
-        public LoginModel(LoginService loginService, OpenAccessState openAccess)
+        public LoginModel(LoginService loginService, OpenAccessState openAccess,
+            IdentityProviderRepository providers)
         {
             _loginService = loginService;
             _openAccess = openAccess;
+            _providers = providers;
+        }
+
+        /// <summary>Enabled external IdPs to render as "Sign in with ..." buttons.</summary>
+        public List<IdentityProvider> ExternalProviders { get; private set; } = new();
+
+        /// <summary>Set when an SSO attempt was denied/failed (generic — no enumeration).</summary>
+        public bool SsoError { get; private set; }
+
+        private async Task LoadExternalProvidersAsync()
+        {
+            try
+            {
+                ExternalProviders = await _providers.GetEnabledAsync();
+            }
+            catch
+            {
+                // Table may not exist on a fresh/un-migrated DB — SSO is optional.
+                ExternalProviders = new List<IdentityProvider>();
+            }
         }
 
         [BindProperty]
@@ -34,7 +57,7 @@ namespace Conduit.Web.Pages
 
         public string? ErrorMessage { get; set; }
 
-        public IActionResult OnGet()
+        public async Task<IActionResult> OnGetAsync(int? sso_error = null)
         {
             // When portal open-access is on there's nothing to authenticate to —
             // any portal page the operator visits will sign them in automatically
@@ -46,6 +69,8 @@ namespace Conduit.Web.Pages
                     ? LocalRedirect(ReturnUrl)
                     : LocalRedirect("/");
             }
+            SsoError = sso_error == 1;
+            await LoadExternalProvidersAsync();
             return Page();
         }
 
@@ -61,12 +86,14 @@ namespace Conduit.Web.Pages
                 Password = "";
                 Response.Headers["Retry-After"] = seconds.ToString();
                 Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                await LoadExternalProvidersAsync();
                 return Page();
             }
             if (!outcome.Success)
             {
                 ErrorMessage = "Invalid username or password.";
                 Password = "";
+                await LoadExternalProvidersAsync();
                 return Page();
             }
             var result = outcome.Result!;

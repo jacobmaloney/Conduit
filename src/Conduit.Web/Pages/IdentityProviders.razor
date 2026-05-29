@@ -1,0 +1,433 @@
+@page "/admin/identity-providers"
+@attribute [Authorize]
+@using System.Text.Json
+@using System.Net.Http
+@using Conduit.Web.Authentication
+@using Conduit.DataAccess.Repositories
+@inject IdentityProviderRepository ProviderRepo
+@inject ISecretProtector SecretProtector
+@inject IHttpClientFactory HttpClientFactory
+@inject AuthenticationStateProvider AuthState
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Identity Providers - Conduit</PageTitle>
+
+<div class="container-fluid identities-container">
+    <CcTemplate1 Icon="oi oi-key" IconAccent="slate"
+                 Title="Identity Providers"
+                 Subtitle="Optional single sign-on. SSO maps to an existing admin — it never creates accounts.">
+        <PrimaryAction>
+            <button class="btn btn-primary" @onclick="OpenCreate">
+                <i class="oi oi-plus"></i> Add provider
+            </button>
+        </PrimaryAction>
+    </CcTemplate1>
+
+    <div class="alert alert-info">
+        <i class="oi oi-info"></i>
+        Single sign-on is <strong>optional</strong>. With no enabled providers, the portal uses local
+        username/password only. A successful SSO sign-in must match an <strong>existing active admin</strong>
+        by username or email — no accounts are auto-created. Changes take effect after an app restart.
+    </div>
+
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+        </div>
+    }
+    else if (!providers.Any())
+    {
+        <div class="alert alert-secondary">
+            <h5 class="alert-heading">No identity providers</h5>
+            <p class="mb-0">Add an OIDC or Azure AD provider to enable single sign-on for your existing admins.</p>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Authority</th>
+                                <th>Status</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in providers)
+                            {
+                                <tr>
+                                    <td><strong>@p.Name</strong></td>
+                                    <td><span class="badge bg-secondary">@p.Type</span></td>
+                                    <td><small class="text-muted">@AuthorityFor(p)</small></td>
+                                    <td>
+                                        @if (p.IsEnabled)
+                                        {
+                                            <span class="badge bg-success">Enabled</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-secondary">Disabled</span>
+                                        }
+                                    </td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenEdit(p)">
+                                            <i class="oi oi-pencil"></i> Edit
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-warning" @onclick="() => ToggleEnabled(p)">
+                                            @(p.IsEnabled ? "Disable" : "Enable")
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteProvider(p)">
+                                            <i class="oi oi-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="modal @(showModal ? "show d-block" : "")" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">@(editingId == null ? "Add identity provider" : "Edit identity provider")</h5>
+                <button type="button" class="btn-close" @onclick="CloseModal"></button>
+            </div>
+            <div class="modal-body">
+                @if (!string.IsNullOrEmpty(formError))
+                {
+                    <div class="alert alert-danger py-2">@formError</div>
+                }
+                <form>
+                    <div class="mb-3">
+                        <label class="form-label">Name * <small class="text-muted">(also the sign-in button label and scheme name)</small></label>
+                        <input type="text" class="form-control" @bind="form.Name" placeholder="e.g., Contoso Azure AD" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Type *</label>
+                        <select class="form-select" @bind="form.Type">
+                            <option value="OIDC">Generic OIDC</option>
+                            <option value="AzureAD">Azure AD</option>
+                        </select>
+                    </div>
+                    @if (form.Type == "AzureAD")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Azure Tenant ID *</label>
+                            <input type="text" class="form-control" @bind="form.TenantId" placeholder="specific tenant GUID (required)" />
+                            <small class="form-text text-muted">Authority becomes https://login.microsoftonline.com/{tenant}/v2.0. Multi-tenant authorities (common, organizations, consumers) are not allowed — they would accept tokens from any Azure tenant.</small>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Authority (issuer URL) *</label>
+                            <input type="text" class="form-control" @bind="form.Authority" placeholder="https://idp.example.com/" />
+                        </div>
+                    }
+                    <div class="mb-3">
+                        <label class="form-label">Client ID *</label>
+                        <input type="text" class="form-control" @bind="form.ClientId" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Client Secret @(editingId != null ? "(leave blank to keep current)" : "*")</label>
+                        <input type="password" class="form-control" @bind="form.ClientSecret" autocomplete="new-password"
+                               placeholder="@(editingId != null ? "•••••••• (unchanged)" : "")" />
+                        <small class="form-text text-muted">Encrypted at rest. Never displayed after saving.</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Username/email claim <small class="text-muted">(optional)</small></label>
+                        <input type="text" class="form-control" @bind="form.UsernameClaim"
+                               placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
+                        <small class="form-text text-muted">Which claim is matched against an existing admin's username.</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Extra scopes <small class="text-muted">(space-separated, optional)</small></label>
+                        <input type="text" class="form-control" @bind="form.ScopesRaw" placeholder="openid profile email are always requested" />
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="idpEnabled" @bind="form.IsEnabled" />
+                        <label class="form-check-label" for="idpEnabled">Enabled</label>
+                    </div>
+
+                    <hr />
+                    <div class="d-flex align-items-center gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="TestConnection" disabled="@testInFlight">
+                            @if (testInFlight)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span><span>Testing…</span>
+                            }
+                            else
+                            {
+                                <i class="oi oi-pulse"></i><span> Test connection</span>
+                            }
+                        </button>
+                        <small class="text-muted">GETs the provider's /.well-known/openid-configuration.</small>
+                    </div>
+                    @if (!string.IsNullOrEmpty(testResult))
+                    {
+                        <div class="@(testOk ? "alert alert-success" : "alert alert-danger") py-2 mt-2 mb-0 small">@testResult</div>
+                    }
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
+                <button type="button" class="btn btn-primary" @onclick="Save" disabled="@saving">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+@if (showModal)
+{
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private List<IdentityProvider> providers = new();
+    private bool loading = true;
+    private bool showModal;
+    private bool saving;
+    private Guid? editingId;
+    private string? formError;
+    private ProviderForm form = new();
+
+    private bool testInFlight;
+    private bool testOk;
+    private string testResult = "";
+
+    private string AuthorityFor(IdentityProvider p)
+    {
+        try
+        {
+            var cfg = JsonSerializer.Deserialize<IdentityProviderConfig>(p.Configuration) ?? new();
+            if (string.Equals(p.Type, "AzureAD", StringComparison.OrdinalIgnoreCase))
+            {
+                var t = string.IsNullOrWhiteSpace(cfg.TenantId) ? "common" : cfg.TenantId;
+                return $"https://login.microsoftonline.com/{t}/v2.0";
+            }
+            return cfg.Authority ?? "(none)";
+        }
+        catch { return "(unparseable)"; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await Load();
+            StateHasChanged();
+        }
+    }
+
+    private async Task Load()
+    {
+        loading = true;
+        try { providers = await ProviderRepo.GetAllAsync(); }
+        catch (Exception ex) { Console.WriteLine($"IdentityProviders load failed: {ex.Message}"); providers = new(); }
+        finally { loading = false; }
+    }
+
+    private void OpenCreate()
+    {
+        editingId = null;
+        form = new ProviderForm { Type = "OIDC", IsEnabled = true };
+        formError = null; testResult = ""; testOk = false;
+        showModal = true;
+    }
+
+    private void OpenEdit(IdentityProvider p)
+    {
+        editingId = p.Id;
+        var cfg = JsonSerializer.Deserialize<IdentityProviderConfig>(p.Configuration) ?? new();
+        form = new ProviderForm
+        {
+            Name = p.Name,
+            Type = p.Type,
+            IsEnabled = p.IsEnabled,
+            ClientId = cfg.ClientId,
+            ClientSecret = "", // never round-trip the secret to the browser
+            Authority = cfg.Authority,
+            TenantId = cfg.TenantId,
+            UsernameClaim = cfg.UsernameClaim,
+            ScopesRaw = string.Join(' ', cfg.Scopes)
+        };
+        formError = null; testResult = ""; testOk = false;
+        showModal = true;
+    }
+
+    private void CloseModal() => showModal = false;
+
+    private async Task<string> CurrentUser()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        return state.User.Identity?.Name ?? "admin";
+    }
+
+    private async Task Save()
+    {
+        formError = null;
+        if (string.IsNullOrWhiteSpace(form.Name)) { formError = "Name is required."; return; }
+        if (string.IsNullOrWhiteSpace(form.ClientId)) { formError = "Client ID is required."; return; }
+        if (form.Type == "AzureAD")
+        {
+            var tenant = form.TenantId?.Trim();
+            if (string.IsNullOrWhiteSpace(tenant)) { formError = "Azure Tenant ID is required."; return; }
+            if (string.Equals(tenant, "common", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tenant, "organizations", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tenant, "consumers", StringComparison.OrdinalIgnoreCase))
+            {
+                formError = "Azure Tenant ID must be a specific tenant GUID. Multi-tenant authorities (common, organizations, consumers) are not allowed.";
+                return;
+            }
+        }
+        if (form.Type != "AzureAD" && string.IsNullOrWhiteSpace(form.Authority)) { formError = "Authority is required."; return; }
+        if (editingId == null && string.IsNullOrWhiteSpace(form.ClientSecret)) { formError = "Client Secret is required."; return; }
+
+        saving = true;
+        try
+        {
+            var who = await CurrentUser();
+
+            // Determine the secret to store: a freshly typed value is encrypted now;
+            // a blank field on edit means "keep the existing encrypted secret".
+            string encryptedSecret;
+            if (!string.IsNullOrWhiteSpace(form.ClientSecret))
+            {
+                encryptedSecret = SecretProtector.Protect(form.ClientSecret);
+            }
+            else if (editingId != null)
+            {
+                var existing = await ProviderRepo.GetByIdAsync(editingId.Value);
+                var existingCfg = existing != null
+                    ? JsonSerializer.Deserialize<IdentityProviderConfig>(existing.Configuration) ?? new()
+                    : new();
+                encryptedSecret = existingCfg.ClientSecret; // already-encrypted ciphertext
+            }
+            else
+            {
+                encryptedSecret = "";
+            }
+
+            var cfg = new IdentityProviderConfig
+            {
+                ClientId = form.ClientId.Trim(),
+                ClientSecret = encryptedSecret,
+                Authority = string.IsNullOrWhiteSpace(form.Authority) ? null : form.Authority.Trim(),
+                TenantId = string.IsNullOrWhiteSpace(form.TenantId) ? null : form.TenantId.Trim(),
+                UsernameClaim = string.IsNullOrWhiteSpace(form.UsernameClaim) ? null : form.UsernameClaim.Trim(),
+                Scopes = (form.ScopesRaw ?? "")
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToList()
+            };
+            var configJson = JsonSerializer.Serialize(cfg);
+
+            if (editingId == null)
+            {
+                await ProviderRepo.CreateAsync(new IdentityProvider
+                {
+                    Name = form.Name.Trim(),
+                    Type = form.Type,
+                    IsEnabled = form.IsEnabled,
+                    Configuration = configJson,
+                    CreatedBy = who,
+                    ModifiedBy = who
+                });
+            }
+            else
+            {
+                var row = await ProviderRepo.GetByIdAsync(editingId.Value);
+                if (row != null)
+                {
+                    row.Name = form.Name.Trim();
+                    row.Type = form.Type;
+                    row.IsEnabled = form.IsEnabled;
+                    row.Configuration = configJson;
+                    row.ModifiedBy = who;
+                    await ProviderRepo.UpdateAsync(row);
+                }
+            }
+            showModal = false;
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            formError = $"Save failed: {ex.Message}";
+        }
+        finally { saving = false; }
+    }
+
+    private async Task ToggleEnabled(IdentityProvider p)
+    {
+        try
+        {
+            await ProviderRepo.SetEnabledAsync(p.Id, !p.IsEnabled, await CurrentUser());
+            await Load();
+        }
+        catch (Exception ex) { Console.WriteLine($"Toggle failed: {ex.Message}"); }
+    }
+
+    private async Task DeleteProvider(IdentityProvider p)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Delete identity provider '{p.Name}'?")) return;
+        try { await ProviderRepo.DeleteAsync(p.Id); await Load(); }
+        catch (Exception ex) { Console.WriteLine($"Delete failed: {ex.Message}"); }
+    }
+
+    private async Task TestConnection()
+    {
+        testInFlight = true; testResult = ""; testOk = false;
+        StateHasChanged();
+        try
+        {
+            string authority;
+            if (form.Type == "AzureAD")
+            {
+                var t = string.IsNullOrWhiteSpace(form.TenantId) ? "common" : form.TenantId!.Trim();
+                authority = $"https://login.microsoftonline.com/{t}/v2.0";
+            }
+            else
+            {
+                authority = (form.Authority ?? "").Trim();
+            }
+            if (string.IsNullOrWhiteSpace(authority)) { testResult = "Set the authority first."; return; }
+
+            var url = authority.TrimEnd('/') + "/.well-known/openid-configuration";
+            using var client = HttpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            var resp = await client.GetAsync(url);
+            testOk = resp.IsSuccessStatusCode;
+            testResult = testOk
+                ? $"✓ {(int)resp.StatusCode} — discovery document reachable at {url}"
+                : $"✗ {(int)resp.StatusCode} {resp.ReasonPhrase} — could not read {url}";
+        }
+        catch (Exception ex)
+        {
+            testOk = false;
+            testResult = $"✗ {ex.Message}";
+        }
+        finally { testInFlight = false; }
+    }
+
+    private class ProviderForm
+    {
+        public string Name { get; set; } = "";
+        public string Type { get; set; } = "OIDC";
+        public bool IsEnabled { get; set; }
+        public string ClientId { get; set; } = "";
+        public string ClientSecret { get; set; } = "";
+        public string? Authority { get; set; }
+        public string? TenantId { get; set; }
+        public string? UsernameClaim { get; set; }
+        public string? ScopesRaw { get; set; }
+    }
+}
