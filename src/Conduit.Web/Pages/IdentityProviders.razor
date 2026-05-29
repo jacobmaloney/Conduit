@@ -120,69 +120,95 @@
                             <option value="AzureAD">Azure AD</option>
                         </select>
                     </div>
-                    @if (form.Type == "AzureAD")
-                    {
-                        <div class="mb-3">
-                            <label class="form-label">Azure Tenant ID *</label>
-                            <input type="text" class="form-control" @bind="form.TenantId" placeholder="specific tenant GUID (required)" />
-                            <small class="form-text text-muted">Authority becomes https://login.microsoftonline.com/{tenant}/v2.0. Multi-tenant authorities (common, organizations, consumers) are not allowed — they would accept tokens from any Azure tenant.</small>
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="mb-3">
-                            <label class="form-label">Authority (issuer URL) *</label>
-                            <input type="text" class="form-control" @bind="form.Authority" placeholder="https://idp.example.com/" />
-                        </div>
-                    }
-                    <div class="mb-3">
-                        <label class="form-label">Client ID *</label>
-                        <input type="text" class="form-control" @bind="form.ClientId" />
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Client Secret @(editingId != null ? "(leave blank to keep current)" : "*")</label>
-                        <input type="password" class="form-control" @bind="form.ClientSecret" autocomplete="new-password"
-                               placeholder="@(editingId != null ? "•••••••• (unchanged)" : "")" />
-                        <small class="form-text text-muted">Encrypted at rest. Never displayed after saving.</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Username/email claim <small class="text-muted">(optional)</small></label>
-                        <input type="text" class="form-control" @bind="form.UsernameClaim"
-                               placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
-                        <small class="form-text text-muted">Which claim is matched against an existing admin's username.</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Extra scopes <small class="text-muted">(space-separated, optional)</small></label>
-                        <input type="text" class="form-control" @bind="form.ScopesRaw" placeholder="openid profile email are always requested" />
-                    </div>
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="checkbox" id="idpEnabled" @bind="form.IsEnabled" />
-                        <label class="form-check-label" for="idpEnabled">Enabled</label>
-                    </div>
 
-                    <hr />
-                    <div class="d-flex align-items-center gap-2">
-                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="TestConnection" disabled="@testInFlight">
-                            @if (testInFlight)
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h6 class="card-title">@(form.Type == "AzureAD" ? "Azure AD" : "Generic OIDC") Settings</h6>
+
+                            @if (form.Type == "AzureAD")
                             {
-                                <span class="spinner-border spinner-border-sm me-1"></span><span>Testing…</span>
+                                <div class="mb-3">
+                                    <label class="form-label">Azure Tenant ID *</label>
+                                    <input type="text" class="form-control" @bind="form.TenantId" placeholder="specific tenant GUID (required)" />
+                                    <small class="form-text text-muted">Authority becomes https://login.microsoftonline.com/{tenant}/v2.0. Multi-tenant authorities (common, organizations, consumers) are not allowed — they would accept tokens from any Azure tenant.</small>
+                                </div>
                             }
                             else
                             {
-                                <i class="oi oi-pulse"></i><span> Test connection</span>
+                                <div class="mb-3">
+                                    <label class="form-label">Authority (issuer URL) *</label>
+                                    <input type="text" class="form-control" @bind="form.Authority" placeholder="https://idp.example.com/" />
+                                </div>
                             }
-                        </button>
-                        <small class="text-muted">GETs the provider's /.well-known/openid-configuration.</small>
+                            <div class="mb-3">
+                                <label class="form-label">Client ID *</label>
+                                <input type="text" class="form-control" @bind="form.ClientId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Client Secret @(editingId != null ? "(leave blank to keep current)" : "*")</label>
+                                <div class="input-group">
+                                    <input type="@(showSecret ? "text" : "password")" class="form-control" @bind="form.ClientSecret" autocomplete="new-password"
+                                           placeholder="@(editingId != null ? "•••••••• (unchanged)" : "")" />
+                                    <button class="btn btn-outline-secondary" type="button" @onclick="ToggleSecret">
+                                        <i class="oi @(showSecret ? "oi-lock-locked" : "oi-eye")"></i>
+                                    </button>
+                                </div>
+                                <small class="form-text text-muted">Encrypted at rest. Never displayed after saving.</small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Username/email claim <small class="text-muted">(optional)</small></label>
+                                <input type="text" class="form-control" @bind="form.UsernameClaim"
+                                       placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
+                                <small class="form-text text-muted">Which claim is matched against an existing admin's username.</small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Redirect / callback path</label>
+                                <input type="text" class="form-control" @bind="form.CallbackPath" placeholder="/signin-oidc" />
+                                <small class="form-text text-muted">The path your IdP redirects back to after login. Register this EXACT path as the redirect URI in your IdP app registration (e.g. https://&lt;host&gt;/signin-oidc). If you run more than one enabled provider, give each a unique path.</small>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Extra scopes <small class="text-muted">(space-separated, optional)</small></label>
+                                <input type="text" class="form-control" @bind="form.ScopesRaw" placeholder="openid profile email are always requested" />
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="idpEnabled" @bind="form.IsEnabled" />
+                                <label class="form-check-label" for="idpEnabled">Enabled</label>
+                            </div>
+                            <div class="form-check mb-0">
+                                <input class="form-check-input" type="checkbox" id="idpAutoProvision" @bind="form.AutoProvision" />
+                                <label class="form-check-label" for="idpAutoProvision">Auto-create an admin on first SSO sign-in</label>
+                                <small class="form-text text-muted d-block">When on, anyone who successfully signs in through this provider (and isn't already an admin) gets a new active admin account. Use only with a trusted, tenant-pinned provider — every Conduit admin has full access.</small>
+                            </div>
+                        </div>
                     </div>
-                    @if (!string.IsNullOrEmpty(testResult))
-                    {
-                        <div class="@(testOk ? "alert alert-success" : "alert alert-danger") py-2 mt-2 mb-0 small">@testResult</div>
-                    }
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
-                <button type="button" class="btn btn-primary" @onclick="Save" disabled="@saving">Save</button>
+                <div class="d-flex flex-column w-100">
+                    @if (!string.IsNullOrEmpty(testResult))
+                    {
+                        <div class="@(testOk ? "alert alert-success" : "alert alert-danger") alert-dismissible fade show py-2 mb-3 small" role="alert">
+                            @testResult
+                            <button type="button" class="btn-close" @onclick="@(() => testResult = string.Empty)"></button>
+                        </div>
+                    }
+                    <div class="d-flex justify-content-end align-items-center gap-2">
+                        <small class="text-muted me-auto">Test GETs the provider's /.well-known/openid-configuration.</small>
+                        <button type="button" class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
+                        <button type="button" class="btn btn-info" @onclick="TestConnection" disabled="@(saving || testInFlight)">
+                            @if (testInFlight)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            }
+                            else
+                            {
+                                <i class="oi oi-pulse me-2"></i>
+                            }
+                            Test Connection
+                        </button>
+                        <button type="button" class="btn btn-primary" @onclick="Save" disabled="@saving">Save</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -204,6 +230,9 @@
     private bool testInFlight;
     private bool testOk;
     private string testResult = "";
+    private bool showSecret;
+
+    private void ToggleSecret() => showSecret = !showSecret;
 
     private string AuthorityFor(IdentityProvider p)
     {
@@ -241,7 +270,7 @@
     {
         editingId = null;
         form = new ProviderForm { Type = "OIDC", IsEnabled = true };
-        formError = null; testResult = ""; testOk = false;
+        formError = null; testResult = ""; testOk = false; showSecret = false;
         showModal = true;
     }
 
@@ -259,9 +288,11 @@
             Authority = cfg.Authority,
             TenantId = cfg.TenantId,
             UsernameClaim = cfg.UsernameClaim,
-            ScopesRaw = string.Join(' ', cfg.Scopes)
+            CallbackPath = string.IsNullOrWhiteSpace(cfg.CallbackPath) ? "/signin-oidc" : cfg.CallbackPath,
+            ScopesRaw = string.Join(' ', cfg.Scopes),
+            AutoProvision = cfg.AutoProvision
         };
-        formError = null; testResult = ""; testOk = false;
+        formError = null; testResult = ""; testOk = false; showSecret = false;
         showModal = true;
     }
 
@@ -291,6 +322,8 @@
             }
         }
         if (form.Type != "AzureAD" && string.IsNullOrWhiteSpace(form.Authority)) { formError = "Authority is required."; return; }
+        var callbackPath = string.IsNullOrWhiteSpace(form.CallbackPath) ? "/signin-oidc" : form.CallbackPath.Trim();
+        if (!callbackPath.StartsWith("/")) { formError = "Redirect / callback path must start with '/' — it is an app-local path, not a full URL."; return; }
         if (editingId == null && string.IsNullOrWhiteSpace(form.ClientSecret)) { formError = "Client Secret is required."; return; }
 
         saving = true;
@@ -325,9 +358,11 @@
                 Authority = string.IsNullOrWhiteSpace(form.Authority) ? null : form.Authority.Trim(),
                 TenantId = string.IsNullOrWhiteSpace(form.TenantId) ? null : form.TenantId.Trim(),
                 UsernameClaim = string.IsNullOrWhiteSpace(form.UsernameClaim) ? null : form.UsernameClaim.Trim(),
+                CallbackPath = callbackPath,
                 Scopes = (form.ScopesRaw ?? "")
                     .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .ToList()
+                    .ToList(),
+                AutoProvision = form.AutoProvision
             };
             var configJson = JsonSerializer.Serialize(cfg);
 
@@ -428,6 +463,8 @@
         public string? Authority { get; set; }
         public string? TenantId { get; set; }
         public string? UsernameClaim { get; set; }
+        public string? CallbackPath { get; set; } = "/signin-oidc";
         public string? ScopesRaw { get; set; }
+        public bool AutoProvision { get; set; }
     }
 }

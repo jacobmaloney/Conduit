@@ -31,4 +31,19 @@ public sealed class IdentityProviderConfig
     /// Defaults to standard email/preferred_username probing when null.
     /// </summary>
     public string? UsernameClaim { get; set; }
+
+    /// <summary>
+    /// App-local path the IdP redirects back to after login. Must be registered as the
+    /// redirect URI in the IdP app registration. Defaults to "/signin-oidc" when blank.
+    /// </summary>
+    public string? CallbackPath { get; set; }
+
+    /// <summary>
+    /// When true, a successful, already-verified SSO sign-in that matches no existing
+    /// PortalAdmin auto-creates a new active admin from the federated identity instead of
+    /// being rejected. Off by default. Only changes the outcome (create vs reject) for an
+    /// identity that has ALREADY cleared every existing gate (tenant pin + email_verified).
+    /// Use only with a trusted, tenant-pinned provider — every Conduit admin has full access.
+    /// </summary>
+    public bool AutoProvision { get; set; }
 }

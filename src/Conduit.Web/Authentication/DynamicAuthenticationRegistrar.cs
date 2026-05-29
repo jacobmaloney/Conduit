@@ -130,9 +130,13 @@ public static class DynamicAuthenticationRegistrar
             throw new InvalidOperationException($"Provider '{provider.Name}' has no resolvable authority.");
         }
 
-        // Each provider gets a distinct callback path so multiple OIDC schemes can
-        // coexist without colliding on /signin-oidc.
-        var schemeCallback = $"{SsoCallbackPath}/{Slug(provider.Name)}";
+        // Use the provider's configured callback path, defaulting to the IC-standard
+        // /signin-oidc so a single-provider setup matches what the IdP app registration
+        // expects out of the box. Operators give each provider a unique path when running
+        // more than one enabled OIDC scheme so they don't collide.
+        var schemeCallback = string.IsNullOrWhiteSpace(cfg.CallbackPath)
+            ? SsoCallbackPath
+            : cfg.CallbackPath.Trim();
 
         authBuilder.AddOpenIdConnect(provider.Name, displayName: provider.Name, options =>
         {
@@ -240,20 +244,55 @@ public static class DynamicAuthenticationRegistrar
                         evtLogger.LogError(ex, "SSO[{Provider}]: admin lookup threw.", provider.Name);
                     }
 
-                    // MATCH-EXISTING-ADMIN-ONLY. No auto-provisioning. Generic deny.
+                    var autoProvisioned = false;
                     if (admin is null || !admin.Active)
                     {
-                        evtLogger.LogWarning("SSO[{Provider}]: no active PortalAdmin matched the federated identity.", provider.Name);
-                        await SafeAudit(audit, evtLogger, "Login.Failed", mappedName, ip,
-                            details: $"method=SSO provider={provider.Name}; no matching active PortalAdmin.");
-                        ctx.Fail("No matching admin.");
-                        ctx.Response.Redirect("/login?sso_error=1");
-                        ctx.HandleResponse();
-                        return;
+                        // No active admin matches this already-verified identity. The default
+                        // behavior is fail-closed (match-existing-only). Auto-provision flips this
+                        // to "create" ONLY when the provider has opted in. It does NOT widen which
+                        // identities are accepted — every gate above (tenant pin, email_verified)
+                        // has already run and passed for this request.
+                        if (!cfg.AutoProvision)
+                        {
+                            evtLogger.LogWarning("SSO[{Provider}]: no active PortalAdmin matched the federated identity.", provider.Name);
+                            await SafeAudit(audit, evtLogger, "Login.Failed", mappedName, ip,
+                                details: $"method=SSO provider={provider.Name}; no matching active PortalAdmin.");
+                            ctx.Fail("No matching admin.");
+                            ctx.Response.Redirect("/login?sso_error=1");
+                            ctx.HandleResponse();
+                            return;
+                        }
+
+                        var userName = mappedName.Trim();
+                        var displayName = ctx.Principal?.FindFirst("name")?.Value;
+                        if (string.IsNullOrWhiteSpace(displayName)) displayName = userName;
+
+                        // No usable local password: hash a discarded random secret so the row
+                        // satisfies the NOT NULL hash/salt columns while leaving SSO as the only
+                        // sign-in path for this account.
+                        var randomSecret = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+                        var (hash, salt) = PasswordHasher.Hash(randomSecret);
+
+                        try
+                        {
+                            admin = await admins.CreateAsync(userName, displayName, hash, salt);
+                        }
+                        catch (SqlException)
+                        {
+                            // Race: a simultaneous first-login created the row under the UNIQUE
+                            // (UserName) constraint. Re-fetch and adopt that row. If the re-fetch
+                            // still finds nothing, the insert failed for some other reason — rethrow.
+                            admin = await admins.GetByUserNameAsync(userName);
+                            if (admin is null) throw;
+                        }
+
+                        autoProvisioned = true;
+                        evtLogger.LogInformation("SSO[{Provider}]: auto-provisioned admin '{User}' via SSO[{Provider}].", provider.Name, admin.UserName, provider.Name);
                     }
 
                     // Rebuild the principal to the EXACT shape LoginService issues, so SSO
-                    // sessions are indistinguishable from local ones downstream.
+                    // sessions are indistinguishable from local ones downstream. A provisioned
+                    // admin and a matched admin share this identical code path.
                     var claims = new List<Claim>
                     {
                         new(ClaimTypes.NameIdentifier, admin.Id.ToString()),
@@ -269,7 +308,7 @@ public static class DynamicAuthenticationRegistrar
                     try { await admins.MarkLoggedInAsync(admin.Id); } catch { /* non-fatal */ }
                     await SafeAudit(audit, evtLogger, "Login.Succeeded", admin.UserName, ip,
                         userId: admin.Id.ToString(),
-                        details: $"method=SSO provider={provider.Name}");
+                        details: $"method=SSO provider={provider.Name}{(autoProvisioned ? "; auto-provisioned admin" : "")}");
                     evtLogger.LogInformation("SSO[{Provider}]: admin '{User}' signed in from {Ip}.", provider.Name, admin.UserName, ip);
                 },
 

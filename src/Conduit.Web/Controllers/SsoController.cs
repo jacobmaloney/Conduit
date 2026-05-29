@@ -23,11 +23,14 @@ namespace Conduit.Web.Controllers;
 public class SsoController : Controller
 {
     private readonly IdentityProviderRepository _providers;
+    private readonly IAuthenticationSchemeProvider _schemes;
     private readonly ILogger<SsoController> _logger;
 
-    public SsoController(IdentityProviderRepository providers, ILogger<SsoController> logger)
+    public SsoController(IdentityProviderRepository providers, IAuthenticationSchemeProvider schemes,
+        ILogger<SsoController> logger)
     {
         _providers = providers;
+        _schemes = schemes;
         _logger = logger;
     }
 
@@ -57,23 +60,26 @@ public class SsoController : Controller
             return Redirect("/login?sso_error=1");
         }
 
+        // OIDC schemes are registered at startup. A provider enabled at runtime has no
+        // scheme until the app restarts; challenging it would throw an unhandled
+        // InvalidOperationException from the auth middleware (the ChallengeResult runs
+        // after this action returns, so a try/catch here can't catch it). Resolve the
+        // scheme up front and bail to the generic error path if it isn't registered yet.
+        var scheme = await _schemes.GetSchemeAsync(row.Name);
+        if (scheme is null)
+        {
+            _logger.LogInformation(
+                "SSO challenge: scheme '{Provider}' is not registered yet — an app restart is required to activate newly added providers.",
+                row.Name);
+            return Redirect("/login?sso_error=1");
+        }
+
         // Open-redirect guard: only ever bounce back to a local URL.
         var safeReturn = (!string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl))
             ? returnUrl!
             : "/";
 
         var props = new AuthenticationProperties { RedirectUri = safeReturn };
-        // Challenge by the provider's scheme name (== row.Name). If the scheme isn't
-        // registered (e.g. enabled after the last restart), the auth middleware throws;
-        // catch it and route the user to a generic error rather than a 500.
-        try
-        {
-            return Challenge(props, row.Name);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "SSO challenge: scheme '{Provider}' not registered (restart required after enabling?).", row.Name);
-            return Redirect("/login?sso_error=1");
-        }
+        return Challenge(props, row.Name);
     }
 }
