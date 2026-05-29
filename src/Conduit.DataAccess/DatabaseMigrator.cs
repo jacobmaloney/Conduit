@@ -890,8 +890,8 @@ BEGIN
         VALUES (@wfId, @projId, N'Default', N'Backfilled by V17 migration.', 0, 1, SYSUTCDATETIME(), SYSUTCDATETIME());
     INSERT INTO dbo.WorkflowSteps (Id, WorkflowId, Name, StepType, Ordinal, Enabled, Configuration, CreatedAt, ModifiedAt)
         VALUES (@stepId, @wfId, N'Default', N'Mapping', 0, 1, NULL, SYSUTCDATETIME(), SYSUTCDATETIME());
-    UPDATE dbo.AttributeMappings   SET WorkflowStepId = @stepId WHERE SyncProjectId = @projId AND WorkflowStepId IS NULL;
-    UPDATE dbo.SyncProjectScopes  SET WorkflowStepId = @stepId WHERE SyncProjectId = @projId AND WorkflowStepId IS NULL;
+    EXEC sp_executesql N'UPDATE dbo.AttributeMappings SET WorkflowStepId = @s WHERE SyncProjectId = @p AND WorkflowStepId IS NULL', N'@s uniqueidentifier, @p uniqueidentifier', @stepId, @projId;
+    EXEC sp_executesql N'UPDATE dbo.SyncProjectScopes SET WorkflowStepId = @s WHERE SyncProjectId = @p AND WorkflowStepId IS NULL', N'@s uniqueidentifier, @p uniqueidentifier', @stepId, @projId;
     FETCH NEXT FROM proj_cur INTO @projId;
 END;
 CLOSE proj_cur;
