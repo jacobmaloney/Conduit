@@ -1,0 +1,37 @@
+@*
+    CcSearchBox — STANDARD search input.
+    Dark slim canonical look used by CcListPanel internally and standalone
+    on pages that need a search input. ValueChanged fires on every keystroke.
+
+    Usage:
+      <CcSearchBox Value="@searchText" ValueChanged="HandleSearchChanged"
+                   Placeholder="Search by name, email..." />
+*@
+
+<div class="cc-search-box @CssClass">
+    <i class="fas fa-search cc-search-box-icon"></i>
+    <input type="text"
+           class="cc-search-box-input"
+           placeholder="@Placeholder"
+           value="@Value"
+           @oninput="HandleInput" />
+</div>
+
+@code {
+    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Search...";
+
+    /// <summary>Optional class for the wrapper (e.g. "cc-search-box-wide").</summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    private async Task HandleInput(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString() ?? string.Empty;
+        Value = v;
+        if (ValueChanged.HasDelegate)
+        {
+            await ValueChanged.InvokeAsync(v);
+        }
+    }
+}

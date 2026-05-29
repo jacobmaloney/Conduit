@@ -1,0 +1,66 @@
+@*
+    CcPersonRow — STANDARD ROW for identity / object lists.
+    Use anywhere that renders a list of person-like entities.
+    For bulk-select aware lists pass BulkSelectMode + IsBulkSelected.
+
+    Usage inside a <CcListPanel> RowTemplate:
+      <CcPersonRow Initials="@GetInitials(p)" Name="@p.DisplayName"
+                   Subtitle="@($"{p.Department} · {p.JobTitle}")"
+                   IsActive="@p.IsActive" Selected="@(selected?.Id == p.Id)" />
+
+    Visual classes (cc-id-row / cc-av / cc-status-dot / cc-id-info) are defined in
+    the shared stylesheet at css/conduit-design.css.
+*@
+
+<div class="cc-id-row @(Selected ? "selected on-identity" : "") @(IsBulkSelected ? "cc-id-row-bulk-selected" : "")">
+    @if (BulkSelectMode)
+    {
+        <div class="form-check cc-id-row-bulk" @onclick:stopPropagation>
+            <input class="form-check-input" type="checkbox"
+                   checked="@IsBulkSelected"
+                   @onchange="HandleBulkSelectChange" />
+        </div>
+    }
+    <div class="cc-av-wrap">
+        <div class="cc-av @(IsActive ? "active" : "disabled")">
+            @Initials
+        </div>
+        <div class="cc-status-dot @(IsActive ? "active" : "inactive")"></div>
+    </div>
+    <div class="cc-id-info">
+        <div class="cc-id-name">@Name</div>
+        @if (!string.IsNullOrEmpty(Subtitle))
+        {
+            <div class="cc-id-title">@Subtitle</div>
+        }
+    </div>
+    @if (Trailing != null)
+    {
+        <div class="cc-id-trailing">
+            @Trailing
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Initials { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Name { get; set; } = string.Empty;
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public bool IsActive { get; set; } = true;
+    [Parameter] public bool Selected { get; set; }
+
+    [Parameter] public bool BulkSelectMode { get; set; }
+    [Parameter] public bool IsBulkSelected { get; set; }
+    [Parameter] public EventCallback<bool> OnBulkSelectChanged { get; set; }
+
+    /// <summary>Optional content rendered to the right of the row (badges, status pills, etc.).</summary>
+    [Parameter] public RenderFragment? Trailing { get; set; }
+
+    private async Task HandleBulkSelectChange(ChangeEventArgs e)
+    {
+        if (OnBulkSelectChanged.HasDelegate && e.Value is bool b)
+        {
+            await OnBulkSelectChanged.InvokeAsync(b);
+        }
+    }
+}

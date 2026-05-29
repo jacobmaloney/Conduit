@@ -1,0 +1,309 @@
+/* ════════════════════════════════════════════════════════════════
+   Conduit design system — shared component stylesheet.
+
+   Loaded by _Layout.cshtml via:
+     <link rel="stylesheet" href="css/conduit-design.css" />
+
+   Load AFTER Bootstrap and BEFORE conduit.css so conduit.css can override
+   design-system defaults locally without !important.
+
+   Layered structure:
+     1. Shared design tokens
+     2. CcTemplate1
+     3. CcSearchBox
+     4. CcPersonRow
+     5. CcListPanel
+   ════════════════════════════════════════════════════════════════ */
+
+/* ─────────── 1. Shared design tokens ─────────── */
+/* These are SAFE FALLBACKS for the palette. conduit.css may redefine
+   these — its :root wins because it loads after. */
+:root {
+  /* Conduit brand */
+  --cc-conduit-300: #67E8F9;
+  --cc-conduit-500: #22D3EE;
+  --cc-conduit-700: #0E7490;
+
+  --cc-gold-300: #E9C25E;
+  --cc-gold-500: #C9A227;
+  --cc-gold-700: #8A6A0E;
+
+  /* Sec-accent ramp used by CcTemplate1 IconAccent.
+     These mirror IC's --sec-* tokens so existing IC pages match. */
+  --cc-sec-identity:   #22D3EE;
+  --cc-sec-governance: #14B8A6;
+  --cc-sec-analytics:  #A78BFA;
+  --cc-sec-operations: #FBBF24;
+  --cc-sec-configure:  #94A3B8;
+}
+
+/* ─────────── 2. CcTemplate1 ─────────── */
+.cc-template1-icon-tile {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+}
+
+.cc-template1-accent-cyan {
+  background: linear-gradient(135deg, rgba(34,211,238,0.22), rgba(34,211,238,0.06));
+  color: var(--sec-identity, var(--cc-sec-identity));
+}
+.cc-template1-accent-teal {
+  background: linear-gradient(135deg, rgba(20,184,166,0.22), rgba(20,184,166,0.06));
+  color: var(--sec-governance, var(--cc-sec-governance));
+}
+.cc-template1-accent-violet {
+  background: linear-gradient(135deg, rgba(167,139,250,0.22), rgba(167,139,250,0.06));
+  color: var(--sec-analytics, var(--cc-sec-analytics));
+}
+.cc-template1-accent-amber {
+  background: linear-gradient(135deg, rgba(251,191,36,0.22), rgba(251,191,36,0.06));
+  color: var(--sec-operations, var(--cc-sec-operations));
+}
+.cc-template1-accent-slate {
+  background: linear-gradient(135deg, rgba(148,163,184,0.22), rgba(148,163,184,0.06));
+  color: var(--sec-configure, var(--cc-sec-configure));
+}
+
+.cc-template1-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.cc-template1-subtitle {
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* ─────────── 3. CcSearchBox ─────────── */
+.cc-search-box {
+  position: relative;
+}
+
+.cc-search-box-wide {
+  min-width: 300px;
+}
+
+.cc-search-box-icon {
+  position: absolute;
+  left: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+  font-size: var(--text-sm, 0.875rem);
+  pointer-events: none;
+}
+
+.cc-search-box-input {
+  width: 100%;
+  background: var(--surface-inset, var(--panel-2, #131F36));
+  border: 1px solid var(--border, rgba(120,160,220,0.10));
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem 0.4rem 2rem;
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--text-primary, var(--text, #E4EDFB));
+  outline: none;
+}
+
+.cc-search-box-input:focus {
+  border-color: var(--accent, var(--cc-conduit-500));
+}
+
+/* ─────────── 4. CcPersonRow ─────────── */
+.cc-id-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle, var(--line-3, rgba(120,160,220,0.08)));
+  transition: background 0.12s ease;
+}
+
+.cc-id-row:hover {
+  background: var(--surface-2, var(--panel-2, #131F36));
+}
+
+.cc-id-row.selected,
+.cc-id-row.on-identity {
+  background: var(--accent-100, rgba(34,211,238,0.14));
+}
+
+.cc-id-row-bulk-selected {
+  background: var(--accent-50, rgba(34,211,238,0.06));
+}
+
+.cc-id-row-bulk {
+  margin: 0;
+  margin-right: 0.5rem;
+}
+
+.cc-av-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.cc-av {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--surface-2, var(--panel-2, #131F36));
+  color: var(--text-primary, var(--text, #E4EDFB));
+}
+
+.cc-av.active {
+  background: var(--accent-100, rgba(34,211,238,0.14));
+  color: var(--accent, var(--cc-conduit-500));
+}
+
+.cc-av.disabled {
+  opacity: 0.6;
+}
+
+.cc-status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--panel, #0F1B2F);
+}
+
+.cc-status-dot.active   { background: var(--ok,   #10B981); }
+.cc-status-dot.inactive { background: var(--text-tertiary, var(--text-3, #6B809E)); }
+
+.cc-id-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.cc-id-name {
+  font-weight: 500;
+  color: var(--text-primary, var(--text, #E4EDFB));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-id-title {
+  font-size: 0.75rem;
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-id-trailing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+/* ─────────── 5. CcListPanel ─────────── */
+.cc-list-panel {
+  height: 100%;
+  border-right: 1px solid var(--border, rgba(120,160,220,0.10));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cc-list-panel-title {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle, var(--line-3, rgba(120,160,220,0.08)));
+  font-weight: 600;
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--text-secondary, var(--text-2, #9DB0CC));
+}
+
+.cc-list-panel-title-count {
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+  font-weight: 400;
+  margin-left: 0.5rem;
+}
+
+.cc-list-panel-search {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle, var(--line-3, rgba(120,160,220,0.08)));
+}
+
+.cc-list-panel-rows {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.cc-list-panel-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+}
+
+.cc-list-panel-empty i { opacity: 0.3; }
+
+.cc-list-panel-empty p { font-size: var(--text-sm, 0.875rem); }
+
+.cc-list-panel-pager {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border-subtle, var(--line-3, rgba(120,160,220,0.08)));
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+}
+
+.cc-list-panel-pager-info {
+  text-align: center;
+  margin-bottom: 0.35rem;
+}
+
+.cc-list-panel-pager-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+}
+
+.cc-list-panel-pager-buttons .cc-btn {
+  padding: 0.2rem 0.45rem;
+}
+
+.cc-list-panel-pager-buttons .cc-btn.active {
+  background: var(--sec-identity, var(--cc-sec-identity));
+  color: #001b1f;
+  border-color: var(--sec-identity, var(--cc-sec-identity));
+}
+
+/* Minimal cc-btn fallback; consumers that already define .cc-btn or .ic-btn
+   keep their own look. */
+.cc-btn {
+  background: transparent;
+  border: 1px solid var(--border, rgba(120,160,220,0.10));
+  color: var(--text-primary, var(--text, #E4EDFB));
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cc-btn:hover:not(:disabled) {
+  background: var(--surface-2, var(--panel-2, #131F36));
+}
+
+.cc-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cc-btn-sm {
+  font-size: 0.75rem;
+}

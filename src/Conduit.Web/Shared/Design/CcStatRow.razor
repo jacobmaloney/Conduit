@@ -1,0 +1,46 @@
+@*
+    CcStatRow — STANDARD METRIC GRID, the dashboard companion to CcTemplate1.
+    Use on dashboard-style pages where you want a 2-6 metric overview row above the
+    main two-column content.
+
+    Column class auto-sizes by item count:
+      2 items → col-md-6 | 3 → col-md-4 | 4 → col-md-3 | 5+ → col-md-2
+
+    Usage:
+      <CcStatRow Stats="@statList" />
+*@
+
+<div class="row mb-3">
+    @foreach (var stat in Stats)
+    {
+        <div class="@(string.IsNullOrEmpty(ColumnClass) ? AutoColumnClass : ColumnClass) mb-3">
+            <div class="stat-card @(stat.Emphasize ? "stat-card-danger" : "") text-center">
+                <div class="stat-number @stat.ValueColor">@stat.Value</div>
+                <div class="stat-label">@stat.Label</div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<StatItem> Stats { get; set; } = Array.Empty<StatItem>();
+
+    /// <summary>Optional override (e.g. "col-md-3"). Default sizes by item count.</summary>
+    [Parameter] public string? ColumnClass { get; set; }
+
+    private string AutoColumnClass => Stats.Count switch
+    {
+        <= 2 => "col-md-6",
+        3    => "col-md-4",
+        4    => "col-md-3",
+        _    => "col-md-2 col-sm-4"
+    };
+
+    /// <summary>One stat tile: a label, a value, the value's text color, and an optional emphasis flag.</summary>
+    public record StatItem(
+        string Label,
+        string Value,
+        string ValueColor = "text-primary",
+        bool Emphasize = false);
+}

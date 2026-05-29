@@ -7,7 +7,6 @@
     <ProjectReference Include="..\Conduit.Sync\Conduit.Sync.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.ActiveDirectory\Conduit.Connectors.ActiveDirectory.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.Emulator\Conduit.Connectors.Emulator.csproj" />
-    <ProjectReference Include="..\..\..\CenturyCity.Design\src\CenturyCity.Design\CenturyCity.Design.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.EntraID\Conduit.Connectors.EntraID.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.Okta\Conduit.Connectors.Okta.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.GoogleWorkspace\Conduit.Connectors.GoogleWorkspace.csproj" />

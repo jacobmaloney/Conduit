@@ -1,0 +1,188 @@
+@*
+    CcListPanel — STANDARD LEFT-LIST PANEL for split-view pages.
+    Generic on TItem. Caller supplies a RowTemplate that renders one item.
+
+    Parameters:
+      Items                — IReadOnlyList<TItem> for the current page
+      TotalCount           — total before paging (drives the "of N" footer)
+      SelectedItem, OnSelect
+      RowTemplate (required)
+      EmptyTemplate (optional)
+      Title (optional)
+      SearchPlaceholder / SearchValue / OnSearchChanged
+      PageSize / CurrentPage / OnPageChanged / ShowPaging
+      ShowSearch (default true)
+      Width (default "320px")
+      MaxHeight (optional)
+
+    The component's CSS lives in css/conduit-design.css under .cc-list-panel*.
+    Width/MaxHeight remain inline because callers parameterize them.
+*@
+
+@typeparam TItem
+
+<div class="cc-list-panel" style="width: @Width; min-width: @Width;@(string.IsNullOrEmpty(MaxHeight) ? "" : " max-height: " + MaxHeight + ";")">
+    @if (!string.IsNullOrEmpty(Title))
+    {
+        <div class="cc-list-panel-title">
+            @Title
+            @if (TotalCount > 0)
+            {
+                <span class="cc-list-panel-title-count">(@TotalCount.ToString("N0"))</span>
+            }
+        </div>
+    }
+
+    @if (ShowSearch)
+    {
+        <div class="cc-list-panel-search">
+            <CcSearchBox Value="@SearchValue" ValueChanged="HandleSearchValueChanged" Placeholder="@SearchPlaceholder" />
+        </div>
+    }
+
+    <div class="cc-list-panel-rows">
+        @if (Items.Count == 0)
+        {
+            @if (EmptyTemplate != null)
+            {
+                @EmptyTemplate
+            }
+            else
+            {
+                <div class="cc-list-panel-empty">
+                    <i class="fas fa-inbox fa-2x mb-2"></i>
+                    <p>No items</p>
+                </div>
+            }
+        }
+        else
+        {
+            @foreach (var item in Items)
+            {
+                <div @onclick="() => OnSelect.InvokeAsync(item)">
+                    @RowTemplate(item)
+                </div>
+            }
+        }
+    </div>
+
+    @if (ShowPaging && TotalPages > 1)
+    {
+        <div class="cc-list-panel-pager">
+            <div class="cc-list-panel-pager-info">
+                Showing @((CurrentPage - 1) * PageSize + 1)–@Math.Min(CurrentPage * PageSize, TotalCount) of @TotalCount.ToString("N0")
+            </div>
+            <div class="cc-list-panel-pager-buttons">
+                <button class="cc-btn cc-btn-sm" disabled="@(CurrentPage <= 1)" @onclick="FirstPage" title="First page">
+                    <i class="fas fa-angle-double-left"></i>
+                </button>
+                <button class="cc-btn cc-btn-sm" disabled="@(CurrentPage <= 1)" @onclick="PrevPage" title="Previous page">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                @foreach (var p in PageNumbersWindow)
+                {
+                    <button class="cc-btn cc-btn-sm @(p == CurrentPage ? "active" : "")"
+                            @onclick="() => GoToPage(p)">
+                        @p
+                    </button>
+                }
+                <button class="cc-btn cc-btn-sm" disabled="@(CurrentPage >= TotalPages)" @onclick="NextPage" title="Next page">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+                <button class="cc-btn cc-btn-sm" disabled="@(CurrentPage >= TotalPages)" @onclick="LastPage" title="Last page">
+                    <i class="fas fa-angle-double-right"></i>
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<TItem> Items { get; set; } = Array.Empty<TItem>();
+    [Parameter] public int TotalCount { get; set; }
+    [Parameter] public TItem? SelectedItem { get; set; }
+    [Parameter] public EventCallback<TItem> OnSelect { get; set; }
+    [Parameter, EditorRequired] public RenderFragment<TItem> RowTemplate { get; set; } = default!;
+    [Parameter] public RenderFragment? EmptyTemplate { get; set; }
+
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string SearchPlaceholder { get; set; } = "Search...";
+    [Parameter] public string SearchValue { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> OnSearchChanged { get; set; }
+
+    [Parameter] public int PageSize { get; set; } = 50;
+    [Parameter] public int CurrentPage { get; set; } = 1;
+    [Parameter] public EventCallback<int> OnPageChanged { get; set; }
+    [Parameter] public bool ShowPaging { get; set; } = true;
+
+    [Parameter] public bool ShowSearch { get; set; } = true;
+
+    [Parameter] public string Width { get; set; } = "320px";
+
+    /// <summary>Optional explicit max-height (e.g. "calc(100vh - 440px)" or "70vh").</summary>
+    [Parameter] public string? MaxHeight { get; set; }
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling((double)TotalCount / PageSize));
+
+    private async Task HandleSearchValueChanged(string value)
+    {
+        SearchValue = value;
+        if (OnSearchChanged.HasDelegate) await OnSearchChanged.InvokeAsync(value);
+    }
+
+    private async Task PrevPage()
+    {
+        if (CurrentPage <= 1) return;
+        CurrentPage--;
+        if (OnPageChanged.HasDelegate) await OnPageChanged.InvokeAsync(CurrentPage);
+    }
+
+    private async Task NextPage()
+    {
+        if (CurrentPage >= TotalPages) return;
+        CurrentPage++;
+        if (OnPageChanged.HasDelegate) await OnPageChanged.InvokeAsync(CurrentPage);
+    }
+
+    private async Task FirstPage()
+    {
+        if (CurrentPage <= 1) return;
+        CurrentPage = 1;
+        if (OnPageChanged.HasDelegate) await OnPageChanged.InvokeAsync(1);
+    }
+
+    private async Task LastPage()
+    {
+        if (CurrentPage >= TotalPages) return;
+        CurrentPage = TotalPages;
+        if (OnPageChanged.HasDelegate) await OnPageChanged.InvokeAsync(TotalPages);
+    }
+
+    private async Task GoToPage(int page)
+    {
+        if (page == CurrentPage || page < 1 || page > TotalPages) return;
+        CurrentPage = page;
+        if (OnPageChanged.HasDelegate) await OnPageChanged.InvokeAsync(page);
+    }
+
+    private IEnumerable<int> PageNumbersWindow
+    {
+        get
+        {
+            const int Window = 7;
+            if (TotalPages <= Window)
+            {
+                for (var i = 1; i <= TotalPages; i++) yield return i;
+                yield break;
+            }
+            var half = Window / 2;
+            var start = Math.Max(1, CurrentPage - half);
+            var end = Math.Min(TotalPages, start + Window - 1);
+            if (end - start + 1 < Window)
+            {
+                start = Math.Max(1, end - Window + 1);
+            }
+            for (var i = start; i <= end; i++) yield return i;
+        }
+    }
+}

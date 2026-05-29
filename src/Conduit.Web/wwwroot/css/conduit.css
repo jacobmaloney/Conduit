@@ -33,14 +33,7 @@
   --conduit-500: #22D3EE;
   --conduit-700: #0E7490;
 
-  /* CenturyCity umbrella gold ramp (CenturyCity handoff §2).
-     Gold is umbrella-only — never paint module surfaces with it. The only
-     gold inside Conduit's UI is the ".ai" in the umbrella lockup. */
-  --gold-300: #E9C25E;
-  --gold-500: #C9A227;
-  --gold-700: #8A6A0E;
-
-  /* Functional dark theme (handoff §2) */
+  /* Functional dark theme */
   --bg:        #0B1424;
   --bg-2:      #0E1A2D;
   --panel:     #0F1B2F;
@@ -89,10 +82,8 @@
   --shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.25);
   --shadow:    0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35);
 
-  /* Typography (CenturyCity handoff §3 — Geist primary, Inter fallback).
-     Geist is the modern hard-edge sans the umbrella brand standardised on.
-     Inter stays as fallback so the app survives a font-CDN outage without
-     dropping to system serif. */
+  /* Typography — Geist primary, Inter fallback. Inter stays as fallback so
+     the app survives a font-CDN outage without dropping to system serif. */
   --font-sans:    'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'Geist', 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -209,11 +200,8 @@ hr { border-color: var(--border); }
   justify-content: space-between;
 }
 
-/* Brand block (Connected Systems design): CenturyCity umbrella lockup on top,
-   a mono "DISTRICT" divider, then the Conduit district lockup below. The
-   block lives where the old .nav-brand single-row lockup used to sit.
-
-   Sidebar still falls back to .nav-brand-only when an authenticated user
+/* Brand block: the Conduit lockup sits where the old .nav-brand single-row
+   lockup used to. Falls back to .nav-brand-only when an authenticated user
    isn't present (e.g. login route renders this layout briefly). */
 .nav-brand-block {
   display: flex;
@@ -225,47 +213,7 @@ hr { border-color: var(--border); }
   min-width: 0;
 }
 
-.cc-lockup {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  color: var(--text);
-}
-.cc-lockup .cc-mark { flex-shrink: 0; }
-.cc-lockup-wm {
-  font-family: var(--font-display);
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  font-size: 13.5px;
-  line-height: 1;
-  color: var(--text);
-}
-.cc-lockup-wm .gold { color: var(--gold-500); }
-
-.divider-mono {
-  margin: 14px 0 12px;
-  height: 1px;
-  background: var(--border);
-  position: relative;
-}
-.divider-mono::before {
-  /* Tag overlaying the divider with the umbrella metaphor. The bg matches the
-     sidebar surface so the line appears to break around the label. */
-  content: 'DISTRICT';
-  position: absolute;
-  left: 0;
-  top: -7px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.18em;
-  color: var(--text-3);
-  background: var(--bg-2);
-  padding-right: 8px;
-  font-weight: 600;
-}
-
-/* Brand lockup (handoff §5.2): mark + wordmark, baseline-aligned. Kept large
+/* Brand lockup: mark + wordmark, baseline-aligned. Kept large
    per the user's preference even though the source design ships 38px — the
    user explicitly upsized the mark earlier this session. */
 .nav-brand {

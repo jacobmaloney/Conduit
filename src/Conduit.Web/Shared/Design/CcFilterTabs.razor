@@ -1,0 +1,39 @@
+@*
+    CcFilterTabs — STANDARD FILTER TAB ROW.
+    Pill-style toggle row that sits between CcTemplate1 and the content.
+    Single active tab; click switches via the OnTabChanged callback.
+
+    Usage:
+      <CcFilterTabs Tabs="@_tabs"
+                    ActiveTab="@activeKey"
+                    OnTabChanged="HandleTabChanged" />
+*@
+
+<div class="d-flex gap-2 flex-wrap mb-3" role="group" aria-label="Filter">
+    @foreach (var tab in Tabs)
+    {
+        <button type="button"
+                class="btn btn-sm @(tab.Key == ActiveTab ? "btn-primary" : "btn-outline-secondary")"
+                @onclick="() => OnTabChanged.InvokeAsync(tab.Key)"
+                aria-pressed="@(tab.Key == ActiveTab)">
+            @if (!string.IsNullOrEmpty(tab.Icon))
+            {
+                <i class="@tab.Icon me-1"></i>
+            }
+            @tab.Label
+            @if (tab.Count.HasValue)
+            {
+                <span class="badge bg-white text-dark ms-1">@tab.Count.Value.ToString("N0")</span>
+            }
+        </button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<Tab> Tabs { get; set; } = Array.Empty<Tab>();
+    [Parameter, EditorRequired] public string ActiveTab { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> OnTabChanged { get; set; }
+
+    /// <summary>One filter tab. Key is the value passed to OnTabChanged; Label is the display text.</summary>
+    public record Tab(string Key, string Label, int? Count = null, string? Icon = null);
+}
