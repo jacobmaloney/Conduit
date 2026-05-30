@@ -3078,5 +3078,69 @@ details summary::-webkit-details-marker { color: var(--accent); }
     margin-bottom: 4px;
 }
 
+/* Sync project create wizard (step-by-step header + body) */
+.sync-wizard-steps {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-bottom: 1.25rem;
+    list-style: none;
+    padding: 0;
+}
+.sync-wizard-step {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    color: var(--text-3);
+    border-bottom: 2px solid var(--border);
+    font-size: 0.82rem;
+    white-space: nowrap;
+    cursor: default;
+}
+.sync-wizard-step.clickable { cursor: pointer; }
+.sync-wizard-step.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+}
+.sync-wizard-step.done {
+    color: var(--text-2);
+    border-bottom-color: var(--accent-100);
+}
+.sync-wizard-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 50%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    font-size: 0.78rem;
+    flex-shrink: 0;
+}
+.sync-wizard-step.active .sync-wizard-step-num,
+.sync-wizard-step.done .sync-wizard-step-num {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.sync-wizard-body { min-height: 18rem; }
+.sync-review-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 1rem;
+    align-items: baseline;
+}
+.sync-review-grid dt {
+    color: var(--text-3);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.sync-review-grid dd { margin: 0; color: var(--text); }
+.sync-field-error { color: #f87171; font-size: 0.8rem; margin-top: 0.25rem; }
+.is-invalid-field { border-color: #ef4444 !important; }
+
 /* End of file. Keep this file as the only app stylesheet; brand and palette
    changes go here, not into per-page <style> blocks. */
