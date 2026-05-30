@@ -1398,6 +1398,13 @@
                                     Standard 5-field cron, or legacy <code>@hourlyToken</code> / <code>@everyToken</code>. Blank = manual only.
                                 </small>
                             </div>
+                            <div class="col-md-12">
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="formSkipUnchanged" @bind="form.SkipUnchanged" />
+                                    <label class="form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records</label>
+                                    <small class="form-text text-muted d-block">Only write records whose mapped attributes changed since the last run (faster; uses a per-record content hash). Recommended for large directories.</small>
+                                </div>
+                            </div>
                         </div>
                     }
                     else if (formTab == "review")
@@ -1425,6 +1432,8 @@
                             <dd>@MappingSummary</dd>
                             <dt>Schedule</dt>
                             <dd>@(string.IsNullOrWhiteSpace(form.CronSchedule) ? "Manual only" : form.CronSchedule)</dd>
+                            <dt>Skip unchanged</dt>
+                            <dd>@(form.SkipUnchanged ? "Yes" : "No")</dd>
                             <dt>Status</dt>
                             <dd>@(form.IsEnabled ? "Enabled" : "Disabled")</dd>
                         </dl>
@@ -2356,7 +2365,8 @@
             SinkCredentialName = selectedProject.SinkCredentialName,
             ObjectClass = selectedProject.ObjectClass,
             CronSchedule = selectedProject.CronSchedule,
-            IsEnabled = selectedProject.IsEnabled
+            IsEnabled = selectedProject.IsEnabled,
+            SkipUnchanged = selectedProject.SkipUnchanged
         };
         await LoadCredentialsForFormAsync();
         scopeForm = await ProjectRepo.GetScopeAsync(selectedProject.Id)
