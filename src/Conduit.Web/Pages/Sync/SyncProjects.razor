@@ -14,6 +14,7 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject Conduit.Sync.Templates.IAttributeMapService AttributeMapper
+@inject Conduit.Sync.Templates.ISyncProjectGenerator ProjectGenerator
 
 @*
     Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjects.razor —
@@ -362,38 +363,27 @@
                     }
 
                     <p class="text-muted">
-                        Pick a source and a sink. We'll create a sync project pair —
-                        one for <strong>Users</strong>, one for <strong>Groups</strong> —
-                        with passthrough attribute mapping and your chosen schedule.
-                        Conduit's symmetric-router model recognises User and Group as
-                        the canonical object classes; per-class governance attributes
-                        are an IC concern.
+                        Pick a source and a sink, then a mode. We'll create one sync
+                        project per object class in the source connector's set for that
+                        mode, each with a Mapping workflow, a default scope filter, and
+                        passthrough attribute mappings auto-filled from the source → sink
+                        attribute catalog. Per-class governance steps are an IC concern.
                     </p>
 
-                    <label class="form-label fw-bold mt-2">Template</label>
-                    <div class="row g-2 mb-3">
-                        <div class="col-md-6">
-                            <div class="sync-template-card @(autoGenTemplate == "Core" ? "active" : "")"
-                                 @onclick='() => autoGenTemplate = "Core"'>
-                                <div class="d-flex align-items-center mb-1">
-                                    <span class="fw-bold sync-template-card-label">Core</span>
-                                    <span class="badge bg-success ms-auto">Recommended</span>
-                                </div>
-                                <div class="small text-muted">2 projects: User + Group</div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="sync-template-card @(autoGenTemplate == "UserOnly" ? "active" : "")"
-                                 @onclick='() => autoGenTemplate = "UserOnly"'>
-                                <div class="fw-bold sync-template-card-label-amber mb-1">User only</div>
-                                <div class="small text-muted">1 project: User</div>
-                            </div>
-                        </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Mode</label>
+                        <select class="form-select" @bind="autoGenMode">
+                            @foreach (var m in AvailableModes)
+                            {
+                                <option value="@m">@ModeLabel(m)</option>
+                            }
+                        </select>
+                        <small class="form-text text-muted">@AutoGeneratePreviewText</small>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Source Connected System</label>
-                        <select class="form-select" @bind="autoGenSourceId">
+                        <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
                             <option value="@Guid.Empty">-- Pick a source --</option>
                             @foreach (var t in allTenants)
                             {
@@ -633,41 +623,68 @@
                         <div class="alert alert-danger py-2">@formError</div>
                     }
 
-                    <ul class="nav nav-tabs mb-3">
-                        <li class="nav-item">
-                            <button class="nav-link @(formTab == "setup" ? "active" : "")" @onclick='() => formTab = "setup"'>
-                                <i class="fas fa-cog me-1"></i>Setup
-                            </button>
-                        </li>
-                        <li class="nav-item">
-                            <button class="nav-link @(formTab == "scope" ? "active" : "")" @onclick='() => formTab = "scope"'>
-                                <i class="fas fa-filter me-1"></i>Scope
-                            </button>
-                        </li>
-                        <li class="nav-item">
-                            <button class="nav-link @(formTab == "mappings" ? "active" : "")" @onclick='() => formTab = "mappings"'>
-                                <i class="fas fa-arrows-alt-h me-1"></i>Mappings
-                                @if (mappingForm.Count > 0)
-                                {
-                                    <span class="badge bg-primary ms-1">@mappingForm.Count</span>
-                                }
-                            </button>
-                        </li>
-                        <li class="nav-item">
-                            <button class="nav-link @(formTab == "workflows" ? "active" : "")" @onclick="OpenWorkflowsTab" disabled="@(!editingId.HasValue)">
-                                <i class="fas fa-project-diagram me-1"></i>Workflows
-                                @if (workflowsForm.Count > 0)
-                                {
-                                    <span class="badge bg-primary ms-1">@workflowsForm.Count</span>
-                                }
-                            </button>
-                        </li>
-                        <li class="nav-item">
-                            <button class="nav-link @(formTab == "schedule" ? "active" : "")" @onclick='() => formTab = "schedule"'>
-                                <i class="fas fa-clock me-1"></i>Schedule
-                            </button>
-                        </li>
-                    </ul>
+                    @if (isWizard)
+                    {
+                        <ul class="sync-wizard-steps">
+                            @foreach (var ws in WizardSteps)
+                            {
+                                var stepNum = ws.Number;
+                                var cls = stepNum == wizardStep ? "active" : (stepNum < wizardStep ? "done clickable" : "");
+                                <li class="sync-wizard-step @cls" @onclick="() => GoToWizardStep(stepNum)">
+                                    <span class="sync-wizard-step-num">
+                                        @if (stepNum < wizardStep)
+                                        {
+                                            <i class="fas fa-check"></i>
+                                        }
+                                        else
+                                        {
+                                            @stepNum
+                                        }
+                                    </span>
+                                    <span>@ws.Label</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                    else
+                    {
+                        <ul class="nav nav-tabs mb-3">
+                            <li class="nav-item">
+                                <button class="nav-link @(formTab == "setup" ? "active" : "")" @onclick='() => formTab = "setup"'>
+                                    <i class="fas fa-cog me-1"></i>Setup
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link @(formTab == "scope" ? "active" : "")" @onclick='() => formTab = "scope"'>
+                                    <i class="fas fa-filter me-1"></i>Scope &amp; Filter
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link @(formTab == "mappings" ? "active" : "")" @onclick='() => formTab = "mappings"'>
+                                    <i class="fas fa-arrows-alt-h me-1"></i>Mappings
+                                    @if (mappingForm.Count > 0)
+                                    {
+                                        <span class="badge bg-primary ms-1">@mappingForm.Count</span>
+                                    }
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link @(formTab == "workflows" ? "active" : "")" @onclick="OpenWorkflowsTab" disabled="@(!editingId.HasValue)">
+                                    <i class="fas fa-project-diagram me-1"></i>Workflows
+                                    @if (workflowsForm.Count > 0)
+                                    {
+                                        <span class="badge bg-primary ms-1">@workflowsForm.Count</span>
+                                    }
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link @(formTab == "schedule" ? "active" : "")" @onclick='() => formTab = "schedule"'>
+                                    <i class="fas fa-clock me-1"></i>Schedule
+                                </button>
+                            </li>
+                        </ul>
+                    }
+                    @* body sections below *@
 
                     @if (formTab == "setup")
                     {
@@ -675,33 +692,25 @@
                             <div class="col-md-8">
                                 <div class="mb-3">
                                     <label class="form-label fw-semibold">Project Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control form-control-lg" @bind="form.Name" placeholder="e.g., AD → Emulator User Sync" />
+                                    <input type="text" class="form-control form-control-lg @(ShowNameError ? "is-invalid-field" : "")" @bind="form.Name" @bind:event="oninput" placeholder="e.g., AD → Emulator User Sync" />
+                                    @if (ShowNameError)
+                                    {
+                                        <div class="sync-field-error">A project name is required.</div>
+                                    }
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label fw-semibold">Description</label>
                                     <textarea class="form-control" rows="2" @bind="form.Description"
                                               placeholder="Optional description of what this project synchronizes"></textarea>
                                 </div>
-                                @* Phase 8: workflow template picker. Only shown on create — on edit the
+                                @* Phase 8: workflow template picker. Only shown on edit's Setup tab —
+                                   the create wizard moves it to the Object Class step. On edit the
                                    project's workflow tree is already persisted and the operator manages
-                                   it from the Workflows tab. *@
-                                @if (!editingId.HasValue)
-                                {
-                                    <div class="mb-3">
-                                        <label class="form-label fw-semibold">Workflow Template</label>
-                                        <select class="form-select" value="@selectedTemplateId" @onchange="OnTemplateChanged">
-                                            @foreach (var tpl in WorkflowTemplateCatalog.All)
-                                            {
-                                                <option value="@tpl.Id">@tpl.DisplayName</option>
-                                            }
-                                        </select>
-                                        <small class="form-text text-muted">@SelectedTemplate.Description</small>
-                                    </div>
-                                }
+                                   it from the Workflows tab, so this is hidden there too. *@
                                 <div class="row g-3">
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">Source Connected System <span class="text-danger">*</span></label>
-                                        <select class="form-select" @bind="form.SourceTenantId" disabled="@editingId.HasValue">
+                                        <select class="form-select @(ShowSourceError ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
                                             <option value="@Guid.Empty">-- Pick a source --</option>
                                             @foreach (var t in allTenants)
                                             {
@@ -712,10 +721,14 @@
                                         {
                                             <small class="form-text text-muted">Source cannot change after creation.</small>
                                         }
+                                        else if (ShowSourceError)
+                                        {
+                                            <div class="sync-field-error">Pick a source Connected System.</div>
+                                        }
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">Sink Connected System <span class="text-danger">*</span></label>
-                                        <select class="form-select" @bind="form.SinkTenantId" disabled="@editingId.HasValue">
+                                        <select class="form-select @(ShowSinkError ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
                                             <option value="@Guid.Empty">-- Pick a sink --</option>
                                             @foreach (var t in allTenants)
                                             {
@@ -726,18 +739,25 @@
                                         {
                                             <small class="form-text text-muted">Sink cannot change after creation.</small>
                                         }
+                                        else if (ShowSinkError)
+                                        {
+                                            <div class="sync-field-error">Pick a sink Connected System.</div>
+                                        }
                                     </div>
+                                </div>
+                                <div class="mt-2">
+                                    <a href="/connected-systems" class="small">
+                                        <i class="fas fa-plug me-1"></i>Manage Connected Systems &amp; test credentials
+                                    </a>
                                 </div>
                                 @* Self-sync banner — surfaces the mastered-identity pattern (e.g. AD → AD
                                    with a default:* transform) without blocking save. *@
-                                @if (form.SourceTenantId != Guid.Empty
-                                     && form.SourceTenantId == form.SinkTenantId
-                                     && tenantById.TryGetValue(form.SourceTenantId, out var selfTenant))
+                                @if (IsSelfSync)
                                 {
                                     <div class="alert alert-info mt-3 mb-0 py-2">
                                         <i class="fas fa-info-circle me-1"></i>
                                         <strong>Self-sync:</strong> this project will pull from
-                                        <strong>@selfTenant.Name</strong> and write back to the same system.
+                                        <strong>@TenantName(form.SourceTenantId)</strong> and write back to the same system.
                                         Common pattern for mastered identity transforms.
                                     </div>
                                 }
@@ -765,25 +785,28 @@
                                         <small class="form-text text-muted">Override when the sink tenant holds multiple credentials.</small>
                                     </div>
                                 </div>
-                                <div class="row g-3 mt-1">
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-semibold">Object Class</label>
-                                        <select class="form-select" @bind="form.ObjectClass">
-                                            <option value="User">User</option>
-                                            <option value="Group">Group</option>
-                                            @if (SinkIsAwsSso)
-                                            {
-                                                <option value="Assignment">Assignment (AWS SSO)</option>
-                                                <option value="GroupMembership">Group Membership</option>
-                                            }
-                                            else if (SinkIsEntraID)
-                                            {
-                                                <option value="GroupMemberships">Group Memberships</option>
-                                                <option value="ManagerRefresh">Manager Refresh</option>
-                                            }
-                                        </select>
+                                @if (!isWizard)
+                                {
+                                    <div class="row g-3 mt-1">
+                                        <div class="col-md-6">
+                                            <label class="form-label fw-semibold">Object Class</label>
+                                            <select class="form-select" @bind="form.ObjectClass">
+                                                <option value="User">User</option>
+                                                <option value="Group">Group</option>
+                                                @if (SinkIsAwsSso)
+                                                {
+                                                    <option value="Assignment">Assignment (AWS SSO)</option>
+                                                    <option value="GroupMembership">Group Membership</option>
+                                                }
+                                                else if (SinkIsEntraID)
+                                                {
+                                                    <option value="GroupMemberships">Group Memberships</option>
+                                                    <option value="ManagerRefresh">Manager Refresh</option>
+                                                }
+                                            </select>
+                                        </div>
                                     </div>
-                                </div>
+                                }
                             </div>
                             <div class="col-md-4">
                                 <div class="sync-form-aside">
@@ -805,32 +828,131 @@
                             </div>
                         </div>
                     }
+                    else if (formTab == "object")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Object Class</label>
+                            <select class="form-select" @bind="form.ObjectClass">
+                                <option value="User">User</option>
+                                <option value="Group">Group</option>
+                                @if (SinkIsAwsSso)
+                                {
+                                    <option value="Assignment">Assignment (AWS SSO)</option>
+                                    <option value="GroupMembership">Group Membership</option>
+                                }
+                                else if (SinkIsEntraID)
+                                {
+                                    <option value="GroupMemberships">Group Memberships</option>
+                                    <option value="ManagerRefresh">Manager Refresh</option>
+                                }
+                            </select>
+                            <small class="form-text text-muted">
+                                The kind of object this project reads from the source and writes to the sink.
+                            </small>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Workflow Template</label>
+                            <select class="form-select" value="@selectedTemplateId" @onchange="OnTemplateChanged">
+                                @foreach (var tpl in WorkflowTemplateCatalog.All)
+                                {
+                                    <option value="@tpl.Id">@tpl.DisplayName</option>
+                                }
+                            </select>
+                            <small class="form-text text-muted">@SelectedTemplate.Description</small>
+                        </div>
+                        <div class="alert alert-secondary py-2 mb-0">
+                            <i class="fas fa-shoe-prints me-1"></i>
+                            The simple path creates a Default workflow with a single Mapping step. After the project
+                            exists you can open the <strong>Workflows</strong> tab to compose multi-step pipelines.
+                        </div>
+                    }
                     else if (formTab == "scope")
                     {
-                        <p class="text-muted">
-                            For an LDAP / AD source, Base DN bounds the read. Leave blank to use the source's
-                            <code>RootDSE.defaultNamingContext</code> (matches IC's behavior). The orchestrator
-                            also stamps a default LDAP filter per object class — only override when you need to narrow.
-                        </p>
-                        <div class="row g-3">
-                            <div class="col-md-7">
-                                <label class="form-label fw-semibold">Base DN</label>
-                                <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
+                        @if (SourceIsLdap)
+                        {
+                            <p class="text-muted">
+                                Base DN bounds the read for <strong>@SourceSystemType</strong>. Leave blank to use the source's
+                                <code>defaultNamingContext</code>. The orchestrator stamps a default LDAP filter per object class —
+                                only override when you need to narrow the read.
+                            </p>
+                            <div class="row g-3">
+                                <div class="col-md-7">
+                                    <label class="form-label fw-semibold">Base DN</label>
+                                    <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
+                                </div>
+                                <div class="col-md-5">
+                                    <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
+                                    <input class="form-control" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                                </div>
                             </div>
-                            <div class="col-md-5">
-                                <label class="form-label fw-semibold">Page size</label>
-                                <input class="form-control" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                            <div class="row g-3 mt-1">
+                                <div class="col-md-9">
+                                    <label class="form-label fw-semibold">LDAP filter override</label>
+                                    <input class="form-control" @bind="scopeForm.LdapFilter" placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default" />
+                                    <small class="form-text text-muted">RFC 4515 LDAP filter. Blank = the per-object-class default.</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold">Max objects</label>
+                                    <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                                    <small class="form-text text-muted">0 = no cap.</small>
+                                </div>
                             </div>
-                        </div>
-                        <div class="row g-3 mt-1">
-                            <div class="col-md-9">
-                                <label class="form-label fw-semibold">LDAP filter override</label>
-                                <input class="form-control" @bind="scopeForm.LdapFilter" placeholder="(leave blank for default for object class)" />
+                        }
+                        else if (SourceIsEntra)
+                        {
+                            <p class="text-muted">
+                                <strong>EntraID</strong> reads via Microsoft Graph — no Base DN. Narrow the read with an OData
+                                <code>$filter</code> expression, or leave blank to read all objects of the chosen class.
+                            </p>
+                            <div class="row g-3">
+                                <div class="col-md-12">
+                                    <label class="form-label fw-semibold">OData filter</label>
+                                    <input class="form-control" @bind="scopeForm.QueryExpression" placeholder="startswith(displayName,'Sales') — blank for all" />
+                                    <small class="form-text text-muted">Graph OData <code>$filter</code>. Blank = all objects of this class.</small>
+                                </div>
                             </div>
-                            <div class="col-md-3">
-                                <label class="form-label fw-semibold">Max objects</label>
-                                <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                            <div class="row g-3 mt-1">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
+                                    <input class="form-control" type="number" min="1" max="999" @bind="scopeForm.PageSize" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Max objects</label>
+                                    <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                                    <small class="form-text text-muted">0 = no cap.</small>
+                                </div>
                             </div>
+                        }
+                        else
+                        {
+                            <p class="text-muted">
+                                @ScopeApiHint
+                                Use a query expression to narrow the read where the connector supports it, or leave blank to read everything.
+                            </p>
+                            <div class="row g-3">
+                                <div class="col-md-12">
+                                    <label class="form-label fw-semibold">Query expression</label>
+                                    <input class="form-control" @bind="scopeForm.QueryExpression" placeholder="Connector-specific query — blank to read all" />
+                                    <small class="form-text text-muted">Interpreted by the source connector. Blank = read all.</small>
+                                </div>
+                            </div>
+                            <div class="row g-3 mt-1">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
+                                    <input class="form-control" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Max objects</label>
+                                    <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                                    <small class="form-text text-muted">0 = no cap.</small>
+                                </div>
+                            </div>
+                        }
+                        <div class="form-check mt-3">
+                            <input class="form-check-input" type="checkbox" id="scopeIncludeDeleted" @bind="scopeForm.IncludeDeleted" />
+                            <label class="form-check-label" for="scopeIncludeDeleted">
+                                Include deleted / soft-deleted objects where the source exposes them
+                            </label>
                         </div>
                     }
                     else if (formTab == "mappings")
@@ -1278,16 +1400,78 @@
                             </div>
                         </div>
                     }
+                    else if (formTab == "review")
+                    {
+                        <p class="text-muted">Review the project before creating it. Use <strong>Back</strong> to change anything.</p>
+                        <dl class="sync-review-grid">
+                            <dt>Name</dt>
+                            <dd>@(string.IsNullOrWhiteSpace(form.Name) ? "(unnamed)" : form.Name)</dd>
+                            @if (!string.IsNullOrWhiteSpace(form.Description))
+                            {
+                                <dt>Description</dt>
+                                <dd>@form.Description</dd>
+                            }
+                            <dt>Source</dt>
+                            <dd>@TenantName(form.SourceTenantId) <span class="text-muted">(@TenantType(form.SourceTenantId))</span>@(string.IsNullOrEmpty(form.SourceCredentialName) ? "" : $" · cred: {form.SourceCredentialName}")</dd>
+                            <dt>Sink</dt>
+                            <dd>@TenantName(form.SinkTenantId) <span class="text-muted">(@TenantType(form.SinkTenantId))</span>@(string.IsNullOrEmpty(form.SinkCredentialName) ? "" : $" · cred: {form.SinkCredentialName}")</dd>
+                            <dt>Object class</dt>
+                            <dd>@form.ObjectClass</dd>
+                            <dt>Workflow template</dt>
+                            <dd>@SelectedTemplate.DisplayName</dd>
+                            <dt>Scope</dt>
+                            <dd>@ScopeSummary()</dd>
+                            <dt>Mappings</dt>
+                            <dd>@MappingSummary</dd>
+                            <dt>Schedule</dt>
+                            <dd>@(string.IsNullOrWhiteSpace(form.CronSchedule) ? "Manual only" : form.CronSchedule)</dd>
+                            <dt>Status</dt>
+                            <dd>@(form.IsEnabled ? "Enabled" : "Disabled")</dd>
+                        </dl>
+                    }
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-secondary" @onclick="CloseFormModal">Cancel</button>
-                    <button class="btn btn-primary" @onclick="SaveForm" disabled="@saving">
-                        @if (saving)
+                    @if (isWizard)
+                    {
+                        <button class="btn btn-secondary me-auto" @onclick="CloseFormModal">Cancel</button>
+                        @if (wizardStep > 1)
                         {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <button class="btn btn-outline-secondary" @onclick="PrevWizardStep" disabled="@saving">
+                                <i class="fas fa-arrow-left me-1"></i>Back
+                            </button>
                         }
-                        @(editingId.HasValue ? "Save changes" : "Create")
-                    </button>
+                        @if (wizardStep < WizardStepCount)
+                        {
+                            <button class="btn btn-primary" @onclick="NextWizardStep">
+                                Next<i class="fas fa-arrow-right ms-1"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-success" @onclick="SaveForm" disabled="@saving">
+                                @if (saving)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                else
+                                {
+                                    <i class="fas fa-check me-1"></i>
+                                }
+                                Create Project
+                            </button>
+                        }
+                    }
+                    else
+                    {
+                        <button class="btn btn-secondary" @onclick="CloseFormModal">Cancel</button>
+                        <button class="btn btn-primary" @onclick="SaveForm" disabled="@saving">
+                            @if (saving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            Save changes
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -1323,6 +1507,32 @@
     private string cronPreset = string.Empty;
     private string formError = string.Empty;
     private string formTab = "setup";
+
+    // Phase 4 wizard. Create uses a step-by-step flow; edit keeps the tabbed layout.
+    private bool isWizard => !editingId.HasValue;
+    private int wizardStep = 1;
+    // Validation visibility flags — only light up after a failed Next / Create so the
+    // form doesn't shout at the operator before they've had a chance to type.
+    private bool showNameValidation;
+    private bool showSourceValidation;
+    private bool showSinkValidation;
+    private bool ShowNameError => showNameValidation && string.IsNullOrWhiteSpace(form.Name);
+    private bool ShowSourceError => !editingId.HasValue && showSourceValidation && form.SourceTenantId == Guid.Empty;
+    private bool ShowSinkError => !editingId.HasValue && showSinkValidation && form.SinkTenantId == Guid.Empty;
+
+    private record WizardStepDef(int Number, string Tab, string Label);
+    private static readonly WizardStepDef[] WizardStepDefs =
+    {
+        new(1, "setup",    "Connections"),
+        new(2, "object",   "Object Class"),
+        new(3, "scope",    "Scope & Filter"),
+        new(4, "mappings", "Mappings"),
+        new(5, "schedule", "Schedule"),
+        new(6, "review",   "Review")
+    };
+    private IReadOnlyList<WizardStepDef> WizardSteps => WizardStepDefs;
+    private int WizardStepCount => WizardStepDefs.Length;
+
     // Phase 2 multi-cred UX: credential names available for the current source / sink tenant.
     private List<string> sourceCredentialNames = new();
     private List<string> sinkCredentialNames = new();
@@ -1834,13 +2044,77 @@
 
     // Auto-generate modal state
     private bool showAutoGenerateModal;
-    private string autoGenTemplate = "Core";
+    private Conduit.Sync.Templates.GenerationMode autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
     private Guid autoGenSourceId = Guid.Empty;
     private Guid autoGenSinkId = Guid.Empty;
     private string autoGenCronSchedule = string.Empty;
     private bool autoGenEnable = true;
     private bool autoGenInProgress;
     private string autoGenError = string.Empty;
+
+    private Tenant? AutoGenSource =>
+        autoGenSourceId == Guid.Empty ? null : allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
+
+    // Core + Full apply to every connector; the middle tier is connector-specific
+    // (AD Infrastructure / Entra Security / SharePoint Collaboration) and only appears
+    // when the chosen source connector defines it.
+    private IReadOnlyList<Conduit.Sync.Templates.GenerationMode> AvailableModes
+    {
+        get
+        {
+            var modes = new List<Conduit.Sync.Templates.GenerationMode>
+            {
+                Conduit.Sync.Templates.GenerationMode.Core,
+                Conduit.Sync.Templates.GenerationMode.Full
+            };
+            var type = AutoGenSource?.SystemType;
+            if (type == "ActiveDirectory")
+            {
+                modes.Insert(1, Conduit.Sync.Templates.GenerationMode.AdInfrastructure);
+            }
+            else if (type == "EntraID")
+            {
+                modes.Insert(1, Conduit.Sync.Templates.GenerationMode.EntraSecurity);
+            }
+            else if (type == "SharePoint")
+            {
+                modes.Insert(1, Conduit.Sync.Templates.GenerationMode.SharePointCollaboration);
+            }
+            return modes;
+        }
+    }
+
+    private static string ModeLabel(Conduit.Sync.Templates.GenerationMode mode) => mode switch
+    {
+        Conduit.Sync.Templates.GenerationMode.Core => "Core",
+        Conduit.Sync.Templates.GenerationMode.AdInfrastructure => "Infrastructure",
+        Conduit.Sync.Templates.GenerationMode.EntraSecurity => "Security",
+        Conduit.Sync.Templates.GenerationMode.SharePointCollaboration => "Collaboration",
+        _ => "Full"
+    };
+
+    private string AutoGeneratePreviewText
+    {
+        get
+        {
+            var source = AutoGenSource;
+            if (source is null)
+            {
+                return "Select a source Connected System to preview the generated object classes.";
+            }
+            var classes = ProjectGenerator.GetObjectClasses(source.SystemType, autoGenMode);
+            var joined = string.Join(", ", classes);
+            return $"Generates {classes.Count} sync project(s): {joined}";
+        }
+    }
+
+    private void OnAutoGenSourceChanged()
+    {
+        if (!AvailableModes.Contains(autoGenMode))
+        {
+            autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
+        }
+    }
 
     // Filtered project lists by tab.
     // Conduit has no "internal" projects today — symmetric router means every project
@@ -1987,8 +2261,14 @@
         cronPreset = string.Empty;
         formError = string.Empty;
         formTab = "setup";
+        wizardStep = 1;
+        showNameValidation = false;
+        showSourceValidation = false;
+        showSinkValidation = false;
         sourceCredentialNames = new();
         sinkCredentialNames = new();
+        // Defaults above may have pre-picked a source/sink — load their credential lists.
+        await LoadCredentialsForFormAsync();
         ResetAssignmentTemplateForm();
         ResetWorkflowFormState();
         showFormModal = true;
@@ -2200,19 +2480,155 @@
         formError = string.Empty;
     }
 
+    // ─── Wizard navigation (create flow) ────────────────────────────────────
+
+    private string SourceSystemType =>
+        tenantById.TryGetValue(form.SourceTenantId, out var t) ? t.SystemType : string.Empty;
+
+    private bool SourceIsLdap =>
+        string.Equals(SourceSystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(SourceSystemType, "GenericLdap", StringComparison.OrdinalIgnoreCase);
+
+    private bool SourceIsEntra =>
+        string.Equals(SourceSystemType, "EntraID", StringComparison.OrdinalIgnoreCase);
+
+    private bool IsSelfSync =>
+        form.SourceTenantId != Guid.Empty && form.SourceTenantId == form.SinkTenantId;
+
+    private async Task OnSourceTenantChanged()
+    {
+        showSourceValidation = false;
+        await LoadCredentialsForFormAsync();
+    }
+
+    private async Task OnSinkTenantChanged()
+    {
+        showSinkValidation = false;
+        await LoadCredentialsForFormAsync();
+    }
+
+    private string CurrentTabForStep(int step) =>
+        WizardStepDefs.FirstOrDefault(s => s.Number == step)?.Tab ?? "setup";
+
+    private async Task GoToWizardStep(int step)
+    {
+        // Only allow jumping backward to an already-completed step via the header.
+        if (step >= wizardStep) return;
+        wizardStep = step;
+        formTab = CurrentTabForStep(step);
+        await Task.CompletedTask;
+    }
+
+    private bool ValidateWizardStep(int step)
+    {
+        formError = string.Empty;
+        switch (step)
+        {
+            case 1:
+                showNameValidation = true;
+                showSourceValidation = true;
+                showSinkValidation = true;
+                if (string.IsNullOrWhiteSpace(form.Name))
+                {
+                    formError = "A project name is required.";
+                    return false;
+                }
+                if (form.SourceTenantId == Guid.Empty || form.SinkTenantId == Guid.Empty)
+                {
+                    formError = "Pick both a source and a sink Connected System.";
+                    return false;
+                }
+                return true;
+            case 3:
+                if (scopeForm.PageSize < 1)
+                {
+                    formError = "Page size must be at least 1.";
+                    return false;
+                }
+                if (scopeForm.MaxObjects < 0)
+                {
+                    formError = "Max objects can't be negative.";
+                    return false;
+                }
+                return true;
+            case 5:
+                if (!ScheduledSyncRunnerJob.TryValidate(form.CronSchedule, out var cronErr))
+                {
+                    formError = cronErr ?? "Invalid schedule.";
+                    return false;
+                }
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    private void NextWizardStep()
+    {
+        if (!ValidateWizardStep(wizardStep)) return;
+        if (wizardStep >= WizardStepCount) return;
+        wizardStep++;
+        formTab = CurrentTabForStep(wizardStep);
+    }
+
+    private void PrevWizardStep()
+    {
+        if (wizardStep <= 1) return;
+        wizardStep--;
+        formTab = CurrentTabForStep(wizardStep);
+    }
+
+    private string ScopeSummary()
+    {
+        var parts = new List<string>();
+        if (SourceIsLdap)
+        {
+            parts.Add(string.IsNullOrWhiteSpace(scopeForm.BaseDN) ? "Base DN: auto-detect" : $"Base DN: {scopeForm.BaseDN}");
+            if (!string.IsNullOrWhiteSpace(scopeForm.LdapFilter)) parts.Add($"LDAP filter: {scopeForm.LdapFilter}");
+        }
+        else if (!string.IsNullOrWhiteSpace(scopeForm.QueryExpression))
+        {
+            parts.Add($"Query: {scopeForm.QueryExpression}");
+        }
+        parts.Add($"Page size {scopeForm.PageSize}");
+        if (scopeForm.MaxObjects > 0) parts.Add($"Max {scopeForm.MaxObjects}");
+        if (scopeForm.IncludeDeleted) parts.Add("includes deleted");
+        return string.Join(" · ", parts);
+    }
+
+    private string MappingSummary
+    {
+        get
+        {
+            var n = mappingForm.Count(m => !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute));
+            return n == 0 ? "Passthrough (no rules)" : $"{n} rule(s)";
+        }
+    }
+
+    // Hint line for the API-shaped (non-LDAP, non-Entra) scope editor.
+    private string ScopeApiHint =>
+        string.IsNullOrEmpty(SourceSystemType)
+            ? "Pick a source on the first step to tailor these fields."
+            : string.Concat(SourceSystemType, " reads via its API.");
+
     private async Task SaveForm()
     {
         formError = string.Empty;
         if (string.IsNullOrWhiteSpace(form.Name))
         {
+            showNameValidation = true;
             formError = "Name is required.";
             formTab = "setup";
+            wizardStep = 1;
             return;
         }
         if (form.SourceTenantId == Guid.Empty || form.SinkTenantId == Guid.Empty)
         {
+            showSourceValidation = true;
+            showSinkValidation = true;
             formError = "Both source and sink Connected Systems are required.";
             formTab = "setup";
+            wizardStep = 1;
             return;
         }
         // Self-sync is allowed — a project can pull from a system and write back
@@ -2223,6 +2639,7 @@
         {
             formError = cronError ?? "Invalid schedule.";
             formTab = "schedule";
+            wizardStep = 5;
             return;
         }
 
@@ -2419,7 +2836,7 @@
 
     private void ShowAutoGenerateModal()
     {
-        autoGenTemplate = "Core";
+        autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
         autoGenSourceId = Guid.Empty;
         autoGenSinkId = Guid.Empty;
         autoGenCronSchedule = string.Empty;
@@ -2442,36 +2859,46 @@
             autoGenError = "Both source and sink are required.";
             return;
         }
-        // Self-sync is allowed for auto-generation too — useful for mastered
-        // transforms (e.g. AD → AD with a default:* stamp).
+
+        var src = allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
+        var sink = allTenants.FirstOrDefault(t => t.Id == autoGenSinkId);
+        if (src is null || sink is null)
+        {
+            autoGenError = "Selected systems no longer exist.";
+            return;
+        }
+
+        // Self-sync is allowed (mastered transforms). The modal's live preview line
+        // already shows the operator the object-class count + names for (source, mode)
+        // before they confirm. Build the whole graph in memory via the Phase 3
+        // generator, then persist project -> workflow -> step -> scope -> mappings
+        // through the repositories. Only Mapping steps are emitted -- no governance.
+        var existingNames = allProjects.Select(p => p.Name).ToList();
+        var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule, existingNames);
+        if (generated.Count == 0)
+        {
+            autoGenError = "This source connector + mode produced no object classes.";
+            return;
+        }
+
         autoGenInProgress = true;
         try
         {
-            var sourceName = TenantName(autoGenSourceId);
-            var sinkName = TenantName(autoGenSinkId);
-            var classes = autoGenTemplate == "UserOnly"
-                ? new[] { "User" }
-                : new[] { "User", "Group" };
-            var created = 0;
-            foreach (var oc in classes)
+            foreach (var g in generated)
             {
-                var p = new SyncProject
+                g.Project.IsEnabled = autoGenEnable;
+                await ProjectRepo.CreateAsync(g.Project);
+                await WorkflowRepo.CreateAsync(g.Workflow);
+                await WorkflowRepo.CreateStepAsync(g.Step);
+                await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, g.Step.Id, g.Scope);
+                if (g.Mappings.Count > 0)
                 {
-                    Name = $"{sourceName} → {sinkName} ({oc})",
-                    Description = $"Auto-generated: pulls {oc} objects from {sourceName} and pushes to {sinkName}.",
-                    SourceTenantId = autoGenSourceId,
-                    SinkTenantId = autoGenSinkId,
-                    ObjectClass = oc,
-                    IsEnabled = autoGenEnable,
-                    CronSchedule = string.IsNullOrWhiteSpace(autoGenCronSchedule) ? null : autoGenCronSchedule
-                };
-                var saved = await ProjectRepo.CreateAsync(p);
-                await ProjectRepo.UpsertScopeAsync(new SyncProjectScope { SyncProjectId = saved.Id, PageSize = 1000 });
-                await ProjectRepo.ReplaceMappingsAsync(saved.Id, Array.Empty<AttributeMapping>()); // passthrough
-                created++;
+                    await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, g.Step.Id, g.Mappings);
+                }
             }
+
             showAutoGenerateModal = false;
-            toastSuccess = $"Auto-generated {created} sync project(s) from {sourceName} to {sinkName}.";
+            toastSuccess = $"Auto-generated {generated.Count} sync project(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
             await Reload();
         }
         catch (Exception ex)
