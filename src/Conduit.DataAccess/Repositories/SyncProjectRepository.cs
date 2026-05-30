@@ -114,6 +114,21 @@ public class SyncProjectRepository : BaseRepository
         return rows > 0;
     }
 
+    /// <summary>
+    /// Releases the <c>IsRunning</c> flag for a project given ONLY its id, with
+    /// no run-stats stamping. Used by the orchestrator's early-failure guard
+    /// (Worf HIGH-1) when a run row may not exist yet (e.g. GetById returned
+    /// null or CreateAsync threw) — in that case there is nothing to stamp, we
+    /// just need the project unstuck so the next Run-Now isn't a permanent 409.
+    /// </summary>
+    public Task ClearRunningAsync(Guid projectId) =>
+        ExecuteAsync(@"
+            UPDATE SyncProjects
+               SET IsRunning = 0,
+                   LastModified = SYSUTCDATETIME()
+             WHERE Id = @ProjectId;",
+            new { ProjectId = projectId });
+
     /// <summary>Stamps the post-run state on the project.</summary>
     public Task FinishRunAsync(Guid projectId, string status) =>
         ExecuteAsync(@"

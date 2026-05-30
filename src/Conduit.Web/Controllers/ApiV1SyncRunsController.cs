@@ -323,6 +323,23 @@ namespace Conduit.Web.Controllers
                     _logger.LogError(ex,
                         "Manual run for project {ProjectId} (triggered by {TriggeredBy}) threw at the controller boundary",
                         projectId, triggeredBy);
+
+                    // Defense in depth (Worf HIGH-1): the orchestrator already
+                    // releases IsRunning on its own failure paths, but the
+                    // controller owns the pre-claim, so guarantee the flag is
+                    // freed here too even if that guard ever regresses. A
+                    // best-effort clear that itself fails is just logged — we
+                    // never want the cleanup to mask the original error.
+                    try
+                    {
+                        await _projects.ClearRunningAsync(projectId).ConfigureAwait(false);
+                    }
+                    catch (Exception clearEx)
+                    {
+                        _logger.LogError(clearEx,
+                            "Failed to release IsRunning for project {ProjectId} after a failed manual run",
+                            projectId);
+                    }
                 }
             });
 

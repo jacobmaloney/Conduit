@@ -75,23 +75,80 @@ public sealed class SyncProjectOrchestrator
     /// </summary>
     public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken)
     {
-        var project = await _projectRepo.GetByIdAsync(projectId)
-            ?? throw new InvalidOperationException($"SyncProject {projectId} not found.");
+        // Worf HIGH-1: the IsRunning flag must be released on EVERY exit path,
+        // including the early throws that happen before a SyncRun row exists
+        // (GetById null, CreateAsync, tenant resolution). The whole body runs
+        // under a guard that clears the flag on any failure.
+        //
+        // Ownership semantics: the controller's manual Run-Now path pre-claims
+        // IsRunning (CAS 0→1) before calling us, so SetRunningAsync below is a
+        // no-op there but WE still own the release. The scheduler path does NOT
+        // pre-claim, so SetRunningAsync below is the actual claim; if it returns
+        // false the project was already running under another invocation and we
+        // must NOT clear that other invocation's flag.
+        SyncRun? run = null;
+        bool ownsFlag = false;
 
-        var run = await _runRepo.CreateAsync(new SyncRun
+        try
         {
-            SyncProjectId = project.Id,
-            Status = "Running",
-            TriggeredBy = triggeredBy,
-            StartedAt = DateTime.UtcNow
-        });
+            var project = await _projectRepo.GetByIdAsync(projectId)
+                ?? throw new InvalidOperationException($"SyncProject {projectId} not found.");
 
-        // No-op when the controller already won the IsRunning compare-and-swap
-        // for a manual Run-Now (Worf HIGH-1). The scheduler path still flips
-        // the row here on the first call.
-        _ = await _projectRepo.SetRunningAsync(project.Id, run.Id);
-        await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
+            run = await _runRepo.CreateAsync(new SyncRun
+            {
+                SyncProjectId = project.Id,
+                Status = "Running",
+                TriggeredBy = triggeredBy,
+                StartedAt = DateTime.UtcNow
+            });
 
+            // Returns false when the controller already won the CAS for a manual
+            // Run-Now (the row's already IsRunning=1) OR when a scheduled run
+            // overlaps an in-flight run. Either way the flag is set; in the
+            // pre-claimed manual case we own its release. We can't distinguish
+            // "controller pre-claimed for me" from "someone else is running" via
+            // the bool alone, so the controller path also releases as defense in
+            // depth (see ApiV1SyncRunsController.StartRun).
+            var won = await _projectRepo.SetRunningAsync(project.Id, run.Id);
+            ownsFlag = true;
+            _ = won;
+            await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
+
+            return await RunCoreAsync(project, run, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Early failure before/around run creation. Make sure the project is
+            // unstuck so the next Run-Now isn't a permanent 409, and mark the run
+            // Failed if it got created. RunCoreAsync owns its own success/failure
+            // stamping, so this only fires for throws OUTSIDE that method.
+            _logger.LogError(ex, "Sync project {ProjectId} failed before run execution", projectId);
+            if (run is not null)
+            {
+                await _runRepo.FinishAsync(run.Id, "Failed", ex.Message, 0);
+            }
+            if (ownsFlag)
+            {
+                await _projectRepo.FinishRunAsync(projectId, "Failed");
+            }
+            else
+            {
+                // GetById/CreateAsync threw before we set the flag. Nothing was
+                // stamped, but a stale flag from a prior crashed run could exist;
+                // clear it defensively without touching run stats.
+                await _projectRepo.ClearRunningAsync(projectId);
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The run pass itself, once the project + run row + IsRunning flag are in
+    /// place. Owns its own try/finally so IsRunning + run stats are stamped on
+    /// EVERY outcome of the pass (success, cancel, mid-run throw).
+    /// </summary>
+    private async Task<Guid> RunCoreAsync(SyncProject project, SyncRun run, CancellationToken cancellationToken)
+    {
         var sw = Stopwatch.StartNew();
         var totals = new RunCounters();
         string status = "Succeeded";
