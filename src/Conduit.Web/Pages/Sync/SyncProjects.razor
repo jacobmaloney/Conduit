@@ -13,6 +13,7 @@
 @inject SyncProjectOrchestrator Orchestrator
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject Conduit.Sync.Templates.IAttributeMapService AttributeMapper
 
 @*
     Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjects.razor —
@@ -904,6 +905,9 @@
 
                         <div class="mapping-editor-toolbar">
                             <h6 class="form-section-title mb-0">Attribute mappings (optional — blank = passthrough)</h6>
+                            <button type="button" class="btn btn-outline-secondary btn-sm me-2" @onclick="AutoMapAttributes">
+                                <i class="fas fa-magic me-1"></i>Auto-map attributes
+                            </button>
                             <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddMappingRow">
                                 <i class="fas fa-plus me-1"></i>Add rule
                             </button>
@@ -2128,6 +2132,57 @@
     {
         if (index < 0 || index >= mappingForm.Count) return;
         mappingForm.RemoveAt(index);
+    }
+
+    private async Task AutoMapAttributes()
+    {
+        var sourceType = tenantById.TryGetValue(form.SourceTenantId, out var src) ? src.SystemType : string.Empty;
+        var sinkType = tenantById.TryGetValue(form.SinkTenantId, out var snk) ? snk.SystemType : string.Empty;
+
+        if (string.IsNullOrWhiteSpace(sourceType))
+        {
+            await JS.InvokeVoidAsync("alert", "Pick a source Connected System on the Setup tab first.");
+            return;
+        }
+
+        var suggested = AttributeMapper.BuildMappings(sourceType, sinkType, form.ObjectClass);
+        if (suggested.Count == 0)
+        {
+            var msg = string.Concat("No attribute template available for ", sourceType, " ", form.ObjectClass, ".");
+            await JS.InvokeVoidAsync("alert", msg);
+            return;
+        }
+
+        var hasEdits = mappingForm.Any(m =>
+            !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute));
+
+        var replace = !hasEdits;
+        if (hasEdits)
+        {
+            replace = await JS.InvokeAsync<bool>("confirm",
+                "Replace the existing mappings with the auto-mapped set? Choose Cancel to append only new (non-duplicate) rows instead.");
+        }
+
+        if (replace)
+        {
+            mappingForm = suggested;
+        }
+        else
+        {
+            var existing = new HashSet<string>(
+                mappingForm.Select(m => string.Concat(m.SourceAttribute, "", m.SinkAttribute)),
+                StringComparer.OrdinalIgnoreCase);
+            var next = mappingForm.Count;
+            foreach (var m in suggested)
+            {
+                var key = string.Concat(m.SourceAttribute, "", m.SinkAttribute);
+                if (existing.Add(key))
+                {
+                    m.SortOrder = next++;
+                    mappingForm.Add(m);
+                }
+            }
+        }
     }
 
     private void ApplyCronPreset()
