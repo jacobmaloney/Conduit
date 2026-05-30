@@ -379,6 +379,7 @@ builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncProjectRepository
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunAsyncJobRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.WorkflowRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkRecordHashRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.ConnectionCredentialRepository>();
 builder.Services.AddScoped<Conduit.Sync.Security.CredentialProtector>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.ActiveDirectory.ActiveDirectoryAdapter>();
@@ -400,6 +401,8 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
 builder.Services.AddScoped<Conduit.Sync.Orchestration.SyncProjectOrchestrator>();
 // Phase 2 — per-connector attribute template catalog + canonical source→sink resolver.
 builder.Services.AddSingleton<Conduit.Sync.Templates.IAttributeMapService, Conduit.Sync.Templates.AttributeMapService>();
+// Phase 3 — per-connector object-class sets → in-memory sync-project graph generator.
+builder.Services.AddSingleton<Conduit.Sync.Templates.ISyncProjectGenerator, Conduit.Sync.Templates.SyncProjectGenerator>();
 
 // Scheduled sync runner is Scoped-by-dependency but the scheduler instantiates
 // IScheduledJob singletons; wire it as a transient that resolves its scoped deps

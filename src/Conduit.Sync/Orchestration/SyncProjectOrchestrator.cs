@@ -48,6 +48,7 @@ public sealed class SyncProjectOrchestrator
     private readonly ConnectorRegistry _connectors;
     private readonly SyncRunAsyncJobRepository _asyncJobRepo;
     private readonly WorkflowRepository _workflowRepo;
+    private readonly SinkRecordHashRepository _hashRepo;
     private readonly ILogger<SyncProjectOrchestrator> _logger;
 
     public SyncProjectOrchestrator(
@@ -57,6 +58,7 @@ public sealed class SyncProjectOrchestrator
         ConnectorRegistry connectors,
         SyncRunAsyncJobRepository asyncJobRepo,
         WorkflowRepository workflowRepo,
+        SinkRecordHashRepository hashRepo,
         ILogger<SyncProjectOrchestrator> logger)
     {
         _projectRepo = projectRepo;
@@ -65,6 +67,7 @@ public sealed class SyncProjectOrchestrator
         _connectors = connectors;
         _asyncJobRepo = asyncJobRepo;
         _workflowRepo = workflowRepo;
+        _hashRepo = hashRepo;
         _logger = logger;
     }
 
@@ -645,15 +648,38 @@ public sealed class SyncProjectOrchestrator
         var sinkCaps = sinkAdapter.Capabilities;
         var batchSize = sinkCaps.SupportsBulk && sinkCaps.MaxBatchSize > 1 ? sinkCaps.MaxBatchSize : 1;
 
+        // Sink-side skip-unchanged. Opt-in per project. Load-once: pull the whole
+        // (project, sink) content-hash map at run start and reuse it across the hot
+        // loop — no per-record SELECT. Records whose mapped payload hashes to the
+        // stored value are skipped instead of re-pushed.
+        //
+        // Correctness: an empty map (first run, or a record never seen before)
+        // means every record is treated as changed and written normally. Failed
+        // writes never get a stored hash, so a retry re-writes them. Records with
+        // no stable SourceId are never skipped. When in doubt, write.
+        bool skipUnchanged = project.SkipUnchanged;
+        Dictionary<string, string> priorHashes = skipUnchanged
+            ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        if (skipUnchanged)
+            await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es).");
+        var writtenHashes = new List<KeyValuePair<string, string>>(256);
+
         await Log(run, "Info",
-            $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={project.ObjectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}.");
+            $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={project.ObjectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}; SkipUnchanged={skipUnchanged}.");
 
         var enumeration = await source.EnumerateAsync(project.ObjectClass, scope, priorCursor, ct);
         var wasIncremental = enumeration.IsIncremental;
 
         var buffer = new List<ConnectorObject>(Math.Min(batchSize, 256));
+        // Parallel to buffer: the content hash of each buffered record (null when
+        // not computable). FlushAsync caches the hash only for records the sink
+        // actually accepted, so failures don't poison the cache.
+        var bufferHashes = new List<string?>(Math.Min(batchSize, 256));
         var emitted = new List<ConnectorObject>(256);
         int read = 0, created = 0, updated = 0, skipped = 0, failed = 0;
+
+        var progress = Stopwatch.StartNew();
 
         await foreach (var sourceObj in enumeration.Objects.WithCancellation(ct))
         {
@@ -670,29 +696,54 @@ public sealed class SyncProjectOrchestrator
             if (!string.IsNullOrWhiteSpace(scope.BaseDN) && !sinkObj.Attributes.ContainsKey("targetOU"))
                 sinkObj.Attributes["targetOU"] = scope.BaseDN;
 
-            buffer.Add(sinkObj);
             emitted.Add(sinkObj);
+
+            // Skip-unchanged gate. Only applies when opt-in AND the record carries
+            // a stable external id. Compute the hash once; reuse it on write.
+            string? hash = null;
+            if (skipUnchanged && !string.IsNullOrEmpty(sinkObj.SourceId))
+            {
+                hash = ComputeContentHash(sinkObj);
+                if (priorHashes.TryGetValue(sinkObj.SourceId, out var prev) && prev == hash)
+                {
+                    skipped++;
+                    continue;
+                }
+            }
+
+            buffer.Add(sinkObj);
+            bufferHashes.Add(hash);
 
             if (buffer.Count >= batchSize)
             {
-                var delta = await FlushAsync(sink, buffer, run, project.Id, sinkTenant.Id, sinkAdapter.SystemType, ct);
+                var delta = await FlushAsync(sink, buffer, bufferHashes, writtenHashes, run, project.Id, sinkTenant.Id, sinkAdapter.SystemType, ct);
                 created += delta.Created; updated += delta.Updated; skipped += delta.Skipped; failed += delta.Failed;
                 buffer.Clear();
+                bufferHashes.Clear();
             }
 
-            if (read % 50 == 0)
+            // Throttle UI counter writes to ~every 2.5s rather than every N records.
+            if (progress.ElapsedMilliseconds >= 2500)
             {
-                // Note: top-level run counters are updated in the workflow loop's
-                // post-step flush — local read counter is for periodic UI ticks.
                 await _runRepo.UpdateCountersAsync(run, read, created, updated, skipped, failed);
+                progress.Restart();
             }
         }
 
         if (buffer.Count > 0)
         {
-            var delta = await FlushAsync(sink, buffer, run, project.Id, sinkTenant.Id, sinkAdapter.SystemType, ct);
+            var delta = await FlushAsync(sink, buffer, bufferHashes, writtenHashes, run, project.Id, sinkTenant.Id, sinkAdapter.SystemType, ct);
             created += delta.Created; updated += delta.Updated; skipped += delta.Skipped; failed += delta.Failed;
             buffer.Clear();
+            bufferHashes.Clear();
+        }
+
+        // Persist hashes for records the sink accepted this run. Done once at the
+        // end (bounded by the change set) so the next run can skip them.
+        if (skipUnchanged && writtenHashes.Count > 0)
+        {
+            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, writtenHashes); }
+            catch (Exception ex) { await Log(run, "Warning", $"    Could not persist sink hashes: {ex.Message}"); }
         }
 
         SyncCursor? newCursor = null;
@@ -709,6 +760,36 @@ public sealed class SyncProjectOrchestrator
             emitted);
     }
 
+    // Field/unit separators for the hash canonical form (ASCII FS/US control
+    // chars) — chosen so they can't collide with attribute keys or values.
+    private const char HashFieldSep = '\x1f';
+    private const char HashUnitSep = '\x1e';
+
+    /// <summary>
+    /// Stable SHA-256 of a mapped sink record. Attributes are sorted by key
+    /// (ordinal) and serialized so the hash is order-independent. The transient
+    /// "_source"/"targetOU" routing hints are included because changing the target
+    /// OU IS a real change the sink must see. Base64 of the 32-byte digest = 44
+    /// chars, matching SinkRecordHashes.ContentHash CHAR(44).
+    /// </summary>
+    private static string ComputeContentHash(ConnectorObject obj)
+    {
+        var sb = new System.Text.StringBuilder(256);
+        sb.Append(obj.ObjectClass).Append(HashUnitSep);
+        foreach (var key in obj.Attributes.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            sb.Append(key).Append(HashFieldSep);
+            var v = obj.Attributes[key];
+            sb.Append(v is null
+                ? "\x00"
+                : System.Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture));
+            sb.Append(HashUnitSep);
+        }
+        var bytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        var digest = System.Security.Cryptography.SHA256.HashData(bytes);
+        return System.Convert.ToBase64String(digest);
+    }
+
     /// <summary>
     /// Phase 2: flush an accumulated batch through the sink. Uses UpsertBatchAsync
     /// when the sink advertises SupportsBulk (single batch network call), else
@@ -719,6 +800,8 @@ public sealed class SyncProjectOrchestrator
     private async Task<FlushDelta> FlushAsync(
         IConnectorSink sink,
         List<ConnectorObject> buffer,
+        List<string?> bufferHashes,
+        List<KeyValuePair<string, string>> writtenHashes,
         Guid runId,
         Guid projectId,
         Guid sinkTenantId,
@@ -765,6 +848,19 @@ public sealed class SyncProjectOrchestrator
                 {
                     await Log(runId, "Warning", $"    Could not persist async job submission ({r.AsyncJob.JobType} / {r.AsyncJob.JobId}): {ex.Message}");
                 }
+            }
+
+            // Cache the content hash only for records the sink durably accepted
+            // (Created/Updated) AND that carried a computable hash (skip-unchanged
+            // on + stable SourceId). Async-job submissions surface as Skipped with
+            // an AsyncJob descriptor — the write isn't durable until the poller
+            // confirms it, so they (and plain Skipped/Failed) are never cached.
+            if ((r.Outcome == SinkWriteOutcome.Created || r.Outcome == SinkWriteOutcome.Updated)
+                && r.AsyncJob is null
+                && i < bufferHashes.Count && bufferHashes[i] is { } h
+                && i < buffer.Count && !string.IsNullOrEmpty(buffer[i].SourceId))
+            {
+                writtenHashes.Add(new KeyValuePair<string, string>(buffer[i].SourceId, h));
             }
 
             switch (r.Outcome)

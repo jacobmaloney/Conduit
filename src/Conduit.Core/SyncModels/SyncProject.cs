@@ -44,6 +44,14 @@ public class SyncProject
     public bool IsEnabled { get; set; } = true;
     public bool IsRunning { get; set; }
 
+    /// <summary>
+    /// Opt-in sink-side skip-unchanged. When true, the orchestrator load-once
+    /// caches the project's sink content hashes and skips re-pushing records whose
+    /// mapped payload is unchanged since the last successful write. Off by default
+    /// so connectors that can't support it safely just do the normal upsert.
+    /// </summary>
+    public bool SkipUnchanged { get; set; }
+
     public DateTime? LastRunAt { get; set; }
     public string? LastRunStatus { get; set; }
     public Guid? LastRunId { get; set; }

@@ -937,6 +937,52 @@ END;
 "
             });
 
+            // Migration 20: Phase 5 perf — sink-side skip-unchanged. NO Objects lake.
+            // SinkRecordHashes stores only a per-(project, sink, externalId) SHA-256
+            // fingerprint of the last successfully written sink payload, so an
+            // incremental run can avoid re-pushing records that map to a byte-identical
+            // payload. Project/sink-scoped only — not a central object store. The
+            // SkipUnchanged flag on SyncProjects opts a project into this behaviour
+            // (off by default so connectors that can't support it safely just upsert).
+            //
+            // SET QUOTED_IDENTIFIER ON is the first statement so CREATE UNIQUE INDEX
+            // succeeds inside the migration's single-batch transaction.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 20,
+                Name = "Phase 5 perf: sink record hashes + skip-unchanged",
+                Description = "Adds SinkRecordHashes (per project+sink+externalId content hash) and SyncProjects.SkipUnchanged opt-in flag for sink-side skip-unchanged.",
+                SqlScript = @"
+SET QUOTED_IDENTIFIER ON;
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SinkRecordHashes')
+BEGIN
+    CREATE TABLE [dbo].[SinkRecordHashes] (
+        [Id]            UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_SinkRecordHashes_Id] DEFAULT NEWID(),
+        [SyncProjectId] UNIQUEIDENTIFIER NOT NULL,
+        [SinkTenantId]  UNIQUEIDENTIFIER NOT NULL,
+        [ExternalId]    NVARCHAR(400)    NOT NULL,
+        [ContentHash]   CHAR(44)         NOT NULL,
+        [UpdatedAt]     DATETIME2        NOT NULL CONSTRAINT [DF_SinkRecordHashes_UpdatedAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_SinkRecordHashes] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [FK_SinkRecordHashes_SyncProjects] FOREIGN KEY ([SyncProjectId]) REFERENCES [SyncProjects]([Id]) ON DELETE CASCADE
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_SinkRecordHashes_Scope' AND object_id = OBJECT_ID('dbo.SinkRecordHashes'))
+BEGIN
+    CREATE UNIQUE INDEX [UX_SinkRecordHashes_Scope]
+        ON [dbo].[SinkRecordHashes]([SyncProjectId], [SinkTenantId], [ExternalId]);
+END;
+
+IF COL_LENGTH('dbo.SyncProjects','SkipUnchanged') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects]
+        ADD [SkipUnchanged] BIT NOT NULL CONSTRAINT [DF_SyncProjects_SkipUnchanged] DEFAULT 0;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

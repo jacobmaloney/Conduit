@@ -45,12 +45,12 @@ public class SyncProjectRepository : BaseRepository
             INSERT INTO SyncProjects
                 (Id, WorkspaceId, Name, Description, SourceTenantId, SinkTenantId, ObjectClass,
                  SourceCredentialName, SinkCredentialName,
-                 CronSchedule, IsEnabled, IsRunning, LastRunAt, LastRunStatus, LastRunId,
+                 CronSchedule, IsEnabled, IsRunning, SkipUnchanged, LastRunAt, LastRunStatus, LastRunId,
                  NextScheduledRunAt, TotalRuns, SuccessfulRuns, FailedRuns, CreatedAt, LastModified)
             VALUES
                 (@Id, @WorkspaceId, @Name, @Description, @SourceTenantId, @SinkTenantId, @ObjectClass,
                  @SourceCredentialName, @SinkCredentialName,
-                 @CronSchedule, @IsEnabled, @IsRunning, @LastRunAt, @LastRunStatus, @LastRunId,
+                 @CronSchedule, @IsEnabled, @IsRunning, @SkipUnchanged, @LastRunAt, @LastRunStatus, @LastRunId,
                  @NextScheduledRunAt, @TotalRuns, @SuccessfulRuns, @FailedRuns, @CreatedAt, @LastModified);";
         await ExecuteAsync(sql, p);
         return p;
@@ -71,6 +71,7 @@ public class SyncProjectRepository : BaseRepository
                    SinkCredentialName = @SinkCredentialName,
                    CronSchedule = @CronSchedule,
                    IsEnabled = @IsEnabled,
+                   SkipUnchanged = @SkipUnchanged,
                    LastModified = @LastModified
              WHERE Id = @Id;";
         var rows = await ExecuteAsync(sql, p);
