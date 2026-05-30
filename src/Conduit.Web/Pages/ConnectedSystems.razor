@@ -243,7 +243,7 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">System Type *</label>
-                    <select class="form-select" @bind="form.SystemType">
+                    <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
                         <option value="Emulator">Emulator (test/demo target)</option>
                         <option value="ActiveDirectory">Active Directory</option>
                         <option value="EntraID">Entra ID (Microsoft 365)</option>
@@ -260,6 +260,74 @@
                     </select>
                     <small class="form-text text-muted">Emulator systems show an amber badge. Real connectors are green.</small>
                 </div>
+                @{
+                    // Connector-shaped credential capture, folded into create/edit so a
+                    // newly-connected system is immediately usable. The adapter for the
+                    // selected SystemType declares its credential types + field specs;
+                    // we render one labeled section per type and persist each as an
+                    // encrypted JSON blob on Save. On edit, non-secret values are
+                    // pre-filled from the decrypted store; secrets render blank with a
+                    // "leave blank to keep" placeholder and are never echoed to the DOM.
+                    var createAdapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
+                    var createCredTypes = createAdapter?.CredentialTypes;
+                }
+                @if (createCredTypes is { Count: > 0 })
+                {
+                    @foreach (var ctype in createCredTypes)
+                    {
+                        var typeHasStored = editingId.HasValue && createExistingCredNames.Contains(ctype.Name);
+                        <div class="cred-section mb-3">
+                            <div class="cred-section-head">
+                                <span class="cred-section-title">@ctype.DisplayName</span>
+                                @if (typeHasStored)
+                                {
+                                    <span class="badge bg-secondary">stored</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrEmpty(ctype.Description))
+                            {
+                                <small class="form-text text-muted d-block mb-2">@ctype.Description</small>
+                            }
+                            @foreach (var field in ctype.Fields)
+                            {
+                                var secretMasked = field.IsSecret && typeHasStored;
+                                <div class="@(field.IsBoolean ? "form-check mb-3" : "mb-3")">
+                                    @if (field.IsBoolean)
+                                    {
+                                        <input class="form-check-input" type="checkbox" id="@($"create_{ctype.Name}_{field.Key}")"
+                                               checked="@GetCreateBool(ctype.Name, field.Key, field.DefaultValue == "true")"
+                                               @onchange="e => SetCreateBool(ctype.Name, field.Key, (bool)(e.Value ?? false))" />
+                                        <label class="form-check-label" for="@($"create_{ctype.Name}_{field.Key}")">@field.Label</label>
+                                    }
+                                    else
+                                    {
+                                        <label class="form-label">@field.Label@(field.IsRequired ? " *" : string.Empty)</label>
+                                        @if (field.IsMultiline)
+                                        {
+                                            <textarea class="form-control" rows="4"
+                                                      placeholder="@(secretMasked ? SecretUnchangedPlaceholder : field.Placeholder)"
+                                                      value="@GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty)"
+                                                      @oninput="e => SetCreateString(ctype.Name, field.Key, e.Value?.ToString() ?? string.Empty)"></textarea>
+                                        }
+                                        else
+                                        {
+                                            <input class="form-control"
+                                                   type="@(field.IsSecret ? "password" : "text")"
+                                                   autocomplete="@(field.IsSecret ? "new-password" : "off")"
+                                                   placeholder="@(secretMasked ? SecretUnchangedPlaceholder : field.Placeholder)"
+                                                   value="@GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty)"
+                                                   @oninput="e => SetCreateString(ctype.Name, field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                        }
+                                        @if (!string.IsNullOrEmpty(field.Help))
+                                        {
+                                            <small class="form-text text-muted">@field.Help</small>
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                }
                 <div class="mb-3">
                     <label class="form-label">Description</label>
                     <textarea class="form-control" rows="3" @bind="form.Description"></textarea>
@@ -1488,6 +1556,7 @@
         editingId = null;
         form = new Tenant { SystemType = "Emulator", IsActive = true };
         errorMessage = "";
+        ResetCreateCredentialState();
         showModal = true;
     }
 
@@ -1498,6 +1567,7 @@
         editingId = id;
         form = existing;
         errorMessage = "";
+        await LoadCreateCredentialsAsync(existing.Id, existing.SystemType);
         showModal = true;
     }
 
@@ -1513,6 +1583,21 @@
         if (editingId.HasValue) return;
         if (string.IsNullOrWhiteSpace(form.Name)) return;
         form.Slug = Slugify(form.Name);
+    }
+
+    // System Type changed in the modal: drop any credential values entered for
+    // the previous adapter so they can't leak into a different connector's blob.
+    // When editing, re-load any credentials already stored for the new type.
+    private async Task OnSystemTypeChanged()
+    {
+        if (editingId.HasValue)
+        {
+            await LoadCreateCredentialsAsync(form.Id, form.SystemType);
+        }
+        else
+        {
+            ResetCreateCredentialState();
+        }
     }
 
     private static string Slugify(string s)
@@ -1540,14 +1625,25 @@
             errorMessage = $"{form.SystemType} requires: {string.Join(", ", missing)}.";
             return;
         }
+        // Connector-shaped credential gate: block Connect when a required
+        // credential field is empty (a required secret already stored may be
+        // left blank to keep it).
+        var missingCreds = GetMissingRequiredCredentialFields();
+        if (missingCreds.Count > 0)
+        {
+            errorMessage = $"Credentials required: {string.Join(", ", missingCreds)}.";
+            return;
+        }
         saving = true;
         errorMessage = "";
         try
         {
+            Guid savedTenantId;
             if (editingId.HasValue)
             {
                 form.Id = editingId.Value;
                 await TenantRepo.UpdateAsync(form);
+                savedTenantId = form.Id;
             }
             else
             {
@@ -1557,8 +1653,10 @@
                     errorMessage = $"A connected system with slug '{form.Slug}' already exists.";
                     return;
                 }
-                await TenantRepo.CreateAsync(form);
+                var created = await TenantRepo.CreateAsync(form);
+                savedTenantId = created.Id;
             }
+            await PersistCreateCredentialsAsync(savedTenantId);
             showModal = false;
             await Load();
         }
@@ -1776,6 +1874,179 @@
         genericCredValues.TryGetValue(key, out var v) && v is bool b ? b : fallback;
 
     private void SetGenericBool(string key, bool value) => genericCredValues[key] = value;
+
+    // ─── Create/Edit modal credential capture ──────────────────────────────
+    // Folded into the connect flow so a new system arrives usable. Keyed by
+    // credentialType.Name → (field.Key → value). Each credential type the
+    // selected adapter declares becomes one StoreAsync blob on Save.
+    private const string SecretUnchangedPlaceholder = "•••• unchanged";
+
+    private readonly Dictionary<string, Dictionary<string, object?>> createCredValues =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // Credential-type names that already have a stored blob for the edited
+    // tenant. Drives the masked-secret placeholder + leave-blank-to-keep logic.
+    private readonly HashSet<string> createExistingCredNames = new(StringComparer.OrdinalIgnoreCase);
+
+    private Dictionary<string, object?> CreateBag(string credTypeName)
+    {
+        if (!createCredValues.TryGetValue(credTypeName, out var bag))
+        {
+            bag = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            createCredValues[credTypeName] = bag;
+        }
+        return bag;
+    }
+
+    private string GetCreateString(string credTypeName, string key, string fallback) =>
+        CreateBag(credTypeName).TryGetValue(key, out var v) && v is string s ? s : fallback;
+
+    private void SetCreateString(string credTypeName, string key, string value) =>
+        CreateBag(credTypeName)[key] = value;
+
+    private bool GetCreateBool(string credTypeName, string key, bool fallback) =>
+        CreateBag(credTypeName).TryGetValue(key, out var v) && v is bool b ? b : fallback;
+
+    private void SetCreateBool(string credTypeName, string key, bool value) =>
+        CreateBag(credTypeName)[key] = value;
+
+    private void ResetCreateCredentialState()
+    {
+        createCredValues.Clear();
+        createExistingCredNames.Clear();
+    }
+
+    // On edit: pre-fill non-secret fields from the decrypted blob; leave secret
+    // fields blank (never echo a stored secret to the DOM).
+    private async Task LoadCreateCredentialsAsync(Guid tenantId, string systemType)
+    {
+        ResetCreateCredentialState();
+        var adapter = string.IsNullOrEmpty(systemType) ? null : ConnectorRegistry.Get(systemType);
+        if (adapter is null) return;
+
+        foreach (var ctype in adapter.CredentialTypes)
+        {
+            string? raw;
+            try { raw = await CredentialProtector.RetrieveAsync(tenantId, ctype.Name); }
+            catch { raw = null; }
+            if (string.IsNullOrEmpty(raw)) continue;
+
+            createExistingCredNames.Add(ctype.Name);
+
+            System.Text.Json.JsonDocument? doc = null;
+            try { doc = System.Text.Json.JsonDocument.Parse(raw); }
+            catch { doc = null; }
+            if (doc is null) continue;
+
+            using (doc)
+            {
+                var bag = CreateBag(ctype.Name);
+                foreach (var field in ctype.Fields)
+                {
+                    if (field.IsSecret) continue;
+                    if (!doc.RootElement.TryGetProperty(field.Key, out var el)) continue;
+                    if (field.IsBoolean)
+                    {
+                        bag[field.Key] = el.ValueKind == System.Text.Json.JsonValueKind.True;
+                    }
+                    else
+                    {
+                        bag[field.Key] = el.ValueKind == System.Text.Json.JsonValueKind.String
+                            ? el.GetString()
+                            : el.ToString();
+                    }
+                }
+            }
+        }
+    }
+
+    // Required-field gate across every credential type of the selected adapter.
+    // A required secret that already has a stored blob may be left blank (keep).
+    private List<string> GetMissingRequiredCredentialFields()
+    {
+        var missing = new List<string>();
+        var adapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
+        if (adapter is null) return missing;
+
+        foreach (var ctype in adapter.CredentialTypes)
+        {
+            var typeHasStored = editingId.HasValue && createExistingCredNames.Contains(ctype.Name);
+            foreach (var field in ctype.Fields)
+            {
+                if (!field.IsRequired || field.IsBoolean) continue;
+                var entered = GetCreateString(ctype.Name, field.Key, string.Empty);
+                if (!string.IsNullOrWhiteSpace(entered)) continue;
+                if (field.IsSecret && typeHasStored) continue;
+                missing.Add(field.Label);
+            }
+        }
+        return missing;
+    }
+
+    // Build the JSON blob for one credential type from the create-modal store.
+    // A blank secret on an existing blob is dropped from the payload so the
+    // caller can merge it with the stored value (leave-blank = keep existing).
+    private string BuildCreateCredentialJson(CredentialTypeInfo ctype, bool typeHasStored)
+    {
+        var jo = new System.Text.Json.Nodes.JsonObject();
+        foreach (var field in ctype.Fields)
+        {
+            if (field.IsBoolean)
+            {
+                jo[field.Key] = GetCreateBool(ctype.Name, field.Key, field.DefaultValue == "true");
+                continue;
+            }
+            var val = GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty);
+            if (field.IsSecret && string.IsNullOrEmpty(val) && typeHasStored) continue;
+            if (!field.IsRequired && string.IsNullOrWhiteSpace(val)) continue;
+            jo[field.Key] = val;
+        }
+        return jo.ToJsonString();
+    }
+
+    // Persist each credential type the operator filled. Merges with the stored
+    // blob on edit so untouched secrets survive.
+    private async Task PersistCreateCredentialsAsync(Guid tenantId)
+    {
+        var adapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
+        if (adapter is null) return;
+
+        foreach (var ctype in adapter.CredentialTypes)
+        {
+            var typeHasStored = createExistingCredNames.Contains(ctype.Name);
+
+            // Did the operator enter anything for this type? On a fresh create with
+            // no input, skip — don't write an empty blob.
+            var hasInput = false;
+            foreach (var field in ctype.Fields)
+            {
+                if (field.IsBoolean) { hasInput = true; break; }
+                if (!string.IsNullOrEmpty(GetCreateString(ctype.Name, field.Key, string.Empty))) { hasInput = true; break; }
+            }
+            if (!hasInput && !typeHasStored) continue;
+
+            var jsonNode = System.Text.Json.Nodes.JsonNode.Parse(BuildCreateCredentialJson(ctype, typeHasStored)) as System.Text.Json.Nodes.JsonObject
+                           ?? new System.Text.Json.Nodes.JsonObject();
+
+            if (typeHasStored)
+            {
+                // Merge entered values over the existing blob so untouched (esp.
+                // secret) fields are preserved.
+                string? existingRaw;
+                try { existingRaw = await CredentialProtector.RetrieveAsync(tenantId, ctype.Name); }
+                catch { existingRaw = null; }
+                if (!string.IsNullOrEmpty(existingRaw)
+                    && System.Text.Json.Nodes.JsonNode.Parse(existingRaw) is System.Text.Json.Nodes.JsonObject existing)
+                {
+                    foreach (var kv in jsonNode)
+                        existing[kv.Key] = kv.Value?.DeepClone();
+                    jsonNode = existing;
+                }
+            }
+
+            await CredentialProtector.StoreAsync(tenantId, ctype.Name, jsonNode.ToJsonString());
+        }
+    }
 
     private sealed class CredentialFormModel
     {
