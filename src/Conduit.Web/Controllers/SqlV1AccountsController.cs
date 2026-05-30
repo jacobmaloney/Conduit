@@ -28,13 +28,13 @@ namespace Conduit.Web.Controllers
     {
         private const string ConfigKey = "SqlEmulator.ConnectionString";
 
-        private readonly DatabaseConfig _db;
+        private readonly SqlAccountRepository _accounts;
         private readonly SystemConfigurationService _config;
         private readonly ITenantContext _tenant;
 
-        public SqlV1AccountsController(DatabaseConfig db, SystemConfigurationService config, ITenantContext tenant)
+        public SqlV1AccountsController(SqlAccountRepository accounts, SystemConfigurationService config, ITenantContext tenant)
         {
-            _db = db;
+            _accounts = accounts;
             _config = config;
             _tenant = tenant;
         }
@@ -63,37 +63,32 @@ namespace Conduit.Web.Controllers
         private Guid InsertTenantId =>
             _tenant.TenantId ?? TenantRepository.DefaultTenantId;
 
-        private string ScopeWhere(string alias) =>
-            (!_tenant.IsAdmin && _tenant.TenantId.HasValue)
-                ? $" AND {alias}.TenantId = @_TenantId "
-                : string.Empty;
+        // Non-admin tenant-scoped tokens see only their own rows; admin tokens see all.
+        private Guid? TenantScope =>
+            (!_tenant.IsAdmin && _tenant.TenantId.HasValue) ? _tenant.TenantId : null;
 
-        private DynamicParameters BuildParams()
+        private static SqlAccount Map(SqlAccountRecord r) => new()
         {
-            var p = new DynamicParameters();
-            if (!_tenant.IsAdmin && _tenant.TenantId.HasValue) p.Add("_TenantId", _tenant.TenantId.Value);
-            return p;
-        }
+            Id = r.Id,
+            TenantId = r.TenantId,
+            Username = r.Username,
+            Disabled = r.Disabled,
+            Created = r.Created
+        };
 
         [HttpGet]
         public async Task<IActionResult> List()
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            var sql = $"SELECT * FROM SqlAccounts a WHERE 1=1 {ScopeWhere("a")} ORDER BY Username";
-            var rows = await conn.QueryAsync<SqlAccount>(sql, BuildParams());
-            return Ok(rows.ToList());
+            var rows = await _accounts.ListAsync(TenantScope);
+            return Ok(rows.Select(Map).ToList());
         }
 
         [HttpGet("{id}")]
         public async Task<IActionResult> Get(Guid id)
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            var p = BuildParams();
-            p.Add("Id", id);
-            var row = await conn.QuerySingleOrDefaultAsync<SqlAccount>(
-                $"SELECT * FROM SqlAccounts a WHERE a.Id = @Id {ScopeWhere("a")}", p);
+            var row = await _accounts.GetAsync(id, TenantScope);
             if (row == null) return NotFound(new { error = "SQL account not found" });
-            return Ok(row);
+            return Ok(Map(row));
         }
 
         [HttpPost]
@@ -115,7 +110,9 @@ namespace Conduit.Web.Controllers
                 return BadRequest(new { error = "username must be a valid SQL identifier (letters, digits, underscore)" });
             }
 
-            // Create the login on the target instance.
+            // INTENTIONAL EXTERNAL-TARGET DDL: CREATE/ALTER LOGIN runs against the
+            // external SQL instance (the provisioning target), NOT Conduit's own DB.
+            // This is connector-style target I/O and stays in the controller.
             try
             {
                 using var sqlConn = new SqlConnection(target);
@@ -134,7 +131,7 @@ namespace Conduit.Web.Controllers
                 return StatusCode(500, new { error = $"SQL login creation failed: {ex.Message}" });
             }
 
-            var record = new SqlAccount
+            var record = new SqlAccountRecord
             {
                 Id = Guid.NewGuid(),
                 TenantId = InsertTenantId,
@@ -142,23 +139,14 @@ namespace Conduit.Web.Controllers
                 Disabled = body.Disabled,
                 Created = DateTime.UtcNow
             };
-            using (var conn = new SqlConnection(_db.ConnectionString))
-            {
-                await conn.ExecuteAsync(@"
-                    INSERT INTO SqlAccounts (Id, TenantId, Username, Disabled, Created)
-                    VALUES (@Id, @TenantId, @Username, @Disabled, @Created)", record);
-            }
-            return StatusCode(201, record);
+            await _accounts.InsertAsync(record);
+            return StatusCode(201, Map(record));
         }
 
         [HttpPatch("{id}")]
         public async Task<IActionResult> Patch(Guid id, [FromBody] PatchRequest body)
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            var p = BuildParams();
-            p.Add("Id", id);
-            var row = await conn.QuerySingleOrDefaultAsync<SqlAccount>(
-                $"SELECT * FROM SqlAccounts a WHERE a.Id = @Id {ScopeWhere("a")}", p);
+            var row = await _accounts.GetAsync(id, TenantScope);
             if (row == null) return NotFound(new { error = "SQL account not found" });
 
             if (body.Disabled.HasValue && body.Disabled.Value != row.Disabled)
@@ -172,6 +160,8 @@ namespace Conduit.Web.Controllers
                 {
                     return StatusCode(500, new { error = "Stored username is not a safe identifier; refusing to ALTER LOGIN." });
                 }
+                // INTENTIONAL EXTERNAL-TARGET DDL: ALTER LOGIN runs against the external
+                // SQL instance, not Conduit's own DB.
                 try
                 {
                     using var sqlConn = new SqlConnection(target);
@@ -184,20 +174,15 @@ namespace Conduit.Web.Controllers
                     return StatusCode(500, new { error = $"ALTER LOGIN failed: {ex.Message}" });
                 }
                 row.Disabled = body.Disabled.Value;
-                await conn.ExecuteAsync("UPDATE SqlAccounts SET Disabled = @Disabled WHERE Id = @Id",
-                    new { row.Disabled, Id = id });
+                await _accounts.SetDisabledAsync(id, row.Disabled);
             }
-            return Ok(row);
+            return Ok(Map(row));
         }
 
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(Guid id)
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            var p = BuildParams();
-            p.Add("Id", id);
-            var row = await conn.QuerySingleOrDefaultAsync<SqlAccount>(
-                $"SELECT * FROM SqlAccounts a WHERE a.Id = @Id {ScopeWhere("a")}", p);
+            var row = await _accounts.GetAsync(id, TenantScope);
             if (row == null) return NotFound(new { error = "SQL account not found" });
 
             var target = await _config.GetAsync(ConfigKey);
@@ -210,6 +195,8 @@ namespace Conduit.Web.Controllers
                 return StatusCode(500, new { error = "Stored username is not a safe identifier; refusing to DROP LOGIN." });
             }
 
+            // INTENTIONAL EXTERNAL-TARGET DDL: DROP LOGIN runs against the external
+            // SQL instance, not Conduit's own DB.
             try
             {
                 using var sqlConn = new SqlConnection(target);
@@ -221,7 +208,7 @@ namespace Conduit.Web.Controllers
                 return StatusCode(500, new { error = $"DROP LOGIN failed: {ex.Message}" });
             }
 
-            await conn.ExecuteAsync("DELETE FROM SqlAccounts WHERE Id = @Id", new { Id = id });
+            await _accounts.DeleteAsync(id);
             return NoContent();
         }
 

@@ -1,11 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Dapper;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
-using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 
 namespace Conduit.Connectors.Emulator;
@@ -13,9 +12,10 @@ namespace Conduit.Connectors.Emulator;
 /// <summary>
 /// Writes ConnectorObjects into the Conduit-owned Users/Groups tables under
 /// the sink TenantId. ExternalId = ConnectorObject.SourceId is the lookup
-/// key — orchestrator-mapped attributes provide the rest. This bypasses the
-/// scoped-tenant-context UserRepository deliberately; the sink writes ARE the
-/// privileged path and we want to target a specific tenant by id.
+/// key — orchestrator-mapped attributes provide the rest. The privileged
+/// per-tenant writes go through EmulatorSinkRepository (Conduit.DataAccess),
+/// which deliberately targets a specific tenant by id rather than the
+/// scoped-tenant-context UserRepository.
 ///
 /// Phase 1B adds Group support — upserts into Groups + GroupMembers. Member
 /// references arrive as ConnectorObject.Attributes["members"] (string list of
@@ -25,13 +25,13 @@ namespace Conduit.Connectors.Emulator;
 public sealed class EmulatorSink : IConnectorSink
 {
     private readonly Guid _sinkTenantId;
-    private readonly DatabaseConfig _config;
+    private readonly EmulatorSinkRepository _repository;
     private readonly ILogger<EmulatorSink> _logger;
 
-    public EmulatorSink(Guid sinkTenantId, DatabaseConfig config, ILogger<EmulatorSink> logger)
+    public EmulatorSink(Guid sinkTenantId, EmulatorSinkRepository repository, ILogger<EmulatorSink> logger)
     {
         _sinkTenantId = sinkTenantId;
-        _config = config;
+        _repository = repository;
         _logger = logger;
     }
 
@@ -68,79 +68,29 @@ public sealed class EmulatorSink : IConnectorSink
 
         try
         {
-            using var conn = new SqlConnection(_config.ConnectionString);
-            await conn.OpenAsync(cancellationToken);
-
             // Lookup by (TenantId, ExternalId) first, then (TenantId, UserName) — both are
             // legitimate keys depending on what the source provided.
-            var existingId = await conn.ExecuteScalarAsync<Guid?>(@"
-                SELECT TOP 1 Id FROM Users
-                 WHERE TenantId = @TenantId
-                   AND (ExternalId = @ExternalId OR (ExternalId IS NULL AND UserName = @UserName))",
-                new { TenantId = _sinkTenantId, ExternalId = obj.SourceId, UserName = userName });
+            var existingId = await _repository.FindUserIdAsync(_sinkTenantId, obj.SourceId, userName);
 
             if (existingId is null)
             {
-                await conn.ExecuteAsync(@"
-                    INSERT INTO Users
-                        (Id, TenantId, ExternalId, UserName, Active, Created, LastModified, Version,
-                         DisplayName, FamilyName, GivenName, Title, Department, EmployeeNumber)
-                    VALUES
-                        (NEWID(), @TenantId, @ExternalId, @UserName, @Active, SYSUTCDATETIME(), SYSUTCDATETIME(), 1,
-                         @DisplayName, @FamilyName, @GivenName, @Title, @Department, @EmployeeNumber);",
-                    new
-                    {
-                        TenantId = _sinkTenantId,
-                        ExternalId = obj.SourceId,
-                        UserName = userName,
-                        Active = active,
-                        DisplayName = displayName,
-                        FamilyName = familyName,
-                        GivenName = givenName,
-                        Title = title,
-                        Department = department,
-                        EmployeeNumber = employeeNumber
-                    });
+                await _repository.InsertUserAsync(_sinkTenantId, obj.SourceId, userName, active,
+                    displayName, familyName, givenName, title, department, employeeNumber);
 
                 if (!string.IsNullOrEmpty(email))
                 {
-                    var newId = await conn.ExecuteScalarAsync<Guid>(
-                        "SELECT Id FROM Users WHERE TenantId = @TenantId AND ExternalId = @ExternalId",
-                        new { TenantId = _sinkTenantId, ExternalId = obj.SourceId });
-                    await UpsertPrimaryEmailAsync(conn, newId, email);
+                    var newId = await _repository.GetUserIdByExternalIdAsync(_sinkTenantId, obj.SourceId);
+                    await _repository.UpsertPrimaryEmailAsync(newId, email);
                 }
                 return SinkWriteResult.Ok(SinkWriteOutcome.Created);
             }
             else
             {
-                await conn.ExecuteAsync(@"
-                    UPDATE Users
-                       SET UserName = @UserName,
-                           Active = @Active,
-                           DisplayName = COALESCE(@DisplayName, DisplayName),
-                           FamilyName = COALESCE(@FamilyName, FamilyName),
-                           GivenName = COALESCE(@GivenName, GivenName),
-                           Title = COALESCE(@Title, Title),
-                           Department = COALESCE(@Department, Department),
-                           EmployeeNumber = COALESCE(@EmployeeNumber, EmployeeNumber),
-                           LastModified = SYSUTCDATETIME(),
-                           Version = Version + 1
-                     WHERE Id = @Id;",
-                    new
-                    {
-                        Id = existingId.Value,
-                        UserName = userName,
-                        Active = active,
-                        DisplayName = displayName,
-                        FamilyName = familyName,
-                        GivenName = givenName,
-                        Title = title,
-                        Department = department,
-                        EmployeeNumber = employeeNumber
-                    });
+                await _repository.UpdateUserAsync(existingId.Value, userName, active,
+                    displayName, familyName, givenName, title, department, employeeNumber);
 
                 if (!string.IsNullOrEmpty(email))
-                    await UpsertPrimaryEmailAsync(conn, existingId.Value, email);
+                    await _repository.UpsertPrimaryEmailAsync(existingId.Value, email);
 
                 return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
             }
@@ -165,14 +115,7 @@ public sealed class EmulatorSink : IConnectorSink
 
         try
         {
-            using var conn = new SqlConnection(_config.ConnectionString);
-            await conn.OpenAsync(cancellationToken);
-
-            var existingId = await conn.ExecuteScalarAsync<Guid?>(@"
-                SELECT TOP 1 Id FROM Groups
-                 WHERE TenantId = @TenantId
-                   AND (ExternalId = @ExternalId OR (ExternalId IS NULL AND DisplayName = @DisplayName))",
-                new { TenantId = _sinkTenantId, ExternalId = obj.SourceId, DisplayName = displayName });
+            var existingId = await _repository.FindGroupIdAsync(_sinkTenantId, obj.SourceId, displayName);
 
             Guid groupId;
             SinkWriteOutcome outcome;
@@ -180,34 +123,14 @@ public sealed class EmulatorSink : IConnectorSink
             if (existingId is null)
             {
                 groupId = Guid.NewGuid();
-                await conn.ExecuteAsync(@"
-                    INSERT INTO Groups
-                        (Id, TenantId, ExternalId, DisplayName, Description, Type, Created, LastModified, Version)
-                    VALUES
-                        (@Id, @TenantId, @ExternalId, @DisplayName, @Description, @Type, SYSUTCDATETIME(), SYSUTCDATETIME(), 1);",
-                    new
-                    {
-                        Id = groupId,
-                        TenantId = _sinkTenantId,
-                        ExternalId = obj.SourceId,
-                        DisplayName = displayName,
-                        Description = description,
-                        Type = groupType
-                    });
+                await _repository.InsertGroupAsync(groupId, _sinkTenantId, obj.SourceId,
+                    displayName, description, groupType);
                 outcome = SinkWriteOutcome.Created;
             }
             else
             {
                 groupId = existingId.Value;
-                await conn.ExecuteAsync(@"
-                    UPDATE Groups
-                       SET DisplayName = @DisplayName,
-                           Description = COALESCE(@Description, Description),
-                           Type = COALESCE(@Type, Type),
-                           LastModified = SYSUTCDATETIME(),
-                           Version = Version + 1
-                     WHERE Id = @Id;",
-                    new { Id = groupId, DisplayName = displayName, Description = description, Type = groupType });
+                await _repository.UpdateGroupAsync(groupId, displayName, description, groupType);
                 outcome = SinkWriteOutcome.Updated;
             }
 
@@ -217,26 +140,11 @@ public sealed class EmulatorSink : IConnectorSink
             var memberExternalIds = ExtractMemberExternalIds(obj);
             if (memberExternalIds.Count > 0)
             {
-                var memberUserIds = (await conn.QueryAsync<Guid>(@"
-                    SELECT Id FROM Users
-                     WHERE TenantId = @TenantId
-                       AND ExternalId IN @ExternalIds",
-                    new { TenantId = _sinkTenantId, ExternalIds = memberExternalIds })).ToList();
+                var memberUserIds = await _repository.ResolveMemberUserIdsAsync(_sinkTenantId, memberExternalIds);
 
                 if (memberUserIds.Count > 0)
                 {
-                    // Delete existing membership for this group (full replace).
-                    await conn.ExecuteAsync(
-                        "DELETE FROM GroupMembers WHERE GroupId = @GroupId",
-                        new { GroupId = groupId });
-
-                    foreach (var uid in memberUserIds)
-                    {
-                        await conn.ExecuteAsync(@"
-                            INSERT INTO GroupMembers (Id, GroupId, Value, [Type], [Primary])
-                            VALUES (NEWID(), @GroupId, @Value, 'User', 0);",
-                            new { GroupId = groupId, Value = uid });
-                    }
+                    await _repository.ReplaceGroupMembersAsync(groupId, memberUserIds);
                 }
             }
 
@@ -282,11 +190,7 @@ public sealed class EmulatorSink : IConnectorSink
     {
         try
         {
-            using var conn = new SqlConnection(_config.ConnectionString);
-            await conn.OpenAsync(cancellationToken);
-            var count = await conn.ExecuteScalarAsync<int>(
-                "SELECT COUNT(*) FROM Tenants WHERE Id = @Id",
-                new { Id = _sinkTenantId });
+            var count = await _repository.CountTenantAsync(_sinkTenantId);
             return count == 1
                 ? new ConnectorTestResult { IsSuccessful = true, Message = "Sink tenant reachable." }
                 : new ConnectorTestResult { IsSuccessful = false, Message = "Sink tenant not found." };
@@ -295,17 +199,6 @@ public sealed class EmulatorSink : IConnectorSink
         {
             return new ConnectorTestResult { IsSuccessful = false, Message = ex.Message };
         }
-    }
-
-    private static async Task UpsertPrimaryEmailAsync(SqlConnection conn, Guid userId, string email)
-    {
-        await conn.ExecuteAsync(@"
-            IF EXISTS (SELECT 1 FROM UserEmails WHERE UserId = @UserId AND [Primary] = 1)
-                UPDATE UserEmails SET Value = @Email WHERE UserId = @UserId AND [Primary] = 1;
-            ELSE
-                INSERT INTO UserEmails (Id, UserId, Value, [Type], [Primary])
-                VALUES (NEWID(), @UserId, @Email, 'work', 1);",
-            new { UserId = userId, Email = email });
     }
 
     private static string? GetStr(ConnectorObject obj, string key)

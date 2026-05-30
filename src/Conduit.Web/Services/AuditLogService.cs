@@ -2,9 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Dapper;
-using Microsoft.Data.SqlClient;
-using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 using Conduit.Web.Models;
 
 namespace Conduit.Web.Services
@@ -14,11 +12,11 @@ namespace Conduit.Web.Services
     /// </summary>
     public class AuditLogService
     {
-        private readonly DatabaseConfig _databaseConfig;
+        private readonly AuditLogRepository _repository;
 
-        public AuditLogService(DatabaseConfig databaseConfig)
+        public AuditLogService(AuditLogRepository repository)
         {
-            _databaseConfig = databaseConfig;
+            _repository = repository;
         }
 
         /// <summary>
@@ -53,20 +51,7 @@ namespace Conduit.Web.Services
         /// <summary>
         /// Inserts an audit log entry
         /// </summary>
-        private async Task InsertLogAsync(AuditLog log)
-        {
-            var sql = @"
-                INSERT INTO AuditLogs (
-                    Id, Timestamp, Action, ResourceType, ResourceId, UserId, UserName,
-                    IpAddress, UserAgent, StatusCode, Details, OldValue, NewValue, Duration
-                ) VALUES (
-                    @Id, @Timestamp, @Action, @ResourceType, @ResourceId, @UserId, @UserName,
-                    @IpAddress, @UserAgent, @StatusCode, @Details, @OldValue, @NewValue, @Duration
-                );";
-
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            await connection.ExecuteAsync(sql, log);
-        }
+        private Task InsertLogAsync(AuditLog log) => _repository.InsertAsync(log);
 
         /// <summary>
         /// Gets audit logs with filtering and pagination
@@ -80,45 +65,11 @@ namespace Conduit.Web.Services
             int page = 1,
             int pageSize = 50)
         {
-            var sql = @"
-                SELECT * FROM (
-                    SELECT *, ROW_NUMBER() OVER (ORDER BY Timestamp DESC) AS RowNum
-                    FROM AuditLogs
-                    WHERE (@StartDate IS NULL OR Timestamp >= @StartDate)
-                    AND (@EndDate IS NULL OR Timestamp <= @EndDate)
-                    AND (@Action IS NULL OR Action = @Action)
-                    AND (@ResourceType IS NULL OR ResourceType = @ResourceType)
-                    AND (@UserId IS NULL OR UserId = @UserId)
-                ) AS Results
-                WHERE RowNum BETWEEN @StartRow AND @EndRow;
-
-                SELECT COUNT(*)
-                FROM AuditLogs
-                WHERE (@StartDate IS NULL OR Timestamp >= @StartDate)
-                AND (@EndDate IS NULL OR Timestamp <= @EndDate)
-                AND (@Action IS NULL OR Action = @Action)
-                AND (@ResourceType IS NULL OR ResourceType = @ResourceType)
-                AND (@UserId IS NULL OR UserId = @UserId);";
-
             var startRow = (page - 1) * pageSize + 1;
             var endRow = page * pageSize;
 
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            using var multi = await connection.QueryMultipleAsync(sql, new
-            {
-                StartDate = startDate,
-                EndDate = endDate,
-                Action = action,
-                ResourceType = resourceType,
-                UserId = userId,
-                StartRow = startRow,
-                EndRow = endRow
-            });
-
-            var logs = (await multi.ReadAsync<AuditLog>()).ToList();
-            var totalCount = await multi.ReadFirstAsync<int>();
-
-            return (logs, totalCount);
+            return await _repository.GetPagedAsync(
+                startDate, endDate, action, resourceType, userId, startRow, endRow);
         }
 
         /// <summary>
@@ -126,40 +77,8 @@ namespace Conduit.Web.Services
         /// </summary>
         public async Task<AuditLogStatistics> GetStatisticsAsync(DateTime? startDate = null, DateTime? endDate = null)
         {
-            var sql = @"
-                SELECT 
-                    COUNT(*) as TotalEvents,
-                    COUNT(DISTINCT UserId) as UniqueUsers,
-                    COUNT(DISTINCT IpAddress) as UniqueIpAddresses,
-                    AVG(DATEDIFF(MILLISECOND, '00:00:00', Duration)) as AvgDurationMs
-                FROM AuditLogs
-                WHERE (@StartDate IS NULL OR Timestamp >= @StartDate)
-                AND (@EndDate IS NULL OR Timestamp <= @EndDate);
-
-                SELECT Action, COUNT(*) as Count
-                FROM AuditLogs
-                WHERE (@StartDate IS NULL OR Timestamp >= @StartDate)
-                AND (@EndDate IS NULL OR Timestamp <= @EndDate)
-                GROUP BY Action
-                ORDER BY Count DESC;
-
-                SELECT ResourceType, COUNT(*) as Count
-                FROM AuditLogs
-                WHERE (@StartDate IS NULL OR Timestamp >= @StartDate)
-                AND (@EndDate IS NULL OR Timestamp <= @EndDate)
-                GROUP BY ResourceType
-                ORDER BY Count DESC;";
-
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            using var multi = await connection.QueryMultipleAsync(sql, new
-            {
-                StartDate = startDate,
-                EndDate = endDate
-            });
-
-            var stats = await multi.ReadFirstAsync<dynamic>();
-            var actionCounts = await multi.ReadAsync<(string Action, int Count)>();
-            var resourceCounts = await multi.ReadAsync<(string ResourceType, int Count)>();
+            var (stats, actionCounts, resourceCounts) =
+                await _repository.GetStatisticsAsync(startDate, endDate);
 
             return new AuditLogStatistics
             {
@@ -175,13 +94,10 @@ namespace Conduit.Web.Services
         /// <summary>
         /// Cleans up old audit logs
         /// </summary>
-        public async Task<int> CleanupOldLogsAsync(int daysToKeep)
+        public Task<int> CleanupOldLogsAsync(int daysToKeep)
         {
             var cutoffDate = DateTime.UtcNow.AddDays(-daysToKeep);
-            var sql = "DELETE FROM AuditLogs WHERE Timestamp < @CutoffDate;";
-
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            return await connection.ExecuteAsync(sql, new { CutoffDate = cutoffDate });
+            return _repository.DeleteOlderThanAsync(cutoffDate);
         }
     }
 

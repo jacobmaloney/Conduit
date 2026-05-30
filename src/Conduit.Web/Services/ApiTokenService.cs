@@ -4,10 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
-using Dapper;
-using Microsoft.Data.SqlClient;
-using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 
 namespace Conduit.Web.Services
 {
@@ -16,11 +13,11 @@ namespace Conduit.Web.Services
     /// </summary>
     public class ApiTokenService
     {
-        private readonly DatabaseConfig _databaseConfig;
+        private readonly ApiTokenRepository _repository;
 
-        public ApiTokenService(DatabaseConfig databaseConfig)
+        public ApiTokenService(ApiTokenRepository repository)
         {
-            _databaseConfig = databaseConfig;
+            _repository = repository;
         }
 
         /// <summary>
@@ -61,12 +58,7 @@ namespace Conduit.Web.Services
                 effectiveExpiry = DateTime.UtcNow.Add(DefaultTokenLifetime);
             }
 
-            const string sql = @"
-                INSERT INTO ApiTokens (Id, Name, Description, TokenHash, CreatedAt, ExpiresAt, IsActive, TenantId, Scope)
-                VALUES (@Id, @Name, @Description, @TokenHash, @CreatedAt, @ExpiresAt, @IsActive, @TenantId, @Scope);";
-
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            await connection.ExecuteAsync(sql, new
+            await _repository.InsertAsync(new ApiTokenRecord
             {
                 Id = tokenId,
                 Name = name,
@@ -89,10 +81,7 @@ namespace Conduit.Web.Services
         public async Task<string> EnsureFixedTokenAsync(string name, string rawValue, Guid? tenantId, string scope, string? description = null)
         {
             var hash = HashToken(rawValue);
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            var exists = await connection.ExecuteScalarAsync<int>(
-                "SELECT COUNT(*) FROM ApiTokens WHERE TokenHash = @TokenHash",
-                new { TokenHash = hash });
+            var exists = await _repository.CountByHashAsync(hash);
             if (exists == 0)
             {
                 await CreateTokenAsync(name, description, expiresAt: null, tenantId, scope, fixedRawValue: rawValue);
@@ -105,11 +94,8 @@ namespace Conduit.Web.Services
         /// </summary>
         public async Task<List<ApiToken>> GetAllTokensAsync()
         {
-            var sql = "SELECT * FROM ApiTokens ORDER BY CreatedAt DESC;";
-
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            var tokens = await connection.QueryAsync<ApiToken>(sql);
-            return tokens.ToList();
+            var rows = await _repository.GetAllAsync();
+            return rows.Select(MapRecord).ToList();
         }
 
         /// <summary>
@@ -123,54 +109,39 @@ namespace Conduit.Web.Services
             var tokenValue = token.Substring(5); // Remove "scim_" prefix
             var hashedToken = HashToken(tokenValue);
 
-            var sql = @"
-                SELECT * FROM ApiTokens 
-                WHERE TokenHash = @TokenHash 
-                AND IsActive = 1 
-                AND (ExpiresAt IS NULL OR ExpiresAt > @Now);";
+            var record = await _repository.GetActiveByHashAsync(hashedToken, DateTime.UtcNow);
+            if (record == null)
+                return null;
 
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            var apiToken = await connection.QuerySingleOrDefaultAsync<ApiToken>(sql, new 
-            { 
-                TokenHash = hashedToken,
-                Now = DateTime.UtcNow
-            });
+            // Update last used timestamp
+            await _repository.TouchLastUsedAsync(record.Id, DateTime.UtcNow);
 
-            if (apiToken != null)
-            {
-                // Update last used timestamp
-                await connection.ExecuteAsync(
-                    "UPDATE ApiTokens SET LastUsedAt = @Now WHERE Id = @Id",
-                    new { Now = DateTime.UtcNow, Id = apiToken.Id });
-            }
-
-            return apiToken;
+            return MapRecord(record);
         }
 
         /// <summary>
         /// Toggles a token's active status
         /// </summary>
-        public async Task ToggleTokenAsync(Guid tokenId)
-        {
-            var sql = @"
-                UPDATE ApiTokens 
-                SET IsActive = CASE WHEN IsActive = 1 THEN 0 ELSE 1 END 
-                WHERE Id = @Id;";
-
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            await connection.ExecuteAsync(sql, new { Id = tokenId });
-        }
+        public Task ToggleTokenAsync(Guid tokenId) => _repository.ToggleActiveAsync(tokenId);
 
         /// <summary>
         /// Deletes a token
         /// </summary>
-        public async Task DeleteTokenAsync(Guid tokenId)
-        {
-            var sql = "DELETE FROM ApiTokens WHERE Id = @Id;";
+        public Task DeleteTokenAsync(Guid tokenId) => _repository.DeleteAsync(tokenId);
 
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            await connection.ExecuteAsync(sql, new { Id = tokenId });
-        }
+        private static ApiToken MapRecord(ApiTokenRecord r) => new()
+        {
+            Id = r.Id,
+            Name = r.Name,
+            Description = r.Description,
+            TokenHash = r.TokenHash,
+            CreatedAt = r.CreatedAt,
+            LastUsedAt = r.LastUsedAt,
+            ExpiresAt = r.ExpiresAt,
+            IsActive = r.IsActive,
+            TenantId = r.TenantId,
+            Scope = r.Scope
+        };
 
         /// <summary>
         /// Generates a secure random token

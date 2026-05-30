@@ -1,5 +1,6 @@
 using System;
 using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 using Microsoft.Extensions.Logging;
 
@@ -30,5 +31,5 @@ public sealed class EmulatorAdapter : IConnectorAdapter
     public IConnectorSource? CreateSource(Guid tenantId) => null;
 
     public IConnectorSink? CreateSink(Guid tenantId) =>
-        new EmulatorSink(tenantId, _config, _loggerFactory.CreateLogger<EmulatorSink>());
+        new EmulatorSink(tenantId, new EmulatorSinkRepository(_config), _loggerFactory.CreateLogger<EmulatorSink>());
 }

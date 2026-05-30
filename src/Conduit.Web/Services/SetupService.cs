@@ -5,6 +5,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 
 namespace Conduit.Web.Services
 {
@@ -16,6 +17,7 @@ namespace Conduit.Web.Services
         private readonly IConfiguration _configuration;
         private readonly ILogger<SetupService> _logger;
         private readonly DatabaseConfig _databaseConfig;
+        private readonly SetupRepository _repository;
         private readonly IHostEnvironment _env;
 
         // setup.complete is anchored to ContentRootPath so launching from `dotnet run`
@@ -25,11 +27,12 @@ namespace Conduit.Web.Services
         private readonly string _setupCompleteFile;
 
         public SetupService(IConfiguration configuration, ILogger<SetupService> logger,
-            DatabaseConfig databaseConfig, IHostEnvironment env)
+            DatabaseConfig databaseConfig, SetupRepository repository, IHostEnvironment env)
         {
             _configuration = configuration;
             _logger = logger;
             _databaseConfig = databaseConfig;
+            _repository = repository;
             _env = env;
             _setupCompleteFile = Path.Combine(env.ContentRootPath, "setup.complete");
         }
@@ -62,16 +65,12 @@ namespace Conduit.Web.Services
                 //    can sign in only if there's a row here. If the table doesn't exist
                 //    yet (pre-v10 schema) we treat that as "setup required" since the
                 //    next migration will create it.
-                using var conn = new SqlConnection(connectionString);
-                await conn.OpenAsync();
-                var hasTable = await conn.ExecuteScalarAsync<int>(
-                    "SELECT COUNT(*) FROM sys.tables WHERE name = 'PortalAdmins'") > 0;
+                var hasTable = await _repository.PortalAdminsTableExistsAsync();
                 if (!hasTable)
                 {
                     return true;
                 }
-                var activeAdmins = await conn.ExecuteScalarAsync<int>(
-                    "SELECT COUNT(*) FROM PortalAdmins WHERE Active = 1");
+                var activeAdmins = await _repository.CountActiveAdminsAsync();
                 if (activeAdmins > 0)
                 {
                     // Setup is effectively complete — backfill the marker file so any
@@ -131,11 +130,10 @@ namespace Conduit.Web.Services
                     return result;
                 }
 
-                var dbExistsQuery = "SELECT COUNT(*) FROM sys.databases WHERE name = @name";
-                using var cmd = new SqlCommand(dbExistsQuery, connection);
-                cmd.Parameters.AddWithValue("@name", result.DatabaseName);
-                var raw = await cmd.ExecuteScalarAsync();
-                result.DatabaseExists = raw is int count && count > 0;
+                var count = await connection.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(*) FROM sys.databases WHERE name = @name",
+                    new { name = result.DatabaseName });
+                result.DatabaseExists = count > 0;
             }
             catch (Exception ex)
             {
@@ -152,10 +150,9 @@ namespace Conduit.Web.Services
             {
                 using var dbConnection = new SqlConnection(targetBuilder.ConnectionString);
                 await dbConnection.OpenAsync();
-                var tableQuery = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Users'";
-                using var tableCmd = new SqlCommand(tableQuery, dbConnection);
-                var tableRaw = await tableCmd.ExecuteScalarAsync();
-                result.SchemaExists = tableRaw is int tableCount && tableCount > 0;
+                var tableCount = await dbConnection.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Users'");
+                result.SchemaExists = tableCount > 0;
             }
             catch (Exception ex)
             {
@@ -287,13 +284,10 @@ namespace Conduit.Web.Services
                 await connection.OpenAsync();
 
                 // Check if database exists
-                var dbExistsQuery = "SELECT COUNT(*) FROM sys.databases WHERE name = @name";
-                using var command = new SqlCommand(dbExistsQuery, connection);
-                command.Parameters.AddWithValue("@name", databaseName);
-                
-                var result = await command.ExecuteScalarAsync();
-                var exists = result is int count && count > 0;
-                if (!exists)
+                var count = await connection.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(*) FROM sys.databases WHERE name = @name",
+                    new { name = databaseName });
+                if (count <= 0)
                 {
                     return false;
                 }
@@ -303,12 +297,9 @@ namespace Conduit.Web.Services
                 using var dbConnection = new SqlConnection(builder.ConnectionString);
                 await dbConnection.OpenAsync();
 
-                var tableExistsQuery = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Users'";
-                using var tableCommand = new SqlCommand(tableExistsQuery, dbConnection);
-                
-                var tableResult = await tableCommand.ExecuteScalarAsync();
-                var tableExists = tableResult is int tableCount && tableCount > 0;
-                return tableExists;
+                var tableCount = await dbConnection.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Users'");
+                return tableCount > 0;
             }
             catch (Exception ex)
             {
@@ -475,34 +466,16 @@ namespace Conduit.Web.Services
         {
             var (hash, salt) = PasswordHasher.Hash(config.AdminPassword);
 
-            using var connection = new SqlConnection(_databaseConfig.ConnectionString);
-            await connection.OpenAsync();
-
-            var existingId = await Dapper.SqlMapper.QuerySingleOrDefaultAsync<Guid?>(connection,
-                "SELECT [Id] FROM [PortalAdmins] WHERE LOWER([UserName]) = LOWER(@UserName)",
-                new { UserName = config.AdminUsername });
+            var existingId = await _repository.GetAdminIdByUserNameAsync(config.AdminUsername);
 
             if (existingId.HasValue)
             {
-                await Dapper.SqlMapper.ExecuteAsync(connection, @"
-                    UPDATE [PortalAdmins]
-                    SET [PasswordHash] = @Hash, [PasswordSalt] = @Salt, [Active] = 1, [LastModified] = SYSUTCDATETIME()
-                    WHERE [Id] = @Id",
-                    new { Hash = hash, Salt = salt, Id = existingId.Value });
+                await _repository.UpdateAdminPasswordAsync(existingId.Value, hash, salt);
                 _logger.LogInformation("Updated existing portal admin: {Username}", config.AdminUsername);
             }
             else
             {
-                await Dapper.SqlMapper.ExecuteAsync(connection, @"
-                    INSERT INTO [PortalAdmins] ([Id], [UserName], [DisplayName], [PasswordHash], [PasswordSalt], [Active])
-                    VALUES (NEWID(), @UserName, @DisplayName, @Hash, @Salt, 1)",
-                    new
-                    {
-                        UserName = config.AdminUsername,
-                        DisplayName = config.AdminUsername,
-                        Hash = hash,
-                        Salt = salt
-                    });
+                await _repository.InsertAdminAsync(config.AdminUsername, config.AdminUsername, hash, salt);
                 _logger.LogInformation("Created portal admin: {Username}", config.AdminUsername);
             }
         }

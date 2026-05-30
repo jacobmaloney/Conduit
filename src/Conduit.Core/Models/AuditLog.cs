@@ -35,27 +35,27 @@ namespace Conduit.Web.Models
         public const string UserActivated = "USER_ACTIVATED";
         public const string UserDeactivated = "USER_DEACTIVATED";
         public const string UserPasswordChanged = "USER_PASSWORD_CHANGED";
-        
+
         // Group actions
         public const string GroupCreated = "GROUP_CREATED";
         public const string GroupUpdated = "GROUP_UPDATED";
         public const string GroupDeleted = "GROUP_DELETED";
         public const string GroupMemberAdded = "GROUP_MEMBER_ADDED";
         public const string GroupMemberRemoved = "GROUP_MEMBER_REMOVED";
-        
+
         // Authentication actions
         public const string LoginSuccess = "LOGIN_SUCCESS";
         public const string LoginFailed = "LOGIN_FAILED";
         public const string TokenCreated = "TOKEN_CREATED";
         public const string TokenRevoked = "TOKEN_REVOKED";
         public const string TokenExpired = "TOKEN_EXPIRED";
-        
+
         // System actions
         public const string SystemStartup = "SYSTEM_STARTUP";
         public const string SystemShutdown = "SYSTEM_SHUTDOWN";
         public const string ConfigurationChanged = "CONFIGURATION_CHANGED";
         public const string DatabaseInitialized = "DATABASE_INITIALIZED";
-        
+
         // API actions
         public const string ApiCallSuccess = "API_CALL_SUCCESS";
         public const string ApiCallFailed = "API_CALL_FAILED";

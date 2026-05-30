@@ -1,6 +1,5 @@
-using Dapper;
-using Microsoft.Data.SqlClient;
 using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 
 namespace Conduit.Web.Services;
 
@@ -25,11 +24,11 @@ public class LoginThrottle
     private const int HardThreshold = 10;      // hard lockout after 10 failures in window
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
-    private readonly DatabaseConfig _db;
+    private readonly LoginThrottleRepository _repository;
 
-    public LoginThrottle(DatabaseConfig db)
+    public LoginThrottle(LoginThrottleRepository repository)
     {
-        _db = db;
+        _repository = repository;
     }
 
     public sealed record CheckResult(bool Allowed, TimeSpan RetryAfter, int FailuresInWindow);
@@ -45,30 +44,17 @@ public class LoginThrottle
 
         try
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            await conn.OpenAsync();
-
             // Active hard lockout?
-            var lockout = await conn.QuerySingleOrDefaultAsync<DateTime?>(@"
-                SELECT LockedUntil FROM LoginLockouts
-                WHERE UsernameLower = @U AND IpAddress = @I AND LockedUntil > @Now",
-                new { U = usernameLower, I = ipAddress, Now = now });
+            var lockout = await _repository.GetActiveLockoutUntilAsync(usernameLower, ipAddress, now);
 
             if (lockout is { } until && until > now)
             {
-                var failuresAtLockout = await conn.ExecuteScalarAsync<int>(@"
-                    SELECT FailureCount FROM LoginLockouts
-                    WHERE UsernameLower = @U AND IpAddress = @I",
-                    new { U = usernameLower, I = ipAddress });
+                var failuresAtLockout = await _repository.GetLockoutFailureCountAsync(usernameLower, ipAddress);
                 return new CheckResult(false, until - now, failuresAtLockout);
             }
 
             // Soft-delay path: count failures in window.
-            var failures = await conn.ExecuteScalarAsync<int>(@"
-                SELECT COUNT(*) FROM LoginAttempts
-                WHERE UsernameLower = @U AND IpAddress = @I
-                  AND Success = 0 AND AttemptedAt > @WindowStart",
-                new { U = usernameLower, I = ipAddress, WindowStart = windowStart });
+            var failures = await _repository.CountFailuresInWindowAsync(usernameLower, ipAddress, windowStart);
 
             if (failures >= SoftThreshold)
             {
@@ -94,15 +80,7 @@ public class LoginThrottle
     {
         try
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            await conn.OpenAsync();
-
-            await conn.ExecuteAsync(@"
-                INSERT INTO LoginAttempts (Id, UsernameLower, IpAddress, AttemptedAt, Success)
-                VALUES (NEWID(), @U, @I, SYSUTCDATETIME(), 1);
-
-                DELETE FROM LoginLockouts WHERE UsernameLower = @U AND IpAddress = @I;",
-                new { U = usernameLower, I = ipAddress });
+            await _repository.RecordSuccessAsync(usernameLower, ipAddress);
         }
         catch
         {
@@ -117,44 +95,18 @@ public class LoginThrottle
     {
         try
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            await conn.OpenAsync();
-
             var now = DateTime.UtcNow;
             var windowStart = now - Window;
 
-            await conn.ExecuteAsync(@"
-                INSERT INTO LoginAttempts (Id, UsernameLower, IpAddress, AttemptedAt, Success)
-                VALUES (NEWID(), @U, @I, @Now, 0);",
-                new { U = usernameLower, I = ipAddress, Now = now });
+            await _repository.RecordFailureAsync(usernameLower, ipAddress, now);
 
-            var failures = await conn.ExecuteScalarAsync<int>(@"
-                SELECT COUNT(*) FROM LoginAttempts
-                WHERE UsernameLower = @U AND IpAddress = @I
-                  AND Success = 0 AND AttemptedAt > @WindowStart",
-                new { U = usernameLower, I = ipAddress, WindowStart = windowStart });
+            var failures = await _repository.CountFailuresInWindowAsync(usernameLower, ipAddress, windowStart);
 
             if (failures >= HardThreshold)
             {
                 // Upsert lockout row — SQL Server MERGE keeps it single round-trip
                 // and idempotent. LockedUntil extends on every subsequent failure.
-                await conn.ExecuteAsync(@"
-                    MERGE LoginLockouts AS target
-                    USING (SELECT @U AS UsernameLower, @I AS IpAddress) AS src
-                       ON target.UsernameLower = src.UsernameLower
-                      AND target.IpAddress = src.IpAddress
-                    WHEN MATCHED THEN
-                        UPDATE SET LockedUntil = @LockedUntil, FailureCount = @Failures
-                    WHEN NOT MATCHED THEN
-                        INSERT (UsernameLower, IpAddress, LockedUntil, FailureCount)
-                        VALUES (src.UsernameLower, src.IpAddress, @LockedUntil, @Failures);",
-                    new
-                    {
-                        U = usernameLower,
-                        I = ipAddress,
-                        LockedUntil = now.Add(LockoutDuration),
-                        Failures = failures
-                    });
+                await _repository.UpsertLockoutAsync(usernameLower, ipAddress, now.Add(LockoutDuration), failures);
             }
 
             return failures;
@@ -196,13 +148,9 @@ public class LoginThrottlePruner : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<DatabaseConfig>();
                 if (!string.IsNullOrEmpty(db.ConnectionString))
                 {
-                    using var conn = new SqlConnection(db.ConnectionString);
-                    await conn.OpenAsync(stoppingToken);
+                    var repository = scope.ServiceProvider.GetRequiredService<LoginThrottleRepository>();
                     var cutoff = DateTime.UtcNow - AttemptRetention;
-                    var rows = await conn.ExecuteAsync(@"
-                        DELETE FROM LoginAttempts WHERE AttemptedAt < @Cutoff;
-                        DELETE FROM LoginLockouts WHERE LockedUntil < SYSUTCDATETIME();",
-                        new { Cutoff = cutoff });
+                    var rows = await repository.PruneAsync(cutoff);
                     if (rows > 0)
                     {
                         _logger.LogInformation("LoginThrottlePruner: removed {Rows} old rows.", rows);

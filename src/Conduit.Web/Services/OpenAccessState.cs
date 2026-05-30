@@ -1,6 +1,4 @@
-using Dapper;
-using Microsoft.Data.SqlClient;
-using Conduit.DataAccess;
+using Conduit.DataAccess.Repositories;
 
 namespace Conduit.Web.Services;
 
@@ -20,15 +18,15 @@ namespace Conduit.Web.Services;
 public class OpenAccessState
 {
     private const string ConfigKey = "Portal.OpenAccess";
-    private readonly DatabaseConfig _db;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<OpenAccessState> _logger;
     private bool _enabled;
 
     public bool IsEnabled => _enabled;
 
-    public OpenAccessState(DatabaseConfig db, ILogger<OpenAccessState> logger)
+    public OpenAccessState(IServiceScopeFactory scopeFactory, ILogger<OpenAccessState> logger)
     {
-        _db = db;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -40,11 +38,9 @@ public class OpenAccessState
     {
         try
         {
-            using var conn = new SqlConnection(_db.ConnectionString);
-            await conn.OpenAsync();
-            var value = await conn.ExecuteScalarAsync<string?>(
-                "SELECT [Value] FROM SystemConfiguration WHERE [Key] = @Key",
-                new { Key = ConfigKey });
+            using var scope = _scopeFactory.CreateScope();
+            var repository = scope.ServiceProvider.GetRequiredService<SystemConfigurationRepository>();
+            var value = await repository.GetValueAsync(ConfigKey);
             _enabled = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
             _logger.LogInformation("OpenAccessState initialized: {Enabled}", _enabled);
         }
@@ -66,18 +62,9 @@ public class OpenAccessState
     {
         var value = enabled ? "true" : "false";
         const string description = "Portal-only open access — no login required when true.";
-        using var conn = new SqlConnection(_db.ConnectionString);
-        await conn.OpenAsync();
-        await conn.ExecuteAsync(@"
-            MERGE SystemConfiguration AS target
-            USING (SELECT @Key AS [Key]) AS src
-               ON target.[Key] = src.[Key]
-            WHEN MATCHED THEN
-                UPDATE SET [Value] = @Value, [Type] = 'Boolean', [Description] = @Description, [LastModified] = SYSUTCDATETIME()
-            WHEN NOT MATCHED THEN
-                INSERT ([Key], [Value], [Type], [Description])
-                VALUES (@Key, @Value, 'Boolean', @Description);",
-            new { Key = ConfigKey, Value = value, Description = description });
+        using var scope = _scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<SystemConfigurationRepository>();
+        await repository.UpsertAsync(ConfigKey, value, "Boolean", description);
         _enabled = enabled;
         _logger.LogWarning("OpenAccessState changed to {Enabled} — portal authentication is now {AuthStatus}.",
             enabled, enabled ? "OFF (open access)" : "ON");

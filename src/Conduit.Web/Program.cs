@@ -210,6 +210,13 @@ builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<GroupRepository>();
 builder.Services.AddScoped<TenantSnapshotService>();
 builder.Services.AddScoped<PortalAdminRepository>();
+builder.Services.AddScoped<ApiTokenRepository>();
+builder.Services.AddScoped<AuditLogRepository>();
+builder.Services.AddScoped<LoginThrottleRepository>();
+builder.Services.AddScoped<SystemConfigurationRepository>();
+builder.Services.AddScoped<SetupRepository>();
+builder.Services.AddScoped<SqlAccountRepository>();
+builder.Services.AddScoped<EmulatorSinkRepository>();
 // Optional external-IdP (SSO) support. Repository + secret-at-rest protector.
 // SSO is OPTIONAL — zero enabled providers means local login only.
 builder.Services.AddScoped<IdentityProviderRepository>();
