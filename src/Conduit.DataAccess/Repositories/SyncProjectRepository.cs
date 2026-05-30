@@ -90,12 +90,16 @@ public class SyncProjectRepository : BaseRepository
             new { Id = id });
 
     /// <summary>
-    /// Marks the project as running and stamps LastRunId so the UI's "currently
-    /// running" badge can light up without a join. Called by the orchestrator at
-    /// the start of a run.
+    /// Atomic compare-and-swap of <c>IsRunning</c> from 0 → 1. Returns
+    /// <c>true</c> when this caller won the swap (row updated), <c>false</c>
+    /// when the project was already running. The controller calls this BEFORE
+    /// firing the orchestrator to make manual Run-Now race-safe; the
+    /// orchestrator also calls it on entry and treats a <c>false</c> return as
+    /// a no-op (the row's already in the right state from the controller).
     /// </summary>
-    public Task SetRunningAsync(Guid projectId, Guid runId) =>
-        ExecuteAsync(@"
+    public async Task<bool> SetRunningAsync(Guid projectId, Guid runId)
+    {
+        var rows = await ExecuteScalarAsync<int>(@"
             UPDATE SyncProjects
                SET IsRunning = 1,
                    LastRunId = @RunId,
@@ -103,8 +107,12 @@ public class SyncProjectRepository : BaseRepository
                    LastRunStatus = 'Running',
                    TotalRuns = TotalRuns + 1,
                    LastModified = SYSUTCDATETIME()
-             WHERE Id = @ProjectId;",
+             WHERE Id = @ProjectId
+               AND IsRunning = 0;
+            SELECT @@ROWCOUNT;",
             new { ProjectId = projectId, RunId = runId });
+        return rows > 0;
+    }
 
     /// <summary>Stamps the post-run state on the project.</summary>
     public Task FinishRunAsync(Guid projectId, string status) =>

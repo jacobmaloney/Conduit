@@ -86,7 +86,10 @@ public sealed class SyncProjectOrchestrator
             StartedAt = DateTime.UtcNow
         });
 
-        await _projectRepo.SetRunningAsync(project.Id, run.Id);
+        // No-op when the controller already won the IsRunning compare-and-swap
+        // for a manual Run-Now (Worf HIGH-1). The scheduler path still flips
+        // the row here on the first call.
+        _ = await _projectRepo.SetRunningAsync(project.Id, run.Id);
         await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
 
         var sw = Stopwatch.StartNew();

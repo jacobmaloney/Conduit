@@ -10,25 +10,25 @@ using Conduit.Core.Models;
 using Conduit.Core.Services;
 using Conduit.Core.SyncModels;
 using Conduit.DataAccess.Repositories;
+using Conduit.Sync.Orchestration;
+using Microsoft.Extensions.Logging;
 
 namespace Conduit.Web.Controllers
 {
     /// <summary>
-    /// F-2.8e — read-only Sync Runs JSON surface for governance-layer consumers
-    /// (CenturyCity Census, future Operations Center deep-link, any read-only
-    /// monitor). Three endpoints:
-    ///   GET /api/v1/sync-projects                              — list projects + last-run summary
-    ///   GET /api/v1/sync-projects/{projectId}/runs?limit=&amp;since= — recent runs for one project
-    ///   GET /api/v1/sync-runs/{runId}                          — single run + step-level log breakdown
+    /// F-2.8e — Sync Runs JSON surface for governance-layer consumers
+    /// (CenturyCity Census, Marshal Run-Now, future Operations Center deep-link).
+    /// Four endpoints:
+    ///   GET  /api/v1/sync-projects                              — list projects + last-run summary
+    ///   GET  /api/v1/sync-projects/{projectId}/runs?limit=&amp;since= — recent runs for one project
+    ///   GET  /api/v1/sync-runs/{runId}                          — single run + step-level log breakdown
+    ///   POST /api/v1/sync-projects/{projectId}/runs             — fire a manual run (F-2 Marshal Run-Now)
     ///
     /// Auth: same Bearer <c>scim_*</c> token + <see cref="Middleware.ApiTokenAuthMiddleware"/>
     /// the rest of the API uses. When the token is Tenant-scoped, results are
     /// filtered to projects where that tenant participates as source OR sink.
-    /// Admin-scope tokens see everything.
-    ///
-    /// Read-only: no writes, no side effects. Sits next to ProvisioningController
-    /// in the /api/v1 namespace so CenturyCity's existing <c>Conduit:BaseUrl</c>
-    /// + <c>Conduit:ApiKey</c> wiring works unchanged.
+    /// Admin-scope tokens see everything. The POST endpoint goes through the
+    /// same <see cref="AuthorizeForProject"/> tenant guard the GETs use.
     /// </summary>
     [ApiController]
     [Route("api/v1")]
@@ -40,17 +40,23 @@ namespace Conduit.Web.Controllers
         private readonly SyncRunRepository _runs;
         private readonly TenantRepository _tenants;
         private readonly ITenantContext _tenantContext;
+        private readonly SyncProjectOrchestrator _orchestrator;
+        private readonly ILogger<ApiV1SyncRunsController> _logger;
 
         public ApiV1SyncRunsController(
             SyncProjectRepository projects,
             SyncRunRepository runs,
             TenantRepository tenants,
-            ITenantContext tenantContext)
+            ITenantContext tenantContext,
+            SyncProjectOrchestrator orchestrator,
+            ILogger<ApiV1SyncRunsController> logger)
         {
             _projects = projects;
             _runs = runs;
             _tenants = tenants;
             _tenantContext = tenantContext;
+            _orchestrator = orchestrator;
+            _logger = logger;
         }
 
         // ─── Wire shapes (kept stable for the CenturyCity client) ────────────────
@@ -265,6 +271,95 @@ namespace Conduit.Web.Controllers
             };
 
             return Ok(detail);
+        }
+
+        // ─── POST /api/v1/sync-projects/{projectId}/runs ──────────────────────────
+
+        /// <summary>
+        /// Body for <see cref="StartRun"/>. Empty object is allowed; <c>reason</c>
+        /// is plumbed into the TriggeredBy stamp so run history shows why a
+        /// Marshal operator (or other governance-layer caller) fired the run.
+        /// </summary>
+        public sealed class StartRunRequest
+        {
+            public string? Reason { get; set; }
+        }
+
+        [HttpPost("sync-projects/{projectId:guid}/runs")]
+        public async Task<IActionResult> StartRun(
+            Guid projectId,
+            [FromBody] StartRunRequest? body,
+            CancellationToken ct)
+        {
+            var project = await _projects.GetByIdAsync(projectId).ConfigureAwait(false);
+            if (project is null)
+                return NotFound(new { error = $"SyncProject {projectId} not found." });
+
+            var scopeError = AuthorizeForProject(project);
+            if (scopeError is not null) return scopeError;
+
+            var triggeredBy = SanitizeTriggeredBy(User.Identity?.Name, body?.Reason);
+
+            // Atomic IsRunning 0 → 1 claim BEFORE firing the orchestrator
+            // (Worf HIGH-1). Two concurrent POSTs cannot both win this swap;
+            // the loser gets 409. The orchestrator's own SetRunningAsync call
+            // becomes a no-op for the winner (the SQL guard already matched).
+            var claimed = await _projects.SetRunningAsync(projectId, Guid.Empty).ConfigureAwait(false);
+            if (!claimed)
+                return Conflict(new { error = "Project run already in progress" });
+
+            // Fire-and-forget. Errors inside ExecuteAsync are caught and stamped
+            // onto the SyncRun row by the orchestrator itself; we log at the
+            // controller boundary in case the task scheduler itself rejects.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _orchestrator.ExecuteAsync(projectId, triggeredBy, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Manual run for project {ProjectId} (triggered by {TriggeredBy}) threw at the controller boundary",
+                        projectId, triggeredBy);
+                }
+            });
+
+            return Accepted(new { projectId = projectId });
+        }
+
+        /// <summary>
+        /// Builds the <c>TriggeredBy</c> stamp for a manual run. Strips CRLF,
+        /// tabs, and all C0 control chars (0x00–0x1F) from both fields, caps
+        /// caller at 40 chars and reason at 50 chars so the full
+        /// <c>Manual:{caller}:{reason}</c> string fits well under the 100-char
+        /// SyncRuns.TriggeredBy column limit. Worf HIGH-2.
+        /// </summary>
+        internal static string SanitizeTriggeredBy(string? caller, string? reason)
+        {
+            var safeCaller = StripControl(caller);
+            if (safeCaller.Length > 40) safeCaller = safeCaller.Substring(0, 40);
+            if (string.IsNullOrEmpty(safeCaller)) safeCaller = "api";
+
+            var safeReason = StripControl(reason);
+            if (safeReason.Length > 50) safeReason = safeReason.Substring(0, 50);
+
+            return string.IsNullOrEmpty(safeReason)
+                ? $"Manual:{safeCaller}"
+                : $"Manual:{safeCaller}:{safeReason}";
+        }
+
+        private static string StripControl(string? input)
+        {
+            if (string.IsNullOrEmpty(input)) return string.Empty;
+            var sb = new System.Text.StringBuilder(input.Length);
+            foreach (var c in input)
+            {
+                if (c <= '') continue; // C0 controls incl. CR, LF, tab
+                sb.Append(c);
+            }
+            return sb.ToString().Trim();
         }
 
         // ─── Helpers ──────────────────────────────────────────────────────────────
