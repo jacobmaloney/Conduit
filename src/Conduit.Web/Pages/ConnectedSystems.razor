@@ -309,12 +309,28 @@
                                                       value="@GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty)"
                                                       @oninput="e => SetCreateString(ctype.Name, field.Key, e.Value?.ToString() ?? string.Empty)"></textarea>
                                         }
+                                        else if (field.IsSecret)
+                                        {
+                                            <div class="input-group">
+                                                <input class="form-control"
+                                                       type="@(IsSecretRevealed(ctype.Name, field.Key) ? "text" : "password")"
+                                                       autocomplete="new-password"
+                                                       placeholder="@(secretMasked ? SecretUnchangedPlaceholder : field.Placeholder)"
+                                                       value="@GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty)"
+                                                       @oninput="e => SetCreateString(ctype.Name, field.Key, e.Value?.ToString() ?? string.Empty)" />
+                                                <button class="btn btn-outline-secondary" type="button"
+                                                        @onclick="() => ToggleSecret(ctype.Name, field.Key)"
+                                                        title="@(IsSecretRevealed(ctype.Name, field.Key) ? "Hide" : "Show")">
+                                                    <i class="bi @(IsSecretRevealed(ctype.Name, field.Key) ? "bi-eye-slash" : "bi-eye")"></i>
+                                                </button>
+                                            </div>
+                                        }
                                         else
                                         {
                                             <input class="form-control"
-                                                   type="@(field.IsSecret ? "password" : "text")"
-                                                   autocomplete="@(field.IsSecret ? "new-password" : "off")"
-                                                   placeholder="@(secretMasked ? SecretUnchangedPlaceholder : field.Placeholder)"
+                                                   type="text"
+                                                   autocomplete="off"
+                                                   placeholder="@field.Placeholder"
                                                    value="@GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty)"
                                                    @oninput="e => SetCreateString(ctype.Name, field.Key, e.Value?.ToString() ?? string.Empty)" />
                                         }
@@ -1103,6 +1119,13 @@
     private Tenant form = new();
     private string errorMessage = "";
     private DemoSeedService.SeedResult? lastSeedResult;
+
+    // In-form live connectivity test (create + edit). Mirrors the Credentials &
+    // test modal's probe path. Secret reveal is tracked per "credType::fieldKey".
+    private bool formTesting;
+    private bool formTestSuccess;
+    private string? formTestMessage;
+    private readonly HashSet<string> revealedSecrets = new(StringComparer.OrdinalIgnoreCase);
 
     private static string GlyphFor(TenantStats s)
     {
@@ -1910,10 +1933,128 @@
     private void SetCreateBool(string credTypeName, string key, bool value) =>
         CreateBag(credTypeName)[key] = value;
 
+    private bool IsSecretRevealed(string credTypeName, string key) =>
+        revealedSecrets.Contains(string.Concat(credTypeName, "::", key));
+
+    private void ToggleSecret(string credTypeName, string key)
+    {
+        var k = string.Concat(credTypeName, "::", key);
+        if (!revealedSecrets.Add(k)) revealedSecrets.Remove(k);
+    }
+
     private void ResetCreateCredentialState()
     {
         createCredValues.Clear();
         createExistingCredNames.Clear();
+        revealedSecrets.Clear();
+        formTesting = false;
+        formTestSuccess = false;
+        formTestMessage = null;
+    }
+
+    private void DismissFormTest()
+    {
+        formTestMessage = null;
+        formTestSuccess = false;
+    }
+
+    private bool CanTestForm =>
+        !string.IsNullOrWhiteSpace(form.SystemType)
+        && ConnectorRegistry.Get(form.SystemType) is not null
+        && GetMissingRequiredTenantFieldsForForm().Count == 0;
+
+    // Live connectivity probe for the create/edit form. Reuses the same path as
+    // the Credentials & test modal: resolve the adapter, build a source (sink
+    // fallback), call TestConnectionAsync. The connector resolves the Tenant row
+    // and its credentials from the database by tenantId, so the entered values
+    // must exist there first:
+    //   • Edit   — persist the freshly-entered creds onto the real tenant, probe.
+    //   • Create — stand up an inactive scratch tenant + creds, probe, then delete
+    //     both so nothing is left behind before the operator actually saves.
+    private async Task TestFormConnectionAsync()
+    {
+        if (formTesting) return;
+        formTestMessage = null;
+        formTestSuccess = false;
+
+        var adapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
+        if (adapter is null)
+        {
+            formTestMessage = string.Concat("No connector adapter registered for '", form.SystemType, "'.");
+            return;
+        }
+        var missing = GetMissingRequiredTenantFieldsForForm();
+        if (missing.Count > 0)
+        {
+            formTestMessage = string.Concat("Fill in the required fields first: ", string.Join(", ", missing), ".");
+            return;
+        }
+
+        formTesting = true;
+        var scratchId = Guid.Empty;
+        try
+        {
+            Guid probeTenantId;
+            if (editingId.HasValue)
+            {
+                await PersistCreateCredentialsAsync(editingId.Value);
+                probeTenantId = editingId.Value;
+            }
+            else
+            {
+                var scratch = await TenantRepo.CreateAsync(new Tenant
+                {
+                    Id = Guid.NewGuid(),
+                    Name = string.Concat("__test__", Guid.NewGuid().ToString("N")),
+                    Slug = string.Concat("__test__", Guid.NewGuid().ToString("N")),
+                    SystemType = form.SystemType,
+                    Domain = string.IsNullOrWhiteSpace(form.Domain) ? null : form.Domain.Trim(),
+                    IsActive = false
+                });
+                scratchId = scratch.Id;
+                await PersistCreateCredentialsAsync(scratchId);
+                probeTenantId = scratchId;
+            }
+
+            var result = await ProbeTenantAsync(adapter, probeTenantId);
+            formTestMessage = result.Message;
+            formTestSuccess = result.IsSuccessful;
+        }
+        catch (Exception ex)
+        {
+            formTestMessage = string.Concat("Test failed: ", ex.Message);
+            formTestSuccess = false;
+        }
+        finally
+        {
+            if (scratchId != Guid.Empty)
+            {
+                try
+                {
+                    foreach (var ctype in adapter.CredentialTypes)
+                        await CredentialProtector.DeleteAsync(scratchId, ctype.Name);
+                    await TenantRepo.DeleteAsync(scratchId);
+                }
+                catch { /* best-effort cleanup of the throw-away tenant */ }
+            }
+            formTesting = false;
+        }
+    }
+
+    private static async Task<Conduit.Sync.Connectors.ConnectorTestResult> ProbeTenantAsync(
+        Conduit.Sync.Connectors.IConnectorAdapter adapter, Guid tenantId)
+    {
+        var source = adapter.CreateSource(tenantId);
+        if (source is not null)
+            return await source.TestConnectionAsync(CancellationToken.None);
+        var sink = adapter.CreateSink(tenantId);
+        if (sink is not null)
+            return await sink.TestConnectionAsync(CancellationToken.None);
+        return new Conduit.Sync.Connectors.ConnectorTestResult
+        {
+            IsSuccessful = false,
+            Message = string.Concat("Adapter for '", adapter.SystemType, "' exposes neither source nor sink — cannot test.")
+        };
     }
 
     // On edit: pre-fill non-secret fields from the decrypted blob; leave secret
