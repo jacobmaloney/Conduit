@@ -78,6 +78,219 @@ public class SyncProjectRepository : BaseRepository
         return rows > 0;
     }
 
+    /// <summary>
+    /// Clones a sync project as a brand-new project under <paramref name="newName"/>,
+    /// mirroring IC's "Copy Template" action. Deep-copies the config — project row,
+    /// project-level scope, project-level (legacy) attribute mappings, AND the full
+    /// Phase-7 workflow tree (Workflows → WorkflowSteps → per-step mappings → per-step
+    /// scopes) — every row re-keyed with a fresh Guid. The clone is created
+    /// <b>Disabled, unscheduled, never-run</b> (run history + counters are NOT copied)
+    /// so it cannot fire until the operator reviews it. The whole copy runs in one
+    /// transaction so a half-cloned project can never be left behind.
+    /// Returns the new project's Id.
+    /// </summary>
+    public async Task<Guid> CloneAsync(Guid sourceProjectId, string newName)
+    {
+        using var conn = CreateConnection();
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            var source = await conn.QuerySingleOrDefaultAsync<SyncProject>(
+                "SELECT * FROM SyncProjects WHERE Id = @Id", new { Id = sourceProjectId }, tx);
+            if (source is null)
+                throw new InvalidOperationException($"SyncProject {sourceProjectId} not found.");
+
+            var now = DateTime.UtcNow;
+            var newId = Guid.NewGuid();
+
+            // 1) The project row. New identity; disabled + unscheduled + zeroed run
+            //    state so the clone is inert until the operator enables it.
+            await conn.ExecuteAsync(@"
+                INSERT INTO SyncProjects
+                    (Id, WorkspaceId, Name, Description, SourceTenantId, SinkTenantId, ObjectClass,
+                     SourceCredentialName, SinkCredentialName,
+                     CronSchedule, IsEnabled, IsRunning, SkipUnchanged, LastRunAt, LastRunStatus, LastRunId,
+                     NextScheduledRunAt, TotalRuns, SuccessfulRuns, FailedRuns, CreatedAt, LastModified)
+                VALUES
+                    (@Id, @WorkspaceId, @Name, @Description, @SourceTenantId, @SinkTenantId, @ObjectClass,
+                     @SourceCredentialName, @SinkCredentialName,
+                     NULL, 0, 0, @SkipUnchanged, NULL, NULL, NULL,
+                     NULL, 0, 0, 0, @CreatedAt, @LastModified);",
+                new
+                {
+                    Id = newId,
+                    source.WorkspaceId,
+                    Name = newName,
+                    source.Description,
+                    source.SourceTenantId,
+                    source.SinkTenantId,
+                    source.ObjectClass,
+                    source.SourceCredentialName,
+                    source.SinkCredentialName,
+                    source.SkipUnchanged,
+                    CreatedAt = now,
+                    LastModified = now
+                }, tx);
+
+            // 2) Project-level scope (WorkflowStepId IS NULL).
+            var projectScope = await conn.QuerySingleOrDefaultAsync<SyncProjectScope>(
+                "SELECT * FROM SyncProjectScopes WHERE SyncProjectId = @Id AND WorkflowStepId IS NULL",
+                new { Id = sourceProjectId }, tx);
+            if (projectScope is not null)
+            {
+                await conn.ExecuteAsync(@"
+                    INSERT INTO SyncProjectScopes
+                        (Id, SyncProjectId, WorkflowStepId, BaseDN, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
+                    VALUES
+                        (@Id, @SyncProjectId, NULL, @BaseDN, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);",
+                    new
+                    {
+                        Id = Guid.NewGuid(),
+                        SyncProjectId = newId,
+                        projectScope.BaseDN,
+                        projectScope.LdapFilter,
+                        projectScope.QueryExpression,
+                        projectScope.PageSize,
+                        projectScope.MaxObjects,
+                        projectScope.IncludeDeleted,
+                        CreatedAt = now,
+                        LastModified = now
+                    }, tx);
+            }
+
+            // 3) Project-level (legacy) mappings (WorkflowStepId IS NULL).
+            var projectMappings = (await conn.QueryAsync<AttributeMapping>(
+                "SELECT * FROM AttributeMappings WHERE SyncProjectId = @Id AND WorkflowStepId IS NULL ORDER BY SortOrder, SinkAttribute",
+                new { Id = sourceProjectId }, tx)).ToList();
+            foreach (var m in projectMappings)
+            {
+                await conn.ExecuteAsync(@"
+                    INSERT INTO AttributeMappings
+                        (Id, SyncProjectId, WorkflowStepId, SourceAttribute, SinkAttribute, TransformExpr, IsRequired, SortOrder)
+                    VALUES
+                        (@Id, @SyncProjectId, NULL, @SourceAttribute, @SinkAttribute, @TransformExpr, @IsRequired, @SortOrder);",
+                    new
+                    {
+                        Id = Guid.NewGuid(),
+                        SyncProjectId = newId,
+                        m.SourceAttribute,
+                        m.SinkAttribute,
+                        m.TransformExpr,
+                        m.IsRequired,
+                        m.SortOrder
+                    }, tx);
+            }
+
+            // 4) Workflow tree. Each old WorkflowStep.Id → new id so per-step
+            //    mappings + scopes can be re-pointed.
+            var workflows = (await conn.QueryAsync<Workflow>(
+                "SELECT * FROM Workflows WHERE SyncProjectId = @Id ORDER BY Ordinal, Name",
+                new { Id = sourceProjectId }, tx)).ToList();
+
+            foreach (var wf in workflows)
+            {
+                var newWorkflowId = Guid.NewGuid();
+                await conn.ExecuteAsync(@"
+                    INSERT INTO Workflows (Id, SyncProjectId, Name, Description, Ordinal, Enabled, CreatedAt, ModifiedAt)
+                    VALUES (@Id, @SyncProjectId, @Name, @Description, @Ordinal, @Enabled, @CreatedAt, @ModifiedAt);",
+                    new
+                    {
+                        Id = newWorkflowId,
+                        SyncProjectId = newId,
+                        wf.Name,
+                        wf.Description,
+                        wf.Ordinal,
+                        wf.Enabled,
+                        CreatedAt = now,
+                        ModifiedAt = now
+                    }, tx);
+
+                var steps = (await conn.QueryAsync<WorkflowStep>(
+                    "SELECT * FROM WorkflowSteps WHERE WorkflowId = @Id ORDER BY Ordinal, Name",
+                    new { Id = wf.Id }, tx)).ToList();
+
+                foreach (var step in steps)
+                {
+                    var newStepId = Guid.NewGuid();
+                    await conn.ExecuteAsync(@"
+                        INSERT INTO WorkflowSteps (Id, WorkflowId, Name, StepType, Ordinal, Enabled, Configuration, CreatedAt, ModifiedAt)
+                        VALUES (@Id, @WorkflowId, @Name, @StepType, @Ordinal, @Enabled, @Configuration, @CreatedAt, @ModifiedAt);",
+                        new
+                        {
+                            Id = newStepId,
+                            WorkflowId = newWorkflowId,
+                            step.Name,
+                            step.StepType,
+                            step.Ordinal,
+                            step.Enabled,
+                            step.Configuration,
+                            CreatedAt = now,
+                            ModifiedAt = now
+                        }, tx);
+
+                    // Per-step mappings.
+                    var stepMappings = (await conn.QueryAsync<AttributeMapping>(
+                        "SELECT * FROM AttributeMappings WHERE WorkflowStepId = @Id ORDER BY SortOrder, SinkAttribute",
+                        new { Id = step.Id }, tx)).ToList();
+                    foreach (var m in stepMappings)
+                    {
+                        await conn.ExecuteAsync(@"
+                            INSERT INTO AttributeMappings
+                                (Id, SyncProjectId, WorkflowStepId, SourceAttribute, SinkAttribute, TransformExpr, IsRequired, SortOrder)
+                            VALUES
+                                (@Id, @SyncProjectId, @WorkflowStepId, @SourceAttribute, @SinkAttribute, @TransformExpr, @IsRequired, @SortOrder);",
+                            new
+                            {
+                                Id = Guid.NewGuid(),
+                                SyncProjectId = newId,
+                                WorkflowStepId = newStepId,
+                                m.SourceAttribute,
+                                m.SinkAttribute,
+                                m.TransformExpr,
+                                m.IsRequired,
+                                m.SortOrder
+                            }, tx);
+                    }
+
+                    // Per-step scope.
+                    var stepScope = await conn.QuerySingleOrDefaultAsync<SyncProjectScope>(
+                        "SELECT TOP 1 * FROM SyncProjectScopes WHERE WorkflowStepId = @Id",
+                        new { Id = step.Id }, tx);
+                    if (stepScope is not null)
+                    {
+                        await conn.ExecuteAsync(@"
+                            INSERT INTO SyncProjectScopes
+                                (Id, SyncProjectId, WorkflowStepId, BaseDN, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
+                            VALUES
+                                (@Id, @SyncProjectId, @WorkflowStepId, @BaseDN, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);",
+                            new
+                            {
+                                Id = Guid.NewGuid(),
+                                SyncProjectId = newId,
+                                WorkflowStepId = newStepId,
+                                stepScope.BaseDN,
+                                stepScope.LdapFilter,
+                                stepScope.QueryExpression,
+                                stepScope.PageSize,
+                                stepScope.MaxObjects,
+                                stepScope.IncludeDeleted,
+                                CreatedAt = now,
+                                LastModified = now
+                            }, tx);
+                    }
+                }
+            }
+
+            tx.Commit();
+            return newId;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
     public Task<int> DeleteAsync(Guid id) =>
         ExecuteAsync(@"
             DELETE FROM SyncProjectScopes WHERE SyncProjectId = @Id;

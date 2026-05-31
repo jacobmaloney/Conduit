@@ -1,0 +1,102 @@
+@page "/synchronization-center"
+@page "/sync-center"
+@attribute [Authorize]
+@using Conduit.Web.Pages
+@using Conduit.Web.Pages.Sync
+@using Microsoft.AspNetCore.WebUtilities
+@inject NavigationManager Navigation
+
+@*
+    Synchronization Center — Conduit's sync HOME.
+
+    Faithful mirror of IC's WebPortal/Pages/Admin/SystemCenter.razor structure:
+    ONE tabbed hub that anchors the whole sync experience. IC sections are
+    Connections / Projects / History / Tags / Modules; this pass implements the
+    three load-bearing tabs (Connections / Projects / History). Tags & Modules
+    are DEFERRED (noted below) — they are IC-governance-flavored and not part of
+    the directory-sync core yet.
+
+    Hosting approach (chosen for Blazor Server, lowest-churn + no Razor SG risk):
+    the hub RENDERS THE EXISTING SYNC PAGES AS CHILD COMPONENTS, one per tab.
+    The pages keep their own @page routes alive (standalone deep-links still
+    work), and this hub becomes the surface the user lands on. We touch ZERO
+    lines of the existing @code blocks, so none of the documented Razor
+    source-generator traps (wrapper-div @code scope, $"" interpolation, etc.)
+    can fire — the panels are reused verbatim.
+
+    Active tab is reflected in the URL (?tab=connections|projects|history) so a
+    refresh / deep-link lands on the right section without a second route.
+*@
+
+<PageTitle>Synchronization Center - Conduit</PageTitle>
+
+<div class="container-fluid identities-container sync-center-container">
+    <CcTemplate1 Title="Synchronization Center"
+                 Subtitle="Connections, sync projects, and run history — the home for everything that moves identities."
+                 Icon="fas fa-sync-alt"
+                 IconAccent="cyan" />
+
+    <CcFilterTabs Tabs="@_tabs"
+                  ActiveTab="@activeTab"
+                  OnTabChanged="HandleTabChanged" />
+
+    <div class="sync-center-body">
+        @if (activeTab == "connections")
+        {
+            <ConnectedSystems />
+        }
+        else if (activeTab == "history")
+        {
+            <SyncHistory />
+        }
+        else if (activeTab == "schedules")
+        {
+            <ScheduleManager />
+        }
+        else if (activeTab == "processing")
+        {
+            <ProcessingCenter />
+        }
+        else
+        {
+            <SyncProjects />
+        }
+    </div>
+</div>
+
+@code {
+    private string activeTab = "projects";
+
+    private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
+    {
+        new("connections", "Connections", null, "fas fa-plug"),
+        new("projects", "Projects", null, "fas fa-exchange-alt"),
+        new("history", "History", null, "fas fa-history"),
+        new("schedules", "Schedules", null, "fas fa-calendar-alt"),
+        new("processing", "Processing", null, "fas fa-microchip"),
+        // DEFERRED to a later pass (IC SystemCenter also has these):
+        //   new("tags", "Tags", null, "fas fa-tags"),
+        //   new("modules", "Modules", null, "fas fa-puzzle-piece"),
+    };
+
+    protected override void OnInitialized()
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        if (QueryHelpers.ParseQuery(uri.Query).TryGetValue("tab", out var tab))
+        {
+            var requested = tab.ToString().ToLowerInvariant();
+            if (requested is "connections" or "projects" or "history" or "schedules" or "processing")
+            {
+                activeTab = requested;
+            }
+        }
+    }
+
+    private void HandleTabChanged(string key)
+    {
+        activeTab = key;
+        // Reflect the active tab in the URL without forcing a full re-render of
+        // the host. replace:true keeps the back button sane.
+        Navigation.NavigateTo($"/synchronization-center?tab={key}", forceLoad: false, replace: true);
+    }
+}

@@ -49,6 +49,7 @@ public sealed class SyncProjectOrchestrator
     private readonly SyncRunAsyncJobRepository _asyncJobRepo;
     private readonly WorkflowRepository _workflowRepo;
     private readonly SinkRecordHashRepository _hashRepo;
+    private readonly SyncCancellationRegistry _cancellation;
     private readonly ILogger<SyncProjectOrchestrator> _logger;
 
     public SyncProjectOrchestrator(
@@ -59,6 +60,7 @@ public sealed class SyncProjectOrchestrator
         SyncRunAsyncJobRepository asyncJobRepo,
         WorkflowRepository workflowRepo,
         SinkRecordHashRepository hashRepo,
+        SyncCancellationRegistry cancellation,
         ILogger<SyncProjectOrchestrator> logger)
     {
         _projectRepo = projectRepo;
@@ -68,6 +70,7 @@ public sealed class SyncProjectOrchestrator
         _asyncJobRepo = asyncJobRepo;
         _workflowRepo = workflowRepo;
         _hashRepo = hashRepo;
+        _cancellation = cancellation;
         _logger = logger;
     }
 
@@ -117,7 +120,20 @@ public sealed class SyncProjectOrchestrator
             _ = won;
             await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
 
-            return await RunCoreAsync(project, run, cancellationToken);
+            // Register this run with the in-process cancellation registry so the
+            // "Stop Sync" button can trip the SAME token the host-shutdown path
+            // uses. The linked token combines the caller's token (host shutdown /
+            // scheduler stop) with the registry's per-project cancel signal. We
+            // unregister in a finally so a fast re-run gets a clean slot.
+            var runToken = _cancellation.Register(project.Id, cancellationToken);
+            try
+            {
+                return await RunCoreAsync(project, run, runToken);
+            }
+            finally
+            {
+                _cancellation.Unregister(project.Id);
+            }
         }
         catch (Exception ex)
         {

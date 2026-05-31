@@ -101,4 +101,16 @@ public sealed class ActiveDirectoryAdapter : IConnectorAdapter
             _tenantRepo,
             _protector,
             _loggerFactory.CreateLogger<ActiveDirectorySink>());
+
+    /// <summary>
+    /// Live OU/container browse for the wizard Scope step's Base DN picker.
+    /// Binds the tenant's stored 'ldap' credentials and enumerates one level of
+    /// containers at a time (lazy drill-down).
+    /// </summary>
+    public IConnectorContainerBrowser? CreateContainerBrowser(Guid tenantId) =>
+        new ActiveDirectoryContainerBrowser(
+            tenantId,
+            _tenantRepo,
+            _protector,
+            _loggerFactory.CreateLogger<ActiveDirectoryContainerBrowser>());
 }

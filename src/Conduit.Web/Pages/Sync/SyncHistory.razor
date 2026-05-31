@@ -177,21 +177,30 @@
 
                         @if (activeDetailTab == "log")
                         {
-                            <div class="sync-detail-section-title">
-                                Log (@logs.Count lines)
-                                @if (selectedRun.Status == "Running")
-                                {
-                                    <small class="sync-log-streaming"><i class="fas fa-sync fa-spin me-1"></i>Streaming…</small>
-                                }
+                            <div class="sync-log-toolbar">
+                                <div class="sync-detail-section-title">
+                                    Log (@visibleLogs.Count of @logs.Count lines)
+                                    @if (selectedRun.Status == "Running")
+                                    {
+                                        <small class="sync-log-streaming"><i class="fas fa-sync fa-spin me-1"></i>Streaming…</small>
+                                    }
+                                </div>
+                                <button type="button"
+                                        class="btn btn-sm @(traceEnabled ? "btn-primary" : "btn-outline-secondary")"
+                                        @onclick="ToggleTrace">
+                                    <i class="fas @(traceEnabled ? "fa-stream" : "fa-align-left") me-1"></i>
+                                    @(traceEnabled ? "Disable Trace" : "Enable Trace")
+                                </button>
                             </div>
-                            @if (logs.Count == 0)
+                            <div class="sync-log-trace-note">@TraceNote</div>
+                            @if (visibleLogs.Count == 0)
                             {
-                                <div class="sync-detail-empty-row">No log lines.</div>
+                                <div class="sync-detail-empty-row">No log lines at this verbosity.</div>
                             }
                             else
                             {
                                 <div class="sync-log-block">
-                                    @foreach (var line in logs)
+                                    @foreach (var line in visibleLogs)
                                     {
                                         <div class="sync-log-line sync-log-@line.Level.ToLowerInvariant()">
                                             <span class="sync-log-ts">@line.Timestamp.ToString("HH:mm:ss")</span>
@@ -200,6 +209,62 @@
                                         </div>
                                     }
                                 </div>
+                            }
+                        }
+                        else if (activeDetailTab == "steps")
+                        {
+                            <div class="sync-detail-section-title">
+                                Steps (@steps.Count)
+                                <small class="sync-log-trace-inline">Derived from the run's own step log markers.</small>
+                            </div>
+                            @if (steps.Count == 0)
+                            {
+                                <div class="sync-detail-empty-row">
+                                    This run produced no per-step markers. It may predate workflow steps,
+                                    or ran the legacy single-pass mapping. See the Log tab for raw lines.
+                                </div>
+                            }
+                            else
+                            {
+                                <table class="sync-asyncjobs-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Status</th>
+                                            <th>Step</th>
+                                            <th>Type</th>
+                                            <th class="text-center">Read</th>
+                                            <th class="text-center">Created</th>
+                                            <th class="text-center">Updated</th>
+                                            <th class="text-center">Skipped</th>
+                                            <th class="text-center">Failed</th>
+                                            <th class="text-end">Detail</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var st in steps)
+                                        {
+                                            var step = st;
+                                            <tr class="@(step.HasError ? "sync-step-row-failed" : "")">
+                                                <td><span class="badge bg-@StepBadge(step)">@StepStatus(step)</span></td>
+                                                <td>@step.Name</td>
+                                                <td><code>@step.StepType</code></td>
+                                                <td class="text-center">@DeltaCell(step.Read)</td>
+                                                <td class="text-center">@DeltaCell(step.Created)</td>
+                                                <td class="text-center">@DeltaCell(step.Updated)</td>
+                                                <td class="text-center">@DeltaCell(step.Skipped)</td>
+                                                <td class="text-center">@DeltaCell(step.Failed)</td>
+                                                <td class="text-end">
+                                                    <button type="button"
+                                                            class="btn btn-sm @(step.HasError ? "btn-outline-danger" : "btn-outline-secondary")"
+                                                            @onclick="() => OpenStepDetail(step)">
+                                                        <i class="fas @(step.HasError ? "fa-triangle-exclamation" : "fa-magnifying-glass") me-1"></i>
+                                                        @(step.HasError ? "Error" : "View")
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
                             }
                         }
                         else if (activeDetailTab == "asyncjobs")
@@ -307,6 +372,79 @@
     </div>
 </div>
 
+@if (stepDetail is not null)
+{
+    <div class="modal-backdrop fade show" @onclick="CloseStepDetail"></div>
+    <div class="modal fade show d-block" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <span class="badge bg-@StepBadge(stepDetail) me-2">@StepStatus(stepDetail)</span>
+                        Step: @stepDetail.Name
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseStepDetail" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="sync-detail-grid">
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">TYPE</div>
+                            <div class="sync-detail-value"><code>@stepDetail.StepType</code></div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">READ</div>
+                            <div class="sync-detail-value">@DeltaCell(stepDetail.Read)</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">CREATED</div>
+                            <div class="sync-detail-value text-success">@DeltaCell(stepDetail.Created)</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">UPDATED</div>
+                            <div class="sync-detail-value text-info">@DeltaCell(stepDetail.Updated)</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">SKIPPED</div>
+                            <div class="sync-detail-value text-muted">@DeltaCell(stepDetail.Skipped)</div>
+                        </div>
+                        <div class="sync-detail-cell">
+                            <div class="sync-detail-label">FAILED</div>
+                            <div class="sync-detail-value text-danger">@DeltaCell(stepDetail.Failed)</div>
+                        </div>
+                    </div>
+
+                    @if (stepDetail.HasError)
+                    {
+                        <div class="sync-detail-section">
+                            <div class="sync-detail-section-title">Errors</div>
+                            <pre class="sync-error-block">@stepDetail.ErrorText</pre>
+                        </div>
+                    }
+
+                    <div class="sync-detail-section">
+                        <div class="sync-detail-section-title">Step log (@stepDetail.Lines.Count lines)</div>
+                        <div class="sync-log-block">
+                            @foreach (var line in stepDetail.Lines)
+                            {
+                                <div class="sync-log-line sync-log-@line.Level.ToLowerInvariant()">
+                                    <span class="sync-log-ts">@line.Timestamp.ToString("HH:mm:ss")</span>
+                                    <span class="sync-log-level">@line.Level</span>
+                                    <span class="sync-log-msg">@line.Message</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseStepDetail">
+                        <i class="fas fa-xmark me-1"></i>Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     [Parameter] public Guid? RunId { get; set; }
 
@@ -323,9 +461,47 @@
     private IReadOnlyList<CcFilterTabs.Tab> statusTabs = Array.Empty<CcFilterTabs.Tab>();
     private IReadOnlyList<CcStatRow.StatItem> statRows = Array.Empty<CcStatRow.StatItem>();
 
-    // Phase 5: detail-pane sub-tabs (Log / Async Jobs).
+    // Item 4: detail-pane sub-tabs (Log / Steps / Async Jobs).
     private string activeDetailTab = "log";
     private IReadOnlyList<CcFilterTabs.Tab> detailTabs = Array.Empty<CcFilterTabs.Tab>();
+
+    // Item 4: client-side trace verbosity + parsed step view.
+    // HONEST NOTE: the toggle is CLIENT-SIDE. Conduit's orchestrator writes one
+    // Info/Warning/Error log stream and accepts no server-side verbosity flag,
+    // so "Enable Trace" reveals the indented per-object/step-detail lines while
+    // "Disable Trace" collapses to workflow/step headers + warnings + errors.
+    // No "Debug" level is emitted today; nothing is faked as a server trace level.
+    private bool traceEnabled = true;
+    private List<Conduit.Core.SyncModels.SyncRunLog> visibleLogs = new();
+    private List<StepView> steps = new();
+    private StepView? stepDetail;
+
+    private string TraceNote => traceEnabled
+        ? "Trace ON — showing every log line, including per-object detail. (Client-side verbosity; the orchestrator emits a single Info/Warning/Error stream.)"
+        : "Trace OFF — showing workflow/step headers, warnings and errors only. (Client-side filter over the same stream.)";
+
+    /// <summary>
+    /// A step reconstructed from the orchestrator's own log markers — NOT a DB
+    /// table. SyncRunLogs has no step column (Id/SyncRunId/Level/Message/Timestamp
+    /// only), so step boundaries are derived from the real lines the orchestrator
+    /// emits: "  Step '{name}' [{type}] starting (ordinal {n})." …
+    /// "  Step '{name}' done. +Read=… +Failed=…." with any
+    /// "  Step '{name}' threw: …" Error line in between.
+    /// </summary>
+    private sealed class StepView
+    {
+        public string Name { get; set; } = string.Empty;
+        public string StepType { get; set; } = string.Empty;
+        public bool Done { get; set; }
+        public bool HasError { get; set; }
+        public int? Read { get; set; }
+        public int? Created { get; set; }
+        public int? Updated { get; set; }
+        public int? Skipped { get; set; }
+        public int? Failed { get; set; }
+        public List<Conduit.Core.SyncModels.SyncRunLog> Lines { get; } = new();
+        public string ErrorText { get; set; } = string.Empty;
+    }
 
     // Phase 5: async-job admin state for the currently selected run.
     private List<Conduit.Core.SyncModels.SyncRunAsyncJob> allAsyncJobs = new();
@@ -440,14 +616,159 @@
 
     private async Task LoadLogs()
     {
-        if (selectedRun is null) { logs = new(); return; }
+        if (selectedRun is null) { logs = new(); RebuildDerivedViews(); return; }
         try { logs = await RunRepo.GetLogsAsync(selectedRun.Id, take: 2000); }
         catch (Exception ex)
         {
             Console.WriteLine($"LoadLogs failed: {ex.Message}");
             logs = new();
         }
+        RebuildDerivedViews();
     }
+
+    // ─── Item 4: derive trace-filtered log + step view from real log lines ───
+
+    private void RebuildDerivedViews()
+    {
+        visibleLogs = traceEnabled
+            ? logs
+            : logs.Where(IsHeadlineLine).ToList();
+        steps = ParseSteps(logs);
+
+        // Keep an open step-detail modal in sync with refreshed log data.
+        if (stepDetail is not null)
+        {
+            stepDetail = steps.FirstOrDefault(s => s.Name == stepDetail.Name && s.StepType == stepDetail.StepType);
+        }
+    }
+
+    // A line is "headline" when it is a Warning/Error, or a step/workflow header
+    // (these start at column 0-2 in the orchestrator's emitted text). Per-object
+    // detail lines are indented 4+ spaces and are hidden when trace is OFF.
+    private static bool IsHeadlineLine(Conduit.Core.SyncModels.SyncRunLog line)
+    {
+        if (line.Level == "Warning" || line.Level == "Error") return true;
+        var leadingSpaces = line.Message.Length - line.Message.TrimStart().Length;
+        return leadingSpaces < 4;
+    }
+
+    private static List<StepView> ParseSteps(List<Conduit.Core.SyncModels.SyncRunLog> source)
+    {
+        var result = new List<StepView>();
+        StepView? current = null;
+
+        foreach (var line in source)
+        {
+            var msg = line.Message;
+            var trimmed = msg.TrimStart();
+
+            if (trimmed.StartsWith("Step '"))
+            {
+                var name = ExtractQuoted(trimmed);
+
+                if (trimmed.Contains("' starting"))
+                {
+                    current = new StepView
+                    {
+                        Name = name,
+                        StepType = ExtractBracketed(trimmed)
+                    };
+                    current.Lines.Add(line);
+                    result.Add(current);
+                    continue;
+                }
+
+                if (current is not null && current.Name == name)
+                {
+                    current.Lines.Add(line);
+                    if (trimmed.Contains("' done."))
+                    {
+                        current.Done = true;
+                        ApplyDeltas(current, trimmed);
+                    }
+                    else if (trimmed.Contains("' threw:"))
+                    {
+                        current.HasError = true;
+                    }
+                    continue;
+                }
+            }
+
+            if (current is not null)
+            {
+                current.Lines.Add(line);
+                if (line.Level == "Error") current.HasError = true;
+            }
+        }
+
+        foreach (var s in result)
+        {
+            var errLines = s.Lines.Where(l => l.Level == "Error").Select(l => l.Message.Trim());
+            s.ErrorText = string.Join("\n", errLines);
+            if (!string.IsNullOrEmpty(s.ErrorText)) s.HasError = true;
+        }
+        return result;
+    }
+
+    // "  Step 'Map Users' [Mapping] starting (ordinal 0)." → "Map Users"
+    private static string ExtractQuoted(string s)
+    {
+        var open = s.IndexOf('\'');
+        if (open < 0) return string.Empty;
+        var close = s.IndexOf('\'', open + 1);
+        if (close < 0) return string.Empty;
+        return s.Substring(open + 1, close - open - 1);
+    }
+
+    // "  Step 'Map Users' [Mapping] starting…" → "Mapping"
+    private static string ExtractBracketed(string s)
+    {
+        var open = s.IndexOf('[');
+        if (open < 0) return string.Empty;
+        var close = s.IndexOf(']', open + 1);
+        if (close < 0) return string.Empty;
+        return s.Substring(open + 1, close - open - 1);
+    }
+
+    // "  Step 'X' done. +Read=5 +Created=2 +Updated=0 +Skipped=1 +Failed=0."
+    private static void ApplyDeltas(StepView step, string doneLine)
+    {
+        step.Read    = ReadDelta(doneLine, "+Read=");
+        step.Created = ReadDelta(doneLine, "+Created=");
+        step.Updated = ReadDelta(doneLine, "+Updated=");
+        step.Skipped = ReadDelta(doneLine, "+Skipped=");
+        step.Failed  = ReadDelta(doneLine, "+Failed=");
+    }
+
+    private static int? ReadDelta(string source, string token)
+    {
+        var idx = source.IndexOf(token, StringComparison.Ordinal);
+        if (idx < 0) return null;
+        var start = idx + token.Length;
+        var end = start;
+        while (end < source.Length && (char.IsDigit(source[end]) || source[end] == '-')) end++;
+        if (end == start) return null;
+        return int.TryParse(source.Substring(start, end - start), out var v) ? v : null;
+    }
+
+    private static string DeltaCell(int? v) => v.HasValue ? v.Value.ToString() : "—";
+
+    private static string StepStatus(StepView s) =>
+        s.HasError ? "Failed" : s.Done ? "Done" : "Running";
+
+    private static string StepBadge(StepView s) =>
+        s.HasError ? "danger" : s.Done ? "success" : "info";
+
+    private async Task ToggleTrace()
+    {
+        traceEnabled = !traceEnabled;
+        RebuildDerivedViews();
+        await Task.CompletedTask;
+    }
+
+    private void OpenStepDetail(StepView step) => stepDetail = step;
+
+    private void CloseStepDetail() => stepDetail = null;
 
     private async Task LoadAsyncJobs()
     {
@@ -481,6 +802,7 @@
         detailTabs = new[]
         {
             new CcFilterTabs.Tab("log", "Log", logs.Count),
+            new CcFilterTabs.Tab("steps", "Steps", steps.Count),
             new CcFilterTabs.Tab("asyncjobs", "Async jobs", allAsyncJobs.Count)
         };
 

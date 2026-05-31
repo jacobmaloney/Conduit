@@ -15,13 +15,14 @@
 @inject IHttpContextAccessor HttpCtx
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject IWebHostEnvironment Environment
 @inject Conduit.Sync.Security.CredentialProtector CredentialProtector
 @inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
 @inject Conduit.DataAccess.Repositories.ConnectionCredentialRepository CredRepo
 @inject Conduit.DataAccess.Repositories.SyncProjectRepository ProjectRepo
 @inject Conduit.Sync.Orchestration.SyncProjectOrchestrator Orchestrator
 
-<PageTitle>Connected Systems - Conduit</PageTitle>
+<PageTitle>Connections - Conduit</PageTitle>
 
 <div class="container-fluid">
     @* Connected Systems landed the new card design 2026-05-23. .head-row +
@@ -30,8 +31,8 @@
        .tenant-card patterns and migrate when touched. *@
     <div class="head-row">
         <div class="head-title">
-            <h1>Connected Systems</h1>
-            <div class="head-sub">External identity targets this SCIM server connects to.</div>
+            <h1>Connections</h1>
+            <div class="head-sub">Directory and target systems Conduit syncs identities to and from.</div>
         </div>
         <div class="head-actions">
             <button class="btn" @onclick="SeedDemo" disabled="@seeding">
@@ -140,37 +141,68 @@
                             </span>
                         }
                         <div class="sys-actions">
-                            @if (IsConnectorType(s.SystemType))
+                            @* Directory-bind model (IC parity): the primary action on a
+                               connection is a real Test Connection that binds the adapter
+                               against the stored credentials. Mirrors IC SystemCenter's
+                               §connections Test-Connection UX. Always surfaced when an
+                               adapter is registered for the type. *@
+                            @if (HasAdapter(s.SystemType))
                             {
-                                <button class="ic-btn quicksync" @onclick="() => ShowQuickSyncModal(s)" title="Quick Sync — clone this system into a local browser tenant">
-                                    <i class="oi oi-data-transfer-download"></i>
-                                    <span>Quick Sync</span>
+                                <button class="ic-btn test"
+                                        @onclick="() => TestCardConnectionAsync(s)"
+                                        disabled="@(cardTestBusyId == s.TenantId)"
+                                        title="Test Connection — perform a real bind against this system using its stored credentials">
+                                    @if (cardTestBusyId == s.TenantId)
+                                    {
+                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                    }
+                                    else
+                                    {
+                                        <i class="oi oi-pulse"></i>
+                                    }
+                                    <span>Test Connection</span>
                                 </button>
                             }
-                            <button class="ic-btn endpoint" @onclick="() => ShowEndpoints(s)" title="View endpoints + tokens">
-                                <i class="oi oi-external-link"></i>
-                                <span>Endpoints</span>
-                            </button>
-                            @if (s.SystemType == "ActiveDirectory")
+                            @if (HasCredentialFields(s.SystemType))
                             {
-                                <button class="ic-btn" @onclick="() => ShowCredentialsModal(s)" title="Credentials & test (LDAP bind)">
+                                <button class="ic-btn" @onclick="() => ShowCredentialsModal(s)" title="Credentials & test (directory bind)">
                                     <i class="oi oi-key"></i>
                                 </button>
                             }
                             <button class="ic-btn" @onclick="() => EditSystem(s.TenantId)" title="Edit">
                                 <i class="oi oi-pencil"></i>
                             </button>
-                            <button class="ic-btn @(s.LegalHold ? "held" : "")"
-                                    @onclick="() => ToggleLegalHold(s)"
-                                    title="@(s.LegalHold ? "Legal hold ON — destructive actions are refused. Click to release." : "Put on legal hold — refuses Clear/Deactivate/Delete.")">
-                                <i class="oi @(s.LegalHold ? "oi-lock-locked" : "oi-lock-unlocked")"></i>
-                            </button>
-                            <button class="ic-btn warn"
-                                    @onclick="() => ClearData(s)"
-                                    disabled="@(clearInProgress || s.LegalHold)"
-                                    title="@(s.LegalHold ? "Refused — system is on legal hold." : "Clear users + groups (keeps the system, tokens, config)")">
-                                <i class="oi oi-eraser"></i>
-                            </button>
+                            @* ── SCIM-server chrome (moved 2026-05-31, item 2) ──────────
+                               Quick Sync, Endpoints, Legal Hold, and Clear Data are
+                               SCIMServer-fork surfaces with no IC directory-connection
+                               parallel. Gated behind ShowDevChrome (== IsDevelopment) per
+                               the item-6 flag — NOT hard-deleted. Hidden from the primary
+                               directory-bind connection view in production. *@
+                            @if (ShowDevChrome)
+                            {
+                                @if (IsConnectorType(s.SystemType))
+                                {
+                                    <button class="ic-btn quicksync" @onclick="() => ShowQuickSyncModal(s)" title="[Dev] Quick Sync — clone this system into a local browser tenant">
+                                        <i class="oi oi-data-transfer-download"></i>
+                                        <span>Quick Sync</span>
+                                    </button>
+                                }
+                                <button class="ic-btn endpoint" @onclick="() => ShowEndpoints(s)" title="[Dev] View SCIM/REST endpoints + tokens">
+                                    <i class="oi oi-external-link"></i>
+                                    <span>Endpoints</span>
+                                </button>
+                                <button class="ic-btn @(s.LegalHold ? "held" : "")"
+                                        @onclick="() => ToggleLegalHold(s)"
+                                        title="@(s.LegalHold ? "[Dev] Legal hold ON — destructive actions are refused. Click to release." : "[Dev] Put on legal hold — refuses Clear/Deactivate/Delete.")">
+                                    <i class="oi @(s.LegalHold ? "oi-lock-locked" : "oi-lock-unlocked")"></i>
+                                </button>
+                                <button class="ic-btn warn"
+                                        @onclick="() => ClearData(s)"
+                                        disabled="@(clearInProgress || s.LegalHold)"
+                                        title="@(s.LegalHold ? "[Dev] Refused — system is on legal hold." : "[Dev] Clear users + groups (keeps the system, tokens, config)")">
+                                    <i class="oi oi-eraser"></i>
+                                </button>
+                            }
                             @if (s.TenantId != TenantRepository.DefaultTenantId)
                             {
                                 <button class="ic-btn warn"
@@ -187,6 +219,13 @@
                                 </button>
                             }
                         </div>
+                        @if (cardTestResultId == s.TenantId && !string.IsNullOrEmpty(cardTestMessage))
+                        {
+                            <div class="card-test-result @(cardTestSuccess ? "ok" : "err")">
+                                <i class="oi @(cardTestSuccess ? "oi-circle-check" : "oi-circle-x")"></i>
+                                <span>@cardTestMessage</span>
+                            </div>
+                        }
                     </div>
                 </div>
             }
@@ -368,8 +407,8 @@
     <div class="modal-backdrop fade show"></div>
 }
 
-<!-- Endpoints modal -->
-@if (endpointsFor != null)
+<!-- Endpoints modal (SCIM-server chrome — dev-only) -->
+@if (ShowDevChrome && endpointsFor != null)
 {
     <div class="modal show d-block" tabindex="-1">
         <div class="modal-dialog modal-xl modal-dialog-scrollable">
@@ -994,8 +1033,9 @@
    Connector-tenant operator wants to "just see what's in this system" without
    wiring an explicit sink. We auto-mint (or reuse) a local Emulator tenant
    named "<source> Local Cache" and create one sync project per checked object
-   class with passthrough mapping, then kick off Run Now. *@
-@if (quickSyncFor is not null)
+   class with passthrough mapping, then kick off Run Now.
+   (SCIM-server chrome — dev-only.) *@
+@if (ShowDevChrome && quickSyncFor is not null)
 {
     <div class="modal show d-block" tabindex="-1">
         <div class="modal-dialog modal-lg">
@@ -1132,6 +1172,71 @@
         var name = s.Name?.Trim();
         if (string.IsNullOrEmpty(name)) return "?";
         return char.ToUpperInvariant(name[0]).ToString();
+    }
+
+    // Item 6 flag (matches NavMenu.razor): SCIM-server chrome — Quick Sync,
+    // Endpoints, Legal Hold, Clear Data — renders only in Development. The
+    // primary directory-bind connection view stays clean in production.
+    private bool ShowDevChrome => Environment.IsDevelopment();
+
+    // True when a connector adapter is registered for this system type, i.e. a
+    // real Test Connection bind is possible. Drives the per-card Test button.
+    private bool HasAdapter(string? systemType) =>
+        !string.IsNullOrEmpty(systemType) && ConnectorRegistry.Get(systemType) is not null;
+
+    // True when the adapter declares any credential type — i.e. there are
+    // directory-bind credentials worth opening the Credentials & test modal for.
+    private bool HasCredentialFields(string? systemType)
+    {
+        if (string.IsNullOrEmpty(systemType)) return false;
+        var adapter = ConnectorRegistry.Get(systemType);
+        return adapter?.CredentialTypes is { Count: > 0 };
+    }
+
+    // ─── Per-card Test Connection (directory-bind, IC parity) ───────────────
+    // Surfaces the real adapter bind directly on the card — no modal hop. Reuses
+    // the same ProbeTenantAsync path the create/edit form test (951eced) uses:
+    // resolve the adapter, build a source (sink fallback), call TestConnectionAsync
+    // against the tenant's already-stored encrypted credentials (6ab380e).
+    private Guid? cardTestBusyId;
+    private Guid? cardTestResultId;
+    private string cardTestMessage = string.Empty;
+    private bool cardTestSuccess;
+
+    private async Task TestCardConnectionAsync(TenantStats s)
+    {
+        if (cardTestBusyId == s.TenantId) return;
+        var adapter = ConnectorRegistry.Get(s.SystemType);
+        if (adapter is null)
+        {
+            cardTestResultId = s.TenantId;
+            cardTestSuccess = false;
+            cardTestMessage = string.Concat("No connector adapter registered for '", s.SystemType, "'.");
+            return;
+        }
+
+        cardTestBusyId = s.TenantId;
+        cardTestResultId = s.TenantId;
+        cardTestMessage = string.Empty;
+        StateHasChanged();
+        try
+        {
+            var result = await ProbeTenantAsync(adapter, s.TenantId);
+            cardTestSuccess = result.IsSuccessful;
+            cardTestMessage = string.IsNullOrWhiteSpace(result.Message)
+                ? (result.IsSuccessful ? "Connection succeeded." : "Connection failed.")
+                : result.Message;
+        }
+        catch (Exception ex)
+        {
+            cardTestSuccess = false;
+            cardTestMessage = string.Concat("Test failed: ", ex.Message);
+        }
+        finally
+        {
+            cardTestBusyId = null;
+            StateHasChanged();
+        }
     }
 
     // ─── Quick Sync support ────────────────────────────────────────────────

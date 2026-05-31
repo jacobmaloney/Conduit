@@ -1,0 +1,336 @@
+@*
+    CcDirectoryBrowserModal — shared live directory/OU container browser.
+
+    Ports IdentityCenter's OU browser UX into Conduit. Given a source tenant id,
+    it resolves that tenant's connector adapter, asks for an IConnectorContainerBrowser,
+    and lazy-loads OUs/containers one level at a time via a live bind against the
+    source. The operator drills down, picks a container, and the chosen DN is
+    returned to the caller — used by the Sync wizard's Base DN field.
+
+    Usage:
+      <CcDirectoryBrowserModal @ref="_dnBrowser" OnSelected="dn => { scopeForm.BaseDN = dn; }" />
+      ...
+      await _dnBrowser.ShowAsync(form.SourceTenantId, form.SourceCredentialName);
+
+    Reusable: any future "pick a container/Base DN" need (sink target OU, etc.)
+    can take a @ref to this same component.
+*@
+
+@implements IDisposable
+@inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
+@inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+
+@if (IsVisible)
+{
+    <div class="modal-backdrop fade show" @onclick="Cancel"></div>
+    <div class="modal fade show d-block" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-diagram-3 me-2"></i>Browse containers
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="Cancel" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3">
+                        Select a container to use as the Base DN for this read.
+                        Only objects within it (and its children) are synchronized.
+                    </p>
+
+                    @if (IsLoadingRoot)
+                    {
+                        <div class="text-center p-4">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading…</span>
+                            </div>
+                            <p class="mt-2 mb-0 text-muted">Binding and loading containers…</p>
+                        </div>
+                    }
+                    else if (!string.IsNullOrEmpty(ErrorMessage))
+                    {
+                        <div class="alert alert-danger mb-0" role="alert">
+                            <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
+                        </div>
+                    }
+                    else if (rootNodes.Count == 0)
+                    {
+                        <div class="alert alert-info mb-0" role="alert">
+                            <i class="bi bi-info-circle me-2"></i>
+                            No containers found under the directory root.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="cc-dn-tree">
+                            @foreach (var node in rootNodes)
+                            {
+                                @RenderNode(node, 0)
+                            }
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(selectedDn))
+                    {
+                        <div class="mt-3 small">
+                            <span class="text-muted">Selected:</span>
+                            <code>@selectedDn</code>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="Cancel">
+                        <i class="bi bi-x-circle me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" disabled="@(string.IsNullOrEmpty(selectedDn))" @onclick="Apply">
+                        <i class="bi bi-check-circle me-1"></i>Use this container
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>Fires with the chosen distinguished name when the operator clicks "Use this container".</summary>
+    [Parameter] public EventCallback<string> OnSelected { get; set; }
+
+    private bool IsVisible { get; set; }
+    private bool IsLoadingRoot { get; set; }
+    private string? ErrorMessage { get; set; }
+    private string? selectedDn;
+
+    private Guid _tenantId;
+    private string? _credentialName;
+    private Conduit.Sync.Connectors.IConnectorContainerBrowser? _browser;
+
+    private readonly List<Node> rootNodes = new();
+
+    private sealed class Node
+    {
+        public string Name { get; set; } = "";
+        public string Dn { get; set; } = "";
+        public string? Description { get; set; }
+        public bool HasChildren { get; set; }
+        public bool IsExpanded { get; set; }
+        public bool IsLoading { get; set; }
+        public bool Loaded { get; set; }
+        public List<Node> Children { get; } = new();
+    }
+
+    /// <summary>
+    /// Open the browser for the given source tenant. <paramref name="credentialName"/>
+    /// is the per-project source credential override (may be null/blank for the
+    /// default 'ldap' credential).
+    /// </summary>
+    public async Task ShowAsync(Guid tenantId, string? credentialName = null)
+    {
+        _tenantId = tenantId;
+        _credentialName = credentialName;
+        selectedDn = null;
+        ErrorMessage = null;
+        rootNodes.Clear();
+        _browser = null;
+        IsVisible = true;
+        IsLoadingRoot = true;
+        StateHasChanged();
+
+        await ResolveBrowserAndLoadRootAsync();
+
+        IsLoadingRoot = false;
+        StateHasChanged();
+    }
+
+    private async Task ResolveBrowserAndLoadRootAsync()
+    {
+        if (_tenantId == Guid.Empty)
+        {
+            ErrorMessage = "No source system selected.";
+            return;
+        }
+
+        var tenant = await TenantRepo.GetByIdAsync(_tenantId);
+        if (tenant is null)
+        {
+            ErrorMessage = "Source system not found.";
+            return;
+        }
+
+        var adapter = ConnectorRegistry.Get(tenant.SystemType);
+        if (adapter is null)
+        {
+            ErrorMessage = string.Concat("No connector registered for '", tenant.SystemType, "'.");
+            return;
+        }
+
+        // Phase 3 honors per-project credential-name override during the live bind.
+        using var scope = Conduit.Sync.Security.CredentialNameContext.Push(_credentialName, null);
+
+        _browser = adapter.CreateContainerBrowser(_tenantId);
+        if (_browser is null)
+        {
+            ErrorMessage = string.Concat(tenant.SystemType, " does not support container browsing. Enter the Base DN manually.");
+            return;
+        }
+
+        try
+        {
+            var result = await _browser.BrowseContainersAsync(null, CancellationToken.None);
+            if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                ErrorMessage = result.ErrorMessage;
+                return;
+            }
+            foreach (var n in result.Nodes)
+                rootNodes.Add(ToNode(n));
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = ex.Message;
+        }
+    }
+
+    private static Node ToNode(Conduit.Sync.Connectors.DirectoryContainerNode n) => new()
+    {
+        Name = n.Name,
+        Dn = n.DistinguishedName,
+        Description = n.Description,
+        HasChildren = n.HasChildren
+    };
+
+    private async Task ToggleAsync(Node node)
+    {
+        if (_browser is null) return;
+
+        if (!node.IsExpanded && !node.Loaded)
+        {
+            node.IsLoading = true;
+            StateHasChanged();
+            using var scope = Conduit.Sync.Security.CredentialNameContext.Push(_credentialName, null);
+            try
+            {
+                var result = await _browser.BrowseContainersAsync(node.Dn, CancellationToken.None);
+                node.Children.Clear();
+                if (string.IsNullOrEmpty(result.ErrorMessage))
+                {
+                    foreach (var c in result.Nodes)
+                        node.Children.Add(ToNode(c));
+                }
+                node.HasChildren = node.Children.Count > 0;
+                node.Loaded = true;
+            }
+            catch
+            {
+                node.Children.Clear();
+                node.HasChildren = false;
+                node.Loaded = true;
+            }
+            finally
+            {
+                node.IsLoading = false;
+            }
+        }
+
+        node.IsExpanded = !node.IsExpanded;
+        StateHasChanged();
+    }
+
+    private void Select(Node node)
+    {
+        selectedDn = node.Dn;
+        StateHasChanged();
+    }
+
+    private async Task Apply()
+    {
+        if (string.IsNullOrEmpty(selectedDn)) return;
+        IsVisible = false;
+        var dn = selectedDn;
+        StateHasChanged();
+        await OnSelected.InvokeAsync(dn);
+    }
+
+    private void Cancel()
+    {
+        IsVisible = false;
+        StateHasChanged();
+    }
+
+    public void Dispose() { }
+
+    private RenderFragment RenderNode(Node node, int depth) => __builder =>
+    {
+        var rowClass = node.Dn == selectedDn ? "cc-dn-row selected" : "cc-dn-row";
+        var indent = string.Concat((depth * 18).ToString(), "px");
+
+        <div class="@rowClass" style="padding-left:@indent">
+            @if (node.HasChildren)
+            {
+                <span class="cc-dn-chevron" @onclick="@(() => ToggleAsync(node))" @onclick:stopPropagation>
+                    <i class="bi @(node.IsExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
+                </span>
+            }
+            else
+            {
+                <span class="cc-dn-chevron"></span>
+            }
+            <span class="cc-dn-icon"><i class="bi bi-folder"></i></span>
+            <span class="cc-dn-name" title="@node.Dn" @onclick="@(() => Select(node))">@node.Name</span>
+            @if (!string.IsNullOrEmpty(node.Description))
+            {
+                <span class="cc-dn-desc text-muted">(@node.Description)</span>
+            }
+        </div>
+
+        @if (node.IsExpanded && node.IsLoading)
+        {
+            var loadIndent = string.Concat(((depth + 1) * 18).ToString(), "px");
+            <div class="cc-dn-row text-muted" style="padding-left:@loadIndent">
+                <span class="cc-dn-chevron"></span>
+                <i class="bi bi-arrow-repeat cc-dn-spin me-1"></i> Loading…
+            </div>
+        }
+        else if (node.IsExpanded)
+        {
+            @foreach (var child in node.Children)
+            {
+                @RenderNode(child, depth + 1)
+            }
+        }
+    };
+}
+
+<style>
+    .cc-dn-tree {
+        border: 1px solid var(--bs-border-color, #2a3550);
+        border-radius: 8px;
+        padding: .5rem;
+        max-height: 420px;
+        overflow-y: auto;
+    }
+    .cc-dn-row {
+        display: flex;
+        align-items: center;
+        gap: .35rem;
+        padding: .2rem .35rem;
+        border-radius: 6px;
+        cursor: default;
+        white-space: nowrap;
+    }
+    .cc-dn-row.selected {
+        background: var(--bs-primary-bg-subtle, rgba(13,110,253,.18));
+    }
+    .cc-dn-chevron {
+        width: 1rem;
+        display: inline-flex;
+        justify-content: center;
+        cursor: pointer;
+        color: var(--bs-secondary-color, #94a3b8);
+    }
+    .cc-dn-icon { color: #f0ad4e; }
+    .cc-dn-name { cursor: pointer; }
+    .cc-dn-name:hover { text-decoration: underline; }
+    .cc-dn-desc { font-size: .85em; }
+    .cc-dn-spin { animation: cc-dn-spin 1s linear infinite; display:inline-block; }
+    @@keyframes cc-dn-spin { to { transform: rotate(360deg); } }
+</style>

@@ -1,0 +1,281 @@
+@*
+    CcDateTimePicker — SHARED visual date/time/frequency schedule builder.
+
+    Mirrors IdentityCenter's SchedulePicker UX (Components/Shared/SchedulePicker.razor):
+    a Frequency selector + time-of-day picker + day-of-week pills + day-of-month,
+    with a live plain-language preview. Emits a valid 5-field NCrontab cron string
+    into Value — the exact dialect ScheduledSyncRunnerJob evaluates — so the visual
+    selection round-trips with the raw cron field on CcScheduleEditor.
+
+    Dependency-free: uses native <input type="time"> and plain <select>/<button>
+    primitives, plus the pure-C# CcCronConverter. No JS library.
+
+    Two-way binds the cron string via Value/ValueChanged. The host (CcScheduleEditor)
+    owns persistence and validation; this component only produces a cron string.
+*@
+
+<div class="cc-dtpicker">
+    <div class="mb-3">
+        <label class="form-label fw-semibold">Frequency</label>
+        <select class="form-select" value="@((int)model.Frequency)" @onchange="OnFrequencyChanged">
+            <option value="0">Manual only (no schedule)</option>
+            <option value="1">Every N minutes</option>
+            <option value="2">Hourly</option>
+            <option value="3">Daily</option>
+            <option value="4">Weekly</option>
+            <option value="5">Monthly</option>
+        </select>
+    </div>
+
+    @if (model.Frequency == CcScheduleFrequency.Minutes)
+    {
+        <div class="mb-3">
+            <label class="form-label">Run every</label>
+            <div class="input-group" style="max-width: 220px;">
+                <input type="number" class="form-control" min="1" max="59"
+                       value="@model.IntervalMinutes" @onchange="OnIntervalMinutesChanged" />
+                <span class="input-group-text">minutes</span>
+            </div>
+        </div>
+    }
+
+    @if (model.Frequency == CcScheduleFrequency.Hourly)
+    {
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label">Run every</label>
+                <div class="input-group">
+                    <input type="number" class="form-control" min="1" max="23"
+                           value="@model.IntervalHours" @onchange="OnIntervalHoursChanged" />
+                    <span class="input-group-text">hours</span>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">At minute</label>
+                <div class="input-group">
+                    <input type="number" class="form-control" min="0" max="59"
+                           value="@model.Minute" @onchange="OnMinuteChanged" />
+                    <span class="input-group-text">past the hour</span>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (ShowTimeOfDay)
+    {
+        <div class="mb-3">
+            <label class="form-label">Time of day</label>
+            <input type="time" class="form-control" style="max-width: 220px;"
+                   value="@TimeValue" @onchange="OnTimeChanged" />
+        </div>
+    }
+
+    @if (model.Frequency == CcScheduleFrequency.Weekly)
+    {
+        <div class="mb-3">
+            <label class="form-label">Days of week</label>
+            <div class="d-flex flex-wrap gap-2">
+                @for (var d = 0; d <= 6; d++)
+                {
+                    var day = d;
+                    var selected = model.DaysOfWeek.Contains(day);
+                    var cls = selected ? "btn btn-sm btn-primary" : "btn btn-sm btn-outline-secondary";
+                    <button type="button" class="@cls" @onclick="() => ToggleDay(day)">
+                        @CcCronConverter.DayLabel(day)
+                    </button>
+                }
+            </div>
+            <div class="mt-2">
+                <button type="button" class="btn btn-link btn-sm p-0 me-3" @onclick="SelectWeekdays">Weekdays</button>
+                <button type="button" class="btn btn-link btn-sm p-0 me-3" @onclick="SelectWeekends">Weekends</button>
+                <button type="button" class="btn btn-link btn-sm p-0" @onclick="SelectAllDays">All days</button>
+            </div>
+        </div>
+    }
+
+    @if (model.Frequency == CcScheduleFrequency.Monthly)
+    {
+        <div class="mb-3">
+            <label class="form-label">Day of month</label>
+            <select class="form-select" style="max-width: 220px;"
+                    value="@model.DayOfMonth" @onchange="OnDayOfMonthChanged">
+                @for (var i = 1; i <= 28; i++)
+                {
+                    <option value="@i">@i</option>
+                }
+            </select>
+            <small class="form-text text-muted d-block">1–28 only, so the run never skips a short month.</small>
+        </div>
+    }
+
+    <div class="cc-dtpicker-preview p-2 rounded">
+        <i class="fas fa-calendar-check me-2"></i>
+        <span class="fw-semibold">@PreviewText</span>
+        @if (!string.IsNullOrEmpty(CurrentCron))
+        {
+            <code class="ms-2 small">@CurrentCron</code>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>The cron string the host owns. Blank/null = manual only.</summary>
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    private CcScheduleModel model = new();
+    private string? lastSyncedValue;
+
+    private string CurrentCron => model.Frequency == CcScheduleFrequency.Manual ? string.Empty : CcCronConverter.ToCron(model);
+
+    private bool ShowTimeOfDay =>
+        model.Frequency == CcScheduleFrequency.Daily
+        || model.Frequency == CcScheduleFrequency.Weekly
+        || model.Frequency == CcScheduleFrequency.Monthly;
+
+    private string TimeValue
+    {
+        get
+        {
+            var hh = model.Hour.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+            var mm = model.Minute.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+            return string.Concat(hh, ":", mm);
+        }
+    }
+
+    private string PreviewText => CcCronConverter.Describe(CurrentCron);
+
+    protected override void OnParametersSet()
+    {
+        // Re-hydrate the visual model only when the host-owned cron value changed
+        // out from under us (e.g. a preset was applied, or the modal reopened on a
+        // different project). Recognized shapes drive the builder; unrecognized
+        // ones leave the model on Manual so the raw field stays in control.
+        if (!string.Equals(Value, lastSyncedValue, StringComparison.Ordinal))
+        {
+            lastSyncedValue = Value;
+            if (CcCronConverter.TryFromCron(Value, out var parsed))
+            {
+                model = parsed;
+            }
+            else if (string.IsNullOrWhiteSpace(Value))
+            {
+                model = new CcScheduleModel { Frequency = CcScheduleFrequency.Manual };
+            }
+            else
+            {
+                // Power-user / legacy expression — don't fight it visually.
+                model.Frequency = CcScheduleFrequency.Manual;
+            }
+        }
+    }
+
+    private async Task EmitAsync()
+    {
+        var cron = CurrentCron;
+        lastSyncedValue = cron;
+        Value = cron;
+        await ValueChanged.InvokeAsync(cron);
+    }
+
+    private async Task OnFrequencyChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var raw) && Enum.IsDefined(typeof(CcScheduleFrequency), raw))
+        {
+            model.Frequency = (CcScheduleFrequency)raw;
+            ApplyFrequencyDefaults();
+            await EmitAsync();
+        }
+    }
+
+    private void ApplyFrequencyDefaults()
+    {
+        switch (model.Frequency)
+        {
+            case CcScheduleFrequency.Weekly when model.DaysOfWeek.Count == 0:
+                model.DaysOfWeek = new List<int> { 1 };
+                break;
+            case CcScheduleFrequency.Monthly when model.DayOfMonth < 1 || model.DayOfMonth > 28:
+                model.DayOfMonth = 1;
+                break;
+        }
+    }
+
+    private async Task OnIntervalMinutesChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+        {
+            model.IntervalMinutes = Math.Clamp(v, 1, 59);
+            await EmitAsync();
+        }
+    }
+
+    private async Task OnIntervalHoursChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+        {
+            model.IntervalHours = Math.Clamp(v, 1, 23);
+            await EmitAsync();
+        }
+    }
+
+    private async Task OnMinuteChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+        {
+            model.Minute = Math.Clamp(v, 0, 59);
+            await EmitAsync();
+        }
+    }
+
+    private async Task OnTimeChanged(ChangeEventArgs e)
+    {
+        var raw = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(raw) && TimeSpan.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, out var ts))
+        {
+            model.Hour = ts.Hours;
+            model.Minute = ts.Minutes;
+            await EmitAsync();
+        }
+    }
+
+    private async Task OnDayOfMonthChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v))
+        {
+            model.DayOfMonth = Math.Clamp(v, 1, 28);
+            await EmitAsync();
+        }
+    }
+
+    private async Task ToggleDay(int day)
+    {
+        if (model.DaysOfWeek.Contains(day))
+        {
+            if (model.DaysOfWeek.Count > 1) model.DaysOfWeek.Remove(day);
+        }
+        else
+        {
+            model.DaysOfWeek.Add(day);
+        }
+        await EmitAsync();
+    }
+
+    private async Task SelectWeekdays()
+    {
+        model.DaysOfWeek = new List<int> { 1, 2, 3, 4, 5 };
+        await EmitAsync();
+    }
+
+    private async Task SelectWeekends()
+    {
+        model.DaysOfWeek = new List<int> { 0, 6 };
+        await EmitAsync();
+    }
+
+    private async Task SelectAllDays()
+    {
+        model.DaysOfWeek = new List<int> { 0, 1, 2, 3, 4, 5, 6 };
+        await EmitAsync();
+    }
+}

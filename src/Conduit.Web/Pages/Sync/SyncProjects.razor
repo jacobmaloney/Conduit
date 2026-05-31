@@ -11,6 +11,7 @@
 @inject ConnectionCredentialRepository CredRepo
 @inject WorkflowRepository WorkflowRepo
 @inject SyncProjectOrchestrator Orchestrator
+@inject Conduit.Sync.Orchestration.SyncCancellationRegistry CancellationRegistry
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject Conduit.Sync.Templates.IAttributeMapService AttributeMapper
@@ -234,9 +235,29 @@
                             <button class="btn btn-warning" disabled>
                                 <i class="fas fa-spinner fa-spin me-1"></i>Running…
                             </button>
-                            <a href="/sync-history" class="btn btn-info">
-                                <i class="fas fa-chart-line me-1"></i>View Progress
-                            </a>
+                            <button class="btn btn-danger" @onclick="ShowStopConfirmModal" disabled="@stopInProgress">
+                                @if (stopInProgress)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                else
+                                {
+                                    <i class="fas fa-stop me-1"></i>
+                                }
+                                Stop Sync
+                            </button>
+                            @if (selectedProject.LastRunId.HasValue)
+                            {
+                                <a href="/sync-history/@selectedProject.LastRunId.Value" class="btn btn-info">
+                                    <i class="fas fa-chart-line me-1"></i>View Live Progress
+                                </a>
+                            }
+                            else
+                            {
+                                <a href="/sync-history?project=@selectedProject.Id" class="btn btn-info">
+                                    <i class="fas fa-chart-line me-1"></i>View Live Progress
+                                </a>
+                            }
                         }
                         else
                         {
@@ -260,6 +281,17 @@
                         <a href="/sync-history?project=@selectedProject.Id" class="btn btn-outline-secondary">
                             <i class="fas fa-history me-1"></i>History
                         </a>
+                        <button class="btn btn-outline-secondary" @onclick="ShowCopyTemplateModal" disabled="@copyInProgress">
+                            @if (copyInProgress)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-copy me-1"></i>
+                            }
+                            Copy Template
+                        </button>
                         <button class="btn btn-outline-primary" @onclick="EditCurrent">
                             <i class="fas fa-cog me-1"></i>Manage
                         </button>
@@ -487,6 +519,113 @@
     <div class="modal-backdrop fade show"></div>
 }
 
+@* ───────── Stop-Sync confirmation Modal ───────── *@
+@if (showStopConfirmModal && selectedProject != null)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-danger">
+                    <h5 class="modal-title">
+                        <i class="fas fa-stop-circle me-2"></i>Stop Running Sync
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseStopConfirmModal" disabled="@stopInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(stopError))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle me-2"></i>@stopError
+                        </div>
+                    }
+                    <h6 class="mb-3">
+                        <i class="fas fa-sync-alt me-2"></i>@selectedProject.Name
+                    </h6>
+                    <div class="alert alert-warning">
+                        <i class="fas fa-info-circle me-2"></i>
+                        This signals the in-flight run to cancel at its next safe checkpoint.
+                        Records already written to <strong>@TenantName(selectedProject.SinkTenantId)</strong>
+                        are <strong>not</strong> rolled back; the run is marked <strong>Cancelled</strong>
+                        and the project is freed for the next run.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseStopConfirmModal" disabled="@stopInProgress">
+                        <i class="fas fa-times me-1"></i>Keep Running
+                    </button>
+                    <button type="button" class="btn btn-danger" @onclick="StopSyncConfirmed" disabled="@stopInProgress">
+                        @if (stopInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-stop me-1"></i>
+                        }
+                        Stop Sync
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ───────── Copy-Template Modal ───────── *@
+@if (showCopyModal && selectedProject != null)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-default">
+                    <h5 class="modal-title">
+                        <i class="fas fa-copy me-2"></i>Copy as Template
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseCopyTemplateModal" disabled="@copyInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(copyError))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle me-2"></i>@copyError
+                        </div>
+                    }
+                    <p class="text-muted">
+                        Creates a new sync project that duplicates
+                        <strong>@selectedProject.Name</strong>'s connections, scope, attribute
+                        mappings, and full workflow tree. The copy is created
+                        <strong>disabled and unscheduled</strong> with no run history, so you can
+                        review it before enabling.
+                    </p>
+                    <div class="mb-2">
+                        <label class="form-label fw-bold">New project name</label>
+                        <input type="text" class="form-control" @bind="copyName" @bind:event="oninput"
+                               placeholder="e.g., @selectedProject.Name (Copy)" autocomplete="off" />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseCopyTemplateModal" disabled="@copyInProgress">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="CopyTemplateConfirmed"
+                            disabled="@(string.IsNullOrWhiteSpace(copyName) || copyInProgress)">
+                        @if (copyInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-copy me-1"></i>
+                        }
+                        Create Copy
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
 @* ───────── Delete-confirmation Modal (typed DELETE) ───────── *@
 @if (showDeleteModal && selectedProject != null)
 {
@@ -564,29 +703,7 @@
                     <button type="button" class="btn-close" @onclick="CloseScheduleModal" disabled="@scheduleSaving"></button>
                 </div>
                 <div class="modal-body">
-                    @if (!string.IsNullOrEmpty(scheduleError))
-                    {
-                        <div class="alert alert-danger">@scheduleError</div>
-                    }
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Preset</label>
-                        <select class="form-select" @bind="scheduleForm" @bind:after="OnSchedulePresetPicked">
-                            <option value="">No schedule (manual only)</option>
-                            <option value="*/15 * * * *">Every 15 minutes</option>
-                            <option value="0 * * * *">Every hour</option>
-                            <option value="0 */6 * * *">Every 6 hours</option>
-                            <option value="0 2 * * *">Daily at 02:00</option>
-                            <option value="0 2 * * 0">Weekly Sunday 02:00</option>
-                            <option value="0 2 1 * *">Monthly 1st 02:00</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Cron expression</label>
-                        <input class="form-control" @bind="scheduleForm" placeholder="@cronPlaceholder" />
-                        <small class="form-text text-muted">
-                            Standard 5-field cron, or legacy <code>@hourlyToken</code> / <code>@everyToken</code>. Blank = manual only.
-                        </small>
-                    </div>
+                    <CcScheduleEditor @bind-Value="scheduleForm" Error="@scheduleError" />
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" @onclick="CloseScheduleModal" disabled="@scheduleSaving">Cancel</button>
@@ -878,7 +995,12 @@
                             <div class="row g-3">
                                 <div class="col-md-7">
                                     <label class="form-label fw-semibold">Base DN</label>
-                                    <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
+                                    <div class="input-group">
+                                        <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
+                                        <button type="button" class="btn btn-outline-secondary" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a container">
+                                            <i class="bi bi-diagram-3 me-1"></i>Browse
+                                        </button>
+                                    </div>
                                 </div>
                                 <div class="col-md-5">
                                     <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
@@ -1381,22 +1503,9 @@
                     else if (formTab == "schedule")
                     {
                         <div class="row g-3">
-                            <div class="col-md-7">
-                                <label class="form-label fw-semibold">Cron expression</label>
-                                <div class="cron-input-group">
-                                    <input class="form-control" @bind="form.CronSchedule" placeholder="@cronPlaceholder" />
-                                    <select class="form-select" @bind="cronPreset" @bind:after="ApplyCronPreset">
-                                        <option value="">Presets...</option>
-                                        <option value="*/15 * * * *">Every 15 min</option>
-                                        <option value="0 * * * *">Hourly</option>
-                                        <option value="0 2 * * *">Daily 02:00</option>
-                                        <option value="0 2 * * 0">Weekly Sun 02:00</option>
-                                        <option value="0 2 1 * *">Monthly 1st 02:00</option>
-                                    </select>
-                                </div>
-                                <small class="form-text text-muted">
-                                    Standard 5-field cron, or legacy <code>@hourlyToken</code> / <code>@everyToken</code>. Blank = manual only.
-                                </small>
+                            <div class="col-md-12">
+                                <label class="form-label fw-semibold">Schedule</label>
+                                <CcScheduleEditor @bind-Value="form.CronSchedule" />
                             </div>
                             <div class="col-md-12">
                                 <div class="form-check mt-2">
@@ -1488,6 +1597,9 @@
     <div class="modal-backdrop fade show"></div>
 }
 
+@* Shared live container browser for the Scope step's Base DN picker. *@
+<CcDirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" />
+
 @code {
     // Literal @hourly / @every:Nm shown to the user — the Razor parser would otherwise
     // try to treat @ as a transition, so we hold them in fields with the bare characters.
@@ -1513,9 +1625,23 @@
     private SyncProject form = new();
     private SyncProjectScope scopeForm = new() { PageSize = 1000 };
     private List<AttributeMapping> mappingForm = new();
-    private string cronPreset = string.Empty;
     private string formError = string.Empty;
     private string formTab = "setup";
+
+    // Scope step: live Base DN container browser (shared component).
+    private CcDirectoryBrowserModal? baseDnBrowser;
+
+    private async Task OpenBaseDnBrowser()
+    {
+        if (baseDnBrowser is null || form.SourceTenantId == Guid.Empty) return;
+        await baseDnBrowser.ShowAsync(form.SourceTenantId, form.SourceCredentialName);
+    }
+
+    private void OnBaseDnPicked(string dn)
+    {
+        scopeForm.BaseDN = dn;
+        StateHasChanged();
+    }
 
     // Phase 4 wizard. Create uses a step-by-step flow; edit keeps the tabbed layout.
     private bool isWizard => !editingId.HasValue;
@@ -2047,9 +2173,20 @@
     private string deleteConfirmText = string.Empty;
     private bool deleteInProgress;
     private bool showScheduleModal;
-    private string scheduleForm = string.Empty;
+    private string? scheduleForm = string.Empty;
     private bool scheduleSaving;
-    private string scheduleError = string.Empty;
+    private string? scheduleError = string.Empty;
+
+    // Stop-Sync modal state
+    private bool showStopConfirmModal;
+    private bool stopInProgress;
+    private string stopError = string.Empty;
+
+    // Copy-Template modal state
+    private bool showCopyModal;
+    private bool copyInProgress;
+    private string copyName = string.Empty;
+    private string copyError = string.Empty;
 
     // Auto-generate modal state
     private bool showAutoGenerateModal;
@@ -2267,7 +2404,6 @@
 
         scopeForm = new SyncProjectScope { PageSize = 1000 };
         mappingForm = new List<AttributeMapping>();
-        cronPreset = string.Empty;
         formError = string.Empty;
         formTab = "setup";
         wizardStep = 1;
@@ -2372,7 +2508,6 @@
         scopeForm = await ProjectRepo.GetScopeAsync(selectedProject.Id)
                     ?? new SyncProjectScope { SyncProjectId = selectedProject.Id, PageSize = 1000 };
         mappingForm = await ProjectRepo.GetMappingsAsync(selectedProject.Id);
-        cronPreset = string.Empty;
         formError = string.Empty;
         formTab = "setup";
         ResetAssignmentTemplateForm();
@@ -2472,15 +2607,6 @@
                     mappingForm.Add(m);
                 }
             }
-        }
-    }
-
-    private void ApplyCronPreset()
-    {
-        if (!string.IsNullOrEmpty(cronPreset))
-        {
-            form.CronSchedule = cronPreset;
-            cronPreset = string.Empty;
         }
     }
 
@@ -2781,6 +2907,103 @@
         }
     }
 
+    // ─── Stop-Sync modal ────────────────────────────────────────────────────
+
+    private void ShowStopConfirmModal()
+    {
+        if (selectedProject is null || !selectedProject.IsRunning) return;
+        stopError = string.Empty;
+        showStopConfirmModal = true;
+    }
+
+    private void CloseStopConfirmModal()
+    {
+        if (stopInProgress) return;
+        showStopConfirmModal = false;
+        stopError = string.Empty;
+    }
+
+    private async Task StopSyncConfirmed()
+    {
+        if (selectedProject is null) return;
+        stopInProgress = true;
+        stopError = string.Empty;
+        try
+        {
+            // Trip the SAME cancellation token the orchestrator threads through
+            // every step / sink loop. The orchestrator's existing
+            // OperationCanceledException handler marks the run "Cancelled" and
+            // releases IsRunning — no parallel stop path. A false return means the
+            // run is not executing in this process (e.g. a scheduler tick on
+            // another node, single-node assumption aside, or it already finished).
+            var signalled = CancellationRegistry.RequestCancel(selectedProject.Id);
+            if (signalled)
+            {
+                var name = selectedProject.Name;
+                showStopConfirmModal = false;
+                toastSuccess = $"Stop requested for '{name}'. The run will cancel at its next checkpoint.";
+            }
+            else
+            {
+                stopError = "No in-flight run was found for this project in this process. It may have already finished — refresh to confirm.";
+            }
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            stopError = $"Stop failed: {ex.Message}";
+        }
+        finally
+        {
+            stopInProgress = false;
+        }
+    }
+
+    // ─── Copy-Template modal ────────────────────────────────────────────────
+
+    private void ShowCopyTemplateModal()
+    {
+        if (selectedProject is null) return;
+        copyName = $"{selectedProject.Name} (Copy)";
+        copyError = string.Empty;
+        showCopyModal = true;
+    }
+
+    private void CloseCopyTemplateModal()
+    {
+        if (copyInProgress) return;
+        showCopyModal = false;
+        copyError = string.Empty;
+    }
+
+    private async Task CopyTemplateConfirmed()
+    {
+        if (selectedProject is null || string.IsNullOrWhiteSpace(copyName)) return;
+        copyInProgress = true;
+        copyError = string.Empty;
+        try
+        {
+            var newId = await ProjectRepo.CloneAsync(selectedProject.Id, copyName.Trim());
+            showCopyModal = false;
+            toastSuccess = $"Created '{copyName.Trim()}' from template. It's disabled — review and enable when ready.";
+            await Reload();
+            // Select the new clone so the operator lands on it.
+            var clone = allProjects.FirstOrDefault(p => p.Id == newId);
+            if (clone is not null)
+            {
+                await HandleSelect(clone);
+            }
+        }
+        catch (Exception ex)
+        {
+            copyError = $"Copy failed: {ex.Message}";
+        }
+        finally
+        {
+            copyInProgress = false;
+        }
+    }
+
     // ─── Schedule modal ─────────────────────────────────────────────────────
 
     private void OpenScheduleModal()
@@ -2796,13 +3019,6 @@
         if (scheduleSaving) return;
         showScheduleModal = false;
         scheduleError = string.Empty;
-    }
-
-    private void OnSchedulePresetPicked()
-    {
-        // scheduleForm is bound to the select; nothing else to do — keeping the
-        // hook so the @bind:after expression compiles and future post-pick logic
-        // (e.g. preview-of-next-run) has a place to land.
     }
 
     private async Task SaveSchedule()

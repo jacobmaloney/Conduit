@@ -398,6 +398,9 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 // Phase 2 — IdentityCenter as a Conduit connector (paired with IC's /api/objects/{query,bulk}).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.IdentityCenterAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
+// Singleton: shared across the controller's fire-and-forget Run-Now task, the
+// scheduler, and every Blazor circuit so "Stop Sync" can trip the in-flight run.
+builder.Services.AddSingleton<Conduit.Sync.Orchestration.SyncCancellationRegistry>();
 builder.Services.AddScoped<Conduit.Sync.Orchestration.SyncProjectOrchestrator>();
 // Phase 2 — per-connector attribute template catalog + canonical source→sink resolver.
 builder.Services.AddSingleton<Conduit.Sync.Templates.IAttributeMapService, Conduit.Sync.Templates.AttributeMapService>();

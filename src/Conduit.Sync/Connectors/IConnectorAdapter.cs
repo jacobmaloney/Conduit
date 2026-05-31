@@ -66,6 +66,80 @@ public interface IConnectorAdapter
     /// resolver the poller uses to advance pending rows.
     /// </summary>
     IConnectorAsyncJobResolver? CreateAsyncJobResolver(Guid tenantId) => null;
+
+    /// <summary>
+    /// Live directory-browse capability used by the wizard's Scope step to let
+    /// the operator navigate and pick a Base DN instead of typing it. Mirrors
+    /// IdentityCenter's OU/container browser. Returns null when the connector has
+    /// no hierarchical container concept (Entra Graph, SCIM, CSV, Database, …) —
+    /// the UI hides the Browse button in that case. LDAP-shaped adapters (AD,
+    /// GenericLdap) return a per-tenant browser that binds with the tenant's
+    /// stored credentials and enumerates one level of containers at a time.
+    /// </summary>
+    IConnectorContainerBrowser? CreateContainerBrowser(Guid tenantId) => null;
+}
+
+/// <summary>
+/// Live container browser for hierarchical (LDAP-shaped) connectors. The wizard
+/// Scope step calls this to enumerate one level of OUs/containers at a time so
+/// the operator can drill down and select a Base DN without typing it.
+///
+/// Browsing is LIVE — it binds the connector's stored credentials against the
+/// source directory on each call. Conduit holds no Objects lake (symmetric
+/// router), so there is nothing to browse from cache; the bind is the only
+/// source of truth. <paramref name="parentDn"/> null/empty means "start at the
+/// directory root" (the source resolves its default naming context).
+/// </summary>
+public interface IConnectorContainerBrowser
+{
+    /// <summary>
+    /// Enumerate the immediate child containers under <paramref name="parentDn"/>.
+    /// Pass null/empty to list the root container(s). Implementations should
+    /// surface a bind/search failure as a thrown exception OR by returning an
+    /// empty list with <see cref="DirectoryBrowseResult.ErrorMessage"/> set —
+    /// callers render the message rather than a bare tree.
+    /// </summary>
+    Task<DirectoryBrowseResult> BrowseContainersAsync(
+        string? parentDn,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// One container node returned by <see cref="IConnectorContainerBrowser"/>.
+/// <see cref="HasChildren"/> is advisory — implementations may always set it
+/// true and let the next drill-down reveal an empty level (matches IC, which
+/// resolves children only on expand).
+/// </summary>
+public sealed class DirectoryContainerNode
+{
+    /// <summary>Short display name (ou / cn / name attribute).</summary>
+    public string Name { get; init; } = string.Empty;
+    /// <summary>Full distinguished name — this is what gets written into Base DN.</summary>
+    public string DistinguishedName { get; init; } = string.Empty;
+    /// <summary>Optional description shown muted next to the name.</summary>
+    public string? Description { get; init; }
+    /// <summary>True if this node may contain further child containers (advisory).</summary>
+    public bool HasChildren { get; init; } = true;
+}
+
+/// <summary>
+/// Envelope from <see cref="IConnectorContainerBrowser.BrowseContainersAsync"/>.
+/// Carries the resolved base (useful when the caller passed null and the source
+/// substituted its defaultNamingContext) plus an optional error string so the
+/// modal can show a clean message instead of swallowing failures.
+/// </summary>
+public sealed class DirectoryBrowseResult
+{
+    public IReadOnlyList<DirectoryContainerNode> Nodes { get; init; } = Array.Empty<DirectoryContainerNode>();
+    /// <summary>The DN actually searched. Set on a root browse so the UI can show what auto-detect resolved to.</summary>
+    public string? ResolvedBaseDn { get; init; }
+    /// <summary>Non-null when the browse failed; the tree shows this instead of nodes.</summary>
+    public string? ErrorMessage { get; init; }
+
+    public static DirectoryBrowseResult Ok(IReadOnlyList<DirectoryContainerNode> nodes, string? resolvedBaseDn = null) =>
+        new() { Nodes = nodes, ResolvedBaseDn = resolvedBaseDn };
+    public static DirectoryBrowseResult Fail(string message) =>
+        new() { ErrorMessage = message };
 }
 
 /// <summary>

@@ -1,0 +1,398 @@
+@page "/schedule-manager"
+@page "/schedules"
+@attribute [Authorize]
+@using Conduit.Core.SyncModels
+@using Conduit.DataAccess.Repositories
+@using Conduit.Sync.Orchestration
+@using NCrontab
+@inject SyncProjectRepository ProjectRepo
+
+@*
+    Schedule Manager — one place to see and manage EVERY sync project's schedule.
+
+    Conduit stores schedules as a per-project CronSchedule string column on
+    SyncProjects (no separate Schedules table); the ScheduledSyncRunnerJob fires
+    enabled projects whose cron is due. This page is therefore an AGGREGATE
+    VIEW/EDITOR over all projects' CronSchedule + IsEnabled — it introduces NO new
+    storage and NO parallel scheduler. It mirrors IC's Schedule Manager surface:
+    list project / schedule (human-readable) / next run / last run+status /
+    enabled, with inline enable-disable and an edit-schedule modal.
+
+    The edit modal reuses the SHARED CcScheduleEditor (same presets + same
+    ScheduledSyncRunnerJob.TryValidate validator the inline Sync Projects modal and
+    the create/edit wizard use) so the schedule-edit logic is not forked.
+*@
+
+<PageTitle>Schedule Manager - Conduit</PageTitle>
+
+<div class="container-fluid identities-container">
+    <CcTemplate1 Title="Schedule Manager"
+                 Subtitle="Every sync project's schedule in one place — when it runs next, when it last ran, and whether it's enabled."
+                 Icon="fas fa-calendar-alt"
+                 IconAccent="amber" />
+
+    <CcStatRow Stats="@StatItems" />
+
+    <CcFilterTabs Tabs="@_tabs"
+                  ActiveTab="@activeTab"
+                  OnTabChanged="HandleTabChanged" />
+
+    @if (loading)
+    {
+        <div class="text-center text-muted py-5">
+            <span class="spinner-border spinner-border-sm me-2"></span> Loading schedules…
+        </div>
+    }
+    else if (loadError is not null)
+    {
+        <div class="alert alert-danger">@loadError</div>
+    }
+    else if (Filtered.Count == 0)
+    {
+        <div class="text-center text-muted py-5">
+            <i class="fas fa-calendar-times fa-2x mb-2 d-block"></i>
+            No sync projects match this filter.
+        </div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Project</th>
+                        <th>Schedule</th>
+                        <th>Next run</th>
+                        <th>Last run</th>
+                        <th>Status</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in Filtered)
+                    {
+                        <tr>
+                            <td>
+                                <div class="fw-bold">@p.Name</div>
+                                @if (!string.IsNullOrWhiteSpace(p.Description))
+                                {
+                                    <div class="text-muted small">@p.Description</div>
+                                }
+                            </td>
+                            <td>
+                                @if (string.IsNullOrWhiteSpace(p.CronSchedule))
+                                {
+                                    <span class="text-muted">Manual only</span>
+                                }
+                                else
+                                {
+                                    <div>@Humanize(p.CronSchedule)</div>
+                                    <code class="small text-muted">@p.CronSchedule</code>
+                                }
+                            </td>
+                            <td>@NextRunText(p)</td>
+                            <td>@LastRunText(p)</td>
+                            <td>
+                                @if (!p.IsEnabled)
+                                {
+                                    <span class="badge bg-secondary">Disabled</span>
+                                }
+                                else if (p.IsRunning)
+                                {
+                                    <span class="badge bg-info">Running</span>
+                                }
+                                else
+                                {
+                                    <span class="badge @LastStatusBadge(p.LastRunStatus)">@(p.LastRunStatus ?? "Idle")</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-primary me-1"
+                                        @onclick="() => OpenEdit(p)"
+                                        disabled="@(busyId == p.Id)">
+                                    <i class="fas fa-clock me-1"></i>Edit
+                                </button>
+                                @if (p.IsEnabled)
+                                {
+                                    <button class="btn btn-sm btn-outline-warning"
+                                            @onclick="() => ToggleEnabled(p)"
+                                            disabled="@(busyId == p.Id)">
+                                        <i class="fas fa-pause me-1"></i>Disable
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-success"
+                                            @onclick="() => ToggleEnabled(p)"
+                                            disabled="@(busyId == p.Id)">
+                                        <i class="fas fa-play me-1"></i>Enable
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(toast))
+{
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080;">
+        <div class="toast show align-items-center text-bg-success border-0">
+            <div class="d-flex">
+                <div class="toast-body">@toast</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" @onclick="() => toast = null"></button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ───────── Edit Schedule Modal (reuses shared CcScheduleEditor) ───────── *@
+@if (editProject is not null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-clock me-2"></i>Schedule: @editProject.Name
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseEdit" disabled="@editSaving"></button>
+                </div>
+                <div class="modal-body">
+                    <CcScheduleEditor @bind-Value="editCron" Error="@editError" />
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseEdit" disabled="@editSaving">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveSchedule" disabled="@editSaving">
+                        @if (editSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Save Schedule
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private List<SyncProject> projects = new();
+    private bool loading = true;
+    private string? loadError;
+    private string? toast;
+    private Guid? busyId;
+
+    private string activeTab = "all";
+
+    private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
+    {
+        new("all", "All", null, "fas fa-list"),
+        new("scheduled", "Scheduled", null, "fas fa-clock"),
+        new("manual", "Manual", null, "fas fa-hand-pointer"),
+        new("disabled", "Disabled", null, "fas fa-ban"),
+    };
+
+    // Edit-modal state.
+    private SyncProject? editProject;
+    private string? editCron;
+    private string? editError;
+    private bool editSaving;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        loading = true;
+        loadError = null;
+        try
+        {
+            projects = await ProjectRepo.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            loadError = $"Failed to load schedules: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private bool HasSchedule(SyncProject p) => !string.IsNullOrWhiteSpace(p.CronSchedule);
+
+    private List<SyncProject> Filtered => activeTab switch
+    {
+        "scheduled" => projects.Where(p => p.IsEnabled && HasSchedule(p)).ToList(),
+        "manual"    => projects.Where(p => p.IsEnabled && !HasSchedule(p)).ToList(),
+        "disabled"  => projects.Where(p => !p.IsEnabled).ToList(),
+        _           => projects,
+    };
+
+    private IReadOnlyList<CcStatRow.StatItem> StatItems => new List<CcStatRow.StatItem>
+    {
+        new("Projects", projects.Count.ToString("N0")),
+        new("Scheduled", projects.Count(p => p.IsEnabled && HasSchedule(p)).ToString("N0"), "text-info"),
+        new("Manual only", projects.Count(p => p.IsEnabled && !HasSchedule(p)).ToString("N0")),
+        new("Disabled", projects.Count(p => !p.IsEnabled).ToString("N0"), "text-warning"),
+    };
+
+    private void HandleTabChanged(string key) => activeTab = key;
+
+    // ─── Inline enable / disable ──────────────────────────────────────────────
+    // Loads the FULL project row before mutating so UpdateAsync (which writes
+    // every column) doesn't null out credential names / SkipUnchanged. Only
+    // IsEnabled is changed.
+    private async Task ToggleEnabled(SyncProject row)
+    {
+        busyId = row.Id;
+        try
+        {
+            var full = await ProjectRepo.GetByIdAsync(row.Id);
+            if (full is null)
+            {
+                toast = "Project no longer exists.";
+                await Reload();
+                return;
+            }
+            full.IsEnabled = !full.IsEnabled;
+            await ProjectRepo.UpdateAsync(full);
+            var verb = full.IsEnabled ? "enabled" : "disabled";
+            toast = $"'{full.Name}' {verb}.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            toast = $"Update failed: {ex.Message}";
+        }
+        finally
+        {
+            busyId = null;
+        }
+    }
+
+    // ─── Edit schedule modal ──────────────────────────────────────────────────
+    private void OpenEdit(SyncProject p)
+    {
+        editProject = p;
+        editCron = p.CronSchedule ?? string.Empty;
+        editError = null;
+    }
+
+    private void CloseEdit()
+    {
+        if (editSaving) return;
+        editProject = null;
+        editError = null;
+    }
+
+    private async Task SaveSchedule()
+    {
+        if (editProject is null) return;
+        if (!ScheduledSyncRunnerJob.TryValidate(editCron, out var err))
+        {
+            editError = err ?? "Invalid schedule.";
+            return;
+        }
+        editSaving = true;
+        editError = null;
+        try
+        {
+            var full = await ProjectRepo.GetByIdAsync(editProject.Id);
+            if (full is null)
+            {
+                editError = "Project no longer exists.";
+                return;
+            }
+            full.CronSchedule = string.IsNullOrWhiteSpace(editCron) ? null : editCron.Trim();
+            await ProjectRepo.UpdateAsync(full);
+            var savedName = full.Name;
+            editProject = null;
+            toast = $"Schedule saved for '{savedName}'.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            editError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            editSaving = false;
+        }
+    }
+
+    // ─── Display helpers ──────────────────────────────────────────────────────
+
+    private static string LastStatusBadge(string? status) => status switch
+    {
+        "Succeeded" => "bg-success",
+        "Failed"    => "bg-danger",
+        "Running"   => "bg-info",
+        "Cancelled" => "bg-secondary",
+        _           => "bg-light text-dark",
+    };
+
+    private static string LastRunText(SyncProject p)
+    {
+        if (!p.LastRunAt.HasValue) return "Never";
+        return p.LastRunAt.Value.ToLocalTime().ToString("g");
+    }
+
+    // Next run for cron-style schedules via NCrontab, anchored at LastRunAt (or
+    // now if never run) — same anchor the scheduler uses. Legacy @hourly /
+    // @every:Nm shorthand and unparseable expressions fall back to a label.
+    private static string NextRunText(SyncProject p)
+    {
+        if (!p.IsEnabled) return "—";
+        var cron = p.CronSchedule;
+        if (string.IsNullOrWhiteSpace(cron)) return "—";
+        var s = cron.Trim();
+
+        if (s.StartsWith("@", StringComparison.Ordinal))
+        {
+            // Legacy interval shorthand — interval from last run, not a wall-clock instant.
+            return "On interval";
+        }
+
+        try
+        {
+            var schedule = CrontabSchedule.Parse(s);
+            var anchor = p.LastRunAt ?? DateTime.UtcNow;
+            var next = schedule.GetNextOccurrence(anchor);
+            if (next < DateTime.UtcNow) next = schedule.GetNextOccurrence(DateTime.UtcNow);
+            return next.ToLocalTime().ToString("g");
+        }
+        catch
+        {
+            return "Invalid";
+        }
+    }
+
+    // Human-readable rendering for the common presets + a generic field-breakdown
+    // fallback. Kept intentionally simple — the raw cron is shown alongside.
+    private static string Humanize(string? cron)
+    {
+        if (string.IsNullOrWhiteSpace(cron)) return "Manual only";
+        var s = cron.Trim();
+        switch (s)
+        {
+            case "@hourly":        return "Every hour";
+            case "*/15 * * * *":   return "Every 15 minutes";
+            case "0 * * * *":      return "Every hour";
+            case "0 */6 * * *":    return "Every 6 hours";
+            case "0 2 * * *":      return "Daily at 02:00";
+            case "0 2 * * 0":      return "Weekly, Sunday 02:00";
+            case "0 2 1 * *":      return "Monthly, 1st at 02:00";
+        }
+        if (s.StartsWith("@every:", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = s["@every:".Length..];
+            return $"Every {rest}";
+        }
+        return "Custom cron";
+    }
+}

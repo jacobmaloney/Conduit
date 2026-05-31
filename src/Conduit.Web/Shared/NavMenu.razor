@@ -9,6 +9,7 @@
 @inject DataChangeNotifier DataChange
 @inject OpenAccessState OpenAccess
 @inject NavigationManager NavigationManager
+@inject IWebHostEnvironment Environment
 @implements IDisposable
 
 <div class="nav-wrapper">
@@ -27,7 +28,11 @@
         </button>
     </div>
 
-    @if (OpenAccess.IsEnabled)
+    @* SCIM-origin chrome (Open-access pill + connected-system switcher) gated to
+       Development only for the directory-sync product. IC has no parallel; this
+       moves it off the primary sync nav without deleting it (item 6 decision,
+       2026-05-31). Re-surface later behind a proper emulator/dev-tools flag. *@
+    @if (ShowDevChrome && OpenAccess.IsEnabled)
     {
         <a class="open-access-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
             <i class="oi oi-warning"></i>
@@ -37,6 +42,8 @@
 
     <AuthorizeView>
         <Authorized>
+            @if (ShowDevChrome)
+            {
             <div class="system-switcher">
                 <button class="ss-button" @onclick="ToggleSwitcher" @onclick:stopPropagation="true">
                     <span class="ss-glyph">@GlyphFor(ActiveSystem.ActiveSystem)</span>
@@ -79,6 +86,7 @@
                     </div>
                 }
             </div>
+            }
         </Authorized>
     </AuthorizeView>
 
@@ -109,13 +117,25 @@
 
         <div class="nav-section nav-section-sync">
             <div class="nav-section-title">Sync</div>
-            <NavLink class="nav-item" href="sync-projects">
+            <NavLink class="nav-item" href="synchronization-center">
                 <i class="oi oi-loop-circular"></i>
+                <span>Synchronization Center</span>
+            </NavLink>
+            <NavLink class="nav-item" href="sync-projects">
+                <i class="oi oi-loop-square"></i>
                 <span>Sync Projects</span>
             </NavLink>
             <NavLink class="nav-item" href="sync-history">
                 <i class="oi oi-clock"></i>
                 <span>Sync History</span>
+            </NavLink>
+            <NavLink class="nav-item" href="schedule-manager">
+                <i class="oi oi-calendar"></i>
+                <span>Schedule Manager</span>
+            </NavLink>
+            <NavLink class="nav-item" href="processing-center">
+                <i class="oi oi-pulse"></i>
+                <span>Processing Center</span>
             </NavLink>
         </div>
 
@@ -136,21 +156,27 @@
                 <i class="oi oi-link-intact"></i>
                 <span>Quick Connect</span>
             </NavLink>
-            <NavLink class="nav-item" href="api-explorer">
-                <i class="oi oi-code"></i>
-                <span>API Explorer</span>
-            </NavLink>
-            <NavLink class="nav-item" href="tokens">
-                <i class="oi oi-key"></i>
-                <span>API Tokens</span>
-            </NavLink>
+            @* API Explorer + API Tokens are SCIM-origin chrome — kept (not
+               deleted) but gated to Development so they don't clutter the
+               primary directory-sync nav (item 6 decision, 2026-05-31). *@
+            @if (ShowDevChrome)
+            {
+                <NavLink class="nav-item" href="api-explorer">
+                    <i class="oi oi-code"></i>
+                    <span>API Explorer</span>
+                </NavLink>
+                <NavLink class="nav-item" href="tokens">
+                    <i class="oi oi-key"></i>
+                    <span>API Tokens</span>
+                </NavLink>
+            }
         </div>
 
         <div class="nav-section nav-section-settings">
             <div class="nav-section-title">Settings</div>
             <NavLink class="nav-item" href="connected-systems">
                 <i class="oi oi-globe"></i>
-                <span>Connected Systems</span>
+                <span>Connections</span>
             </NavLink>
             <NavLink class="nav-item" href="configuration">
                 <i class="oi oi-cog"></i>
@@ -199,6 +225,11 @@
     private bool collapseNavMenu = true;
     private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
     private void ToggleNavMenu() => collapseNavMenu = !collapseNavMenu;
+
+    // SCIM-origin chrome (system switcher, Open-access pill, API Explorer,
+    // API Tokens) is gated to Development for the directory-sync product.
+    // Not deleted — just kept off the production sync nav (item 6, 2026-05-31).
+    private bool ShowDevChrome => Environment.IsDevelopment();
 
     // System switcher state. The selected system is held in the scoped
     // ActiveSystemState service so the Users / Groups pages can read it.

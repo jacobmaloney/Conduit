@@ -1,0 +1,138 @@
+@using Conduit.Sync.Orchestration
+
+@*
+    CcScheduleEditor — the SHARED cron-schedule editor body.
+
+    Extracted so the Schedule Manager page and the inline Sync Projects schedule
+    step use ONE editor instead of forking the logic. Renders only the form body;
+    the host supplies the modal/section chrome and the Save/Cancel buttons, then
+    calls TryGetNormalized() before persisting.
+
+    Two modes over the SAME host-owned cron string (Value/ValueChanged):
+      • Visual  — CcDateTimePicker (frequency + time-of-day + day-of-week +
+                  day-of-month) builds a valid 5-field cron. Mirrors IC's
+                  SchedulePicker UX.
+      • Advanced — raw cron field + presets for power users / legacy shorthand.
+
+    Both write the same Value, so switching modes round-trips: a visual selection
+    produces cron, and an existing cron re-populates the picker where its shape is
+    recognized. Validation reuses ScheduledSyncRunnerJob.TryValidate — the SAME
+    validator the scheduler and the create/edit wizard already use.
+*@
+
+<div class="cc-schedule-editor">
+    <div class="btn-group btn-group-sm mb-3" role="group" aria-label="Schedule editor mode">
+        <button type="button" class="@VisualBtnClass" @onclick="ShowVisual">
+            <i class="fas fa-calendar-alt me-1"></i>Visual
+        </button>
+        <button type="button" class="@AdvancedBtnClass" @onclick="ShowAdvanced">
+            <i class="fas fa-code me-1"></i>Advanced (cron)
+        </button>
+    </div>
+
+    @if (mode == EditorMode.Visual)
+    {
+        <CcDateTimePicker Value="@Value" ValueChanged="OnPickerChanged" />
+    }
+    else
+    {
+        <div class="mb-3">
+            <label class="form-label fw-bold">Preset</label>
+            <select class="form-select" value="@Value" @onchange="OnPresetPicked">
+                <option value="">No schedule (manual only)</option>
+                <option value="*/15 * * * *">Every 15 minutes</option>
+                <option value="0 * * * *">Every hour</option>
+                <option value="0 */6 * * *">Every 6 hours</option>
+                <option value="0 2 * * *">Daily at 02:00</option>
+                <option value="0 2 * * 0">Weekly Sunday 02:00</option>
+                <option value="0 2 1 * *">Monthly 1st 02:00</option>
+            </select>
+        </div>
+        <div class="mb-2">
+            <label class="form-label fw-bold">Cron expression</label>
+            <input class="form-control" value="@Value" @oninput="OnCronInput" placeholder="@PlaceholderText" />
+            <small class="form-text text-muted">
+                Standard 5-field cron, or legacy <code>@HourlyToken</code> / <code>@EveryToken</code>. Blank = manual only.
+            </small>
+        </div>
+    }
+</div>
+@if (!string.IsNullOrEmpty(Error))
+{
+    <div class="alert alert-danger py-2 px-3 mb-0">@Error</div>
+}
+
+@code {
+    // Help-text tokens kept as fields (not inline literals) so the leading '@'
+    // never confuses the Razor parser inside markup.
+    private const string PlaceholderText = "@hourly  or  @every:15m  (blank = manual only)";
+    private const string HourlyToken = "@hourly";
+    private const string EveryToken = "@every:Nm";
+
+    private enum EditorMode { Visual, Advanced }
+    private EditorMode mode = EditorMode.Visual;
+    private bool modeInitialized;
+
+    private string VisualBtnClass => mode == EditorMode.Visual ? "btn btn-primary" : "btn btn-outline-secondary";
+    private string AdvancedBtnClass => mode == EditorMode.Advanced ? "btn btn-primary" : "btn btn-outline-secondary";
+
+    /// <summary>The cron string the host owns. Blank/null = manual only.</summary>
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    /// <summary>Inline validation message to show under the field (host-controlled).</summary>
+    [Parameter] public string? Error { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        // Pick the most helpful default mode ONCE, based on the incoming value:
+        // a builder-shaped (or blank) value opens in Visual; a power-user/legacy
+        // expression opens in Advanced so we don't misrepresent it.
+        if (!modeInitialized)
+        {
+            modeInitialized = true;
+            var visualizable = string.IsNullOrWhiteSpace(Value) || CcCronConverter.TryFromCron(Value, out _);
+            mode = visualizable ? EditorMode.Visual : EditorMode.Advanced;
+        }
+    }
+
+    private void ShowVisual() => mode = EditorMode.Visual;
+    private void ShowAdvanced() => mode = EditorMode.Advanced;
+
+    private async Task OnPickerChanged(string? cron)
+    {
+        Value = cron;
+        await ValueChanged.InvokeAsync(cron);
+    }
+
+    private async Task OnPresetPicked(ChangeEventArgs e)
+    {
+        var picked = e.Value?.ToString() ?? string.Empty;
+        Value = picked;
+        await ValueChanged.InvokeAsync(picked);
+    }
+
+    private async Task OnCronInput(ChangeEventArgs e)
+    {
+        var typed = e.Value?.ToString() ?? string.Empty;
+        Value = typed;
+        await ValueChanged.InvokeAsync(typed);
+    }
+
+    /// <summary>
+    /// Validates the current value with the same validator the scheduler uses.
+    /// Returns the normalized cron (trimmed, or null for blank=manual) on success,
+    /// or null + an out error on failure. Host calls this before persisting.
+    /// </summary>
+    public bool TryGetNormalized(out string? normalized, out string? error)
+    {
+        normalized = null;
+        if (!ScheduledSyncRunnerJob.TryValidate(Value, out error))
+        {
+            error ??= "Invalid schedule.";
+            return false;
+        }
+        normalized = string.IsNullOrWhiteSpace(Value) ? null : Value.Trim();
+        return true;
+    }
+}

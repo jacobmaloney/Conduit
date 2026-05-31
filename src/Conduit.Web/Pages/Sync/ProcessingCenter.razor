@@ -1,0 +1,464 @@
+@page "/processing-center"
+@attribute [Authorize]
+@using Conduit.Core.SyncModels
+@using Conduit.DataAccess.Repositories
+@using Conduit.Sync.Orchestration
+@inject SyncRunRepository RunRepo
+@inject SyncProjectRepository ProjectRepo
+@inject SyncCancellationRegistry CancellationRegistry
+@inject NavigationManager Navigation
+@implements IDisposable
+
+@*
+    Processing Center — local job-execution monitor.
+
+    Faithful mirror of IC's WebPortal/Pages/Admin/ProcessingCenter.razor INTENT
+    (running now / queue / recent history / health), but SINGLE-NODE, LOCAL JOBS
+    ONLY by the 2026-05-31 decision (spec §4). This page monitors only the jobs
+    Conduit itself runs in THIS process. It deliberately does NOT port IC's
+    IExecutionServerRegistry / distributed job queue / remote-agent fleet — there
+    is no "Execution Servers" status strip and no remote-agent ops here.
+
+    It is an AGGREGATION of infrastructure that already exists — it builds NO new
+    backend and adds NO migration:
+      - Running now      : SyncRunRepository.GetRecentAsync(status:"Running")
+                           + SyncCancellationRegistry for honest in-process Stop.
+      - Queue / upcoming : SyncProjectRepository.GetEnabledScheduledAsync()
+                           + ScheduledSyncRunnerJob.IsDue (the SAME due-evaluator
+                           the scheduler uses). There is no real in-memory queue
+                           beyond "what fires next", so we show NEXT-SCHEDULED and
+                           label it honestly — no fabricated queue depth.
+      - Recent history   : SyncRunRepository.GetRecentAsync(200) across projects.
+      - Health strip     : derived from the above (active / last status / 24h fails).
+
+    Node-origin seam (future remote workers): the job-origin is a CODE-LEVEL
+    constant defaulting to "local" (LocalNodeId). Every run shown here executes in
+    this process, so it is the local node. When a remote-worker registry is added
+    later, runs carry a real origin and this page groups by node WITHOUT a schema
+    reshape — the column is already here, just pinned to "local" for now.
+
+    Visuals: CcTemplate1 + CcStatRow + CcFilterTabs + container-fluid, matching
+    items 1 / 7. Zero inline style= attributes; no Razor-SG interpolation traps.
+*@
+
+<PageTitle>Processing Center - Conduit</PageTitle>
+
+<div class="container-fluid sync-page-container">
+    <CcTemplate1 Title="Processing Center"
+                 Subtitle="What's running, what's scheduled next, and what just ran — on this node."
+                 Icon="fas fa-microchip"
+                 IconAccent="amber">
+        <PrimaryAction>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAll" disabled="@loading">
+                <i class="fas fa-rotate me-1"></i> Refresh
+            </button>
+        </PrimaryAction>
+    </CcTemplate1>
+
+    <CcStatRow Stats="@healthStats" />
+
+    @* Single local node today. The strip is here so the seam is visible — when
+       remote workers attach later this becomes a per-node row. *@
+    <div class="pc-node-strip mb-3">
+        <span class="badge bg-success-subtle text-success-emphasis pc-node-pill">
+            <i class="fas fa-circle pc-node-dot me-1"></i> @LocalNodeId
+        </span>
+        <span class="pc-node-meta">This process · single-node</span>
+    </div>
+
+    <CcFilterTabs Tabs="@sectionTabs"
+                  ActiveTab="@activeSection"
+                  OnTabChanged="HandleSectionChanged" />
+
+    @if (loadError is { Length: > 0 })
+    {
+        <div class="alert alert-danger">@loadError</div>
+    }
+
+    @if (activeSection == "running")
+    {
+        <div class="card pc-card">
+            <div class="card-header pc-card-header">
+                <i class="fas fa-bolt me-2"></i> Running now
+                <span class="badge bg-secondary ms-2">@runningRuns.Count</span>
+            </div>
+            <div class="card-body p-0">
+                @if (runningRuns.Count == 0)
+                {
+                    <div class="pc-empty">Nothing is running on this node right now.</div>
+                }
+                else
+                {
+                    <table class="table table-hover mb-0 pc-table">
+                        <thead>
+                            <tr>
+                                <th>Project</th>
+                                <th>Trigger</th>
+                                <th>Started</th>
+                                <th>Elapsed</th>
+                                <th>Read</th>
+                                <th>Origin</th>
+                                <th class="text-end">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in runningRuns)
+                            {
+                                var cancellable = CancellationRegistry.IsRunningHere(r.SyncProjectId);
+                                <tr>
+                                    <td>@ProjectName(r.SyncProjectId)</td>
+                                    <td><span class="badge bg-secondary">@r.TriggeredBy</span></td>
+                                    <td>@FormatTime(r.StartedAt)</td>
+                                    <td>@Elapsed(r.StartedAt)</td>
+                                    <td>@r.ObjectsRead</td>
+                                    <td><span class="badge bg-info-subtle text-info-emphasis">@LocalNodeId</span></td>
+                                    <td class="text-end">
+                                        @if (cancellable)
+                                        {
+                                            <button class="btn btn-sm btn-outline-danger"
+                                                    @onclick="() => RequestStop(r)"
+                                                    disabled="@(stoppingRunId == r.Id)">
+                                                <i class="fas fa-stop me-1"></i> Stop
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted small" title="Not cancellable from this process">Not on this node</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        @if (stopMessage is { Length: > 0 })
+        {
+            <div class="alert alert-info mt-2">@stopMessage</div>
+        }
+        @if (stopError is { Length: > 0 })
+        {
+            <div class="alert alert-warning mt-2">@stopError</div>
+        }
+    }
+    else if (activeSection == "queue")
+    {
+        <div class="card pc-card">
+            <div class="card-header pc-card-header">
+                <i class="fas fa-clock me-2"></i> Scheduled — next to fire
+                <span class="badge bg-secondary ms-2">@upcoming.Count</span>
+            </div>
+            <div class="card-body p-0">
+                @if (upcoming.Count == 0)
+                {
+                    <div class="pc-empty">
+                        No enabled, scheduled projects. There is no standing job queue —
+                        runs are either firing now, scheduled, or started manually.
+                    </div>
+                }
+                else
+                {
+                    <div class="pc-queue-note">
+                        Conduit has no standing job queue. This is the schedule-driven
+                        <strong>next-fire</strong> view — the same due-evaluation the
+                        scheduler uses — not a queue depth.
+                    </div>
+                    <table class="table table-hover mb-0 pc-table">
+                        <thead>
+                            <tr>
+                                <th>Project</th>
+                                <th>Schedule</th>
+                                <th>Last run</th>
+                                <th>State</th>
+                                <th>Origin</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in upcoming)
+                            {
+                                <tr>
+                                    <td>@p.Name</td>
+                                    <td><code class="pc-cron">@p.CronSchedule</code></td>
+                                    <td>@(p.LastRunAt.HasValue ? FormatTime(p.LastRunAt.Value) : "—")</td>
+                                    <td>
+                                        @if (p.IsRunning)
+                                        {
+                                            <span class="badge bg-primary">Running</span>
+                                        }
+                                        else if (DueNow(p))
+                                        {
+                                            <span class="badge bg-warning text-dark">Due — fires next tick</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-secondary">Waiting</span>
+                                        }
+                                    </td>
+                                    <td><span class="badge bg-info-subtle text-info-emphasis">@LocalNodeId</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card pc-card">
+            <div class="card-header pc-card-header">
+                <i class="fas fa-list me-2"></i> Recent job history
+                <span class="badge bg-secondary ms-2">@recentRuns.Count</span>
+            </div>
+            <div class="card-body p-0">
+                @if (recentRuns.Count == 0)
+                {
+                    <div class="pc-empty">No runs recorded yet.</div>
+                }
+                else
+                {
+                    <table class="table table-hover mb-0 pc-table">
+                        <thead>
+                            <tr>
+                                <th>Project</th>
+                                <th>Trigger</th>
+                                <th>Status</th>
+                                <th>Started</th>
+                                <th>Duration</th>
+                                <th>R / C / U / S / F</th>
+                                <th>Origin</th>
+                                <th class="text-end"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in recentRuns)
+                            {
+                                <tr class="@(string.Equals(r.Status, "Failed", StringComparison.OrdinalIgnoreCase) ? "pc-row-failed" : null)">
+                                    <td>@ProjectName(r.SyncProjectId)</td>
+                                    <td><span class="badge bg-secondary">@r.TriggeredBy</span></td>
+                                    <td>@StatusBadge(r.Status)</td>
+                                    <td>@FormatTime(r.StartedAt)</td>
+                                    <td>@DurationLabel(r)</td>
+                                    <td class="pc-counts">@CountSummary(r)</td>
+                                    <td><span class="badge bg-info-subtle text-info-emphasis">@LocalNodeId</span></td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-link p-0" @onclick="() => OpenRun(r.Id)">View</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // Node-origin seam. Code-level default for the single-node phase — NO schema
+    // column, NO migration. When a remote-worker registry lands, runs will carry
+    // a real origin and this constant becomes the local fallback.
+    private const string LocalNodeId = "local";
+
+    private bool loading;
+    private string loadError = string.Empty;
+
+    private string activeSection = "running";
+
+    private List<SyncRun> runningRuns = new();
+    private List<SyncRun> recentRuns = new();
+    private List<SyncProject> upcoming = new();
+    private Dictionary<Guid, string> projectNames = new();
+
+    // Stop state
+    private Guid? stoppingRunId;
+    private string stopMessage = string.Empty;
+    private string stopError = string.Empty;
+
+    private IReadOnlyList<CcStatRow.StatItem> healthStats = Array.Empty<CcStatRow.StatItem>();
+
+    private IReadOnlyList<CcFilterTabs.Tab> sectionTabs = Array.Empty<CcFilterTabs.Tab>();
+
+    // 2-second auto-refresh while anything is running (matches SyncHistory cadence).
+    private System.Threading.Timer? pollTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAll();
+        pollTimer = new System.Threading.Timer(async _ =>
+        {
+            if (runningRuns.Count == 0) return;
+            await InvokeAsync(ReloadAll);
+        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private async Task ReloadAll()
+    {
+        loading = true;
+        loadError = string.Empty;
+        try
+        {
+            var projects = await ProjectRepo.GetAllAsync();
+            projectNames = projects.ToDictionary(p => p.Id, p => p.Name);
+
+            runningRuns = await RunRepo.GetRecentAsync(take: 100, status: "Running");
+            recentRuns = await RunRepo.GetRecentAsync(take: 200);
+
+            var scheduled = await ProjectRepo.GetEnabledScheduledAsync();
+            // Order so the ones about to fire bubble to the top, then by last run.
+            upcoming = scheduled
+                .OrderByDescending(DueNow)
+                .ThenByDescending(p => p.LastRunAt ?? DateTime.MinValue)
+                .ToList();
+
+            BuildHealth();
+            BuildTabs();
+        }
+        catch (Exception ex)
+        {
+            loadError = $"Failed to load processing state: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void BuildHealth()
+    {
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        var fails24h = recentRuns.Count(r =>
+            string.Equals(r.Status, "Failed", StringComparison.OrdinalIgnoreCase)
+            && r.StartedAt >= cutoff);
+
+        var lastTerminal = recentRuns.FirstOrDefault(r =>
+            !string.Equals(r.Status, "Running", StringComparison.OrdinalIgnoreCase));
+        var lastStatus = lastTerminal?.Status ?? "—";
+        var lastStatusColor = lastStatus switch
+        {
+            "Succeeded" => "text-success",
+            "Failed" => "text-danger",
+            "Cancelled" => "text-warning",
+            _ => "text-secondary"
+        };
+
+        healthStats = new List<CcStatRow.StatItem>
+        {
+            new("Node", LocalNodeId, "text-info"),
+            new("Running now", runningRuns.Count.ToString(), runningRuns.Count > 0 ? "text-primary" : "text-secondary"),
+            new("Last run", lastStatus, lastStatusColor),
+            new("Failures (24h)", fails24h.ToString(), fails24h > 0 ? "text-danger" : "text-success", fails24h > 0),
+        };
+    }
+
+    private void BuildTabs()
+    {
+        sectionTabs = new List<CcFilterTabs.Tab>
+        {
+            new("running", "Running now", runningRuns.Count, "fas fa-bolt"),
+            new("queue", "Scheduled next", upcoming.Count, "fas fa-clock"),
+            new("history", "Recent history", recentRuns.Count, "fas fa-list"),
+        };
+    }
+
+    private void HandleSectionChanged(string key)
+    {
+        activeSection = key;
+        stopMessage = string.Empty;
+        stopError = string.Empty;
+    }
+
+    private async Task RequestStop(SyncRun run)
+    {
+        stoppingRunId = run.Id;
+        stopMessage = string.Empty;
+        stopError = string.Empty;
+        try
+        {
+            // Same cancellation path Stop Sync uses on SyncProjects — trip the CTS
+            // the orchestrator threads through its sink loop. A false return means
+            // the run isn't executing in THIS process (single-node honesty).
+            var signalled = CancellationRegistry.RequestCancel(run.SyncProjectId);
+            if (signalled)
+            {
+                var name = ProjectName(run.SyncProjectId);
+                stopMessage = $"Stop requested for '{name}'. The run cancels at its next checkpoint.";
+            }
+            else
+            {
+                stopError = "No in-flight run was found for this project in this process. It may have already finished — refresh to confirm.";
+            }
+            await ReloadAll();
+        }
+        catch (Exception ex)
+        {
+            stopError = $"Stop failed: {ex.Message}";
+        }
+        finally
+        {
+            stoppingRunId = null;
+        }
+    }
+
+    private void OpenRun(Guid runId) => Navigation.NavigateTo($"/sync-history/{runId}");
+
+    // ─── Display helpers ────────────────────────────────────────────────────
+
+    private string ProjectName(Guid projectId) =>
+        projectNames.TryGetValue(projectId, out var name) ? name : "(unknown project)";
+
+    private bool DueNow(SyncProject p) =>
+        !p.IsRunning && ScheduledSyncRunnerJob.IsDue(p.CronSchedule, p.LastRunAt, DateTime.UtcNow);
+
+    private static string FormatTime(DateTime utc) =>
+        utc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static string Elapsed(DateTime startedUtc)
+    {
+        var span = DateTime.UtcNow - startedUtc;
+        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
+        return FormatSpan(span);
+    }
+
+    private static string DurationLabel(SyncRun r)
+    {
+        if (r.DurationMs.HasValue) return FormatSpan(TimeSpan.FromMilliseconds(r.DurationMs.Value));
+        if (r.CompletedAt.HasValue) return FormatSpan(r.CompletedAt.Value - r.StartedAt);
+        return "—";
+    }
+
+    private static string FormatSpan(TimeSpan span)
+    {
+        if (span.TotalSeconds < 1) return "<1s";
+        if (span.TotalMinutes < 1) return $"{(int)span.TotalSeconds}s";
+        if (span.TotalHours < 1) return $"{(int)span.TotalMinutes}m {span.Seconds}s";
+        return $"{(int)span.TotalHours}h {span.Minutes}m";
+    }
+
+    private static string CountSummary(SyncRun r) =>
+        $"{r.ObjectsRead} / {r.ObjectsCreated} / {r.ObjectsUpdated} / {r.ObjectsSkipped} / {r.ObjectsFailed}";
+
+    private RenderFragment StatusBadge(string status) => builder =>
+    {
+        var cls = status switch
+        {
+            "Succeeded" => "bg-success",
+            "Failed" => "bg-danger",
+            "Cancelled" => "bg-warning text-dark",
+            "Running" => "bg-primary",
+            _ => "bg-secondary"
+        };
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", $"badge {cls}");
+        builder.AddContent(2, status);
+        builder.CloseElement();
+    };
+
+    public void Dispose()
+    {
+        pollTimer?.Dispose();
+    }
+}
