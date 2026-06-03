@@ -20,8 +20,10 @@ namespace Conduit.Connectors.ActiveDirectory;
 /// defaultNamingContext used as the root when no parent is supplied.
 ///
 /// Binds with the same path as <see cref="ActiveDirectorySource"/> —
-/// System.DirectoryServices.Protocols simple bind, host:port from Tenant.Domain,
-/// credentials from ConnectionCredentials ("ldap", {Username,Password}). No data
+/// System.DirectoryServices.Protocols Negotiate bind (DOMAIN\user split), host:port
+/// from Tenant.Domain, credentials from ConnectionCredentials ("ldap",
+/// {Username,Password}). Negotiate is required: hardened DCs that enforce LDAP
+/// signing reject a simple bind with "Strong authentication is required." No data
 /// is cached or persisted; every call is a fresh live read against the source.
 /// </summary>
 public sealed class ActiveDirectoryContainerBrowser : IConnectorContainerBrowser
@@ -67,13 +69,7 @@ public sealed class ActiveDirectoryContainerBrowser : IConnectorContainerBrowser
     {
         try
         {
-            using var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-            {
-                AuthType = AuthType.Basic
-            };
-            connection.SessionOptions.ProtocolVersion = 3;
-            connection.Credential = new NetworkCredential(creds.Username, creds.Password);
-            connection.Bind();
+            using var connection = CreateBoundConnection(host, port, creds);
 
             // Resolve the search base. Null/blank parent => directory root via RootDSE.
             var searchBase = parentDn;
@@ -149,6 +145,40 @@ public sealed class ActiveDirectoryContainerBrowser : IConnectorContainerBrowser
     // ─── credential + host helpers (mirror ActiveDirectorySource) ────────────
 
     private sealed record AdCredentials(string Username, string Password);
+
+    /// <summary>
+    /// Build a bound LdapConnection using Negotiate (GSS-SPNEGO → Kerberos/NTLM).
+    /// MIRRORS <see cref="ActiveDirectorySource"/>.CreateBoundConnection — domain
+    /// controllers that enforce LDAP signing/sealing REJECT a simple bind
+    /// (AuthType.Basic) over plain :389 with "Strong authentication is required
+    /// for this operation." The Phase 1 source-read fix moved to Negotiate; the
+    /// container browser had its own simple bind that still failed, so it gets the
+    /// same path here. DOMAIN\user is split into NetworkCredential(user){Domain}
+    /// the way SSPI expects; UPN / bare names pass through unchanged.
+    /// </summary>
+    private static LdapConnection CreateBoundConnection(string host, int port, AdCredentials creds)
+    {
+        var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
+        {
+            AuthType = AuthType.Negotiate
+        };
+        connection.SessionOptions.ProtocolVersion = 3;
+        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.All;
+
+        NetworkCredential netCred;
+        if (creds.Username.Contains('\\'))
+        {
+            var parts = creds.Username.Split('\\', 2);
+            netCred = new NetworkCredential(parts[1], creds.Password) { Domain = parts[0] };
+        }
+        else
+        {
+            netCred = new NetworkCredential(creds.Username, creds.Password);
+        }
+        connection.Credential = netCred;
+        connection.Bind();
+        return connection;
+    }
 
     private async Task<AdCredentials?> ReadCredsAsync()
     {

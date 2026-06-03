@@ -419,25 +419,33 @@
                         <label class="form-label fw-bold">Source Connected System</label>
                         <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
                             <option value="@Guid.Empty">-- Pick a source --</option>
-                            @foreach (var t in SourceTenants)
+                            @foreach (var t in AutoGenSourceTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
                         </select>
-                        <small class="form-text text-muted">Only connectors that can read are listed.</small>
+                        <small class="form-text text-muted">Only connectors that can read are listed. The chosen sink is excluded.</small>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Sink Connected System</label>
                         <select class="form-select" @bind="autoGenSinkId">
                             <option value="@Guid.Empty">-- Pick a sink --</option>
-                            @foreach (var t in SinkTenants)
+                            @foreach (var t in AutoGenSinkTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
                         </select>
-                        <small class="form-text text-muted">Only connectors that can write are listed.</small>
+                        <small class="form-text text-muted">Only connectors that can write are listed. The chosen source is excluded.</small>
                     </div>
+                    @if (AutoGenIsSelfSync)
+                    {
+                        <div class="alert alert-danger py-2">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            <strong>Source and target must be different connections.</strong>
+                            Pick a different sink.
+                        </div>
+                    }
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Schedule</label>
@@ -459,7 +467,7 @@
                     <button type="button" class="btn btn-secondary" @onclick="CloseAutoGenerateModal">Cancel</button>
                     <button type="button" class="btn btn-success"
                             @onclick="GenerateAutoSyncProject"
-                            disabled="@(autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty || autoGenInProgress)">
+                            disabled="@(autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty || AutoGenIsSelfSync || autoGenInProgress)">
                         @if (autoGenInProgress)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>
@@ -833,7 +841,7 @@
                                         <label class="form-label fw-semibold">
                                             <i class="fas fa-arrow-up-from-bracket me-1 text-muted"></i>Source Connected System <span class="text-danger">*</span>
                                         </label>
-                                        <select class="form-select @(ShowSourceError || SourceCapabilityInvalid ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
+                                        <select class="form-select @(ShowSourceError || SourceCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
                                             <option value="@Guid.Empty">-- Pick a source --</option>
                                             @foreach (var t in SourceTenants)
                                             {
@@ -866,7 +874,7 @@
                                         <label class="form-label fw-semibold">
                                             <i class="fas fa-arrow-down-to-bracket me-1 text-muted"></i>Sink Connected System <span class="text-danger">*</span>
                                         </label>
-                                        <select class="form-select @(ShowSinkError || SinkCapabilityInvalid ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
+                                        <select class="form-select @(ShowSinkError || SinkCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
                                             <option value="@Guid.Empty">-- Pick a sink --</option>
                                             @foreach (var t in SinkTenants)
                                             {
@@ -918,15 +926,16 @@
                                         }
                                     </div>
                                 }
-                                @* Self-sync banner — surfaces the mastered-identity pattern (e.g. AD → AD
-                                   with a default:* transform) without blocking save. *@
+                                @* Self-sync HARD block — source and target must be different
+                                   connections. A connection syncing to itself is never valid;
+                                   the Next/Save guard blocks on the same condition. *@
                                 @if (IsSelfSync)
                                 {
-                                    <div class="alert alert-info mt-3 mb-0 py-2">
-                                        <i class="fas fa-info-circle me-1"></i>
-                                        <strong>Self-sync:</strong> this project will pull from
-                                        <strong>@TenantName(form.SourceTenantId)</strong> and write back to the same system.
-                                        Common pattern for mastered identity transforms.
+                                    <div class="alert alert-danger mt-3 mb-0 py-2">
+                                        <i class="fas fa-triangle-exclamation me-1"></i>
+                                        <strong>Source and target must be different connections.</strong>
+                                        <strong>@TenantName(form.SourceTenantId)</strong> is selected on both sides.
+                                        Pick a different connection for the sink.
                                     </div>
                                 }
                                 <div class="row g-3 mt-1">
@@ -2457,9 +2466,17 @@
         var sourceCandidate = allTenants.FirstOrDefault(t =>
             !string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(t.SystemType, "Emulator", StringComparison.OrdinalIgnoreCase));
-        if (sourceCandidate is not null)
+        if (sourceCandidate is not null && sourceCandidate.Id != form.SinkTenantId)
         {
             form.SourceTenantId = sourceCandidate.Id;
+        }
+        // Never pre-default both pickers to the SAME connection — a directory
+        // syncing to itself is the bug we're guarding against. If the source
+        // default collided with the sink default (single-tenant labs), drop the
+        // sink default and let the operator pick a distinct one.
+        if (form.SourceTenantId != Guid.Empty && form.SourceTenantId == form.SinkTenantId)
+        {
+            form.SinkTenantId = Guid.Empty;
         }
 
         scopeForm = new SyncProjectScope { PageSize = 1000 };
@@ -2730,12 +2747,41 @@
         return a is null || a.SupportsSink;
     }
 
-    // Pickers iterate these instead of the raw allTenants list.
+    // Pickers iterate these instead of the raw allTenants list. Beyond the
+    // capability filter (slice 4), each side EXCLUDES the connection already
+    // chosen on the opposite side so the operator can't pick the same tenant as
+    // both source and sink (a directory syncing to itself). The exclusion is
+    // skipped while a side is unset (Guid.Empty) and never hides the currently
+    // selected value from its own picker.
     private IReadOnlyList<Tenant> SourceTenants =>
-        allTenants.Where(TenantSupportsSource).ToList();
+        allTenants
+            .Where(TenantSupportsSource)
+            .Where(t => form.SinkTenantId == Guid.Empty || t.Id != form.SinkTenantId)
+            .ToList();
 
     private IReadOnlyList<Tenant> SinkTenants =>
-        allTenants.Where(TenantSupportsSink).ToList();
+        allTenants
+            .Where(TenantSupportsSink)
+            .Where(t => form.SourceTenantId == Guid.Empty || t.Id != form.SourceTenantId)
+            .ToList();
+
+    // Auto-Generate modal pickers — same capability filter as the wizard, but
+    // keyed off the modal's own autoGenSourceId / autoGenSinkId so each side
+    // excludes the connection chosen on the other (no self-sync).
+    private bool AutoGenIsSelfSync =>
+        autoGenSourceId != Guid.Empty && autoGenSourceId == autoGenSinkId;
+
+    private IReadOnlyList<Tenant> AutoGenSourceTenants =>
+        allTenants
+            .Where(TenantSupportsSource)
+            .Where(t => autoGenSinkId == Guid.Empty || t.Id != autoGenSinkId)
+            .ToList();
+
+    private IReadOnlyList<Tenant> AutoGenSinkTenants =>
+        allTenants
+            .Where(TenantSupportsSink)
+            .Where(t => autoGenSourceId == Guid.Empty || t.Id != autoGenSourceId)
+            .ToList();
 
     // Capability pills for the currently-selected source / sink, rendered beside
     // each picker so the operator sees what the chosen connector can do.
@@ -2838,6 +2884,11 @@
                 if (SinkCapabilityInvalid)
                 {
                     formError = $"{TenantName(form.SinkTenantId)} ({TenantType(form.SinkTenantId)}) cannot act as a sink — its connector is source-only. Pick a different sink.";
+                    return false;
+                }
+                if (IsSelfSync)
+                {
+                    formError = "Source and target must be different connections.";
                     return false;
                 }
                 return true;
@@ -2947,10 +2998,19 @@
             wizardStep = 1;
             return;
         }
-        // Self-sync is allowed — a project can pull from a system and write back
-        // to the same system (the "default:transformed" mastered-identity pattern).
-        // The symmetric-router contract doesn't care; the soft banner above the
-        // Source/Sink picker tells the operator what they're doing.
+        // Source and target must be DISTINCT connections — a directory syncing to
+        // itself is never valid. Primary gate is the wizard Next button; this catches
+        // a tabbed-edit jump or stale selection that lands here directly. Only
+        // meaningful on create — source/sink are locked on edit.
+        if (!editingId.HasValue && IsSelfSync)
+        {
+            formError = "Source and target must be different connections.";
+            showSourceValidation = true;
+            showSinkValidation = true;
+            formTab = "setup";
+            wizardStep = 1;
+            return;
+        }
         if (!ScheduledSyncRunnerJob.TryValidate(form.CronSchedule, out var cronError))
         {
             formError = cronError ?? "Invalid schedule.";
@@ -3266,6 +3326,12 @@
             return;
         }
 
+        if (AutoGenIsSelfSync)
+        {
+            autoGenError = "Source and target must be different connections.";
+            return;
+        }
+
         var src = allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
         var sink = allTenants.FirstOrDefault(t => t.Id == autoGenSinkId);
         if (src is null || sink is null)
@@ -3274,9 +3340,9 @@
             return;
         }
 
-        // Self-sync is allowed (mastered transforms). The modal's live preview line
-        // already shows the operator the object-class count + names for (source, mode)
-        // before they confirm. Build the whole graph in memory via the Phase 3
+        // The modal's live preview line already shows the operator the object-class
+        // count + names for (source, mode) before they confirm. Build the whole
+        // graph in memory via the Phase 3
         // generator, then persist project -> workflow -> step -> scope -> mappings
         // through the repositories. Only Mapping steps are emitted -- no governance.
         var existingNames = allProjects.Select(p => p.Name).ToList();
