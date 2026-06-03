@@ -492,7 +492,7 @@ namespace Conduit.Web.Services
         public string JwtSecretKey { get; set; } = string.Empty;
         public string? JwtIssuer { get; set; }
         public string? JwtAudience { get; set; }
-        public int ServerPort { get; set; } = 5000;
+        public int ServerPort { get; set; } = 5500;
         public bool UseHttps { get; set; } = false;
         public bool AutoCreateDatabase { get; set; } = true;
     }

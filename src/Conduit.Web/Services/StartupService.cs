@@ -54,7 +54,7 @@ namespace Conduit.Web.Services
                     Console.WriteLine("This appears to be the first time running Conduit.");
                     Console.WriteLine("Please open your web browser and navigate to:");
                     Console.WriteLine();
-                    Console.WriteLine("  http://localhost:5000/setup");
+                    Console.WriteLine("  http://localhost:5500/setup");
                     Console.WriteLine();
                     Console.WriteLine("to complete the initial configuration.");
                     Console.WriteLine();
@@ -67,8 +67,8 @@ namespace Conduit.Web.Services
                     Console.WriteLine("  Conduit Started Successfully");
                     Console.WriteLine("========================================");
                     Console.WriteLine();
-                    Console.WriteLine("Web UI: http://localhost:5000");
-                    Console.WriteLine("API Base: http://localhost:5000/scim/v2");
+                    Console.WriteLine("Web UI: http://localhost:5500");
+                    Console.WriteLine("API Base: http://localhost:5500/scim/v2");
                     Console.WriteLine();
                 }
             }
