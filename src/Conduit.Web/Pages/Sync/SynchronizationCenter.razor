@@ -4,7 +4,11 @@
 @using Conduit.Web.Pages
 @using Conduit.Web.Pages.Sync
 @using Microsoft.AspNetCore.WebUtilities
+@using Conduit.DataAccess.Repositories
 @inject NavigationManager Navigation
+@inject TenantRepository TenantRepo
+@inject SyncProjectRepository ProjectRepo
+@inject SyncRunRepository RunRepo
 
 @*
     Synchronization Center — Conduit's sync HOME.
@@ -34,7 +38,28 @@
     <CcTemplate1 Title="Synchronization Center"
                  Subtitle="Connections, sync projects, and run history — the home for everything that moves identities."
                  Icon="fas fa-sync-alt"
-                 IconAccent="cyan" />
+                 IconAccent="cyan">
+        <Stats>
+            <div class="d-flex gap-3 flex-wrap align-items-center ms-2">
+                <div class="cc-hub-chip">
+                    <span class="cc-hub-chip-value">@connectionCount</span>
+                    <span class="cc-hub-chip-label">Connections</span>
+                </div>
+                <div class="cc-hub-chip">
+                    <span class="cc-hub-chip-value">@projectCount</span>
+                    <span class="cc-hub-chip-label">Sync Projects</span>
+                </div>
+                <div class="cc-hub-chip">
+                    <span class="cc-hub-chip-value">@runsTodayCount</span>
+                    <span class="cc-hub-chip-label">Runs today</span>
+                </div>
+                <div class="cc-hub-chip">
+                    <span class="cc-hub-chip-value @LastRunColor">@LastRunLabel</span>
+                    <span class="cc-hub-chip-label">Last run</span>
+                </div>
+            </div>
+        </Stats>
+    </CcTemplate1>
 
     <CcFilterTabs Tabs="@_tabs"
                   ActiveTab="@activeTab"
@@ -67,6 +92,33 @@
 @code {
     private string activeTab = "projects";
 
+    // Header stat chips — cheap counts pulled once on load. These are display-only
+    // and never block the hub: any repo failure leaves them as "—".
+    private string connectionCount = "—";
+    private string projectCount = "—";
+    private string runsTodayCount = "—";
+    private string? lastRunStatus;
+    private DateTime? lastRunWhen;
+
+    private string LastRunLabel => lastRunWhen is { } w ? RelativeTime(w) : "—";
+
+    private string LastRunColor => lastRunStatus switch
+    {
+        "Completed" or "Succeeded" => "text-success",
+        "Failed" or "Error" => "text-danger",
+        "Running" => "text-info",
+        _ => "text-primary"
+    };
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc;
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}m ago";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}h ago";
+        return $"{(int)span.TotalDays}d ago";
+    }
+
     private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
     {
         new("connections", "Connections", null, "fas fa-plug"),
@@ -79,7 +131,7 @@
         //   new("modules", "Modules", null, "fas fa-puzzle-piece"),
     };
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
         if (QueryHelpers.ParseQuery(uri.Query).TryGetValue("tab", out var tab))
@@ -90,6 +142,44 @@
                 activeTab = requested;
             }
         }
+
+        await LoadHubStatsAsync();
+    }
+
+    // Loads the four header chips. Display-only; swallows failures so the hub and
+    // its child panels always render even before setup / when the DB is cold.
+    private async Task LoadHubStatsAsync()
+    {
+        try
+        {
+            var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
+            connectionCount = tenants.Count.ToString("N0");
+        }
+        catch { connectionCount = "—"; }
+
+        try
+        {
+            var projects = await ProjectRepo.GetAllAsync();
+            projectCount = projects.Count.ToString("N0");
+        }
+        catch { projectCount = "—"; }
+
+        try
+        {
+            var recent = await RunRepo.GetRecentAsync(take: 200);
+            var today = DateTime.UtcNow.Date;
+            runsTodayCount = recent.Count(r => r.StartedAt.Date == today).ToString("N0");
+
+            var latest = recent
+                .OrderByDescending(r => r.CompletedAt ?? r.StartedAt)
+                .FirstOrDefault();
+            if (latest is not null)
+            {
+                lastRunStatus = latest.Status;
+                lastRunWhen = latest.CompletedAt ?? latest.StartedAt;
+            }
+        }
+        catch { runsTodayCount = "—"; }
     }
 
     private void HandleTabChanged(string key)

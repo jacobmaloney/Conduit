@@ -48,7 +48,7 @@
                 <button class="ss-button" @onclick="ToggleSwitcher" @onclick:stopPropagation="true">
                     <span class="ss-glyph">@GlyphFor(ActiveSystem.ActiveSystem)</span>
                     <span class="ss-meta">
-                        <span class="ss-name">@(ActiveSystem.ActiveSystem?.Name ?? "All Connected Systems")</span>
+                        <span class="ss-name">@(ActiveSystem.ActiveSystem?.Name ?? "All connections")</span>
                         <span class="ss-domain">@SubtitleFor(ActiveSystem.ActiveSystem)</span>
                     </span>
                     <i class="oi oi-chevron-bottom ss-chev"></i>
@@ -56,12 +56,12 @@
                 @if (switcherOpen)
                 {
                     <div class="ss-menu" @onclick:stopPropagation="true">
-                        <div class="ss-menu-label">Connected Systems</div>
+                        <div class="ss-menu-label">Connections</div>
                         <button class="ss-menu-item @(ActiveSystem.ActiveSystem == null ? "active" : "")"
                                 @onclick="() => SelectSystemAsync(null)">
                             <span class="ss-glyph ss-glyph-sm">★</span>
                             <span class="ss-menu-meta">
-                                <span>All Connected Systems</span>
+                                <span>All connections</span>
                                 <span class="ss-menu-domain">admin · cross-system</span>
                             </span>
                             <span class="kind-pill">Admin</span>
@@ -240,7 +240,7 @@
 
     private string CountTooltip => ActiveSystem.ActiveSystem is { } s
         ? $"Total in {s.Name}"
-        : "Total across all Connected Systems";
+        : "Total across all connections";
 
     protected override void OnInitialized()
     {

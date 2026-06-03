@@ -1762,7 +1762,7 @@
     private async Task SeedDemo()
     {
         var ok = await JS.InvokeAsync<bool>("confirm",
-            "Seed demo data? This creates three Connected Systems (IT Helpdesk Portal, Finance Suite, HR Connect), 25 users + 5 groups in IT Helpdesk with the SOD trap pair, and five fixed-value API tokens. The operation is idempotent — re-running is safe.");
+            "Seed demo data? This creates three connections (IT Helpdesk Portal, Finance Suite, HR Connect), 25 users + 5 groups in IT Helpdesk with the SOD trap pair, and five fixed-value API tokens. The operation is idempotent — re-running is safe.");
         if (!ok) return;
         seeding = true;
         lastSeedResult = null;

@@ -41,7 +41,7 @@
 
 <div class="container-fluid sync-page-container">
     <CcTemplate1 Title="Sync Projects"
-                 Subtitle="Pump data between Connected Systems. Source → mapping → sink, on a schedule or on demand."
+                 Subtitle="Pump data between connections. Source → mapping → sink, on a schedule or on demand."
                  Icon="fas fa-exchange-alt"
                  IconAccent="cyan">
         <PrimaryAction>
@@ -864,7 +864,7 @@
                                 </div>
                                 <div class="mt-2">
                                     <a href="/connected-systems" class="small">
-                                        <i class="fas fa-plug me-1"></i>Manage Connected Systems &amp; test credentials
+                                        <i class="fas fa-plug me-1"></i>Manage Connections &amp; test credentials
                                     </a>
                                 </div>
                                 @* Self-sync banner — surfaces the mastered-identity pattern (e.g. AD → AD
@@ -2762,7 +2762,7 @@
         {
             showSourceValidation = true;
             showSinkValidation = true;
-            formError = "Both source and sink Connected Systems are required.";
+            formError = "Both source and sink connections are required.";
             formTab = "setup";
             wizardStep = 1;
             return;

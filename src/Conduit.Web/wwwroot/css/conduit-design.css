@@ -81,6 +81,33 @@
   margin-top: 2px;
 }
 
+/* Hub header stat chips — compact value/label tiles that live in CcTemplate1's
+   <Stats> slot (Synchronization Center hub). Mirrors IC's SystemCenter feel. */
+.cc-hub-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.3rem 0.75rem;
+  background: var(--surface-inset, var(--panel-2, #131F36));
+  border: 1px solid var(--border, rgba(120,160,220,0.10));
+  border-radius: 8px;
+  min-width: 84px;
+}
+
+.cc-hub-chip-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary, var(--text, #E4EDFB));
+}
+
+.cc-hub-chip-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+}
+
 /* ─────────── 3. CcSearchBox ─────────── */
 .cc-search-box {
   position: relative;
