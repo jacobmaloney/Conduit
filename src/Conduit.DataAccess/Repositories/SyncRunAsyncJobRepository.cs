@@ -44,6 +44,22 @@ public class SyncRunAsyncJobRepository : BaseRepository
         return rows.ToList();
     }
 
+    /// <summary>
+    /// Recent rows across ALL states for the Processing Center "Async ops" view —
+    /// read-only aggregation over the same table the poller drives. Ordered by the
+    /// most recent activity (completion, else last poll, else submission) so live
+    /// and just-finished jobs sit at the top. No new persistence.
+    /// </summary>
+    public async Task<List<SyncRunAsyncJob>> GetRecentAsync(int batchSize)
+    {
+        var rows = await QueryAsync<SyncRunAsyncJob>(@"
+            SELECT TOP (@BatchSize) *
+              FROM SyncRunAsyncJobs
+             ORDER BY COALESCE(CompletedAt, LastPolledAt, SubmittedAt) DESC",
+            new { BatchSize = batchSize });
+        return rows.ToList();
+    }
+
     public Task MarkPolledAsync(long id) =>
         ExecuteAsync(@"
             UPDATE SyncRunAsyncJobs

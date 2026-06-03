@@ -5,6 +5,7 @@
 @using Conduit.Sync.Orchestration
 @inject SyncRunRepository RunRepo
 @inject SyncProjectRepository ProjectRepo
+@inject SyncRunAsyncJobRepository AsyncJobRepo
 @inject SyncCancellationRegistry CancellationRegistry
 @inject NavigationManager Navigation
 @implements IDisposable
@@ -205,6 +206,78 @@
             </div>
         </div>
     }
+    else if (activeSection == "async")
+    {
+        <div class="card pc-card">
+            <div class="card-header pc-card-header">
+                <i class="fas fa-hourglass-half me-2"></i> Pending operations
+                <span class="badge bg-secondary ms-2">@pendingJobs.Count</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="pc-queue-note">
+                    Adapter-submitted async jobs (e.g. AWS SSO assignment creations)
+                    persisted in <code>SyncRunAsyncJobs</code>. The AsyncJobPoller advances
+                    each <strong>Pending</strong> row to a terminal state every 30 seconds.
+                    Showing pending first, then recently-completed for context.
+                </div>
+                @if (asyncJobs.Count == 0)
+                {
+                    <div class="pc-empty">
+                        No async operations. Connectors that complete writes synchronously
+                        (the AD → Emulator path, SQL, Google Workspace) never enqueue here —
+                        only long-running target operations do.
+                    </div>
+                }
+                else
+                {
+                    <table class="table table-hover mb-0 pc-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Project / Run</th>
+                                <th>Object</th>
+                                <th>Submitted</th>
+                                <th>Last poll</th>
+                                <th>Attempts</th>
+                                <th>Origin</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var j in asyncJobs)
+                            {
+                                <tr class="@(string.Equals(j.State, "Failed", StringComparison.OrdinalIgnoreCase) ? "pc-row-failed" : null)">
+                                    <td>
+                                        <code class="pc-cron">@j.JobType</code>
+                                        <div class="text-muted small">@j.SystemType</div>
+                                    </td>
+                                    <td>@AsyncStatusBadge(j.State)</td>
+                                    <td>
+                                        @ProjectName(j.SyncProjectId)
+                                        <div>
+                                            <button class="btn btn-sm btn-link p-0" @onclick="() => OpenRun(j.SyncRunId)">Run detail</button>
+                                        </div>
+                                    </td>
+                                    <td class="text-muted small">@(string.IsNullOrEmpty(j.ObjectExternalId) ? "—" : j.ObjectExternalId)</td>
+                                    <td>@FormatTime(j.SubmittedAt)</td>
+                                    <td>@(j.LastPolledAt.HasValue ? FormatTime(j.LastPolledAt.Value) : "—")</td>
+                                    <td>@j.PollAttempts</td>
+                                    <td><span class="badge bg-info-subtle text-info-emphasis">@LocalNodeId</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (asyncErrors.Count > 0)
+                    {
+                        <div class="pc-queue-note">
+                            <i class="fas fa-triangle-exclamation me-1 text-warning"></i>
+                            @asyncErrors.Count failed operation(s) in view — hover a row or open its run detail for the recorded error.
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
     else
     {
         <div class="card pc-card">
@@ -272,6 +345,14 @@
     private List<SyncProject> upcoming = new();
     private Dictionary<Guid, string> projectNames = new();
 
+    // Async-ops view (Item 2). pendingJobs = the live persisted queue
+    // (SyncRunAsyncJobRepository.GetPendingAsync — fleet-wide State='Pending').
+    // asyncJobs = pending first, then recently-terminal for context
+    // (GetRecentAsync). Read-only aggregation; no new persistence.
+    private List<SyncRunAsyncJob> pendingJobs = new();
+    private List<SyncRunAsyncJob> asyncJobs = new();
+    private List<SyncRunAsyncJob> asyncErrors = new();
+
     // Stop state
     private Guid? stoppingRunId;
     private string stopMessage = string.Empty;
@@ -289,7 +370,9 @@
         await ReloadAll();
         pollTimer = new System.Threading.Timer(async _ =>
         {
-            if (runningRuns.Count == 0) return;
+            // Refresh while anything is in flight: a running sync OR a pending async
+            // job the 30s poller is still advancing.
+            if (runningRuns.Count == 0 && pendingJobs.Count == 0) return;
             await InvokeAsync(ReloadAll);
         }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
@@ -311,6 +394,18 @@
             upcoming = scheduled
                 .OrderByDescending(DueNow)
                 .ThenByDescending(p => p.LastRunAt ?? DateTime.MinValue)
+                .ToList();
+
+            // Async ops: the live persisted Pending queue + recent terminal rows.
+            // De-dupe by Id so a row that's still Pending isn't shown twice when it
+            // also appears in the recent set. Pending bubbles to the top.
+            pendingJobs = await AsyncJobRepo.GetPendingAsync(200);
+            var recentJobs = await AsyncJobRepo.GetRecentAsync(200);
+            asyncJobs = pendingJobs
+                .Concat(recentJobs.Where(r => pendingJobs.All(p => p.Id != r.Id)))
+                .ToList();
+            asyncErrors = asyncJobs
+                .Where(j => string.Equals(j.State, "Failed", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             BuildHealth();
@@ -361,6 +456,7 @@
         {
             new("running", "Running now", runningRuns.Count, "fas fa-bolt"),
             new("queue", "Scheduled next", upcoming.Count, "fas fa-clock"),
+            new("async", "Pending ops", pendingJobs.Count, "fas fa-hourglass-half"),
             new("history", "Recent history", recentRuns.Count, "fas fa-list"),
         };
     }
@@ -460,6 +556,26 @@
         builder.OpenElement(0, "span");
         builder.AddAttribute(1, "class", $"badge {cls}");
         builder.AddContent(2, label);
+        builder.CloseElement();
+    };
+
+    // Async-job status vocabulary: Pending | Succeeded | Failed | Cancelled
+    // (SyncRunAsyncJob.State). Cancelled is shown amber to match the page-wide
+    // amber convention for non-failure-but-not-success outcomes (the same shade
+    // PartialSuccess / Cancelled use on runs). Pending is info (work in flight).
+    private RenderFragment AsyncStatusBadge(string state) => builder =>
+    {
+        var cls = state switch
+        {
+            "Succeeded" => "bg-success",
+            "Failed" => "bg-danger",
+            "Cancelled" => "bg-warning text-dark",
+            "Pending" => "bg-info",
+            _ => "bg-secondary"
+        };
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", $"badge {cls}");
+        builder.AddContent(2, state);
         builder.CloseElement();
     };
 

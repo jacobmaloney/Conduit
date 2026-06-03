@@ -6,6 +6,9 @@
 @using Conduit.Sync.Orchestration
 @using NCrontab
 @inject SyncProjectRepository ProjectRepo
+@inject SyncProjectOrchestrator Orchestrator
+@inject SyncCancellationRegistry CancellationRegistry
+@inject NavigationManager Navigation
 
 @*
     Schedule Manager — one place to see and manage EVERY sync project's schedule.
@@ -107,6 +110,28 @@
                                 }
                             </td>
                             <td class="text-end">
+                                @if (p.IsEnabled && !p.IsRunning && !CancellationRegistry.IsRunningHere(p.Id))
+                                {
+                                    <button class="btn btn-sm btn-outline-success me-1"
+                                            @onclick="() => RunNow(p)"
+                                            disabled="@(busyId is not null)">
+                                        @if (runningRowId == p.Id)
+                                        {
+                                            <span class="spinner-border spinner-border-sm me-1"></span>
+                                        }
+                                        else
+                                        {
+                                            <i class="fas fa-play me-1"></i>
+                                        }
+                                        Run Now
+                                    </button>
+                                }
+                                else if (p.IsRunning || CancellationRegistry.IsRunningHere(p.Id))
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary me-1" disabled>
+                                        <i class="fas fa-spinner fa-spin me-1"></i>Running…
+                                    </button>
+                                }
                                 <button class="btn btn-sm btn-outline-primary me-1"
                                         @onclick="() => OpenEdit(p)"
                                         disabled="@(busyId == p.Id)">
@@ -140,14 +165,22 @@
 @if (!string.IsNullOrEmpty(toast))
 {
     <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080;">
-        <div class="toast show align-items-center text-bg-success border-0">
+        <div class="toast show align-items-center @toastClass border-0">
             <div class="d-flex">
-                <div class="toast-body">@toast</div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" @onclick="() => toast = null"></button>
+                <div class="toast-body">
+                    @toast
+                    @if (lastRunId is not null)
+                    {
+                        <a class="text-white text-decoration-underline ms-2" href="/sync-history/@lastRunId">View run</a>
+                    }
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" @onclick="DismissToast"></button>
             </div>
         </div>
     </div>
 }
+
+<CcConfirmationModal @ref="runConfirm" ConfirmLabel="Run Now" ConfirmButtonClass="btn-success" />
 
 @* ───────── Edit Schedule Modal (reuses shared CcScheduleEditor) ───────── *@
 @if (editProject is not null)
@@ -203,7 +236,86 @@
     private string? editError;
     private bool editSaving;
 
+    // Run-now state. runningRowId marks the row whose run is in flight (the
+    // orchestrator's ExecuteAsync runs the whole pass inline, so the await holds
+    // until the run is terminal — same as the Sync Projects page). toastClass +
+    // lastRunId drive the result toast and its "View run" link.
+    private CcConfirmationModal? runConfirm;
+    private Guid? runningRowId;
+    private string toastClass = "text-bg-success";
+    private Guid? lastRunId;
+
     protected override async Task OnInitializedAsync() => await Reload();
+
+    private void DismissToast()
+    {
+        toast = null;
+        lastRunId = null;
+    }
+
+    // ─── Run Now (manual, ignores schedule) ───────────────────────────────────
+    // Reuses the EXACT in-app trigger path the Sync Projects page uses:
+    // SyncProjectOrchestrator.ExecuteAsync(projectId, "Manual", ...). No new run
+    // mechanism. Double-trigger is guarded twice: the project's persisted
+    // IsRunning flag AND the in-process SyncCancellationRegistry.IsRunningHere —
+    // matching RunNowConfirmed's guard. ExecuteAsync itself also CAS-claims
+    // IsRunning, so a concurrent claim can't produce two overlapping runs.
+    private async Task RunNow(SyncProject row)
+    {
+        if (runConfirm is null) return;
+        if (!row.IsEnabled) return;
+        if (row.IsRunning || CancellationRegistry.IsRunningHere(row.Id)) return;
+
+        var ok = await runConfirm.ShowAsync(
+            $"Run '{row.Name}' now?",
+            "This starts a manual sync run immediately, regardless of the schedule.",
+            "It reads from the source, applies the project's mappings, and writes to the sink.");
+        if (!ok) return;
+
+        // Re-check after the (awaited) confirm — a scheduler tick or another
+        // operator may have started it while the dialog was open.
+        var fresh = await ProjectRepo.GetByIdAsync(row.Id);
+        if (fresh is null)
+        {
+            toastClass = "text-bg-danger";
+            lastRunId = null;
+            toast = "Project no longer exists.";
+            await Reload();
+            return;
+        }
+        if (fresh.IsRunning || CancellationRegistry.IsRunningHere(row.Id))
+        {
+            toastClass = "text-bg-warning";
+            lastRunId = null;
+            toast = $"'{fresh.Name}' is already running — not started again.";
+            await Reload();
+            return;
+        }
+
+        runningRowId = row.Id;
+        busyId = row.Id;
+        lastRunId = null;
+        try
+        {
+            var runId = await Orchestrator.ExecuteAsync(row.Id, "Manual", CancellationToken.None);
+            lastRunId = runId;
+            toastClass = "text-bg-success";
+            toast = $"Manual run completed for '{row.Name}'.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            toastClass = "text-bg-danger";
+            lastRunId = null;
+            toast = $"Run failed for '{row.Name}': {ex.Message}";
+            await Reload();
+        }
+        finally
+        {
+            runningRowId = null;
+            busyId = null;
+        }
+    }
 
     private async Task Reload()
     {
@@ -250,6 +362,8 @@
     private async Task ToggleEnabled(SyncProject row)
     {
         busyId = row.Id;
+        toastClass = "text-bg-success";
+        lastRunId = null;
         try
         {
             var full = await ProjectRepo.GetByIdAsync(row.Id);
@@ -300,6 +414,8 @@
         }
         editSaving = true;
         editError = null;
+        toastClass = "text-bg-success";
+        lastRunId = null;
         try
         {
             var full = await ProjectRepo.GetByIdAsync(editProject.Id);
