@@ -238,12 +238,20 @@
     }
 </div>
 
-<!-- Create / Edit modal -->
-<div class="modal @(showModal ? "show d-block" : "")" tabindex="-1">
+<!-- Create / Edit modal — IC "New Connection" parity (Cc-styled, Test-gated) -->
+<div class="modal conn-editor-modal @(showModal ? "show d-block" : "")" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">@(editingId.HasValue ? "Edit Connected System" : "Connect a System")</h5>
+            <div class="modal-header conn-editor-head">
+                <div class="conn-editor-head-row">
+                    <div class="cc-template1-icon-tile cc-template1-accent-cyan conn-editor-icon">
+                        <i class="@ConnectorGlyph(form.SystemType)"></i>
+                    </div>
+                    <div>
+                        <h5 class="modal-title mb-0">@(editingId.HasValue ? "Edit Connection" : "New Connection")</h5>
+                        <div class="conn-editor-sub">@(editingId.HasValue ? "Update this connected system's settings, credentials, and test the bind." : "Pick a connection type, enter credentials, and test the bind before you connect.")</div>
+                    </div>
+                </div>
                 <button type="button" class="btn-close" @onclick="CloseModal"></button>
             </div>
             <div class="modal-body">
@@ -274,14 +282,14 @@
                     <label class="form-label">
                         Domain@(domainRequired ? " *" : string.Empty)
                     </label>
-                    <input class="form-control" @bind="form.Domain" placeholder="@domainPlaceholder" />
+                    <input class="form-control" @bind="form.Domain" @bind:after="InvalidateFormTest" placeholder="@domainPlaceholder" />
                     @if (!string.IsNullOrEmpty(domainHelp))
                     {
                         <small class="form-text text-muted">@domainHelp</small>
                     }
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">System Type *</label>
+                    <label class="form-label">Connection Type *</label>
                     <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
                         <option value="Emulator">Emulator (test/demo target)</option>
                         <option value="ActiveDirectory">Active Directory</option>
@@ -297,7 +305,37 @@
                         <option value="IdentityCenter">IdentityCenter</option>
                         <option value="Real">Real (legacy / generic)</option>
                     </select>
-                    <small class="form-text text-muted">Emulator systems show an amber badge. Real connectors are green.</small>
+                    @{
+                        var typeAdapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
+                        var typeCaps = typeAdapter?.Capabilities;
+                    }
+                    <small class="form-text text-muted">
+                        @if (typeAdapter is not null)
+                        {
+                            <span>The credential fields below are driven by the <strong>@typeAdapter.DisplayName</strong> connector.</span>
+                            @if (typeCaps is not null)
+                            {
+                                <span class="conn-cap-pills">
+                                    @if (typeAdapter.SupportsSource)
+                                    {
+                                        <span class="conn-cap-pill">Source</span>
+                                    }
+                                    @if (typeAdapter.SupportsSink)
+                                    {
+                                        <span class="conn-cap-pill">Sink</span>
+                                    }
+                                    @if (typeCaps.SupportsIncremental)
+                                    {
+                                        <span class="conn-cap-pill">Incremental</span>
+                                    }
+                                </span>
+                            }
+                        }
+                        else
+                        {
+                            <span>Emulator systems show an amber badge. Real connectors are green.</span>
+                        }
+                    </small>
                 </div>
                 @{
                     // Connector-shaped credential capture, folded into create/edit so a
@@ -387,10 +425,77 @@
                     <label class="form-label">Description</label>
                     <textarea class="form-control" rows="3" @bind="form.Description"></textarea>
                 </div>
+
+                @* Active + Authoritative toggles (IC "New Connection" parity). Active is
+                   the real Tenant.IsActive flag. Authoritative has NO Tenant column today
+                   — Conduit's symmetric router decides "which side wins" per sync project /
+                   per attribute, not per connection. Rendered disabled + explained until
+                   Jacob decides the data-model mapping (see the flagged decision). *@
+                <div class="conn-toggle-row">
+                    <div class="conn-toggle">
+                        <label class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" @bind="form.IsActive" />
+                            <span class="form-check-label">Active</span>
+                        </label>
+                        <small class="form-text text-muted">Inactive connections are hidden from active lists and won't run scheduled syncs.</small>
+                    </div>
+                    <div class="conn-toggle is-disabled" title="Authoritative source is decided per sync project / per attribute in Conduit's symmetric router, not per connection. Pending data-model decision.">
+                        <label class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" disabled />
+                            <span class="form-check-label">Authoritative <span class="conn-soon">soon</span></span>
+                        </label>
+                        <small class="form-text text-muted">Set the winning side in the Sync Project (per-attribute), not here — see Sync Projects.</small>
+                    </div>
+                </div>
+
+                @* ── Test Connection gate (IC parity + this-session's save-trap fix) ──
+                   The green test state is the gate: Connect/Save is blocked until a real
+                   adapter bind succeeds, and ANY field change (type, domain, credential)
+                   invalidates that green state so you can never save a credential that
+                   wasn't the one that passed the test. *@
+                @if (CanTestForm)
+                {
+                    <div class="conn-test-strip @(formTestSuccess ? "ok" : (formTestMessage is not null ? "err" : ""))">
+                        <div class="conn-test-left">
+                            @if (formTestSuccess)
+                            {
+                                <i class="oi oi-circle-check"></i>
+                                <span>Connection verified — you can connect now.</span>
+                            }
+                            else if (formTestMessage is not null)
+                            {
+                                <i class="oi oi-circle-x"></i>
+                                <span>@formTestMessage</span>
+                            }
+                            else
+                            {
+                                <i class="oi oi-pulse"></i>
+                                <span>Test the connection before you @(editingId.HasValue ? "save" : "connect").</span>
+                            }
+                        </div>
+                        <button class="btn btn-outline-primary btn-sm" type="button" @onclick="TestFormConnectionAsync" disabled="@formTesting">
+                            @if (formTesting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                                <span>Testing…</span>
+                            }
+                            else
+                            {
+                                <i class="oi oi-pulse"></i>
+                                <span class="ms-1">Test Connection</span>
+                            }
+                        </button>
+                    </div>
+                    @if (formTestSuccess && formTestMessage is not null)
+                    {
+                        <div class="conn-test-detail">@formTestMessage</div>
+                    }
+                }
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
-                <button class="btn btn-primary" @onclick="Save" disabled="@saving">
+                <button class="btn btn-primary" @onclick="Save" disabled="@(saving || !CanSaveForm)"
+                        title="@(CanSaveForm ? null : (RequiresTestBeforeSave ? "Test the connection successfully before you can " + (editingId.HasValue ? "save." : "connect.") : null))">
                     @if (saving)
                     {
                         <span class="spinner-border spinner-border-sm me-2" role="status"></span>
@@ -1174,6 +1279,25 @@
         return char.ToUpperInvariant(name[0]).ToString();
     }
 
+    // Font Awesome glyph for the connection-editor header icon tile, by connector
+    // type. Falls back to a generic plug. Keeps the modal header feeling specific
+    // to whatever type the operator has selected (IC "New Connection" parity).
+    private static string ConnectorGlyph(string? systemType) => systemType switch
+    {
+        "ActiveDirectory" or "GenericLdap" or "Real" => "fas fa-sitemap",
+        "EntraID" => "fab fa-microsoft",
+        "Okta" => "fas fa-circle-nodes",
+        "GoogleWorkspace" => "fab fa-google",
+        "Scim" => "fas fa-arrows-rotate",
+        "Database" => "fas fa-database",
+        "CSV" => "fas fa-file-csv",
+        "AWS" or "AWSIdentityCenter" => "fab fa-aws",
+        "SharePoint" => "fas fa-share-nodes",
+        "IdentityCenter" => "fas fa-id-badge",
+        "Emulator" => "fas fa-flask",
+        _ => "fas fa-plug"
+    };
+
     // Item 6 flag (matches NavMenu.razor): SCIM-server chrome — Quick Sync,
     // Endpoints, Legal Hold, Clear Data — renders only in Development. The
     // primary directory-bind connection view stays clean in production.
@@ -1762,6 +1886,15 @@
             errorMessage = $"Credentials required: {string.Join(", ", missingCreds)}.";
             return;
         }
+        // Test-before-Save gate (server-side enforcement, not just the disabled
+        // button). For connectors with credential fields, a fresh successful test
+        // must back the current form state — formTestSuccess is invalidated on any
+        // credential/type/domain change, so this can't pass for un-tested values.
+        if (RequiresTestBeforeSave && !formTestSuccess)
+        {
+            errorMessage = "Test the connection successfully before you can " + (editingId.HasValue ? "save." : "connect.");
+            return;
+        }
         saving = true;
         errorMessage = "";
         try
@@ -2029,14 +2162,33 @@
     private string GetCreateString(string credTypeName, string key, string fallback) =>
         CreateBag(credTypeName).TryGetValue(key, out var v) && v is string s ? s : fallback;
 
-    private void SetCreateString(string credTypeName, string key, string value) =>
+    // Any credential edit invalidates a prior green test — the saved blob must be
+    // exactly the one that passed the bind (this session's credential-save-trap fix).
+    private void SetCreateString(string credTypeName, string key, string value)
+    {
         CreateBag(credTypeName)[key] = value;
+        InvalidateFormTest();
+    }
 
     private bool GetCreateBool(string credTypeName, string key, bool fallback) =>
         CreateBag(credTypeName).TryGetValue(key, out var v) && v is bool b ? b : fallback;
 
-    private void SetCreateBool(string credTypeName, string key, bool value) =>
+    private void SetCreateBool(string credTypeName, string key, bool value)
+    {
         CreateBag(credTypeName)[key] = value;
+        InvalidateFormTest();
+    }
+
+    // Clears the green test state so Save re-gates on a fresh successful bind.
+    // Called from every field-change path that could alter what gets persisted.
+    private void InvalidateFormTest()
+    {
+        if (formTestSuccess || formTestMessage is not null)
+        {
+            formTestSuccess = false;
+            formTestMessage = null;
+        }
+    }
 
     private bool IsSecretRevealed(string credTypeName, string key) =>
         revealedSecrets.Contains(string.Concat(credTypeName, "::", key));
@@ -2067,6 +2219,19 @@
         !string.IsNullOrWhiteSpace(form.SystemType)
         && ConnectorRegistry.Get(form.SystemType) is not null
         && GetMissingRequiredTenantFieldsForForm().Count == 0;
+
+    // The Test-before-Save gate only applies when the adapter declares credential
+    // fields worth binding — i.e. there's something to test. Sink-only / credential-
+    // less connectors (e.g. Emulator) are never blocked. This preserves the Phase-1
+    // AD path (AD declares 'ldap' creds, so it IS gated — by design) without making
+    // credential-less systems un-saveable.
+    private bool RequiresTestBeforeSave => HasCredentialFields(form.SystemType);
+
+    // Save is allowed when the gate doesn't apply, OR the gate applies and the
+    // current field state has a fresh successful test behind it. formTestSuccess is
+    // invalidated by every credential/type/domain change, so a green here always
+    // means "the values currently in the form are the ones that passed the bind".
+    private bool CanSaveForm => !RequiresTestBeforeSave || formTestSuccess;
 
     // Live connectivity probe for the create/edit form. Reuses the same path as
     // the Credentials & test modal: resolve the adapter, build a source (sink

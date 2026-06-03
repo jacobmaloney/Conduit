@@ -307,3 +307,120 @@
 .cc-btn-sm {
   font-size: 0.75rem;
 }
+
+/* ─────────── 6. Connection editor modal (IC "New Connection" parity) ─────────── */
+/* Used by Pages/ConnectedSystems.razor create/edit modal. Brings the IC
+   icon-tile header, capability pills, Active/Authoritative toggles, and the
+   Test-Connection gate strip into Conduit's dark theme. */
+
+.conn-editor-head {
+  align-items: flex-start;
+}
+.conn-editor-head-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+.conn-editor-icon {
+  flex: 0 0 auto;
+}
+.conn-editor-sub {
+  color: var(--text-tertiary, var(--text-3, #6B809E));
+  font-size: 12.5px;
+  margin-top: 2px;
+  max-width: 46ch;
+}
+
+/* Source / Sink / Incremental capability pills under the type picker. */
+.conn-cap-pills {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.conn-cap-pill {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-100, rgba(34,211,238,0.14));
+  color: var(--accent, #22d3ee);
+  border: 1px solid var(--accent-200, rgba(34,211,238,0.22));
+}
+
+/* Active + Authoritative toggle row. */
+.conn-toggle-row {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 0 0.25rem;
+  border-top: 1px solid var(--border, rgba(255,255,255,0.07));
+  margin-top: 0.25rem;
+}
+.conn-toggle {
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+.conn-toggle .form-check-label {
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+.conn-toggle.is-disabled {
+  opacity: 0.55;
+}
+.conn-soon {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #FCD34D;
+  border: 1px solid rgba(245, 158, 11, 0.30);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* Test-Connection gate strip. */
+.conn-test-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-2, rgba(255,255,255,0.10));
+  background: var(--panel-2, rgba(255,255,255,0.02));
+}
+.conn-test-strip .conn-test-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: var(--text-2, #94a3b8);
+}
+.conn-test-strip.ok {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.08);
+}
+.conn-test-strip.ok .conn-test-left {
+  color: #A7F3D0;
+}
+.conn-test-strip.err {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+.conn-test-strip.err .conn-test-left {
+  color: #FCA5A5;
+}
+.conn-test-detail {
+  margin-top: 0.4rem;
+  font-size: 12px;
+  color: var(--text-tertiary, #6B809E);
+  padding-left: 0.85rem;
+}
