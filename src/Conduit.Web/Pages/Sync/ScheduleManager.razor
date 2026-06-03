@@ -103,7 +103,7 @@
                                 }
                                 else
                                 {
-                                    <span class="badge @LastStatusBadge(p.LastRunStatus)">@(p.LastRunStatus ?? "Idle")</span>
+                                    <span class="badge @LastStatusBadge(p.LastRunStatus)">@LastStatusLabel(p.LastRunStatus)</span>
                                 }
                             </td>
                             <td class="text-end">
@@ -327,13 +327,27 @@
 
     // ─── Display helpers ──────────────────────────────────────────────────────
 
+    // Status vocabulary matches the orchestrator's emitted statuses and the way
+    // Processing Center / Sync History (slices 5-6) render them: PartialSuccess and
+    // Cancelled are both real rolled-up statuses shown amber. Kept in lock-step so
+    // the same run never shows green here and amber there.
     private static string LastStatusBadge(string? status) => status switch
     {
-        "Succeeded" => "bg-success",
-        "Failed"    => "bg-danger",
-        "Running"   => "bg-info",
-        "Cancelled" => "bg-secondary",
-        _           => "bg-light text-dark",
+        "Succeeded"      => "bg-success",
+        "Failed"         => "bg-danger",
+        "Running"        => "bg-info",
+        "PartialSuccess" => "bg-warning text-dark",
+        "Cancelled"      => "bg-warning text-dark",
+        _                => "bg-light text-dark",
+    };
+
+    // "PartialSuccess" is a raw enum from the orchestrator; show the friendly label
+    // (same wording as Processing Center / Sync History) so it doesn't read as code.
+    private static string LastStatusLabel(string? status) => status switch
+    {
+        "PartialSuccess" => "Partial Success",
+        null             => "Idle",
+        _                => status,
     };
 
     private static string LastRunText(SyncProject p)
