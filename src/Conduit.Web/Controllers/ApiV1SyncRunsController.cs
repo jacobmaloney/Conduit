@@ -213,6 +213,78 @@ namespace Conduit.Web.Controllers
             return Ok(dtos);
         }
 
+        // ─── GET /api/v1/sync-runs ────────────────────────────────────────────────
+
+        /// <summary>
+        /// Cross-project recent-run history. Backs the IdentityCenter governance
+        /// layer's read-only "Sync History (Conduit)" view (Phase 2 IC→Conduit
+        /// seam). Returns the most-recent runs across ALL projects the caller's
+        /// token can see, newest first, each decorated with project name +
+        /// source/sink Connected-System names so the consumer renders without a
+        /// second round-trip per row.
+        ///
+        /// Tenant-scoped tokens see only runs whose project lists their tenant as
+        /// source OR sink (same rule as <see cref="ListProjects"/>); Admin tokens
+        /// see everything. Filters: limit (1..1000, default 200), since (UTC),
+        /// status (exact match, e.g. "Succeeded"/"Failed"/"Running").
+        /// </summary>
+        [HttpGet("sync-runs")]
+        public async Task<IActionResult> ListRuns(
+            [FromQuery] int limit = 200,
+            [FromQuery] DateTime? since = null,
+            [FromQuery] string? status = null,
+            CancellationToken ct = default)
+        {
+            if (limit <= 0 || limit > 1000) limit = 200;
+
+            // Pull recent runs across all projects (repo handles null projectId),
+            // then decorate + scope-filter in-process. Conduit installs have a
+            // bounded run table; the project/tenant maps are tens of rows.
+            var rows = await _runs.GetRecentAsync(limit, projectId: null, status: status).ConfigureAwait(false);
+            if (since is { } sinceUtc)
+            {
+                rows = rows.Where(r => r.StartedAt > sinceUtc).ToList();
+            }
+
+            var projects = (await _projects.GetAllAsync().ConfigureAwait(false))
+                .ToDictionary(p => p.Id);
+            var visibleProjectIds = FilterByTokenScope(projects.Values)
+                .Select(p => p.Id)
+                .ToHashSet();
+
+            var tenants = (await _tenants.GetAllAsync(includeInactive: true).ConfigureAwait(false))
+                .ToDictionary(t => t.Id);
+
+            var dtos = rows
+                .Where(r => visibleProjectIds.Contains(r.SyncProjectId))
+                .Select(r =>
+                {
+                    projects.TryGetValue(r.SyncProjectId, out var p);
+                    return p is null
+                        ? new SyncRunSummaryDto
+                        {
+                            Id = r.Id,
+                            ProjectId = r.SyncProjectId,
+                            Status = r.Status,
+                            TriggeredBy = r.TriggeredBy,
+                            StartedAt = r.StartedAt,
+                            CompletedAt = r.CompletedAt,
+                            DurationMs = r.DurationMs,
+                            RecordsProcessed = r.ObjectsRead,
+                            RecordsCreated = r.ObjectsCreated,
+                            RecordsUpdated = r.ObjectsUpdated,
+                            RecordsSkipped = r.ObjectsSkipped,
+                            RecordsFailed = r.ObjectsFailed,
+                            ErrorMessage = r.ErrorMessage,
+                            IsIncremental = r.IsIncremental,
+                        }
+                        : ProjectRun(r, p, tenants);
+                })
+                .ToList();
+
+            return Ok(dtos);
+        }
+
         // ─── GET /api/v1/sync-runs/{runId} ────────────────────────────────────────
 
         [HttpGet("sync-runs/{runId:guid}")]
