@@ -3289,6 +3289,23 @@ details summary::-webkit-details-marker { color: var(--accent); }
 .sync-field-error { color: #f87171; font-size: 0.8rem; margin-top: 0.25rem; }
 .is-invalid-field { border-color: #ef4444 !important; }
 
+/* Slice 4: connector-capability pills shown under the From→To pickers. */
+.cap-pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem; }
+.cap-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.28rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    letter-spacing: 0.02em;
+}
+.cap-pill-ok   { color: #34d399; background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.35); }
+.cap-pill-info { color: #38bdf8; background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); }
+.cap-pill-bad  { color: #f87171; background: rgba(239, 68, 68, 0.12);  border-color: rgba(239, 68, 68, 0.35); }
+
 /* End of file. Keep this file as the only app stylesheet; brand and palette
    changes go here, not into per-page <style> blocks. */
 

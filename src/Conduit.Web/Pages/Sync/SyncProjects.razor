@@ -5,6 +5,8 @@
 @using Conduit.DataAccess.Repositories
 @using Conduit.Sync.Orchestration
 @using Conduit.Sync.Templates
+@using Conduit.Sync.Connectors
+@inject ConnectorRegistry Connectors
 @inject SyncProjectRepository ProjectRepo
 @inject SyncRunRepository RunRepo
 @inject TenantRepository TenantRepo
@@ -417,22 +419,24 @@
                         <label class="form-label fw-bold">Source Connected System</label>
                         <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
                             <option value="@Guid.Empty">-- Pick a source --</option>
-                            @foreach (var t in allTenants)
+                            @foreach (var t in SourceTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
                         </select>
+                        <small class="form-text text-muted">Only connectors that can read are listed.</small>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Sink Connected System</label>
                         <select class="form-select" @bind="autoGenSinkId">
                             <option value="@Guid.Empty">-- Pick a sink --</option>
-                            @foreach (var t in allTenants)
+                            @foreach (var t in SinkTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
                         </select>
+                        <small class="form-text text-muted">Only connectors that can write are listed.</small>
                     </div>
 
                     <div class="mb-3">
@@ -826,14 +830,25 @@
                                    it from the Workflows tab, so this is hidden there too. *@
                                 <div class="row g-3">
                                     <div class="col-md-6">
-                                        <label class="form-label fw-semibold">Source Connected System <span class="text-danger">*</span></label>
-                                        <select class="form-select @(ShowSourceError ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
+                                        <label class="form-label fw-semibold">
+                                            <i class="fas fa-arrow-up-from-bracket me-1 text-muted"></i>Source Connected System <span class="text-danger">*</span>
+                                        </label>
+                                        <select class="form-select @(ShowSourceError || SourceCapabilityInvalid ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
                                             <option value="@Guid.Empty">-- Pick a source --</option>
-                                            @foreach (var t in allTenants)
+                                            @foreach (var t in SourceTenants)
                                             {
                                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                                             }
                                         </select>
+                                        @if (SourceCapabilityPills.Count > 0)
+                                        {
+                                            <div class="cap-pill-row">
+                                                @foreach (var pill in SourceCapabilityPills)
+                                                {
+                                                    <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
+                                                }
+                                            </div>
+                                        }
                                         @if (editingId.HasValue)
                                         {
                                             <small class="form-text text-muted">Source cannot change after creation.</small>
@@ -842,16 +857,31 @@
                                         {
                                             <div class="sync-field-error">Pick a source Connected System.</div>
                                         }
+                                        else
+                                        {
+                                            <small class="form-text text-muted">Only connectors that can read are listed.</small>
+                                        }
                                     </div>
                                     <div class="col-md-6">
-                                        <label class="form-label fw-semibold">Sink Connected System <span class="text-danger">*</span></label>
-                                        <select class="form-select @(ShowSinkError ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
+                                        <label class="form-label fw-semibold">
+                                            <i class="fas fa-arrow-down-to-bracket me-1 text-muted"></i>Sink Connected System <span class="text-danger">*</span>
+                                        </label>
+                                        <select class="form-select @(ShowSinkError || SinkCapabilityInvalid ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
                                             <option value="@Guid.Empty">-- Pick a sink --</option>
-                                            @foreach (var t in allTenants)
+                                            @foreach (var t in SinkTenants)
                                             {
                                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                                             }
                                         </select>
+                                        @if (SinkCapabilityPills.Count > 0)
+                                        {
+                                            <div class="cap-pill-row">
+                                                @foreach (var pill in SinkCapabilityPills)
+                                                {
+                                                    <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
+                                                }
+                                            </div>
+                                        }
                                         @if (editingId.HasValue)
                                         {
                                             <small class="form-text text-muted">Sink cannot change after creation.</small>
@@ -860,6 +890,10 @@
                                         {
                                             <div class="sync-field-error">Pick a sink Connected System.</div>
                                         }
+                                        else
+                                        {
+                                            <small class="form-text text-muted">Only connectors that can write are listed.</small>
+                                        }
                                     </div>
                                 </div>
                                 <div class="mt-2">
@@ -867,6 +901,23 @@
                                         <i class="fas fa-plug me-1"></i>Manage Connections &amp; test credentials
                                     </a>
                                 </div>
+                                @* Slice 4: capability-mismatch hard banner. Lights up when a selected
+                                   side's connector can't fulfil that role (e.g. a sink-only connector
+                                   chosen as source). The Next/Create guard blocks on the same condition. *@
+                                @if (SourceCapabilityInvalid || SinkCapabilityInvalid)
+                                {
+                                    <div class="alert alert-danger mt-3 mb-0 py-2">
+                                        <i class="fas fa-triangle-exclamation me-1"></i>
+                                        @if (SourceCapabilityInvalid)
+                                        {
+                                            <span><strong>@TenantName(form.SourceTenantId)</strong> can't be a source — its connector is sink-only.</span>
+                                        }
+                                        else
+                                        {
+                                            <span><strong>@TenantName(form.SinkTenantId)</strong> can't be a sink — its connector is source-only.</span>
+                                        }
+                                    </div>
+                                }
                                 @* Self-sync banner — surfaces the mastered-identity pattern (e.g. AD → AD
                                    with a default:* transform) without blocking save. *@
                                 @if (IsSelfSync)
@@ -1198,6 +1249,15 @@
                             Transforms: <code>upper</code>, <code>lower</code>, <code>trim</code>, <code>prefix:X</code>, <code>suffix:X</code>,
                             <code>substring:N</code>, <code>substring:N:M</code>, <code>replace:OLD:NEW</code>, <code>default:VAL</code>.
                             Chain with <code>|</code> (e.g. <code>trim | lower | prefix:user_</code>).
+                        </div>
+                        <div class="alert alert-secondary py-2 mt-2 mb-0">
+                            <i class="fas fa-circle-info me-1"></i>
+                            <strong>Authoritative side</strong> is decided per sync project by its <em>direction</em>:
+                            this project's source (<strong>@TenantName(form.SourceTenantId)</strong>) is authoritative for every
+                            mapped attribute above — its values overwrite the sink on each run. Per-attribute precedence
+                            (letting individual attributes be mastered by the other side) is a planned follow-up; it needs an
+                            <code>AttributeMapping</code> precedence column + a schema migration, so it is intentionally not a
+                            toggle here yet.
                         </div>
                     }
                     else if (formTab == "workflows")
@@ -2643,6 +2703,102 @@
         await LoadCredentialsForFormAsync();
     }
 
+    // ─── Slice 4: connector-capability-aware pickers ─────────────────────────
+    //
+    // The symmetric router lets any Connected System be a source AND a sink, but
+    // a given connector adapter may only implement one side (e.g. the Emulator
+    // is sink-only; a read-only LDAP is source-only). Filter each picker to the
+    // tenants whose adapter advertises the relevant capability so the operator
+    // can't build a project the orchestrator would reject at run time. The
+    // adapter is resolved by SystemType via the injected ConnectorRegistry.
+
+    private IConnectorAdapter? AdapterFor(Guid tenantId) =>
+        tenantById.TryGetValue(tenantId, out var t) ? Connectors.Get(t.SystemType) : null;
+
+    private bool TenantSupportsSource(Tenant t)
+    {
+        var a = Connectors.Get(t.SystemType);
+        // Unknown SystemType (no registered adapter) → don't hide it; the operator
+        // may have a tenant whose adapter isn't loaded in this build. Fail open on
+        // the list, fail closed on the explicit guard banner below.
+        return a is null || a.SupportsSource;
+    }
+
+    private bool TenantSupportsSink(Tenant t)
+    {
+        var a = Connectors.Get(t.SystemType);
+        return a is null || a.SupportsSink;
+    }
+
+    // Pickers iterate these instead of the raw allTenants list.
+    private IReadOnlyList<Tenant> SourceTenants =>
+        allTenants.Where(TenantSupportsSource).ToList();
+
+    private IReadOnlyList<Tenant> SinkTenants =>
+        allTenants.Where(TenantSupportsSink).ToList();
+
+    // Capability pills for the currently-selected source / sink, rendered beside
+    // each picker so the operator sees what the chosen connector can do.
+    private IReadOnlyList<CapabilityPill> SourceCapabilityPills => CapabilityPillsFor(form.SourceTenantId, isSource: true);
+    private IReadOnlyList<CapabilityPill> SinkCapabilityPills => CapabilityPillsFor(form.SinkTenantId, isSource: false);
+
+    private record CapabilityPill(string Label, string CssClass, string Icon);
+
+    private IReadOnlyList<CapabilityPill> CapabilityPillsFor(Guid tenantId, bool isSource)
+    {
+        if (tenantId == Guid.Empty) return Array.Empty<CapabilityPill>();
+        var adapter = AdapterFor(tenantId);
+        if (adapter is null) return Array.Empty<CapabilityPill>();
+
+        var pills = new List<CapabilityPill>();
+        var caps = adapter.Capabilities;
+
+        if (isSource)
+        {
+            pills.Add(adapter.SupportsSource
+                ? new CapabilityPill("Source", "cap-pill-ok", "fas fa-arrow-up-from-bracket")
+                : new CapabilityPill("Not a source", "cap-pill-bad", "fas fa-ban"));
+            if (adapter.SupportsSource && caps.SupportsIncremental)
+            {
+                pills.Add(new CapabilityPill("Incremental", "cap-pill-info", "fas fa-bolt"));
+            }
+        }
+        else
+        {
+            pills.Add(adapter.SupportsSink
+                ? new CapabilityPill("Sink", "cap-pill-ok", "fas fa-arrow-down-to-bracket")
+                : new CapabilityPill("Not a sink", "cap-pill-bad", "fas fa-ban"));
+            if (adapter.SupportsSink && caps.SupportsBulk)
+            {
+                pills.Add(new CapabilityPill("Bulk", "cap-pill-info", "fas fa-layer-group"));
+            }
+        }
+        return pills;
+    }
+
+    // Hard guard: lights up when the operator has (e.g. via an unknown-adapter
+    // tenant or a stale selection) picked a side the adapter can't fulfil. Drives
+    // a banner on the Setup step and blocks Next/Create.
+    private bool SourceCapabilityInvalid
+    {
+        get
+        {
+            if (form.SourceTenantId == Guid.Empty) return false;
+            var a = AdapterFor(form.SourceTenantId);
+            return a is not null && !a.SupportsSource;
+        }
+    }
+
+    private bool SinkCapabilityInvalid
+    {
+        get
+        {
+            if (form.SinkTenantId == Guid.Empty) return false;
+            var a = AdapterFor(form.SinkTenantId);
+            return a is not null && !a.SupportsSink;
+        }
+    }
+
     private string CurrentTabForStep(int step) =>
         WizardStepDefs.FirstOrDefault(s => s.Number == step)?.Tab ?? "setup";
 
@@ -2672,6 +2828,16 @@
                 if (form.SourceTenantId == Guid.Empty || form.SinkTenantId == Guid.Empty)
                 {
                     formError = "Pick both a source and a sink Connected System.";
+                    return false;
+                }
+                if (SourceCapabilityInvalid)
+                {
+                    formError = $"{TenantName(form.SourceTenantId)} ({TenantType(form.SourceTenantId)}) cannot act as a source — its connector is sink-only. Pick a different source.";
+                    return false;
+                }
+                if (SinkCapabilityInvalid)
+                {
+                    formError = $"{TenantName(form.SinkTenantId)} ({TenantType(form.SinkTenantId)}) cannot act as a sink — its connector is source-only. Pick a different sink.";
                     return false;
                 }
                 return true;
@@ -2763,6 +2929,20 @@
             showSourceValidation = true;
             showSinkValidation = true;
             formError = "Both source and sink connections are required.";
+            formTab = "setup";
+            wizardStep = 1;
+            return;
+        }
+        // Slice 4: enforce connector capability on save too (Next-button guard is
+        // the primary gate, but a tabbed-edit jump or a stale selection could land
+        // here directly). Only meaningful on create — source/sink are locked on edit.
+        if (!editingId.HasValue && (SourceCapabilityInvalid || SinkCapabilityInvalid))
+        {
+            formError = SourceCapabilityInvalid
+                ? $"{TenantName(form.SourceTenantId)} cannot act as a source — its connector is sink-only."
+                : $"{TenantName(form.SinkTenantId)} cannot act as a sink — its connector is source-only.";
+            showSourceValidation = true;
+            showSinkValidation = true;
             formTab = "setup";
             wizardStep = 1;
             return;
