@@ -342,6 +342,7 @@
             "Succeeded" => "text-success",
             "Failed" => "text-danger",
             "Cancelled" => "text-warning",
+            "PartialSuccess" => "text-warning",
             _ => "text-secondary"
         };
 
@@ -443,17 +444,22 @@
 
     private RenderFragment StatusBadge(string status) => builder =>
     {
+        // Same status vocabulary the orchestrator emits and Sync History renders
+        // (slice 5): PartialSuccess is a real rolled-up status shown amber, with
+        // a friendly "Partial Success" label so it doesn't read as a raw enum.
         var cls = status switch
         {
             "Succeeded" => "bg-success",
             "Failed" => "bg-danger",
             "Cancelled" => "bg-warning text-dark",
+            "PartialSuccess" => "bg-warning text-dark",
             "Running" => "bg-primary",
             _ => "bg-secondary"
         };
+        var label = status == "PartialSuccess" ? "Partial Success" : status;
         builder.OpenElement(0, "span");
         builder.AddAttribute(1, "class", $"badge {cls}");
-        builder.AddContent(2, status);
+        builder.AddContent(2, label);
         builder.CloseElement();
     };
 
