@@ -2634,6 +2634,77 @@ details summary::-webkit-details-marker { color: var(--accent); }
 
 .sync-detail-section { margin-top: 20px; }
 
+/* ── Connections-step direction visual: Source (read from) → Target (write to) ── */
+.sync-flow-side {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border-strong, rgba(255,255,255,0.08));
+    border-radius: 10px;
+    padding: 14px 14px 12px;
+    height: 100%;
+}
+.sync-flow-role {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.sync-flow-role-sub {
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    font-size: 11px;
+    color: var(--fg-dim, #94a3b8);
+}
+.sync-flow-role-source { color: #38bdf8; }
+.sync-flow-role-target { color: #34d399; }
+.sync-flow-pick {
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg, #e5e7eb);
+}
+.sync-flow-pick-name { margin-right: 4px; }
+.sync-flow-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 64px;
+    color: var(--fg-dim, #94a3b8);
+}
+.sync-flow-arrow i {
+    font-size: 26px;
+    color: #22d3ee;
+}
+.sync-flow-arrow-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 4px;
+}
+/* On narrow screens the center column stacks; rotate the arrow to point down. */
+@media (max-width: 767.98px) {
+    .sync-flow-arrow i { transform: rotate(90deg); }
+}
+/* Inline FROM/TO chips used on list rows, card badge, and review direction line. */
+.sync-dir-tag {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(148, 163, 184, 0.18);
+    color: var(--fg-dim, #94a3b8);
+    vertical-align: middle;
+    margin-right: 2px;
+}
+
 .sync-detail-section-title {
     font-size: 12px;
     text-transform: uppercase;

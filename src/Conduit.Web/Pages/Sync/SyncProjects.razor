@@ -43,7 +43,7 @@
 
 <div class="container-fluid sync-page-container">
     <CcTemplate1 Title="Sync Projects"
-                 Subtitle="Pump data between connections. Source → mapping → sink, on a schedule or on demand."
+                 Subtitle="Pump data between connections. Read from a Source, map, write to a Target — on a schedule or on demand."
                  Icon="fas fa-exchange-alt"
                  IconAccent="cyan">
         <PrimaryAction>
@@ -106,7 +106,9 @@
                     <div class="sync-project-row @(selectedProject?.Id == context.Id ? "active" : "")">
                         <div class="sync-project-row-name">@context.Name</div>
                         <div class="sync-project-row-meta">
-                            @TenantName(context.SourceTenantId) <i class="fas fa-arrow-right mx-1"></i> @TenantName(context.SinkTenantId)
+                            <span class="sync-dir-tag">FROM</span> @TenantName(context.SourceTenantId)
+                            <i class="fas fa-arrow-right mx-1"></i>
+                            <span class="sync-dir-tag">TO</span> @TenantName(context.SinkTenantId)
                         </div>
                         <div class="sync-project-row-foot">
                             <span class="badge bg-@StatusBadgeColor(context.LastRunStatus)">@(context.LastRunStatus ?? "Never run")</span>
@@ -180,7 +182,9 @@
                     <div class="sync-project-badges">
                         <span class="sync-badge sync-badge-connection">
                             <i class="fas fa-plug me-1"></i>
-                            @TenantName(selectedProject.SourceTenantId) <i class="fas fa-arrow-right mx-1"></i> @TenantName(selectedProject.SinkTenantId)
+                            <span class="sync-dir-tag">FROM</span> @TenantName(selectedProject.SourceTenantId)
+                            <i class="fas fa-arrow-right mx-1"></i>
+                            <span class="sync-dir-tag">TO</span> @TenantName(selectedProject.SinkTenantId)
                         </span>
                         <span class="sync-badge sync-badge-workflows">
                             <i class="fas fa-layer-group me-1"></i>
@@ -304,14 +308,14 @@
 
                     <div class="sync-detail-grid">
                         <div class="sync-detail-cell">
-                            <div class="sync-detail-label">SOURCE</div>
+                            <div class="sync-detail-label"><i class="fas fa-arrow-up-from-bracket me-1"></i>SOURCE — READ FROM</div>
                             <div class="sync-detail-value">
                                 @TenantName(selectedProject.SourceTenantId)
                                 <span class="sync-detail-tag">@TenantType(selectedProject.SourceTenantId)</span>
                             </div>
                         </div>
                         <div class="sync-detail-cell">
-                            <div class="sync-detail-label">SINK</div>
+                            <div class="sync-detail-label"><i class="fas fa-arrow-down-to-bracket me-1"></i>TARGET — WRITE TO</div>
                             <div class="sync-detail-value">
                                 @TenantName(selectedProject.SinkTenantId)
                                 <span class="sync-detail-tag">@TenantType(selectedProject.SinkTenantId)</span>
@@ -397,10 +401,11 @@
                     }
 
                     <p class="text-muted">
-                        Pick a source and a sink, then a mode. We'll create one sync
-                        project per object class in the source connector's set for that
-                        mode, each with a Mapping workflow, a default scope filter, and
-                        passthrough attribute mappings auto-filled from the source → sink
+                        Pick a source and a target, then a mode. Data is read from the
+                        source and written to the target. We'll create one sync project
+                        per object class in the source connector's set for that mode,
+                        each with a Mapping workflow, a default scope filter, and
+                        passthrough attribute mappings auto-filled from the source → target
                         attribute catalog. Per-class governance steps are an IC concern.
                     </p>
 
@@ -416,7 +421,7 @@
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Source Connected System</label>
+                        <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(read from)</span></label>
                         <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
                             <option value="@Guid.Empty">-- Pick a source --</option>
                             @foreach (var t in AutoGenSourceTenants)
@@ -424,13 +429,17 @@
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
                         </select>
-                        <small class="form-text text-muted">Only connectors that can read are listed. The chosen sink is excluded.</small>
+                        <small class="form-text text-muted">Only connectors that can read are listed. The chosen target is excluded.</small>
+                    </div>
+
+                    <div class="mb-3 text-center text-muted">
+                        <i class="fas fa-arrow-down-long"></i> <span class="small">data flows to</span>
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Sink Connected System</label>
+                        <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(write to)</span></label>
                         <select class="form-select" @bind="autoGenSinkId">
-                            <option value="@Guid.Empty">-- Pick a sink --</option>
+                            <option value="@Guid.Empty">-- Pick a target --</option>
                             @foreach (var t in AutoGenSinkTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
@@ -443,7 +452,7 @@
                         <div class="alert alert-danger py-2">
                             <i class="fas fa-triangle-exclamation me-1"></i>
                             <strong>Source and target must be different connections.</strong>
-                            Pick a different sink.
+                            Pick a different target.
                         </div>
                     }
 
@@ -503,9 +512,8 @@
                     </h6>
                     <div class="alert alert-info">
                         <i class="fas fa-info-circle me-2"></i>
-                        Triggering a manual run will read from <strong>@TenantName(selectedProject.SourceTenantId)</strong>,
-                        apply the project's attribute mappings, and push the results to
-                        <strong>@TenantName(selectedProject.SinkTenantId)</strong>.
+                        Triggering a manual run will read <strong>from the source @TenantName(selectedProject.SourceTenantId)</strong>,
+                        apply the project's attribute mappings, and write <strong>to the target @TenantName(selectedProject.SinkTenantId)</strong>.
                         Group memberships are full-replaced (not delta).
                     </div>
                 </div>
@@ -556,7 +564,7 @@
                     <div class="alert alert-warning">
                         <i class="fas fa-info-circle me-2"></i>
                         This signals the in-flight run to cancel at its next safe checkpoint.
-                        Records already written to <strong>@TenantName(selectedProject.SinkTenantId)</strong>
+                        Records already written to the target <strong>@TenantName(selectedProject.SinkTenantId)</strong>
                         are <strong>not</strong> rolled back; the run is marked <strong>Cancelled</strong>
                         and the project is freed for the next run.
                     </div>
@@ -836,72 +844,102 @@
                                    the create wizard moves it to the Object Class step. On edit the
                                    project's workflow tree is already persisted and the operator manages
                                    it from the Workflows tab, so this is hidden there too. *@
-                                <div class="row g-3">
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-semibold">
-                                            <i class="fas fa-arrow-up-from-bracket me-1 text-muted"></i>Source Connected System <span class="text-danger">*</span>
-                                        </label>
-                                        <select class="form-select @(ShowSourceError || SourceCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
-                                            <option value="@Guid.Empty">-- Pick a source --</option>
-                                            @foreach (var t in SourceTenants)
-                                            {
-                                                <option value="@t.Id">@t.Name (@t.SystemType)</option>
-                                            }
-                                        </select>
-                                        @if (SourceCapabilityPills.Count > 0)
-                                        {
-                                            <div class="cap-pill-row">
-                                                @foreach (var pill in SourceCapabilityPills)
-                                                {
-                                                    <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
-                                                }
+                                <p class="text-muted small mb-2">
+                                    <i class="fas fa-circle-info me-1"></i>
+                                    Data is <strong>read from the Source</strong> and <strong>written to the Target</strong>. The arrow shows the direction of flow.
+                                </p>
+                                <div class="row g-3 align-items-stretch sync-flow-row">
+                                    <div class="col-md-5">
+                                        <div class="sync-flow-side">
+                                            <div class="sync-flow-role sync-flow-role-source">
+                                                <i class="fas fa-arrow-up-from-bracket me-1"></i>SOURCE <span class="sync-flow-role-sub">read from</span>
                                             </div>
-                                        }
-                                        @if (editingId.HasValue)
-                                        {
-                                            <small class="form-text text-muted">Source cannot change after creation.</small>
-                                        }
-                                        else if (ShowSourceError)
-                                        {
-                                            <div class="sync-field-error">Pick a source Connected System.</div>
-                                        }
-                                        else
-                                        {
-                                            <small class="form-text text-muted">Only connectors that can read are listed.</small>
-                                        }
+                                            <label class="form-label fw-semibold mb-1">Connected System <span class="text-danger">*</span></label>
+                                            <select class="form-select @(ShowSourceError || SourceCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
+                                                <option value="@Guid.Empty">-- Pick a source --</option>
+                                                @foreach (var t in SourceTenants)
+                                                {
+                                                    <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                                }
+                                            </select>
+                                            @if (form.SourceTenantId != Guid.Empty)
+                                            {
+                                                <div class="sync-flow-pick">
+                                                    <span class="sync-flow-pick-name">@TenantName(form.SourceTenantId)</span>
+                                                    <span class="sync-detail-tag">@TenantType(form.SourceTenantId)</span>
+                                                </div>
+                                            }
+                                            @if (SourceCapabilityPills.Count > 0)
+                                            {
+                                                <div class="cap-pill-row">
+                                                    @foreach (var pill in SourceCapabilityPills)
+                                                    {
+                                                        <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
+                                                    }
+                                                </div>
+                                            }
+                                            @if (editingId.HasValue)
+                                            {
+                                                <small class="form-text text-muted">Source cannot change after creation.</small>
+                                            }
+                                            else if (ShowSourceError)
+                                            {
+                                                <div class="sync-field-error">Pick a source Connected System.</div>
+                                            }
+                                            else
+                                            {
+                                                <small class="form-text text-muted">Only connectors that can read are listed.</small>
+                                            }
+                                        </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-semibold">
-                                            <i class="fas fa-arrow-down-to-bracket me-1 text-muted"></i>Sink Connected System <span class="text-danger">*</span>
-                                        </label>
-                                        <select class="form-select @(ShowSinkError || SinkCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
-                                            <option value="@Guid.Empty">-- Pick a sink --</option>
-                                            @foreach (var t in SinkTenants)
-                                            {
-                                                <option value="@t.Id">@t.Name (@t.SystemType)</option>
-                                            }
-                                        </select>
-                                        @if (SinkCapabilityPills.Count > 0)
-                                        {
-                                            <div class="cap-pill-row">
-                                                @foreach (var pill in SinkCapabilityPills)
-                                                {
-                                                    <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
-                                                }
+                                    <div class="col-md-2">
+                                        <div class="sync-flow-arrow" title="Data flows from Source to Target">
+                                            <i class="fas fa-arrow-right-long"></i>
+                                            <span class="sync-flow-arrow-label">flows to</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-5">
+                                        <div class="sync-flow-side">
+                                            <div class="sync-flow-role sync-flow-role-target">
+                                                <i class="fas fa-arrow-down-to-bracket me-1"></i>TARGET <span class="sync-flow-role-sub">write to</span>
                                             </div>
-                                        }
-                                        @if (editingId.HasValue)
-                                        {
-                                            <small class="form-text text-muted">Sink cannot change after creation.</small>
-                                        }
-                                        else if (ShowSinkError)
-                                        {
-                                            <div class="sync-field-error">Pick a sink Connected System.</div>
-                                        }
-                                        else
-                                        {
-                                            <small class="form-text text-muted">Only connectors that can write are listed.</small>
-                                        }
+                                            <label class="form-label fw-semibold mb-1">Connected System <span class="text-danger">*</span></label>
+                                            <select class="form-select @(ShowSinkError || SinkCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
+                                                <option value="@Guid.Empty">-- Pick a target --</option>
+                                                @foreach (var t in SinkTenants)
+                                                {
+                                                    <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                                }
+                                            </select>
+                                            @if (form.SinkTenantId != Guid.Empty)
+                                            {
+                                                <div class="sync-flow-pick">
+                                                    <span class="sync-flow-pick-name">@TenantName(form.SinkTenantId)</span>
+                                                    <span class="sync-detail-tag">@TenantType(form.SinkTenantId)</span>
+                                                </div>
+                                            }
+                                            @if (SinkCapabilityPills.Count > 0)
+                                            {
+                                                <div class="cap-pill-row">
+                                                    @foreach (var pill in SinkCapabilityPills)
+                                                    {
+                                                        <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
+                                                    }
+                                                </div>
+                                            }
+                                            @if (editingId.HasValue)
+                                            {
+                                                <small class="form-text text-muted">Target cannot change after creation.</small>
+                                            }
+                                            else if (ShowSinkError)
+                                            {
+                                                <div class="sync-field-error">Pick a target Connected System.</div>
+                                            }
+                                            else
+                                            {
+                                                <small class="form-text text-muted">Only connectors that can write are listed.</small>
+                                            }
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="mt-2">
@@ -918,11 +956,11 @@
                                         <i class="fas fa-triangle-exclamation me-1"></i>
                                         @if (SourceCapabilityInvalid)
                                         {
-                                            <span><strong>@TenantName(form.SourceTenantId)</strong> can't be a source — its connector is sink-only.</span>
+                                            <span><strong>@TenantName(form.SourceTenantId)</strong> can't be a source — its connector is target-only (write-only).</span>
                                         }
                                         else
                                         {
-                                            <span><strong>@TenantName(form.SinkTenantId)</strong> can't be a sink — its connector is source-only.</span>
+                                            <span><strong>@TenantName(form.SinkTenantId)</strong> can't be a target — its connector is source-only (read-only).</span>
                                         }
                                     </div>
                                 }
@@ -935,7 +973,7 @@
                                         <i class="fas fa-triangle-exclamation me-1"></i>
                                         <strong>Source and target must be different connections.</strong>
                                         <strong>@TenantName(form.SourceTenantId)</strong> is selected on both sides.
-                                        Pick a different connection for the sink.
+                                        Pick a different connection for the target.
                                     </div>
                                 }
                                 <div class="row g-3 mt-1">
@@ -951,7 +989,7 @@
                                         <small class="form-text text-muted">Override when the source tenant holds multiple credentials.</small>
                                     </div>
                                     <div class="col-md-6">
-                                        <label class="form-label fw-semibold">Sink Credential <span class="text-muted">(optional)</span></label>
+                                        <label class="form-label fw-semibold">Target Credential <span class="text-muted">(optional)</span></label>
                                         <select class="form-select" @bind="form.SinkCredentialName">
                                             <option value="">(default)</option>
                                             @foreach (var name in sinkCredentialNames)
@@ -959,7 +997,7 @@
                                                 <option value="@name">@name</option>
                                             }
                                         </select>
-                                        <small class="form-text text-muted">Override when the sink tenant holds multiple credentials.</small>
+                                        <small class="form-text text-muted">Override when the target connection holds multiple credentials.</small>
                                     </div>
                                 </div>
                                 @if (!isWizard)
@@ -1024,7 +1062,7 @@
                                 }
                             </select>
                             <small class="form-text text-muted">
-                                The kind of object this project reads from the source and writes to the sink.
+                                The kind of object this project reads from the source and writes to the target.
                             </small>
                         </div>
                         <div class="mb-3">
@@ -1228,7 +1266,7 @@
                                 <thead>
                                     <tr>
                                         <th>Source attribute</th>
-                                        <th>Sink attribute</th>
+                                        <th>Target attribute</th>
                                         <th>Transform (optional)</th>
                                         <th class="text-center">Req</th>
                                         <th></th>
@@ -1263,7 +1301,7 @@
                             <i class="fas fa-circle-info me-1"></i>
                             <strong>Authoritative side</strong> is decided per sync project by its <em>direction</em>:
                             this project's source (<strong>@TenantName(form.SourceTenantId)</strong>) is authoritative for every
-                            mapped attribute above — its values overwrite the sink on each run. Per-attribute precedence
+                            mapped attribute above — its values overwrite the target on each run. Per-attribute precedence
                             (letting individual attributes be mastered by the other side) is a planned follow-up; it needs an
                             <code>AttributeMapping</code> precedence column + a schema migration, so it is intentionally not a
                             toggle here yet.
@@ -1349,7 +1387,7 @@
                                             <div class="col-md-5">
                                                 <label class="form-label fw-semibold">Type</label>
                                                 <select class="form-select" @bind="st.StepType">
-                                                    <option value="Mapping">Mapping (source → sink)</option>
+                                                    <option value="Mapping">Mapping (source → target)</option>
                                                     <option value="PersonMatch">PersonMatch</option>
                                                     <option value="PersonCreate">PersonCreate</option>
                                                     <option value="AssignManager">AssignManager</option>
@@ -1478,7 +1516,7 @@
                                                             <thead>
                                                                 <tr>
                                                                     <th>Source attribute</th>
-                                                                    <th>Sink attribute</th>
+                                                                    <th>Target attribute</th>
                                                                     <th>Transform (optional)</th>
                                                                     <th class="text-center">Req</th>
                                                                     <th></th>
@@ -1596,9 +1634,11 @@
                                 <dt>Description</dt>
                                 <dd>@form.Description</dd>
                             }
-                            <dt>Source</dt>
+                            <dt>Source <span class="text-muted">(read from)</span></dt>
                             <dd>@TenantName(form.SourceTenantId) <span class="text-muted">(@TenantType(form.SourceTenantId))</span>@(string.IsNullOrEmpty(form.SourceCredentialName) ? "" : $" · cred: {form.SourceCredentialName}")</dd>
-                            <dt>Sink</dt>
+                            <dt>Direction</dt>
+                            <dd><span class="sync-dir-tag">FROM</span> @TenantName(form.SourceTenantId) <i class="fas fa-arrow-right mx-1"></i> <span class="sync-dir-tag">TO</span> @TenantName(form.SinkTenantId)</dd>
+                            <dt>Target <span class="text-muted">(write to)</span></dt>
                             <dd>@TenantName(form.SinkTenantId) <span class="text-muted">(@TenantType(form.SinkTenantId))</span>@(string.IsNullOrEmpty(form.SinkCredentialName) ? "" : $" · cred: {form.SinkCredentialName}")</dd>
                             <dt>Object class</dt>
                             <dd>@form.ObjectClass</dd>
