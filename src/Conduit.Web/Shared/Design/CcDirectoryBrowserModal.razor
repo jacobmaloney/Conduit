@@ -115,6 +115,7 @@
         public bool IsExpanded { get; set; }
         public bool IsLoading { get; set; }
         public bool Loaded { get; set; }
+        public string? LoadError { get; set; }
         public List<Node> Children { get; } = new();
     }
 
@@ -205,25 +206,34 @@
         if (!node.IsExpanded && !node.Loaded)
         {
             node.IsLoading = true;
+            node.LoadError = null;
             StateHasChanged();
             using var scope = Conduit.Sync.Security.CredentialNameContext.Push(_credentialName, null);
             try
             {
                 var result = await _browser.BrowseContainersAsync(node.Dn, CancellationToken.None);
                 node.Children.Clear();
-                if (string.IsNullOrEmpty(result.ErrorMessage))
+                if (!string.IsNullOrEmpty(result.ErrorMessage))
+                {
+                    // Surface the child-load failure on the node instead of
+                    // silently collapsing it to a phantom leaf. A swallowed error
+                    // here is exactly what reads as "can't expand the tree".
+                    node.LoadError = result.ErrorMessage;
+                    node.Loaded = false; // allow retry on next expand
+                }
+                else
                 {
                     foreach (var c in result.Nodes)
                         node.Children.Add(ToNode(c));
+                    node.HasChildren = node.Children.Count > 0;
+                    node.Loaded = true;
                 }
-                node.HasChildren = node.Children.Count > 0;
-                node.Loaded = true;
             }
-            catch
+            catch (Exception ex)
             {
                 node.Children.Clear();
-                node.HasChildren = false;
-                node.Loaded = true;
+                node.LoadError = ex.Message;
+                node.Loaded = false; // allow retry on next expand
             }
             finally
             {
@@ -233,6 +243,15 @@
 
         node.IsExpanded = !node.IsExpanded;
         StateHasChanged();
+    }
+
+    private async Task RetryAsync(Node node)
+    {
+        // Node is still unloaded after a failed expand (Loaded==false), so just
+        // re-run the load path. Collapse first so ToggleAsync takes the load branch.
+        node.IsExpanded = false;
+        node.LoadError = null;
+        await ToggleAsync(node);
     }
 
     private void Select(Node node)
@@ -290,6 +309,16 @@
                 <i class="bi bi-arrow-repeat cc-dn-spin me-1"></i> Loading…
             </div>
         }
+        else if (node.IsExpanded && !string.IsNullOrEmpty(node.LoadError))
+        {
+            var errIndent = string.Concat(((depth + 1) * 18).ToString(), "px");
+            <div class="cc-dn-row cc-dn-error" style="padding-left:@errIndent" title="@node.LoadError">
+                <span class="cc-dn-chevron"></span>
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                <span class="cc-dn-errtext">@node.LoadError</span>
+                <button type="button" class="btn btn-link btn-sm p-0 ms-2 cc-dn-retry" @onclick="@(() => RetryAsync(node))" @onclick:stopPropagation>retry</button>
+            </div>
+        }
         else if (node.IsExpanded)
         {
             @foreach (var child in node.Children)
@@ -333,4 +362,7 @@
     .cc-dn-desc { font-size: .85em; }
     .cc-dn-spin { animation: cc-dn-spin 1s linear infinite; display:inline-block; }
     @@keyframes cc-dn-spin { to { transform: rotate(360deg); } }
+    .cc-dn-error { color: var(--bs-danger, #dc3545); white-space: normal; }
+    .cc-dn-errtext { font-size: .85em; }
+    .cc-dn-retry { font-size: .85em; }
 </style>

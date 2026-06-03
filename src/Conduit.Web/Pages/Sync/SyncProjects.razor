@@ -1075,10 +1075,21 @@
                             </select>
                             <small class="form-text text-muted">@SelectedTemplate.Description</small>
                         </div>
-                        <div class="alert alert-secondary py-2 mb-0">
+                        <div class="alert alert-secondary py-2 mb-3">
                             <i class="fas fa-shoe-prints me-1"></i>
                             The simple path creates a Default workflow with a single Mapping step. After the project
                             exists you can open the <strong>Workflows</strong> tab to compose multi-step pipelines.
+                        </div>
+                        <div class="alert alert-info py-2 mb-0 d-flex align-items-center justify-content-between">
+                            <span>
+                                <i class="fas fa-magic me-1"></i>
+                                Want the <strong>full object-class set</strong> at once — a workflow + auto-populated
+                                mappings per class (users, groups, computers, …) — instead of one project? Auto-Generate
+                                builds them all for this Source and Target.
+                            </span>
+                            <button type="button" class="btn btn-sm btn-success ms-3 flex-shrink-0" @onclick="SwitchToAutoGenerateFromWizard">
+                                <i class="fas fa-magic me-1"></i>Auto-Generate the set
+                            </button>
                         </div>
                     }
                     else if (formTab == "scope")
@@ -3355,6 +3366,30 @@
     {
         if (autoGenInProgress) return;
         showAutoGenerateModal = false;
+    }
+
+    /// <summary>
+    /// In-wizard handoff: the operator is mid manual-create but wants the full
+    /// object-class workflow set (IC AutoSyncProjectGenerator parity) instead of a
+    /// single project. Close the wizard, open the Auto-Generate modal pre-seeded
+    /// with the source/sink they already picked. Reuses the one generator +
+    /// distinct-source/sink rules — no duplicated logic, no second engine.
+    /// </summary>
+    private void SwitchToAutoGenerateFromWizard()
+    {
+        var src = form.SourceTenantId;
+        var sink = form.SinkTenantId;
+        showFormModal = false;
+        formError = string.Empty;
+        ShowAutoGenerateModal();
+        autoGenSourceId = src;
+        autoGenSinkId = sink;
+        // Honor the same distinct-source/sink rule the modal enforces: if the
+        // wizard hadn't picked a valid distinct pair yet, leave the offending
+        // side blank so the operator must choose it.
+        if (autoGenSourceId != Guid.Empty && autoGenSourceId == autoGenSinkId)
+            autoGenSinkId = Guid.Empty;
+        OnAutoGenSourceChanged();
     }
 
     private async Task GenerateAutoSyncProject()
