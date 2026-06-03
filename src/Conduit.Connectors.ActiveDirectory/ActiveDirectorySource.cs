@@ -117,18 +117,14 @@ public sealed class ActiveDirectorySource : IConnectorSource
         if (creds is null) yield break;
         var (host, port) = ParseHostPort(tenant.Domain);
 
-        using var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-        {
-            AuthType = AuthType.Basic
-        };
-        connection.SessionOptions.ProtocolVersion = 3;
-        connection.Credential = new NetworkCredential(creds.Username, creds.Password);
-        try { connection.Bind(); }
+        LdapConnection connection;
+        try { connection = CreateBoundConnection(host, port, creds); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "AD tombstone bind failed for tenant {TenantId}; skipping tombstone pass", _tenantId);
             yield break;
         }
+        using var _conn = connection;
 
         // Resolve Deleted Objects container DN from RootDSE.
         string? deletedObjectsContainer;
@@ -285,13 +281,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
             ?? throw new InvalidOperationException(
                 $"No 'ldap' credential stored for tenant {_tenantId}. Save credentials before running.");
 
-        using var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-        {
-            AuthType = AuthType.Basic
-        };
-        connection.SessionOptions.ProtocolVersion = 3;
-        connection.Credential = new NetworkCredential(creds.Username, creds.Password);
-        connection.Bind();
+        using var connection = CreateBoundConnection(host, port, creds);
 
         // RFC 2696 paged results. PageSize bounded by scope; default 1000.
         var pageSize = scope.PageSize > 0 ? scope.PageSize : 1000;
@@ -369,13 +359,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 return new ConnectorTestResult { IsSuccessful = false, Message = "No 'ldap' credential stored." };
 
             var (host, port) = ParseHostPort(tenant.Domain);
-            using var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-            {
-                AuthType = AuthType.Basic
-            };
-            connection.SessionOptions.ProtocolVersion = 3;
-            connection.Credential = new NetworkCredential(creds.Username, creds.Password);
-            connection.Bind();
+            using var connection = CreateBoundConnection(host, port, creds);
 
             // RootDSE probe.
             var req = new SearchRequest("", "(objectClass=*)", SearchScope.Base,
@@ -400,6 +384,38 @@ public sealed class ActiveDirectorySource : IConnectorSource
     // ─── helpers ──────────────────────────────────────────────────────────
 
     private sealed record AdCredentials(string Username, string Password);
+
+    /// <summary>
+    /// Build a bound LdapConnection using Negotiate (GSS-SPNEGO → Kerberos/NTLM).
+    /// Domain controllers that enforce LDAP signing/sealing REJECT a simple bind
+    /// (AuthType.Basic) over plain :389 — IC's DirectoryQueryService uses Negotiate
+    /// for exactly this reason. We mirror it here so Conduit binds to a hardened DC
+    /// standalone. DOMAIN\user is split into NetworkCredential(user){Domain} the way
+    /// SSPI expects; UPN/bare names pass through unchanged.
+    /// </summary>
+    private static LdapConnection CreateBoundConnection(string host, int port, AdCredentials creds)
+    {
+        var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
+        {
+            AuthType = AuthType.Negotiate
+        };
+        connection.SessionOptions.ProtocolVersion = 3;
+        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.All;
+
+        NetworkCredential netCred;
+        if (creds.Username.Contains('\\'))
+        {
+            var parts = creds.Username.Split('\\', 2);
+            netCred = new NetworkCredential(parts[1], creds.Password) { Domain = parts[0] };
+        }
+        else
+        {
+            netCred = new NetworkCredential(creds.Username, creds.Password);
+        }
+        connection.Credential = netCred;
+        connection.Bind();
+        return connection;
+    }
 
     private async Task<AdCredentials?> ReadCredsAsync()
     {

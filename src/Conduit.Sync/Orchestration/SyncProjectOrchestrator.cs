@@ -175,6 +175,19 @@ public sealed class SyncProjectOrchestrator
         SyncCursor? newCursor = null;
         bool wasIncremental = false;
 
+        // ── Step-outcome rollup state (false-success fix) ──────────────────────
+        // IC's SyncProjectOrchestrator derives the run outcome from persisted
+        // SyncStepRuns. Conduit has no per-step table — step results live in
+        // memory — so we roll up from the in-loop StepResult outcomes instead of
+        // blindly stamping "Succeeded". A run whose steps/records failed must be
+        // reported Failed/PartialSuccess with the real reason surfaced, NOT a
+        // green success with 0 records.
+        int failedSteps = 0;       // steps whose StepResult classified as Failed
+        int succeededSteps = 0;    // steps that did real work with no failures
+        string? firstStepError = null; // first surfaced step-level error message
+        bool anyMappingRan = false;    // at least one Mapping/legacy pass executed
+        bool ranAnyStep = false;       // at least one workflow step executed at all
+
         try
         {
             // Source & sink tenants → adapters via registry → instances.
@@ -215,6 +228,19 @@ public sealed class SyncProjectOrchestrator
                 totals.Add(legacyResult.Delta);
                 newCursor = legacyResult.NewCursor;
                 wasIncremental = legacyResult.WasIncremental;
+
+                // Roll up the single legacy Mapping pass into the step tally.
+                anyMappingRan = true;
+                ranAnyStep = true;
+                if (legacyResult.Delta.Failed > 0)
+                {
+                    failedSteps++;
+                    firstStepError ??= $"Mapping pass reported {legacyResult.Delta.Failed} failed record(s). See run logs for the per-record reason.";
+                }
+                else
+                {
+                    succeededSteps++;
+                }
             }
             else
             {
@@ -266,6 +292,25 @@ public sealed class SyncProjectOrchestrator
 
                         totals.Add(stepResult.Delta);
 
+                        // Step-outcome rollup (false-success fix). A step that
+                        // reported any failed records is a failed step; otherwise
+                        // it counts as a real success. Pure-skip steps (capability
+                        // missing / no upstream batch) are neither — they don't
+                        // make the run green on their own, and they don't fail it.
+                        ranAnyStep = true;
+                        if (step.StepType == WorkflowStepTypes.Mapping)
+                            anyMappingRan = true;
+
+                        if (stepResult.Delta.Failed > 0)
+                        {
+                            failedSteps++;
+                            firstStepError ??= $"Step '{step.Name}' [{step.StepType}] reported {stepResult.Delta.Failed} failure(s). See run logs for the reason.";
+                        }
+                        else if (stepResult.Delta.Created > 0 || stepResult.Delta.Updated > 0 || stepResult.Delta.Read > 0)
+                        {
+                            succeededSteps++;
+                        }
+
                         // Hoist incremental cursor only from a Mapping step.
                         if (stepResult.NewCursor is not null)
                         {
@@ -289,6 +334,48 @@ public sealed class SyncProjectOrchestrator
 
             await Log(run.Id, "Info",
                 $"Run finished. Read={totals.Read} Created={totals.Created} Updated={totals.Updated} Skipped={totals.Skipped} Failed={totals.Failed}.");
+
+            // ── Roll up the true run status from step outcomes ─────────────────
+            // No top-level exception escaped, but individual steps/records may have
+            // failed. Derive Failed / PartialSuccess / Succeeded from the tally so
+            // a run that moved zero records (or whose mapping never returned) is not
+            // reported as a green success.
+            if (failedSteps > 0 && succeededSteps > 0)
+            {
+                status = "PartialSuccess";
+                errorMessage = firstStepError;
+            }
+            else if (failedSteps > 0)
+            {
+                status = "Failed";
+                errorMessage = firstStepError;
+            }
+            else if (anyMappingRan && totals.Read == 0)
+            {
+                // "Query never returned" sentinel normalization. A Mapping pass that
+                // enumerated the source but read ZERO objects is almost always a
+                // misconfiguration (bad BaseDN/filter, bind that silently returned
+                // nothing) rather than a legitimately empty directory. Surface it as
+                // a failure with a real reason instead of a silent green / 0-records
+                // success — the long-standing false-success symptom.
+                status = "Failed";
+                errorMessage = "Source enumeration returned 0 objects. Check the connection credential, BaseDN, and LDAP filter — a truthful 0-record run is treated as a failure to avoid a silent green success.";
+                await Log(run.Id, "Error", errorMessage);
+            }
+            else if (!ranAnyStep)
+            {
+                // Nothing executed at all (no workflows/steps, no legacy pass).
+                status = "Failed";
+                errorMessage = "No workflow steps executed — the project has no enabled Mapping step. Nothing was synced.";
+                await Log(run.Id, "Error", errorMessage);
+            }
+            else
+            {
+                status = "Succeeded";
+            }
+
+            await Log(run.Id, status == "Succeeded" ? "Info" : "Warning",
+                $"Run status rolled up to '{status}' (succeededSteps={succeededSteps}, failedSteps={failedSteps}, read={totals.Read}).");
         }
         catch (OperationCanceledException)
         {
@@ -299,14 +386,25 @@ public sealed class SyncProjectOrchestrator
         catch (Exception ex)
         {
             status = "Failed";
-            errorMessage = ex.Message;
+            // ex.Message can be empty for some directory/bind failures; fall back
+            // to the exception type name so the run never shows a blank reason.
+            errorMessage = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
             _logger.LogError(ex, "Sync project {ProjectId} failed", project.Id);
-            await Log(run.Id, "Error", $"Run failed: {ex.Message}");
+            await Log(run.Id, "Error", $"Run failed: {errorMessage}");
         }
         finally
         {
             sw.Stop();
-            await _runRepo.UpdateCountersAsync(run.Id, totals.Read, totals.Created, totals.Updated, totals.Skipped, totals.Failed);
+
+            // Force ObjectsFailed >= 1 whenever the run did NOT succeed so the
+            // counter agrees with the status (IC parity). Without this a Failed /
+            // PartialSuccess run driven by a 0-record enumeration or a top-level
+            // throw would show "0 failed", contradicting its own red status.
+            int persistedFailed = totals.Failed;
+            if (status is "Failed" or "PartialSuccess" && persistedFailed < 1)
+                persistedFailed = 1;
+
+            await _runRepo.UpdateCountersAsync(run.Id, totals.Read, totals.Created, totals.Updated, totals.Skipped, persistedFailed);
             // Only persist the cursor if the run actually succeeded — otherwise next
             // run would silently skip data the failed run never wrote downstream.
             if (status == "Succeeded" && newCursor is not null)
