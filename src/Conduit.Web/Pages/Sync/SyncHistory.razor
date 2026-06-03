@@ -69,7 +69,11 @@
                                 {
                                     <i class="fas fa-spinner fa-spin me-1"></i>
                                 }
-                                @context.Status
+                                else if (context.Status == "PartialSuccess")
+                                {
+                                    <i class="fas fa-triangle-exclamation me-1"></i>
+                                }
+                                @StatusLabel(context.Status)
                             </span>
                             <span class="sync-run-row-when">@context.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</span>
                         </div>
@@ -118,7 +122,11 @@
                                     {
                                         <i class="fas fa-spinner fa-spin me-1"></i>
                                     }
-                                    @selectedRun.Status
+                                    else if (selectedRun.Status == "PartialSuccess")
+                                    {
+                                        <i class="fas fa-triangle-exclamation me-1"></i>
+                                    }
+                                    @StatusLabel(selectedRun.Status)
                                 </span>
                                 @if (isPolling)
                                 {
@@ -578,11 +586,12 @@
     {
         statusTabs = new[]
         {
-            new CcFilterTabs.Tab("all",       "All",       allRuns.Count),
-            new CcFilterTabs.Tab("Running",   "Running",   allRuns.Count(r => r.Status == "Running")),
-            new CcFilterTabs.Tab("Succeeded", "Succeeded", allRuns.Count(r => r.Status == "Succeeded")),
-            new CcFilterTabs.Tab("Failed",    "Failed",    allRuns.Count(r => r.Status == "Failed")),
-            new CcFilterTabs.Tab("Cancelled", "Cancelled", allRuns.Count(r => r.Status == "Cancelled"))
+            new CcFilterTabs.Tab("all",            "All",       allRuns.Count),
+            new CcFilterTabs.Tab("Running",        "Running",   allRuns.Count(r => r.Status == "Running")),
+            new CcFilterTabs.Tab("Succeeded",      "Succeeded", allRuns.Count(r => r.Status == "Succeeded")),
+            new CcFilterTabs.Tab("PartialSuccess", "Partial",   allRuns.Count(r => r.Status == "PartialSuccess")),
+            new CcFilterTabs.Tab("Failed",         "Failed",    allRuns.Count(r => r.Status == "Failed")),
+            new CcFilterTabs.Tab("Cancelled",      "Cancelled", allRuns.Count(r => r.Status == "Cancelled"))
         };
     }
 
@@ -967,11 +976,20 @@
 
     private static string StatusBadgeColor(string? status) => status switch
     {
-        "Succeeded" => "success",
-        "Running"   => "info",
-        "Failed"    => "danger",
-        "Cancelled" => "warning",
-        _           => "secondary"
+        "Succeeded"      => "success",
+        "Running"        => "info",
+        "Failed"         => "danger",
+        "PartialSuccess" => "warning",
+        "Cancelled"      => "warning",
+        _                => "secondary"
+    };
+
+    // The orchestrator emits "PartialSuccess" as a real rolled-up status (some
+    // steps failed, some succeeded). Matches IC SyncProjectRuns' "Partial Success".
+    private static string StatusLabel(string? status) => status switch
+    {
+        "PartialSuccess" => "Partial Success",
+        _                => status ?? "Unknown"
     };
 
     private static string TruncateErr(string s) =>
