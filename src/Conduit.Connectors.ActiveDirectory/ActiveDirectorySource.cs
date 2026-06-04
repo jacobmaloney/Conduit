@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.DirectoryServices.Protocols;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -298,8 +299,16 @@ public sealed class ActiveDirectorySource : IConnectorSource
             ? $"(&{baseFilter}(whenChanged>={ToGeneralizedTime(sinceIsoUtc!)}))"
             : baseFilter;
 
-        if (string.IsNullOrWhiteSpace(scope.BaseDN))
-            throw new InvalidOperationException("AD source requires a BaseDN in the SyncProjectScope.");
+        // IC-parity multi-select scope. GetIncludedBaseList() returns the explicit
+        // Included DN set (or the legacy single BaseDN, or empty). Each Included DN
+        // is read as a Subtree. Excluded DNs prune any entry at/under them — exactly
+        // IC's SearchBases / ExcludedSearchBases model.
+        var includedBases = OptimizeBases(scope.GetIncludedBaseList());
+        if (includedBases.Count == 0)
+            throw new InvalidOperationException(
+                "AD source requires at least one included Base DN in the SyncProjectScope (set a Base DN or pick an Included container in the scope tree).");
+
+        var excludedBases = scope.GetExcludedBaseList();
 
         var creds = await ReadCredsAsync()
             ?? throw new InvalidOperationException(
@@ -309,77 +318,130 @@ public sealed class ActiveDirectorySource : IConnectorSource
 
         // RFC 2696 paged results. PageSize bounded by scope; default 1000.
         var pageSize = scope.PageSize > 0 ? scope.PageSize : 1000;
-        var pageControl = new PageResultRequestControl(pageSize);
         var emitted = 0;
 
-        while (true)
+        // Walk each Included base in turn. The complete-read sentinel may ONLY be
+        // set after the FINAL base drains to its natural LDAP terminus, so a partial
+        // drain of any earlier base never green-lights tombstones.
+        for (int baseIdx = 0; baseIdx < includedBases.Count; baseIdx++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var searchBase = includedBases[baseIdx];
+            var isLastBase = baseIdx == includedBases.Count - 1;
+            var pageControl = new PageResultRequestControl(pageSize);
 
-            var request = new SearchRequest(
-                scope.BaseDN,
-                ldapFilter,
-                SearchScope.Subtree,
-                attributeList: null);   // null = all attributes
-            request.Controls.Add(pageControl);
-
-            SearchResponse response;
-            try
+            while (true)
             {
-                response = (SearchResponse)connection.SendRequest(request);
-            }
-            catch (DirectoryOperationException ex)
-            {
-                _logger.LogError(ex, "LDAP search failed for tenant {TenantId} (base {Base}, filter {Filter})",
-                    _tenantId, scope.BaseDN, ldapFilter);
-                throw;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            foreach (SearchResultEntry entry in response.Entries)
-            {
-                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value)
-                    // Deliberate early exit on the MaxObjects cap. This is a TRUNCATED
-                    // read, not a complete drain — leave completion.IsComplete FALSE so
-                    // the orchestrator does NOT tombstone against a partial population.
-                    yield break;
+                var request = new SearchRequest(
+                    searchBase,
+                    ldapFilter,
+                    SearchScope.Subtree,
+                    attributeList: null);   // null = all attributes
+                request.Controls.Add(pageControl);
 
-                // Phase 2 cursor: track max whenChanged seen.
-                if (entry.Attributes.Contains("whenChanged"))
+                SearchResponse response;
+                try
                 {
-                    var raw = entry.Attributes["whenChanged"][0]?.ToString();
-                    if (!string.IsNullOrEmpty(raw))
-                    {
-                        // AD generalizedTime: yyyyMMddHHmmss.0Z
-                        if (raw.Length >= 14 && DateTime.TryParseExact(raw.Substring(0, 14),
-                            "yyyyMMddHHmmss", null,
-                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
-                            out var dt))
-                        {
-                            watermark.Observe(dt);
-                        }
-                    }
+                    response = (SearchResponse)connection.SendRequest(request);
+                }
+                catch (DirectoryOperationException ex)
+                {
+                    _logger.LogError(ex, "LDAP search failed for tenant {TenantId} (base {Base}, filter {Filter})",
+                        _tenantId, searchBase, ldapFilter);
+                    throw;
                 }
 
-                var obj = EntryToConnectorObject(entry, objectClass);
-                emitted++;
-                yield return obj;
-            }
+                foreach (SearchResultEntry entry in response.Entries)
+                {
+                    if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value)
+                        // Deliberate early exit on the MaxObjects cap. This is a TRUNCATED
+                        // read, not a complete drain — leave completion.IsComplete FALSE so
+                        // the orchestrator does NOT tombstone against a partial population.
+                        yield break;
 
-            // Advance the cookie. Empty cookie = last page.
-            var responseControl = FindPageResponseControl(response.Controls);
-            if (responseControl is null || responseControl.Cookie.Length == 0)
-            {
-                // NATURAL TERMINUS — paging drained to the last page with no error,
-                // no cancellation, and no MaxObjects truncation. This is the ONLY
-                // site that proves a complete read, so it is the ONLY site that may
-                // set the sentinel. (A thrown DirectoryOperationException above
-                // rethrows before reaching here; a MaxObjects truncation yield-breaks
-                // before reaching here; a cancellation throws OperationCanceledException.)
-                if (completion is not null) completion.IsComplete = true;
-                yield break;
+                    // Blocked-subtree prune: drop any entry whose DN is at/under an
+                    // Excluded base, even though it sits under an Included base. This
+                    // is what makes "Explicitly Blocked" functional, not cosmetic.
+                    if (IsInExcludedScope(entry.DistinguishedName, excludedBases))
+                        continue;
+
+                    // Phase 2 cursor: track max whenChanged seen.
+                    if (entry.Attributes.Contains("whenChanged"))
+                    {
+                        var raw = entry.Attributes["whenChanged"][0]?.ToString();
+                        if (!string.IsNullOrEmpty(raw))
+                        {
+                            // AD generalizedTime: yyyyMMddHHmmss.0Z
+                            if (raw.Length >= 14 && DateTime.TryParseExact(raw.Substring(0, 14),
+                                "yyyyMMddHHmmss", null,
+                                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                                out var dt))
+                            {
+                                watermark.Observe(dt);
+                            }
+                        }
+                    }
+
+                    var obj = EntryToConnectorObject(entry, objectClass);
+                    emitted++;
+                    yield return obj;
+                }
+
+                // Advance the cookie. Empty cookie = last page of THIS base.
+                var responseControl = FindPageResponseControl(response.Controls);
+                if (responseControl is null || responseControl.Cookie.Length == 0)
+                {
+                    // This base drained naturally. Only the LAST base's natural
+                    // terminus proves the WHOLE read is complete — that is the ONLY
+                    // site that may set the sentinel. (A thrown DirectoryOperationException
+                    // rethrows before reaching here; a MaxObjects truncation yield-breaks
+                    // before reaching here; a cancellation throws OperationCanceledException.)
+                    if (isLastBase && completion is not null) completion.IsComplete = true;
+                    break; // move to the next Included base (or finish)
+                }
+                pageControl.Cookie = responseControl.Cookie;
             }
-            pageControl.Cookie = responseControl.Cookie;
         }
+    }
+
+    /// <summary>
+    /// IC-parity redundant-child removal. When an Included base is already covered
+    /// by a shorter (ancestor) Included base, drop it so its subtree isn't read
+    /// twice. Mirrors IC's DirectoryQueryService optimization.
+    /// </summary>
+    private static List<string> OptimizeBases(List<string> bases)
+    {
+        var optimized = new List<string>();
+        foreach (var b in bases.Where(s => !string.IsNullOrWhiteSpace(s))
+                                .Select(s => s.Trim())
+                                .OrderBy(s => s.Length))
+        {
+            bool redundant = optimized.Any(parent =>
+                b.EndsWith(parent, StringComparison.OrdinalIgnoreCase) &&
+                b.Length > parent.Length);
+            if (!redundant)
+                optimized.Add(b);
+        }
+        return optimized;
+    }
+
+    /// <summary>
+    /// IC-parity blocked-subtree test: true when <paramref name="dn"/> is at or
+    /// under any Excluded base (case-insensitive DN-suffix match). Mirrors IC's
+    /// DirectorySchemaService.IsInExcludedScope.
+    /// </summary>
+    private static bool IsInExcludedScope(string? dn, List<string> excludedBases)
+    {
+        if (string.IsNullOrEmpty(dn) || excludedBases.Count == 0)
+            return false;
+        foreach (var excluded in excludedBases)
+        {
+            if (!string.IsNullOrWhiteSpace(excluded) &&
+                dn.EndsWith(excluded.Trim(), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)

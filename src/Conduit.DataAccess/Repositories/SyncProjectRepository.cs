@@ -140,14 +140,16 @@ public class SyncProjectRepository : BaseRepository
             {
                 await conn.ExecuteAsync(@"
                     INSERT INTO SyncProjectScopes
-                        (Id, SyncProjectId, WorkflowStepId, BaseDN, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
+                        (Id, SyncProjectId, WorkflowStepId, BaseDN, IncludedBaseDNs, ExcludedBaseDNs, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
                     VALUES
-                        (@Id, @SyncProjectId, NULL, @BaseDN, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);",
+                        (@Id, @SyncProjectId, NULL, @BaseDN, @IncludedBaseDNs, @ExcludedBaseDNs, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);",
                     new
                     {
                         Id = Guid.NewGuid(),
                         SyncProjectId = newId,
                         projectScope.BaseDN,
+                        projectScope.IncludedBaseDNs,
+                        projectScope.ExcludedBaseDNs,
                         projectScope.LdapFilter,
                         projectScope.QueryExpression,
                         projectScope.PageSize,
@@ -260,15 +262,17 @@ public class SyncProjectRepository : BaseRepository
                     {
                         await conn.ExecuteAsync(@"
                             INSERT INTO SyncProjectScopes
-                                (Id, SyncProjectId, WorkflowStepId, BaseDN, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
+                                (Id, SyncProjectId, WorkflowStepId, BaseDN, IncludedBaseDNs, ExcludedBaseDNs, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
                             VALUES
-                                (@Id, @SyncProjectId, @WorkflowStepId, @BaseDN, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);",
+                                (@Id, @SyncProjectId, @WorkflowStepId, @BaseDN, @IncludedBaseDNs, @ExcludedBaseDNs, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);",
                             new
                             {
                                 Id = Guid.NewGuid(),
                                 SyncProjectId = newId,
                                 WorkflowStepId = newStepId,
                                 stepScope.BaseDN,
+                                stepScope.IncludedBaseDNs,
+                                stepScope.ExcludedBaseDNs,
                                 stepScope.LdapFilter,
                                 stepScope.QueryExpression,
                                 stepScope.PageSize,
@@ -375,6 +379,8 @@ public class SyncProjectRepository : BaseRepository
                ON tgt.SyncProjectId = src.SyncProjectId AND tgt.WorkflowStepId IS NULL
             WHEN MATCHED THEN
                 UPDATE SET BaseDN = @BaseDN,
+                           IncludedBaseDNs = @IncludedBaseDNs,
+                           ExcludedBaseDNs = @ExcludedBaseDNs,
                            LdapFilter = @LdapFilter,
                            QueryExpression = @QueryExpression,
                            PageSize = @PageSize,
@@ -382,8 +388,8 @@ public class SyncProjectRepository : BaseRepository
                            IncludeDeleted = @IncludeDeleted,
                            LastModified = @LastModified
             WHEN NOT MATCHED THEN
-                INSERT (Id, SyncProjectId, WorkflowStepId, BaseDN, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
-                VALUES (@Id, @SyncProjectId, NULL, @BaseDN, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);";
+                INSERT (Id, SyncProjectId, WorkflowStepId, BaseDN, IncludedBaseDNs, ExcludedBaseDNs, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
+                VALUES (@Id, @SyncProjectId, NULL, @BaseDN, @IncludedBaseDNs, @ExcludedBaseDNs, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);";
 
         if (scope.Id == Guid.Empty) scope.Id = Guid.NewGuid();
         if (scope.CreatedAt == default) scope.CreatedAt = DateTime.UtcNow;

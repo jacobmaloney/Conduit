@@ -983,6 +983,79 @@ END;
 "
             });
 
+            // Migration 21: IC-parity multi-select scope (workflow → step → scope).
+            // Ports IdentityCenter's 4-state OU-tree scope model onto Conduit's
+            // SyncProjectScopes. Two changes:
+            //
+            //   (a) Two new JSON columns — IncludedBaseDNs + ExcludedBaseDNs —
+            //       mirroring IC's SyncStep.SearchBases / ExcludedSearchBases.
+            //       Each is a JSON array of container DNs. Included DNs each become
+            //       a Subtree LDAP base; Excluded DNs prune any object at/under them.
+            //       The 4-state (Included / Inherited / Blocked / NotSelected) is
+            //       derived from these two sets exactly as IC does — Inherited is a
+            //       computed UI state (ancestor is Included), never stored. The
+            //       legacy single BaseDN is retained as the first-included fallback.
+            //
+            //   (b) DROP the project-only unique constraint
+            //       UQ_SyncProjectScopes_SyncProjectId. Phase 7 (V17) re-pointed
+            //       scopes at WorkflowSteps but left this UNIQUE(SyncProjectId) in
+            //       place, which silently caps a project at ONE scope row total —
+            //       fatal for multiple per-step scopes. Replace it with two filtered
+            //       unique indexes: at most one project-level row (WorkflowStepId
+            //       NULL) and at most one row per WorkflowStep. This preserves the
+            //       "one scope per step / one per project" invariant the repos rely
+            //       on (their MERGE keys are WorkflowStepId, and SyncProjectId+NULL)
+            //       while finally allowing many scope rows under one project.
+            //
+            // Fully idempotent: column adds guarded by COL_LENGTH, constraint drop
+            // guarded by sys.key_constraints, index creates guarded by sys.indexes.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 21,
+                Name = "IC-parity multi-select scope (included/blocked DN sets)",
+                Description = "Adds SyncProjectScopes.IncludedBaseDNs + ExcludedBaseDNs (JSON DN arrays, IC SearchBases/ExcludedSearchBases parity); drops the project-only UQ_SyncProjectScopes_SyncProjectId and replaces it with filtered unique indexes per project-level row and per workflow step, enabling multiple scope rows per project.",
+                SqlScript = @"
+-- (a) New multi-select scope columns (JSON arrays of container DNs).
+IF COL_LENGTH('dbo.SyncProjectScopes','IncludedBaseDNs') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjectScopes] ADD [IncludedBaseDNs] NVARCHAR(MAX) NULL;
+END;
+
+IF COL_LENGTH('dbo.SyncProjectScopes','ExcludedBaseDNs') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjectScopes] ADD [ExcludedBaseDNs] NVARCHAR(MAX) NULL;
+END;
+
+-- (b) Drop the project-only unique constraint that caps a project at one scope row.
+IF EXISTS (SELECT 1 FROM sys.key_constraints
+            WHERE name = 'UQ_SyncProjectScopes_SyncProjectId'
+              AND parent_object_id = OBJECT_ID('dbo.SyncProjectScopes'))
+BEGIN
+    ALTER TABLE [dbo].[SyncProjectScopes] DROP CONSTRAINT [UQ_SyncProjectScopes_SyncProjectId];
+END;
+
+-- Replace with filtered uniques: at most one project-level row (WorkflowStepId NULL)
+-- and at most one row per WorkflowStep. Many scope rows may now live under one project.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE name = 'UX_SyncProjectScopes_ProjectLevel'
+                  AND object_id = OBJECT_ID('dbo.SyncProjectScopes'))
+BEGIN
+    CREATE UNIQUE INDEX [UX_SyncProjectScopes_ProjectLevel]
+        ON [dbo].[SyncProjectScopes]([SyncProjectId])
+        WHERE [WorkflowStepId] IS NULL;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE name = 'UX_SyncProjectScopes_Step'
+                  AND object_id = OBJECT_ID('dbo.SyncProjectScopes'))
+BEGIN
+    CREATE UNIQUE INDEX [UX_SyncProjectScopes_Step]
+        ON [dbo].[SyncProjectScopes]([WorkflowStepId])
+        WHERE [WorkflowStepId] IS NOT NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

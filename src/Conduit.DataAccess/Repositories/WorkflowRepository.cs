@@ -216,6 +216,8 @@ public class WorkflowRepository : BaseRepository
                ON tgt.WorkflowStepId = src.WorkflowStepId
             WHEN MATCHED THEN
                 UPDATE SET BaseDN = @BaseDN,
+                           IncludedBaseDNs = @IncludedBaseDNs,
+                           ExcludedBaseDNs = @ExcludedBaseDNs,
                            LdapFilter = @LdapFilter,
                            QueryExpression = @QueryExpression,
                            PageSize = @PageSize,
@@ -223,8 +225,8 @@ public class WorkflowRepository : BaseRepository
                            IncludeDeleted = @IncludeDeleted,
                            LastModified = @LastModified
             WHEN NOT MATCHED THEN
-                INSERT (Id, SyncProjectId, WorkflowStepId, BaseDN, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
-                VALUES (@Id, @SyncProjectId, @WorkflowStepId, @BaseDN, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);";
+                INSERT (Id, SyncProjectId, WorkflowStepId, BaseDN, IncludedBaseDNs, ExcludedBaseDNs, LdapFilter, QueryExpression, PageSize, MaxObjects, IncludeDeleted, CreatedAt, LastModified)
+                VALUES (@Id, @SyncProjectId, @WorkflowStepId, @BaseDN, @IncludedBaseDNs, @ExcludedBaseDNs, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);";
         await ExecuteAsync(sql, scope);
     }
 }

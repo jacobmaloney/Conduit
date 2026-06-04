@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Conduit.Core.SyncModels;
 
@@ -79,7 +81,27 @@ public class SyncProjectScope
     /// earlier), the scope applies to the project as a whole.
     /// </summary>
     public Guid? WorkflowStepId { get; set; }
+    /// <summary>
+    /// Legacy single-container Base DN. Retained for back-compat and as the
+    /// "first included" fallback. When <see cref="IncludedBaseDNs"/> is populated
+    /// (the IC-style multi-select scope), this holds the first included DN so any
+    /// caller that still reads a single BaseDN keeps working.
+    /// </summary>
     public string? BaseDN { get; set; }
+    /// <summary>
+    /// IC-parity multi-select scope. JSON array of explicitly-Included container
+    /// DNs. Each becomes a Subtree LDAP base. NULL/empty = fall back to
+    /// <see cref="BaseDN"/> (single-container) or the source default naming context.
+    /// Mirrors IC's <c>SyncStep.SearchBases</c>.
+    /// </summary>
+    public string? IncludedBaseDNs { get; set; }
+    /// <summary>
+    /// IC-parity multi-select scope. JSON array of explicitly-Blocked container
+    /// DNs. Any object whose DN is at or under one of these is dropped from the
+    /// read, even when it sits under an Included base. Mirrors IC's
+    /// <c>SyncStep.ExcludedSearchBases</c>.
+    /// </summary>
+    public string? ExcludedBaseDNs { get; set; }
     public string? LdapFilter { get; set; }
     public string? QueryExpression { get; set; }
     public int PageSize { get; set; } = 1000;
@@ -87,6 +109,89 @@ public class SyncProjectScope
     public bool IncludeDeleted { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastModified { get; set; } = DateTime.UtcNow;
+
+    // ─── IC-parity multi-select scope helpers ────────────────────────────
+    // The UI works in two HashSet<string> (Included / Blocked) DN sets exactly
+    // like IC's MultiScopeBrowser. These helpers (de)serialize those sets to the
+    // JSON columns and keep BaseDN coherent as the single-value fallback. The
+    // 4-state model is: Included (in the included set), Blocked (in the blocked
+    // set), Inherited (an ancestor DN is Included — computed in the UI, never
+    // stored), NotSelected (in neither set).
+
+    /// <summary>
+    /// Returns the explicitly-Included container DNs. Priority: IncludedBaseDNs
+    /// JSON array, else the single BaseDN, else empty. Mirrors IC
+    /// <c>SyncStep.GetSearchBaseList()</c>.
+    /// </summary>
+    public List<string> GetIncludedBaseList()
+    {
+        if (!string.IsNullOrWhiteSpace(IncludedBaseDNs))
+        {
+            try
+            {
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(IncludedBaseDNs);
+                if (list is { Count: > 0 })
+                    return list.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+            }
+            catch (System.Text.Json.JsonException) { /* fall through to BaseDN */ }
+        }
+        if (!string.IsNullOrWhiteSpace(BaseDN))
+            return new List<string> { BaseDN };
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// Stores the explicitly-Included container DNs as JSON. Also stamps
+    /// <see cref="BaseDN"/> with the first entry so single-value callers keep
+    /// working. Empty list clears both. Mirrors IC <c>SyncStep.SetSearchBaseList()</c>.
+    /// </summary>
+    public void SetIncludedBaseList(IEnumerable<string>? included)
+    {
+        var valid = (included ?? Enumerable.Empty<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (valid.Count == 0)
+        {
+            IncludedBaseDNs = null;
+            // Leave BaseDN as-is only if it was the sole source of truth; here we
+            // null it so an empty multi-select genuinely means "no included base".
+            BaseDN = null;
+            return;
+        }
+
+        BaseDN = valid[0]; // single-value fallback
+        IncludedBaseDNs = valid.Count == 1 ? null : System.Text.Json.JsonSerializer.Serialize(valid);
+    }
+
+    /// <summary>Returns the explicitly-Blocked container DNs. Mirrors IC <c>GetExcludedSearchBaseList()</c>.</summary>
+    public List<string> GetExcludedBaseList()
+    {
+        if (string.IsNullOrWhiteSpace(ExcludedBaseDNs))
+            return new List<string>();
+        try
+        {
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(ExcludedBaseDNs);
+            return list?.Where(s => !string.IsNullOrWhiteSpace(s)).ToList() ?? new List<string>();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return new List<string>();
+        }
+    }
+
+    /// <summary>Stores the explicitly-Blocked container DNs as JSON. Mirrors IC <c>SetExcludedSearchBaseList()</c>.</summary>
+    public void SetExcludedBaseList(IEnumerable<string>? excluded)
+    {
+        var valid = (excluded ?? Enumerable.Empty<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        ExcludedBaseDNs = valid.Count == 0 ? null : System.Text.Json.JsonSerializer.Serialize(valid);
+    }
 }
 
 /// <summary>One source attribute → one sink attribute. Optional transform.</summary>

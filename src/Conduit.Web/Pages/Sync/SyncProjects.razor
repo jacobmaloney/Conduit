@@ -1106,10 +1106,24 @@
                                     <label class="form-label fw-semibold">Base DN</label>
                                     <div class="input-group">
                                         <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
-                                        <button type="button" class="btn btn-outline-secondary" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a container">
+                                        <button type="button" class="btn btn-outline-secondary" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a single container">
                                             <i class="bi bi-diagram-3 me-1"></i>Browse
                                         </button>
+                                        <button type="button" class="btn btn-outline-primary" @onclick="OpenScopeBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick multiple Included / Blocked containers">
+                                            <i class="bi bi-folder-symlink me-1"></i>Select Scope Locations
+                                        </button>
                                     </div>
+                                    @{ var projInc = scopeForm.GetIncludedBaseList(); var projBlk = scopeForm.GetExcludedBaseList(); }
+                                    @if (projInc.Count > 1 || projBlk.Count > 0)
+                                    {
+                                        <small class="form-text text-muted">
+                                            <i class="bi bi-check-circle-fill text-success me-1"></i>@projInc.Count included
+                                            @if (projBlk.Count > 0)
+                                            {
+                                                <span><i class="bi bi-slash-circle-fill text-danger ms-2 me-1"></i>@projBlk.Count blocked</span>
+                                            }
+                                        </small>
+                                    }
                                 </div>
                                 <div class="col-md-5">
                                     <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
@@ -1461,10 +1475,27 @@
                                                 @if (!inheritScope)
                                                 {
                                                     var scope = GetStepScope(stepId);
+                                                    var stepInc = scope.GetIncludedBaseList();
+                                                    var stepBlk = scope.GetExcludedBaseList();
                                                     <div class="row g-3 mt-1">
                                                         <div class="col-md-7">
                                                             <label class="form-label fw-semibold">Base DN</label>
-                                                            <input class="form-control" @bind="scope.BaseDN" placeholder="DC=demo,DC=local — or blank for source's defaultNamingContext" />
+                                                            <div class="input-group">
+                                                                <input class="form-control" @bind="scope.BaseDN" placeholder="DC=demo,DC=local — or blank for source's defaultNamingContext" />
+                                                                <button type="button" class="btn btn-outline-primary" @onclick="@(() => OpenStepScopeBrowser(stepId))" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick multiple Included / Blocked containers for this step">
+                                                                    <i class="bi bi-folder-symlink me-1"></i>Scope Locations
+                                                                </button>
+                                                            </div>
+                                                            @if (stepInc.Count > 1 || stepBlk.Count > 0)
+                                                            {
+                                                                <small class="form-text text-muted">
+                                                                    <i class="bi bi-check-circle-fill text-success me-1"></i>@stepInc.Count included
+                                                                    @if (stepBlk.Count > 0)
+                                                                    {
+                                                                        <span><i class="bi bi-slash-circle-fill text-danger ms-2 me-1"></i>@stepBlk.Count blocked</span>
+                                                                    }
+                                                                </small>
+                                                            }
                                                         </div>
                                                         <div class="col-md-5">
                                                             <label class="form-label fw-semibold">Page size</label>
@@ -1718,7 +1749,7 @@
 }
 
 @* Shared live container browser for the Scope step's Base DN picker. *@
-<CcDirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" />
+<CcDirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" OnScopesSelected="OnScopesPicked" />
 
 @code {
     // Literal @hourly / @every:Nm shown to the user — the Razor parser would otherwise
@@ -1760,6 +1791,45 @@
     private void OnBaseDnPicked(string dn)
     {
         scopeForm.BaseDN = dn;
+        StateHasChanged();
+    }
+
+    // Tracks which scope object the multi-select tree is editing: null = the
+    // project-level scopeForm; otherwise the per-step scope keyed by step id.
+    private Guid? scopeBrowserStepId;
+
+    /// <summary>Open the IC-style multi-select scope tree for the PROJECT-level scope.</summary>
+    private async Task OpenScopeBrowser()
+    {
+        if (baseDnBrowser is null || form.SourceTenantId == Guid.Empty) return;
+        scopeBrowserStepId = null;
+        await baseDnBrowser.ShowForScopeAsync(
+            form.SourceTenantId, form.SourceCredentialName,
+            scopeForm.GetIncludedBaseList(), scopeForm.GetExcludedBaseList());
+    }
+
+    /// <summary>Open the IC-style multi-select scope tree for a specific step's scope.</summary>
+    private async Task OpenStepScopeBrowser(Guid stepId)
+    {
+        if (baseDnBrowser is null || form.SourceTenantId == Guid.Empty) return;
+        scopeBrowserStepId = stepId;
+        var scope = GetStepScope(stepId);
+        await baseDnBrowser.ShowForScopeAsync(
+            form.SourceTenantId, form.SourceCredentialName,
+            scope.GetIncludedBaseList(), scope.GetExcludedBaseList());
+    }
+
+    /// <summary>
+    /// Apply the edited Included / Blocked DN sets back onto whichever scope object
+    /// the tree was opened for. SetIncludedBaseList keeps BaseDN coherent as the
+    /// single-value fallback so single-base callers keep working.
+    /// </summary>
+    private void OnScopesPicked((HashSet<string> Included, HashSet<string> Blocked) sets)
+    {
+        var target = scopeBrowserStepId.HasValue ? GetStepScope(scopeBrowserStepId.Value) : scopeForm;
+        target.SetIncludedBaseList(sets.Included);
+        target.SetExcludedBaseList(sets.Blocked);
+        scopeBrowserStepId = null;
         StateHasChanged();
     }
 
