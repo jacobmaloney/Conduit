@@ -43,6 +43,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.SharePoi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.IdentityCenter", "src\Conduit.Connectors.IdentityCenter\Conduit.Connectors.IdentityCenter.csproj", "{D1C1C1C1-1C1C-4C1C-AC1C-1C1C1C1C1C1C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Shared.SyncUI", "src\Conduit.Shared.SyncUI\Conduit.Shared.SyncUI.csproj", "{F527AAFF-B776-43BF-ABDF-E754ECD752C3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -281,6 +283,18 @@ Global
 		{D1C1C1C1-1C1C-4C1C-AC1C-1C1C1C1C1C1C}.Release|x64.Build.0 = Release|Any CPU
 		{D1C1C1C1-1C1C-4C1C-AC1C-1C1C1C1C1C1C}.Release|x86.ActiveCfg = Release|Any CPU
 		{D1C1C1C1-1C1C-4C1C-AC1C-1C1C1C1C1C1C}.Release|x86.Build.0 = Release|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Debug|x64.Build.0 = Debug|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Debug|x86.Build.0 = Debug|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Release|x64.ActiveCfg = Release|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Release|x64.Build.0 = Release|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Release|x86.ActiveCfg = Release|Any CPU
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -305,5 +319,6 @@ Global
 		{7F794FC0-9AE6-47EB-96AC-7B4802E9E624} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
 		{B91DDB39-E202-42F9-8F65-7A53D9626248} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
 		{D1C1C1C1-1C1C-4C1C-AC1C-1C1C1C1C1C1C} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
+		{F527AAFF-B776-43BF-ABDF-E754ECD752C3} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
 	EndGlobalSection
 EndGlobal

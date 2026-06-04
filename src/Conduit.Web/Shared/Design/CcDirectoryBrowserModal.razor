@@ -17,6 +17,8 @@
 *@
 
 @implements IDisposable
+@using Conduit.Shared.SyncUI
+@using Conduit.Web.Shared.Design
 @inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
 
@@ -35,13 +37,35 @@
                 <div class="modal-body">
                     @if (ScopeMode)
                     {
-                        <div class="cc-scope-legend mb-3">
-                            <span class="cc-scope-legend-item"><i class="bi bi-check-circle-fill text-success"></i> Explicitly Included</span>
-                            <span class="cc-scope-legend-item"><i class="bi bi-check-circle text-success"></i> Inherited (parent included)</span>
-                            <span class="cc-scope-legend-item"><i class="bi bi-slash-circle-fill text-danger"></i> Explicitly Blocked</span>
-                            <span class="cc-scope-legend-item"><i class="bi bi-circle text-muted"></i> Not selected</span>
-                            <div class="cc-scope-legend-hint">Click the state icon to cycle: Not selected &rarr; Included &rarr; Blocked &rarr; Not selected. Included containers are read as a subtree; Blocked subtrees are pruned.</div>
-                        </div>
+                        @* OPTION-A PILOT: scope mode now renders the SHARED ScopeTree
+                           (Conduit.Shared.SyncUI) — the same component IC runs — driven by
+                           a ConduitScopeDataSource over the live container browser. The
+                           component carries its own legend, 4-state icons (self-contained
+                           inline SVG, no font dependency → fixes the blank-icon drift), and
+                           the "N included, M blocked" summary. *@
+                        @if (IsLoadingRoot)
+                        {
+                            <div class="text-center p-4">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading…</span>
+                                </div>
+                                <p class="mt-2 mb-0 text-muted">Binding to the source directory…</p>
+                            </div>
+                        }
+                        else if (!string.IsNullOrEmpty(ErrorMessage))
+                        {
+                            <div class="alert alert-danger mb-0" role="alert">
+                                <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
+                            </div>
+                        }
+                        else if (_scopeDataSource is not null)
+                        {
+                            <ScopeTree DataSource="_scopeDataSource"
+                                       SelectedScopes="includedScopes"
+                                       BlockedScopes="blockedScopes"
+                                       DefaultRootWhenEmpty="false"
+                                       ContextKey="@_scopeContextKey" />
+                        }
                     }
                     else
                     {
@@ -49,57 +73,47 @@
                             Select a container to use as the Base DN for this read.
                             Only objects within it (and its children) are synchronized.
                         </p>
-                    }
 
-                    @if (IsLoadingRoot)
-                    {
-                        <div class="text-center p-4">
-                            <div class="spinner-border text-primary" role="status">
-                                <span class="visually-hidden">Loading…</span>
+                        @if (IsLoadingRoot)
+                        {
+                            <div class="text-center p-4">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading…</span>
+                                </div>
+                                <p class="mt-2 mb-0 text-muted">Binding and loading containers…</p>
                             </div>
-                            <p class="mt-2 mb-0 text-muted">Binding and loading containers…</p>
-                        </div>
-                    }
-                    else if (!string.IsNullOrEmpty(ErrorMessage))
-                    {
-                        <div class="alert alert-danger mb-0" role="alert">
-                            <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
-                        </div>
-                    }
-                    else if (rootNodes.Count == 0)
-                    {
-                        <div class="alert alert-info mb-0" role="alert">
-                            <i class="bi bi-info-circle me-2"></i>
-                            No containers found under the directory root.
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="cc-dn-tree">
-                            @foreach (var node in rootNodes)
-                            {
-                                @RenderNode(node, 0)
-                            }
-                        </div>
-                    }
+                        }
+                        else if (!string.IsNullOrEmpty(ErrorMessage))
+                        {
+                            <div class="alert alert-danger mb-0" role="alert">
+                                <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
+                            </div>
+                        }
+                        else if (rootNodes.Count == 0)
+                        {
+                            <div class="alert alert-info mb-0" role="alert">
+                                <i class="bi bi-info-circle me-2"></i>
+                                No containers found under the directory root.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="cc-dn-tree">
+                                @foreach (var node in rootNodes)
+                                {
+                                    @RenderNode(node, 0)
+                                }
+                            </div>
+                        }
 
-                    @if (ScopeMode && (includedScopes.Count > 0 || blockedScopes.Count > 0))
-                    {
-                        <div class="cc-dn-selected mt-3">
-                            <i class="bi bi-check2-circle cc-dn-selected-icon"></i>
-                            <span class="cc-dn-selected-label">Scope</span>
-                            <span class="cc-dn-selected-dn">
-                                @includedScopes.Count included, @blockedScopes.Count blocked
-                            </span>
-                        </div>
-                    }
-                    else if (!ScopeMode && !string.IsNullOrEmpty(selectedDn))
-                    {
-                        <div class="cc-dn-selected mt-3">
-                            <i class="bi bi-check2-circle cc-dn-selected-icon"></i>
-                            <span class="cc-dn-selected-label">Selected</span>
-                            <code class="cc-dn-selected-dn">@selectedDn</code>
-                        </div>
+                        @if (!string.IsNullOrEmpty(selectedDn))
+                        {
+                            <div class="cc-dn-selected mt-3">
+                                <i class="bi bi-check2-circle cc-dn-selected-icon"></i>
+                                <span class="cc-dn-selected-label">Selected</span>
+                                <code class="cc-dn-selected-dn">@selectedDn</code>
+                            </div>
+                        }
                     }
                 </div>
                 <div class="modal-footer">
@@ -152,6 +166,11 @@
     private string? _credentialName;
     private Conduit.Sync.Connectors.IConnectorContainerBrowser? _browser;
 
+    // Option-A pilot: in scope mode the shared ScopeTree owns the loading via this
+    // adapter. _scopeContextKey changes per open so ScopeTree reloads from root.
+    private IScopeDataSource? _scopeDataSource;
+    private string? _scopeContextKey;
+
     private readonly List<Node> rootNodes = new();
 
     private sealed class Node
@@ -183,6 +202,7 @@
         ErrorMessage = null;
         rootNodes.Clear();
         _browser = null;
+        _scopeDataSource = null;
         IsVisible = true;
         IsLoadingRoot = true;
         StateHasChanged();
@@ -220,6 +240,7 @@
         ErrorMessage = null;
         rootNodes.Clear();
         _browser = null;
+        _scopeDataSource = null;
         IsVisible = true;
         IsLoadingRoot = true;
         StateHasChanged();
@@ -262,6 +283,16 @@
             return;
         }
 
+        // Option-A pilot: scope mode delegates ALL loading to the shared ScopeTree
+        // via the adapter — the modal no longer hand-loads/renders the scope tree.
+        if (ScopeMode)
+        {
+            _scopeDataSource = new ConduitScopeDataSource(_browser, _credentialName);
+            _scopeContextKey = Guid.NewGuid().ToString("N");
+            return;
+        }
+
+        // Single-pick (Base DN) mode keeps the modal's own lazy tree unchanged.
         try
         {
             var result = await _browser.BrowseContainersAsync(null, CancellationToken.None);

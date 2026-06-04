@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!--
+    Conduit.Shared.SyncUI
+    ─────────────────────
+    Option-A pilot (Jacob, 2026-06): the ONE TRUE sync scope-picker component,
+    shared by BOTH Conduit and IdentityCenter so the two stop drifting.
+
+    Lives in Conduit (toward the end-state "all sync lives in Conduit"). IC
+    references it transitionally via a relative project reference and drops the
+    reference if/when sync leaves IC.
+
+    SELF-CONTAINED VISUALS: the 4-state scope icons are inline SVG defined in this
+    library's own scoped CSS (ScopeTree.razor.css). The component depends on NO
+    host-app icon font (Font Awesome / Bootstrap Icons) — that font-coupling is
+    exactly why Conduit's earlier port rendered blank state icons. This RCL renders
+    identically in either app regardless of what icon fonts the host loads.
+
+    NEUTRAL CONTRACT: the component depends only on IScopeDataSource / ScopeNode /
+    ScopeState (defined here). It references neither DataAccessLibrary.Models (IC)
+    nor Conduit.Core (Conduit). Each app supplies a thin IScopeDataSource adapter.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AddRazorSupportForMvc>false</AddRazorSupportForMvc>
+    <RootNamespace>Conduit.Shared.SyncUI</RootNamespace>
+    <AssemblyName>Conduit.Shared.SyncUI</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <!--
+    Use the shared-framework reference (NOT a pinned NuGet package) so the RCL
+    binds to whatever 8.0.x ASP.NET Core the HOST app resolves. This keeps the
+    component-runtime types (EventCallback, RenderFragment, ComponentBase) in
+    lockstep with both Conduit.Web and IC's WebPortal with zero version drift.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>

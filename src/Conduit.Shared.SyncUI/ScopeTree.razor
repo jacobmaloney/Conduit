@@ -1,0 +1,398 @@
+@namespace Conduit.Shared.SyncUI
+@using System.Threading
+@implements IDisposable
+
+@*
+    ScopeTree — the ONE TRUE sync scope picker, shared by IdentityCenter and Conduit.
+
+    Faithful port of IC's MultiScopeBrowser + Tree/TreeView (the 4-state scope tree:
+    Included / Inherited / Blocked / NotSelected, the state-cycle click, lazy drill-in,
+    the legend, the "N included, M blocked" summary). Collapsed into ONE recursive
+    component so the shared library is self-contained.
+
+    SELF-CONTAINED VISUALS: the state glyphs and the chevron/folder icons are inline
+    SVG defined in ScopeTree.razor.css (via CSS mask), NOT a host icon font. This is
+    the fix for Conduit's blank state icons. Renders identically in either host.
+
+    The component depends only on the neutral contract (IScopeDataSource / ScopeNode /
+    ScopeState). It binds two HashSet<string> DN sets — Included and Blocked — exactly
+    like IC. Inherited is computed from Included ancestors, never stored.
+*@
+
+<div class="st-scope-browser">
+    @if (IsLoading)
+    {
+        <div class="st-center st-pad">
+            <span class="st-spinner" role="status" aria-label="Loading"></span>
+            <p class="st-muted">@LoadingText</p>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(ErrorMessage))
+    {
+        <div class="st-alert st-alert-danger" role="alert">
+            <span class="st-glyph st-warn"></span>
+            <span>@ErrorMessage</span>
+        </div>
+    }
+    else if (rootNode == null)
+    {
+        <div class="st-alert st-alert-info" role="alert">
+            <span class="st-glyph st-info"></span>
+            <span>No containers found. Check the connection settings.</span>
+        </div>
+    }
+    else
+    {
+        @if (ShowLegend)
+        {
+            <div class="st-legend">
+                <span class="st-legend-item"><span class="st-scope-glyph st-included" aria-hidden="true"></span> Explicitly Included</span>
+                <span class="st-legend-item"><span class="st-scope-glyph st-inherited" aria-hidden="true"></span> Inherited (parent included)</span>
+                <span class="st-legend-item"><span class="st-scope-glyph st-blocked" aria-hidden="true"></span> Explicitly Blocked</span>
+                <span class="st-legend-item"><span class="st-scope-glyph st-notselected" aria-hidden="true"></span> Not selected</span>
+                <div class="st-legend-hint">
+                    Click the state icon to cycle: Not selected &rarr; Included &rarr; Blocked &rarr; Not selected.
+                    Included containers are read as a subtree; Blocked subtrees are pruned.
+                </div>
+            </div>
+        }
+
+        <div class="st-tree">
+            @RenderNode(rootNode, 0)
+        </div>
+
+        <div class="st-summary">
+            <span class="st-scope-glyph st-included" aria-hidden="true"></span>
+            <span class="st-summary-label">Scope</span>
+            <span class="st-summary-text">@SelectedScopes.Count included, @BlockedScopes.Count blocked</span>
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>The neutral data seam. REQUIRED. Each host supplies its own adapter.</summary>
+    [Parameter, EditorRequired] public IScopeDataSource DataSource { get; set; } = default!;
+
+    /// <summary>
+    /// Explicitly-Included container DNs. Two-way bound. The component mutates this
+    /// set in place and raises <see cref="SelectedScopesChanged"/> on every change,
+    /// exactly like IC's MultiScopeBrowser.
+    /// </summary>
+    [Parameter] public HashSet<string> SelectedScopes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [Parameter] public EventCallback<HashSet<string>> SelectedScopesChanged { get; set; }
+
+    /// <summary>Explicitly-Blocked container DNs. Two-way bound (mutated in place).</summary>
+    [Parameter] public HashSet<string> BlockedScopes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [Parameter] public EventCallback<HashSet<string>> BlockedScopesChanged { get; set; }
+
+    /// <summary>
+    /// Opaque key identifying WHICH scope context this tree is bound to (project vs a
+    /// specific workflow step). When it changes, the tree reloads from the root. Lets
+    /// one component instance serve "scope per workflow step" without remounting.
+    /// </summary>
+    [Parameter] public string? ContextKey { get; set; }
+
+    /// <summary>Show the 4-state legend above the tree. Default true.</summary>
+    [Parameter] public bool ShowLegend { get; set; } = true;
+
+    /// <summary>
+    /// When true and nothing is selected on first load, default the selection to the
+    /// resolved domain/root DN (IC's behavior). When false, start with an empty
+    /// selection (per-workflow-step scope often wants "inherit from project" = empty).
+    /// </summary>
+    [Parameter] public bool DefaultRootWhenEmpty { get; set; } = true;
+
+    [Parameter] public string LoadingText { get; set; } = "Loading containers…";
+
+    private TreeNode? rootNode;
+    private bool IsLoading;
+    private string? ErrorMessage;
+    private string? _loadedContextKey;
+    private CancellationTokenSource? _cts;
+
+    /// <summary>Internal render node — owns the loaded/expanded UI state around a neutral ScopeNode.</summary>
+    private sealed class TreeNode
+    {
+        public ScopeNode Model { get; init; } = new();
+        public string Dn => Model.Dn;
+        public string Name => Model.Name;
+        public bool IsExpanded { get; set; }
+        public bool IsLoadingChildren { get; set; }
+        public bool Loaded { get; set; }
+        public string? LoadError { get; set; }
+        public List<TreeNode> Children { get; } = new();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Reload when the bound scope context changes (e.g. switching workflow steps),
+        // or on first parameter set. DataSource identity change also triggers reload.
+        if (DataSource != null && !string.Equals(_loadedContextKey, ContextKey, StringComparison.Ordinal))
+        {
+            _loadedContextKey = ContextKey;
+            await LoadRootAsync();
+        }
+    }
+
+    private async Task LoadRootAsync()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+            rootNode = null;
+            StateHasChanged();
+
+            var result = await DataSource.LoadChildrenAsync(null, ct);
+            if (ct.IsCancellationRequested) return;
+
+            if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                ErrorMessage = result.ErrorMessage;
+                return;
+            }
+
+            var rootDn = result.ResolvedRootDn
+                ?? DeriveDomainDn(result.Nodes.FirstOrDefault()?.Dn)
+                ?? string.Empty;
+            var rootName = result.RootDisplayName
+                ?? DeriveDomainName(result.Nodes.FirstOrDefault()?.Dn)
+                ?? "Directory";
+
+            rootNode = new TreeNode
+            {
+                Model = new ScopeNode { Name = rootName, Dn = rootDn, NodeType = "domain", HasChildren = true, Description = "All objects" },
+                IsExpanded = true,
+                Loaded = true,
+            };
+            foreach (var n in result.Nodes)
+                rootNode.Children.Add(new TreeNode { Model = n });
+
+            // IC parity: default selection to the domain root when nothing is selected.
+            if (DefaultRootWhenEmpty && SelectedScopes.Count == 0 && BlockedScopes.Count == 0 && !string.IsNullOrEmpty(rootDn))
+            {
+                SelectedScopes.Add(rootDn);
+                await SelectedScopesChanged.InvokeAsync(SelectedScopes);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // superseded by a newer load; ignore
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Failed to load containers: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleAsync(TreeNode node)
+    {
+        if (!node.IsExpanded && !node.Loaded)
+        {
+            node.IsLoadingChildren = true;
+            node.LoadError = null;
+            StateHasChanged();
+            try
+            {
+                var result = await DataSource.LoadChildrenAsync(node.Dn, _cts?.Token ?? CancellationToken.None);
+                node.Children.Clear();
+                if (!string.IsNullOrEmpty(result.ErrorMessage))
+                {
+                    // Surface the child-load failure on the node rather than collapsing
+                    // it to a phantom leaf — a swallowed error here reads as "won't expand".
+                    node.LoadError = result.ErrorMessage;
+                    node.Loaded = false; // allow retry
+                }
+                else
+                {
+                    foreach (var n in result.Nodes)
+                        node.Children.Add(new TreeNode { Model = n });
+                    node.Loaded = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                node.Children.Clear();
+                node.LoadError = ex.Message;
+                node.Loaded = false;
+            }
+            finally
+            {
+                node.IsLoadingChildren = false;
+            }
+        }
+
+        node.IsExpanded = !node.IsExpanded;
+        StateHasChanged();
+    }
+
+    private async Task RetryAsync(TreeNode node)
+    {
+        node.IsExpanded = false;
+        node.LoadError = null;
+        await ToggleAsync(node);
+    }
+
+    /// <summary>
+    /// IC-parity 4-state cycle on the node's EXPLICIT state:
+    /// NotSelected → Included → Blocked → NotSelected. Inherited is never an explicit
+    /// state — it falls out of an Included ancestor and is computed at render time.
+    /// </summary>
+    private async Task CycleScopeState(TreeNode node)
+    {
+        var dn = node.Dn;
+        if (string.IsNullOrWhiteSpace(dn)) return;
+
+        if (BlockedScopes.Contains(dn))
+        {
+            BlockedScopes.Remove(dn);              // Blocked → NotSelected
+        }
+        else if (SelectedScopes.Contains(dn))
+        {
+            SelectedScopes.Remove(dn);             // Included → Blocked
+            BlockedScopes.Add(dn);
+        }
+        else
+        {
+            SelectedScopes.Add(dn);                // NotSelected → Included
+        }
+
+        await SelectedScopesChanged.InvokeAsync(SelectedScopes);
+        await BlockedScopesChanged.InvokeAsync(BlockedScopes);
+        StateHasChanged();
+    }
+
+    private ScopeState StateOf(string dn)
+    {
+        if (BlockedScopes.Contains(dn)) return ScopeState.Blocked;
+        if (SelectedScopes.Contains(dn)) return ScopeState.Included;
+        if (IsAncestorInSet(dn, BlockedScopes)) return ScopeState.Blocked;     // inherited-blocked renders as blocked-muted (see css)
+        if (IsAncestorInSet(dn, SelectedScopes)) return ScopeState.Inherited;
+        return ScopeState.NotSelected;
+    }
+
+    private bool IsInheritedBlocked(string dn) =>
+        !BlockedScopes.Contains(dn) && !SelectedScopes.Contains(dn) && IsAncestorInSet(dn, BlockedScopes);
+
+    private static bool IsAncestorInSet(string dn, HashSet<string> set)
+    {
+        if (string.IsNullOrEmpty(dn) || set.Count == 0) return false;
+        var parts = dn.Split(',');
+        for (int i = 1; i < parts.Length; i++)
+        {
+            var ancestor = string.Join(",", parts.Skip(i));
+            if (set.Contains(ancestor)) return true;
+        }
+        return false;
+    }
+
+    private static string? DeriveDomainDn(string? anyDn)
+    {
+        if (string.IsNullOrEmpty(anyDn)) return null;
+        var dc = anyDn.Split(',').Select(p => p.Trim())
+            .Where(p => p.StartsWith("DC=", StringComparison.OrdinalIgnoreCase));
+        var joined = string.Join(",", dc);
+        return string.IsNullOrEmpty(joined) ? null : joined;
+    }
+
+    private static string? DeriveDomainName(string? anyDn)
+    {
+        if (string.IsNullOrEmpty(anyDn)) return null;
+        var dc = anyDn.Split(',').Select(p => p.Trim())
+            .Where(p => p.StartsWith("DC=", StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Substring(3));
+        var joined = string.Join(".", dc);
+        return string.IsNullOrEmpty(joined) ? null : joined;
+    }
+
+    private static string TypeIconClass(string nodeType) => nodeType switch
+    {
+        "domain" => "st-type-domain",
+        "ou" => "st-type-ou",
+        _ => "st-type-cn",
+    };
+
+    private RenderFragment RenderNode(TreeNode node, int depth) => __builder =>
+    {
+        var state = StateOf(node.Dn);
+        var inheritedBlocked = IsInheritedBlocked(node.Dn);
+        var scopeClass = state switch
+        {
+            ScopeState.Blocked when inheritedBlocked => "st-scope-glyph st-inherited-blocked",
+            ScopeState.Blocked => "st-scope-glyph st-blocked",
+            ScopeState.Included => "st-scope-glyph st-included",
+            ScopeState.Inherited => "st-scope-glyph st-inherited",
+            _ => "st-scope-glyph st-notselected",
+        };
+        var scopeTitle = state switch
+        {
+            ScopeState.Blocked when inheritedBlocked => "Inherited Blocked (ancestor blocked)",
+            ScopeState.Blocked => "Explicitly Blocked — click to clear",
+            ScopeState.Included => "Explicitly Included — click to block",
+            ScopeState.Inherited => "Inherited (ancestor included)",
+            _ => "Not selected — click to include",
+        };
+        var hasKids = node.Children.Count > 0 || node.Model.HasChildren;
+
+        <div class="st-row" style="padding-left:@($"{depth * 16}px")">
+            @if (hasKids)
+            {
+                <span class="st-chevron @(node.IsExpanded ? "st-chevron-open" : "")"
+                      role="button" aria-expanded="@node.IsExpanded"
+                      @onclick="@(() => ToggleAsync(node))" @onclick:stopPropagation></span>
+            }
+            else
+            {
+                <span class="st-chevron st-chevron-empty"></span>
+            }
+
+            <span class="@scopeClass" role="button" title="@scopeTitle"
+                  @onclick="@(() => CycleScopeState(node))" @onclick:stopPropagation></span>
+
+            <span class="st-typeicon @TypeIconClass(node.Model.NodeType)" aria-hidden="true"></span>
+
+            <span class="st-name" title="@node.Dn">@node.Name</span>
+
+            @if (!string.IsNullOrEmpty(node.Model.Description))
+            {
+                <span class="st-desc">(@node.Model.Description)</span>
+            }
+        </div>
+
+        @if (node.IsExpanded && node.IsLoadingChildren)
+        {
+            <div class="st-row st-status" style="padding-left:@($"{(depth + 1) * 16}px")">
+                <span class="st-chevron st-chevron-empty"></span>
+                <span class="st-spinner st-spinner-sm"></span>
+                <span class="st-statustext">Loading…</span>
+            </div>
+        }
+        else if (node.IsExpanded && !string.IsNullOrEmpty(node.LoadError))
+        {
+            <div class="st-row st-error" style="padding-left:@($"{(depth + 1) * 16}px")" title="@node.LoadError">
+                <span class="st-chevron st-chevron-empty"></span>
+                <span class="st-glyph st-warn"></span>
+                <span class="st-errtext">@node.LoadError</span>
+                <button type="button" class="st-retry" @onclick="@(() => RetryAsync(node))" @onclick:stopPropagation>retry</button>
+            </div>
+        }
+        else if (node.IsExpanded)
+        {
+            @foreach (var child in node.Children.OrderBy(c => c.Model.NodeType == "ou" ? 0 : 1).ThenBy(c => c.Name))
+            {
+                @RenderNode(child, depth + 1)
+            }
+        }
+    };
+
+    public void Dispose() => _cts?.Cancel();
+}

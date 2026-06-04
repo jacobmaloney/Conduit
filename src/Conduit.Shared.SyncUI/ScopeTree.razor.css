@@ -1,0 +1,173 @@
+/*
+  ScopeTree scoped styles — SELF-CONTAINED.
+
+  All glyphs (the 4 scope states, chevron, folder/domain type icons, spinner,
+  warn/info) are inline-SVG baked into this file as data-URI CSS masks. The
+  component depends on NO host icon font. Colors come from the SVG-mask +
+  background-color technique so a single span renders a crisp, recolorable icon.
+
+  Theme: reads CSS custom properties with safe fallbacks so it looks right in
+  both Conduit's and IC's dark themes without importing either app's globals.
+*/
+
+.st-scope-browser {
+    --st-text:        var(--color-text-primary, var(--text-primary, var(--text, #E4EDFB)));
+    --st-text-2:      var(--color-text-secondary, var(--text-secondary, var(--text-2, #9DB0CC)));
+    --st-text-3:      var(--color-text-tertiary, #6b7d99);
+    --st-accent:      var(--color-primary, var(--accent, #22d3ee));
+    --st-accent-50:   var(--color-primary-50, var(--accent-50, rgba(34,211,238,0.08)));
+    --st-accent-100:  var(--color-primary-100, var(--accent-100, rgba(34,211,238,0.16)));
+    --st-border:      var(--color-border-strong, var(--border, rgba(120,160,220,0.14)));
+    --st-inset:       var(--surface-inset, var(--panel-2, #131F36));
+    --st-success:     #16c784;
+    --st-success-dim: #3f9e7a;
+    --st-danger:      #f1707a;
+    --st-danger-dim:  #a8636a;
+    --st-folder:      #f0b450;
+    --st-domain:      #3b82f6;
+    --st-ou:          #f59e0b;
+    --st-cn:          #8b5cf6;
+    color: var(--st-text);
+    font-size: 0.86rem;
+}
+
+/* ── Layout helpers ── */
+.st-center { text-align: center; }
+.st-pad { padding: 1.25rem; }
+.st-muted { color: var(--st-text-2); margin: .5rem 0 0; }
+
+.st-alert {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .65rem .8rem; border-radius: 8px; margin-bottom: .75rem;
+}
+.st-alert-danger { background: rgba(241,112,122,0.10); border: 1px solid rgba(241,112,122,0.25); color: var(--st-danger); }
+.st-alert-info   { background: var(--st-accent-50); border: 1px solid var(--st-border); color: var(--st-text-2); }
+
+/* ── Legend ── */
+.st-legend {
+    display: flex; flex-wrap: wrap; gap: .35rem 1rem;
+    padding: .6rem .7rem; border-radius: 8px; margin-bottom: .75rem;
+    background: var(--st-inset); border: 1px solid var(--st-border);
+}
+.st-legend-item { font-size: .78rem; color: var(--st-text-2); display: inline-flex; align-items: center; gap: .35rem; }
+.st-legend-hint { flex-basis: 100%; font-size: .74rem; color: var(--st-text-2); opacity: .85; margin-top: .15rem; }
+
+/* ── Tree container ── */
+.st-tree {
+    border: 1px solid var(--st-border); border-radius: 10px;
+    padding: .4rem; max-height: 440px; overflow-y: auto; background: var(--st-inset);
+}
+
+.st-row {
+    display: flex; align-items: center; gap: .4rem;
+    padding: .3rem .45rem; border-radius: 7px; cursor: default;
+    white-space: nowrap; transition: background-color .12s ease;
+}
+.st-row:hover { background: var(--st-accent-50); }
+
+/* ── Chevron (SVG mask, rotates open) ── */
+.st-chevron {
+    flex: 0 0 auto; width: 1.15rem; height: 1.15rem;
+    display: inline-flex; cursor: pointer; border-radius: 5px;
+    background-color: var(--st-text-3);
+    -webkit-mask: var(--svg-chevron) center / 0.7rem no-repeat;
+            mask: var(--svg-chevron) center / 0.7rem no-repeat;
+    transition: transform .15s ease, background-color .12s ease;
+}
+.st-chevron:hover { background-color: var(--st-accent); }
+.st-chevron-open { transform: rotate(90deg); }
+.st-chevron-empty { background: none; cursor: default; pointer-events: none; }
+
+/* ── 4-state scope glyph (the heart — SVG masks, recolored per state) ── */
+.st-scope-glyph {
+    flex: 0 0 auto; width: 1.15rem; height: 1.15rem;
+    display: inline-flex; cursor: pointer; border-radius: 5px;
+    -webkit-mask-position: center; mask-position: center;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-size: 0.95rem; mask-size: 0.95rem;
+    transition: background-color .12s ease, transform .08s ease;
+}
+.st-scope-glyph:hover { transform: scale(1.12); }
+.st-included {
+    background-color: var(--st-success);
+    -webkit-mask-image: var(--svg-check-circle-fill); mask-image: var(--svg-check-circle-fill);
+}
+.st-inherited {
+    background-color: var(--st-success-dim);
+    -webkit-mask-image: var(--svg-check-circle); mask-image: var(--svg-check-circle);
+}
+.st-blocked {
+    background-color: var(--st-danger);
+    -webkit-mask-image: var(--svg-slash-circle-fill); mask-image: var(--svg-slash-circle-fill);
+}
+.st-inherited-blocked {
+    background-color: var(--st-danger-dim);
+    -webkit-mask-image: var(--svg-dash-circle); mask-image: var(--svg-dash-circle);
+}
+.st-notselected {
+    background-color: var(--st-text-3);
+    -webkit-mask-image: var(--svg-circle); mask-image: var(--svg-circle);
+}
+
+/* ── Type icon (domain / ou / cn) ── */
+.st-typeicon {
+    flex: 0 0 auto; width: 1rem; height: 1rem; display: inline-flex;
+    -webkit-mask: var(--svg-folder) center / 0.95rem no-repeat;
+            mask: var(--svg-folder) center / 0.95rem no-repeat;
+}
+.st-type-domain { background-color: var(--st-domain); -webkit-mask-image: var(--svg-globe); mask-image: var(--svg-globe); }
+.st-type-ou     { background-color: var(--st-folder); -webkit-mask-image: var(--svg-folder); mask-image: var(--svg-folder); }
+.st-type-cn     { background-color: var(--st-cn);     -webkit-mask-image: var(--svg-box);    mask-image: var(--svg-box); }
+
+/* ── Name + description ── */
+.st-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; color: var(--st-text); }
+.st-desc { font-size: .74rem; color: var(--st-text-2); overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+
+/* ── Status / error rows ── */
+.st-status { cursor: default; color: var(--st-text-2); }
+.st-status:hover { background: transparent; }
+.st-statustext { font-size: .8rem; }
+.st-error { color: var(--st-danger); white-space: normal; }
+.st-error:hover { background: transparent; }
+.st-errtext { font-size: .8rem; }
+.st-retry { font-size: .8rem; font-weight: 600; color: var(--st-accent); background: none; border: none; padding: 0 0 0 .3rem; cursor: pointer; }
+
+/* ── Summary strip ── */
+.st-summary {
+    display: flex; align-items: center; gap: .5rem; margin-top: .65rem;
+    padding: .5rem .7rem; border-radius: 8px;
+    background: var(--st-accent-50); border: 1px solid var(--st-border);
+}
+.st-summary-label { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--st-accent); }
+.st-summary-text { font-size: .82rem; color: var(--st-text); }
+
+/* ── Inline glyphs (warn / info) ── */
+.st-glyph { flex: 0 0 auto; width: 1rem; height: 1rem; display: inline-flex; background-color: currentColor;
+            -webkit-mask-position: center; mask-position: center; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: contain; mask-size: contain; }
+.st-warn { -webkit-mask-image: var(--svg-warn); mask-image: var(--svg-warn); }
+.st-info { -webkit-mask-image: var(--svg-info); mask-image: var(--svg-info); }
+
+/* ── Spinner (pure CSS, no font) ── */
+.st-spinner { width: 1.4rem; height: 1.4rem; border: 2px solid var(--st-border); border-top-color: var(--st-accent); border-radius: 50%; display: inline-block; animation: st-spin .8s linear infinite; }
+.st-spinner-sm { width: .9rem; height: .9rem; border-width: 2px; }
+@keyframes st-spin { to { transform: rotate(360deg); } }
+
+/*
+  ── Inline-SVG icon definitions ──
+  Bootstrap-Icons-equivalent paths, baked in as data-URIs and applied via CSS mask
+  so they recolor with background-color. NO external font is needed; this is the
+  fix for the blank/invisible state icons in Conduit's earlier port.
+*/
+.st-scope-browser {
+    --svg-chevron:            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"/></svg>');
+    --svg-check-circle-fill:  url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0m-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05"/></svg>');
+    --svg-check-circle:       url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="m10.97 4.97-.02.022-3.473 4.425-2.093-2.094a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05"/></svg>');
+    --svg-slash-circle-fill:  url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M2.625 4.275A6.97 6.97 0 0 0 1 8a7 7 0 0 0 7 7 6.97 6.97 0 0 0 3.725-1.075zm10.75 7.45A6.97 6.97 0 0 0 15 8a7 7 0 0 0-7-7 6.97 6.97 0 0 0-3.725 1.075z"/></svg>');
+    --svg-dash-circle:        url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/><path d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8"/></svg>');
+    --svg-circle:             url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/></svg>');
+    --svg-folder:             url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M9.828 3h3.982a2 2 0 0 1 1.992 2.181l-.637 7A2 2 0 0 1 13.174 14H2.825a2 2 0 0 1-1.991-1.819l-.637-7a2 2 0 0 1 .342-1.31L.5 3a2 2 0 0 1 2-2h3.672a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 9.828 3"/></svg>');
+    --svg-globe:              url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m7.5-6.923c-.67.204-1.335.82-1.887 1.855-.143.268-.276.56-.395.872.705.157 1.472.257 2.282.287zM4.249 3.539c.142-.384.304-.744.481-1.078a7 7 0 0 1 .597-.933A7 7 0 0 0 3.051 3.05c.362.184.763.349 1.198.49zM3.509 7.5c.036-1.07.188-2.087.436-3.008a9 9 0 0 1-1.565-.667A6.96 6.96 0 0 0 1.018 7.5zm1.4-2.741a12.3 12.3 0 0 0-.4 2.741H7.5V5.091c-.91-.03-1.783-.145-2.591-.332M8.5 5.09V7.5h2.99a12.3 12.3 0 0 0-.399-2.741c-.808.187-1.681.301-2.591.332zM4.51 8.5c.035.987.176 1.914.4 2.741.808-.187 1.681-.301 2.59-.332V8.5zm3.99 0v2.409c.91.03 1.783.145 2.591.332.224-.827.365-1.754.4-2.741zm-3.282 3.696q.18.484.397.871c.552 1.035 1.218 1.65 1.887 1.855V11.91c-.81.03-1.577.13-2.282.287zm.11 2.276a7 7 0 0 1-.598-.933 9 9 0 0 1-.481-1.079 8.4 8.4 0 0 0-1.198.49 7 7 0 0 0 2.276 1.522zm-1.383-2.964A13.4 13.4 0 0 1 3.508 8.5h-2.49a6.96 6.96 0 0 0 1.362 3.675c.47-.258.995-.482 1.565-.667zm6.728 2.964a7 7 0 0 0 2.275-1.521 8.4 8.4 0 0 0-1.197-.49 9 9 0 0 1-.481 1.078 7 7 0 0 1-.597.933M8.5 11.909v3.014c.67-.204 1.335-.82 1.887-1.855q.216-.4.396-.872A12.6 12.6 0 0 0 8.5 11.91zm3.555-.401c.57.185 1.095.409 1.565.667A6.96 6.96 0 0 0 14.982 8.5h-2.49a13.4 13.4 0 0 1-.437 3.008M14.982 7.5a6.96 6.96 0 0 0-1.362-3.675c-.47.258-.995.482-1.565.667.248.92.4 1.938.437 3.008zM11.27 2.461c.177.334.339.694.482 1.078a8.4 8.4 0 0 0 1.196-.49 7 7 0 0 0-2.275-1.52c.218.283.418.597.597.932m-.488 1.343a8 8 0 0 0-.395-.872c-.552-1.035-1.218-1.65-1.887-1.855v3.014c.81-.03 1.577-.13 2.282-.287z"/></svg>');
+    --svg-box:                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5 8 5.961 14.154 3.5zM15 4.239l-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.928l-7.185 2.874a.5.5 0 0 1-.372 0L.63 13.09a1 1 0 0 1-.63-.928V3.5a.5.5 0 0 1 .314-.464z"/></svg>');
+    --svg-warn:               url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M7.938 2.016A.13.13 0 0 1 8.002 2a.13.13 0 0 1 .063.016.15.15 0 0 1 .054.057l6.857 11.667c.036.06.035.124.002.183a.2.2 0 0 1-.054.06.1.1 0 0 1-.066.017H1.146a.1.1 0 0 1-.066-.017.2.2 0 0 1-.054-.06.18.18 0 0 1 .002-.183zM8.5 5a.5.5 0 0 0-1 0v4a.5.5 0 0 0 1 0zM8 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2"/></svg>');
+    --svg-info:               url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2"/></svg>');
+}
