@@ -47,7 +47,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
 
         try
         {
-            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId)
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink)
                 ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
 
@@ -106,8 +106,24 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
 
         try
         {
-            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId)
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink)
                 ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
+
+            // Tombstone soft-delete is only implemented for the Objects table
+            // (/api/objects/tombstones). When this sink targets the Identities table
+            // there is no people-table tombstone endpoint, so emit nothing rather
+            // than mis-route disappeared ids to the Objects endpoint (which would
+            // resolve the wrong connection and could soft-delete unrelated accounts).
+            // Safe no-op: the orchestrator simply doesn't prune, and Identities rows
+            // are never destructively touched by a table-to-table sync.
+            if (creds.Table == IcTable.Identities)
+            {
+                _logger.LogInformation(
+                    "IC tombstone emission skipped: sink table=Identities has no tombstone endpoint (tenant={TenantId}, ids={Count}).",
+                    _tenantId, distinct.Count);
+                return TombstoneEmitResult.Nothing();
+            }
+
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
 
             const int icHardCap = 1000;
@@ -202,14 +218,17 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
     {
         try
         {
-            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId);
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink);
             if (creds is null)
                 return new ConnectorTestResult { IsSuccessful = false, Message = "No 'identitycenter' credential stored." };
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
-            var resp = await client.GetAsync($"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1", cancellationToken);
+            var probeUrl = creds.Table == IcTable.Identities
+                ? $"{creds.BaseUrl}/api/identities/query?keyField=employeeId&page=1&pageSize=1"
+                : $"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1";
+            var resp = await client.GetAsync(probeUrl, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return new ConnectorTestResult { IsSuccessful = false, Message = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}" };
-            return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl}." };
+            return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl} (table={creds.Table})." };
         }
         catch (Exception ex)
         {
@@ -218,6 +237,17 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
     }
 
     private async Task<List<SinkWriteResult>> PostBatchAsync(
+        HttpClient client,
+        IdentityCenterCredentials creds,
+        IReadOnlyList<ConnectorObject> slice,
+        CancellationToken cancellationToken)
+    {
+        return creds.Table == IcTable.Identities
+            ? await PostIdentityBatchAsync(client, creds, slice, cancellationToken)
+            : await PostObjectBatchAsync(client, creds, slice, cancellationToken);
+    }
+
+    private async Task<List<SinkWriteResult>> PostObjectBatchAsync(
         HttpClient client,
         IdentityCenterCredentials creds,
         IReadOnlyList<ConnectorObject> slice,
@@ -282,6 +312,120 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
             }
         }
 
+        return MapResults(slice, byId);
+    }
+
+    /// <summary>
+    /// Identities-table sink. Maps each ConnectorObject to an IdentityBulkUpsertItem
+    /// keyed on the deterministic employeeId (falling back to the object's SourceId,
+    /// which the Identities source stamps as the keyValue). RAW field movement only —
+    /// IC's /api/identities/bulk does NOT run PersonMatch/correlation.
+    /// </summary>
+    private async Task<List<SinkWriteResult>> PostIdentityBatchAsync(
+        HttpClient client,
+        IdentityCenterCredentials creds,
+        IReadOnlyList<ConnectorObject> slice,
+        CancellationToken cancellationToken)
+    {
+        var batchId = Guid.NewGuid();
+
+        // Map the inbound attribute bag to Identities column names. Source-side keys
+        // vary (AD: givenName/sn/mail; IC Identities: FirstName/LastName/PrimaryEmail).
+        // The IC endpoint allow-lists columns and ignores unknowns, so we forward a
+        // superset and let IC filter — but we normalise the common AD/Entra-isms to
+        // IC columns so a raw AD→Identities sync lands sensible data.
+        static void Put(Dictionary<string, string?> d, string col, string? v)
+        {
+            if (!string.IsNullOrEmpty(v) && !d.ContainsKey(col)) d[col] = v;
+        }
+
+        var items = new List<object>(slice.Count);
+        // Track the key we send per object so we can map IC's per-row result back.
+        var keyOf = new List<string>(slice.Count);
+        foreach (var o in slice)
+        {
+            string? Attr(string k) => LookupAttr(o, k);
+
+            // The deterministic key: prefer an explicit employeeId, else the
+            // SourceId (the Identities source sets this to the row's keyValue;
+            // for AD it's the objectGUID — still a stable per-row key).
+            var key = Attr("employeeId") ?? Attr("employeeID") ?? o.SourceId;
+
+            var attrs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            Put(attrs, "EmployeeId",        Attr("employeeId") ?? Attr("employeeID"));
+            Put(attrs, "FirstName",         Attr("FirstName") ?? Attr("firstName") ?? Attr("givenName"));
+            Put(attrs, "LastName",          Attr("LastName") ?? Attr("lastName") ?? Attr("sn"));
+            Put(attrs, "DisplayName",       Attr("displayName"));
+            Put(attrs, "PrimaryEmail",      Attr("primaryEmail") ?? Attr("email") ?? Attr("mail") ?? Attr("userPrincipalName"));
+            Put(attrs, "UserPrincipalName", Attr("userPrincipalName") ?? Attr("upn"));
+            Put(attrs, "Username",          Attr("userName") ?? Attr("sAMAccountName") ?? Attr("username"));
+            Put(attrs, "Department",        Attr("department"));
+            Put(attrs, "JobTitle",          Attr("jobTitle") ?? Attr("title"));
+            Put(attrs, "MobilePhone",       Attr("mobilePhone") ?? Attr("mobile"));
+            Put(attrs, "Status",            Attr("status"));
+            // Pass through any attribute that is already a literal Identities column
+            // name (the IC Identities source emits these), without clobbering the
+            // normalised values above.
+            foreach (var (k, v) in o.Attributes)
+            {
+                if (k.StartsWith("_", StringComparison.Ordinal)) continue;  // _source etc.
+                Put(attrs, k, v?.ToString());
+            }
+
+            keyOf.Add(key);
+            items.Add(new { KeyValue = key, Attributes = attrs });
+        }
+
+        var body = new { BatchId = batchId, KeyField = "employeeId", Items = items };
+
+        using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/identities/bulk", body, cancellationToken);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var msg = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
+            var failures = new List<SinkWriteResult>(slice.Count);
+            for (var i = 0; i < slice.Count; i++) failures.Add(SinkWriteResult.Fail(msg));
+            return failures;
+        }
+
+        var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(json);
+        var byKey = new Dictionary<string, (string Outcome, string? Err)>(StringComparer.Ordinal);
+        if (doc.RootElement.TryGetProperty("results", out var resultsEl) && resultsEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var r in resultsEl.EnumerateArray())
+            {
+                var kv = r.TryGetProperty("keyValue", out var sEl) ? sEl.GetString() : null;
+                var outcome = r.TryGetProperty("outcome", out var oEl) ? oEl.GetString() : null;
+                var err = r.TryGetProperty("errorMessage", out var eEl) ? eEl.GetString() : null;
+                if (!string.IsNullOrEmpty(kv))
+                    byKey[kv!] = (outcome ?? "Skipped", err);
+            }
+        }
+
+        // Map results back by the key we sent, in slice order.
+        var ordered = new List<SinkWriteResult>(slice.Count);
+        for (var i = 0; i < slice.Count; i++)
+        {
+            if (!byKey.TryGetValue(keyOf[i], out var pair))
+            {
+                ordered.Add(SinkWriteResult.Fail("Missing result row in IC response"));
+                continue;
+            }
+            ordered.Add(pair.Outcome switch
+            {
+                "Created" => SinkWriteResult.Ok(SinkWriteOutcome.Created),
+                "Updated" => SinkWriteResult.Ok(SinkWriteOutcome.Updated),
+                "Skipped" => SinkWriteResult.Ok(SinkWriteOutcome.Skipped),
+                _ => SinkWriteResult.Fail(pair.Err ?? "Failed")
+            });
+        }
+        return ordered;
+    }
+
+    private static List<SinkWriteResult> MapResults(
+        IReadOnlyList<ConnectorObject> slice,
+        Dictionary<string, (string Outcome, string? Err)> byId)
+    {
         var ordered = new List<SinkWriteResult>(slice.Count);
         foreach (var o in slice)
         {

@@ -534,6 +534,14 @@ public sealed class CredentialFieldSpec
     public bool IsBoolean { get; init; }
     /// <summary>Optional default for string fields. Booleans default to false.</summary>
     public string? DefaultValue { get; init; }
+    /// <summary>
+    /// When non-empty, the field renders as a dropdown (&lt;select&gt;) constrained
+    /// to these values instead of a free-text input. Used e.g. by the IdentityCenter
+    /// connector's table selector (Objects|Identities). Persisted as a JSON string
+    /// like any other text field. Ignored when <see cref="IsSecret"/>/<see cref="IsBoolean"/>
+    /// /<see cref="IsMultiline"/> is set.
+    /// </summary>
+    public IReadOnlyList<string> AllowedValues { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>

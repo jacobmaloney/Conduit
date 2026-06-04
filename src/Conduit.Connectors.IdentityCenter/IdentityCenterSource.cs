@@ -66,7 +66,7 @@ public sealed class IdentityCenterSource : IConnectorSource
         Watermark watermark,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId)
+        var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Source)
             ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
         var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
 
@@ -80,10 +80,15 @@ public sealed class IdentityCenterSource : IConnectorSource
         var emitted = 0;
         var page = 1;
 
+        // Identities source surfaces a deterministic key (employeeId) the sink can
+        // address rows by. Objects source keys on sourceUniqueId. The endpoint +
+        // item shape differ per table; everything else (paging, watermark) is shared.
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var url = $"{creds.BaseUrl}/api/objects/query?objectClass={Uri.EscapeDataString(icClass)}&page={page}&pageSize={pageSize}";
+            var url = creds.Table == IcTable.Identities
+                ? $"{creds.BaseUrl}/api/identities/query?keyField=employeeId&page={page}&pageSize={pageSize}"
+                : $"{creds.BaseUrl}/api/objects/query?objectClass={Uri.EscapeDataString(icClass)}&page={page}&pageSize={pageSize}";
             if (!string.IsNullOrWhiteSpace(modifiedSinceIso))
                 url += $"&modifiedSince={Uri.EscapeDataString(modifiedSinceIso)}";
 
@@ -101,7 +106,9 @@ public sealed class IdentityCenterSource : IConnectorSource
             foreach (var item in itemsEl.EnumerateArray())
             {
                 if (emitted >= maxObjects) yield break;
-                var converted = Convert(item, icClass, watermark);
+                var converted = creds.Table == IcTable.Identities
+                    ? ConvertIdentity(item, watermark)
+                    : Convert(item, icClass, watermark);
                 if (converted is null) continue;
                 emitted++;
                 pageEmitted++;
@@ -117,14 +124,17 @@ public sealed class IdentityCenterSource : IConnectorSource
     {
         try
         {
-            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId);
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Source);
             if (creds is null)
                 return new ConnectorTestResult { IsSuccessful = false, Message = "No 'identitycenter' credential stored." };
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
-            var resp = await client.GetAsync($"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1", cancellationToken);
+            var probeUrl = creds.Table == IcTable.Identities
+                ? $"{creds.BaseUrl}/api/identities/query?keyField=employeeId&page=1&pageSize=1"
+                : $"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1";
+            var resp = await client.GetAsync(probeUrl, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return new ConnectorTestResult { IsSuccessful = false, Message = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}" };
-            return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl}." };
+            return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl} (table={creds.Table})." };
         }
         catch (Exception ex)
         {
@@ -192,6 +202,79 @@ public sealed class IdentityCenterSource : IConnectorSource
         {
             SourceId = sourceUniqueId!,
             ObjectClass = canonical,
+            Attributes = attrs
+        };
+    }
+
+    /// <summary>
+    /// Build a ConnectorObject from an IdentityQueryItem (table=Identities). The
+    /// row's SourceId is its deterministic key (keyValue, e.g. employeeId) so an
+    /// Identities→Identities round-trip is stable and an Identities→Objects sync
+    /// carries a usable id. The full typed-column projection is flattened into
+    /// attributes. ObjectClass is forced to "User" — Identities are always people.
+    /// </summary>
+    private static ConnectorObject? ConvertIdentity(JsonElement item, Watermark watermark)
+    {
+        var keyValue = Str(item, "keyValue");
+        // Fall back to email/UPN/employeeId so a row with an empty primary key is
+        // still addressable rather than silently dropped.
+        var sourceId = keyValue
+            ?? Str(item, "employeeId")
+            ?? Str(item, "userPrincipalName")
+            ?? Str(item, "primaryEmail");
+        if (string.IsNullOrEmpty(sourceId)) return null;
+
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "user",
+            ["keyField"] = Str(item, "keyField"),
+            ["keyValue"] = keyValue,
+        };
+
+        Set(attrs, "id",                Str(item, "id"));
+        Set(attrs, "displayName",       Str(item, "displayName"));
+        Set(attrs, "firstName",         Str(item, "firstName"));
+        Set(attrs, "lastName",          Str(item, "lastName"));
+        Set(attrs, "primaryEmail",      Str(item, "primaryEmail"));
+        Set(attrs, "email",             Str(item, "primaryEmail"));
+        Set(attrs, "userPrincipalName", Str(item, "userPrincipalName"));
+        Set(attrs, "userName",          Str(item, "username"));
+        Set(attrs, "employeeId",        Str(item, "employeeId"));
+        Set(attrs, "department",        Str(item, "department"));
+        Set(attrs, "jobTitle",          Str(item, "jobTitle"));
+        Set(attrs, "status",            Str(item, "status"));
+        if (item.TryGetProperty("isActive", out var actEl))
+        {
+            var active = actEl.ValueKind == JsonValueKind.True;
+            attrs["isActive"] = active;
+            attrs["accountEnabled"] = active;
+        }
+
+        if (item.TryGetProperty("modifiedAt", out var mEl)
+            && mEl.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(mEl.GetString(), null,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var mDt))
+        {
+            attrs["whenChanged"] = mDt.ToString("o");
+            watermark.Observe(mDt);
+        }
+
+        // Flatten IC's typed-column projection (the "attributes" bag the IC query
+        // endpoint returns) so any Identities column maps without a second call.
+        if (item.TryGetProperty("attributes", out var attrEl) && attrEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in attrEl.EnumerateObject())
+            {
+                var v = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.ToString();
+                if (!string.IsNullOrEmpty(v)) attrs[prop.Name] = v;
+            }
+        }
+
+        return new ConnectorObject
+        {
+            SourceId = sourceId!,
+            ObjectClass = "User",
             Attributes = attrs
         };
     }

@@ -406,6 +406,17 @@
                                                 </button>
                                             </div>
                                         }
+                                        else if (field.AllowedValues.Count > 0)
+                                        {
+                                            <select class="form-select"
+                                                    value="@GetCreateString(ctype.Name, field.Key, field.DefaultValue ?? string.Empty)"
+                                                    @onchange="e => SetCreateString(ctype.Name, field.Key, e.Value?.ToString() ?? string.Empty)">
+                                                @foreach (var opt in field.AllowedValues)
+                                                {
+                                                    <option value="@opt">@opt</option>
+                                                }
+                                            </select>
+                                        }
                                         else
                                         {
                                             <input class="form-control"
@@ -946,6 +957,17 @@
                                                   placeholder="@field.Placeholder"
                                                   value="@GetGenericString(field.Key, field.DefaultValue ?? string.Empty)"
                                                   @oninput="e => SetGenericString(field.Key, e.Value?.ToString() ?? string.Empty)"></textarea>
+                                    }
+                                    else if (field.AllowedValues.Count > 0 && !field.IsSecret)
+                                    {
+                                        <select class="form-select"
+                                                value="@GetGenericString(field.Key, field.DefaultValue ?? string.Empty)"
+                                                @onchange="e => SetGenericString(field.Key, e.Value?.ToString() ?? string.Empty)">
+                                            @foreach (var opt in field.AllowedValues)
+                                            {
+                                                <option value="@opt">@opt</option>
+                                            }
+                                        </select>
                                     }
                                     else
                                     {

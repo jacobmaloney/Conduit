@@ -50,6 +50,22 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
             {
                 new CredentialFieldSpec { Key = "BaseUrl", Label = "Base URL", Placeholder = "https://identitycenter.local:7048", IsRequired = true },
                 new CredentialFieldSpec { Key = "ApiKey",  Label = "API Key",  IsRequired = true, IsSecret = true },
+                // Table selector — which IC table THIS endpoint reads from / writes to.
+                // Independent per credential side, so a project can SOURCE from
+                // Identities and SINK into Objects (IC/Identities → IC/Objects).
+                // Objects = directory accounts (/api/objects/*); Identities = people
+                // golden records (/api/identities/*). Default Objects (pre-existing
+                // behaviour). The connection editor renders this as a dropdown via
+                // AllowedValues.
+                new CredentialFieldSpec
+                {
+                    Key = "Table",
+                    Label = "IC Table",
+                    Help = "Which IdentityCenter table this endpoint syncs: Objects (directory accounts) or Identities (people).",
+                    IsRequired = false,
+                    DefaultValue = "Objects",
+                    AllowedValues = new[] { "Objects", "Identities" },
+                },
             }
         }
     };
@@ -72,21 +88,33 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
         new IdentityCenterSink(tenantId, _httpFactory, _protector, _loggerFactory.CreateLogger<IdentityCenterSink>());
 }
 
-internal sealed record IdentityCenterCredentials(string BaseUrl, string ApiKey);
+/// <summary>Which IC table an endpoint targets. Objects = directory accounts
+/// (/api/objects/*); Identities = people golden records (/api/identities/*).</summary>
+internal enum IcTable { Objects, Identities }
+
+internal sealed record IdentityCenterCredentials(string BaseUrl, string ApiKey, IcTable Table);
 
 internal static class IdentityCenterCredentialReader
 {
     public const string CredentialName = "identitycenter";
 
-    public static async Task<IdentityCenterCredentials?> ReadAsync(CredentialProtector p, Guid tenantId)
+    /// <summary>
+    /// Reads the IC credential for the GIVEN side so the table choice is read
+    /// from THAT side's stored blob — letting a project source from Identities
+    /// and sink into Objects independently. Falls back to the other side's blob
+    /// only when the requested side has none stored (single-credential installs).
+    /// </summary>
+    public static async Task<IdentityCenterCredentials?> ReadAsync(
+        CredentialProtector p, Guid tenantId, CredentialSide side = CredentialSide.Source)
     {
-        var name = CredentialNameContext.Resolve(CredentialName, CredentialSide.Source);
+        var name = CredentialNameContext.Resolve(CredentialName, side);
         var raw = await p.RetrieveAsync(tenantId, name);
         if (string.IsNullOrEmpty(raw))
         {
-            var sinkName = CredentialNameContext.Resolve(CredentialName, CredentialSide.Sink);
-            if (!string.Equals(sinkName, name, StringComparison.OrdinalIgnoreCase))
-                raw = await p.RetrieveAsync(tenantId, sinkName);
+            var other = side == CredentialSide.Source ? CredentialSide.Sink : CredentialSide.Source;
+            var otherName = CredentialNameContext.Resolve(CredentialName, other);
+            if (!string.Equals(otherName, name, StringComparison.OrdinalIgnoreCase))
+                raw = await p.RetrieveAsync(tenantId, otherName);
         }
         if (string.IsNullOrEmpty(raw)) return null;
         try
@@ -95,7 +123,11 @@ internal static class IdentityCenterCredentialReader
             var url = doc.RootElement.TryGetProperty("BaseUrl", out var uEl) ? uEl.GetString() : null;
             var key = doc.RootElement.TryGetProperty("ApiKey",  out var kEl) ? kEl.GetString() : null;
             if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key)) return null;
-            return new IdentityCenterCredentials(url!.TrimEnd('/'), key!);
+            var tableStr = doc.RootElement.TryGetProperty("Table", out var tEl) ? tEl.GetString() : null;
+            var table = string.Equals(tableStr, "Identities", StringComparison.OrdinalIgnoreCase)
+                ? IcTable.Identities
+                : IcTable.Objects;   // default + any unknown value → Objects (pre-existing behaviour)
+            return new IdentityCenterCredentials(url!.TrimEnd('/'), key!, table);
         }
         catch { return null; }
     }
