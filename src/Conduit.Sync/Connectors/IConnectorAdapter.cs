@@ -320,6 +320,60 @@ public interface IConnectorSink
 }
 
 /// <summary>
+/// Phase 2.2 tombstone capability. A sink that can soft-delete records the source
+/// dropped implements this IN ADDITION to <see cref="IConnectorSink"/>. The
+/// orchestrator checks <c>sink is ITombstoneEmittingSink</c> and only then — and
+/// only on a proven complete source read — emits the disappeared ids. Keeping this
+/// a separate interface (not a method on IConnectorSink) means only sinks that
+/// genuinely support reversible soft-delete opt in; every other sink is inert by
+/// construction, which is the safe default for a destructive operation.
+///
+/// Lives in Conduit.Sync so the orchestrator can reference it without inverting the
+/// connector→Sync dependency direction; the IdentityCenter connector implements it.
+/// </summary>
+public interface ITombstoneEmittingSink
+{
+    /// <summary>
+    /// Emit the disappeared <paramref name="sourceUniqueIds"/> for soft-delete on
+    /// the sink side. <paramref name="source"/> MUST be the same connection
+    /// identifier the sink stamps on its upserts so the sink resolves the SAME
+    /// target connection (per-connection scoping). Implementations NEVER hard-delete
+    /// and NEVER override the sink's own safety cap. Returns counts + the ids that
+    /// were durably actioned (safe for the orchestrator to prune from its cache).
+    /// </summary>
+    Task<TombstoneEmitResult> EmitTombstonesAsync(
+        string source,
+        IReadOnlyList<string> sourceUniqueIds,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Outcome of <see cref="ITombstoneEmittingSink.EmitTombstonesAsync"/>. Carries the
+/// sink-reported counts plus the ids the orchestrator may safely prune from its
+/// SinkRecordHashes cache (durably-actioned ids only — capped/aborted ids were NOT
+/// deleted and must remain so they're re-evaluated next run).
+/// </summary>
+public sealed class TombstoneEmitResult
+{
+    public bool Succeeded { get; init; }
+    /// <summary>True if ANY batch was aborted by the sink's safety cap.</summary>
+    public bool Aborted { get; init; }
+    public string? AbortReason { get; init; }
+    public int Requested { get; init; }
+    public int Matched { get; init; }
+    public int SoftDeleted { get; init; }
+    public string? ErrorMessage { get; init; }
+    /// <summary>Ids whose tombstone batch the sink accepted (not aborted) — safe to prune.</summary>
+    public IReadOnlyList<string> PrunableIds { get; init; } = Array.Empty<string>();
+
+    public static TombstoneEmitResult Nothing() =>
+        new() { Succeeded = true, PrunableIds = Array.Empty<string>() };
+
+    public static TombstoneEmitResult Failed(string message, IReadOnlyList<string> prunable) =>
+        new() { Succeeded = false, ErrorMessage = message, PrunableIds = prunable };
+}
+
+/// <summary>
 /// Declared once per adapter. The orchestrator reads <see cref="MaxBatchSize"/>
 /// and <see cref="SupportsBulk"/> to decide whether to accumulate or stream
 /// single-record. UI reads <see cref="SupportsIncremental"/> to label projects.
@@ -511,6 +565,25 @@ public sealed class SyncEnumerationResult
 
     /// <summary>True if this enumeration was incremental (vs. fresh full).</summary>
     public bool IsIncremental { get; init; }
+
+    /// <summary>
+    /// SAFETY-CRITICAL (Phase 2.2 tombstones). Resolved AFTER <see cref="Objects"/>
+    /// is fully drained — exactly like <see cref="ResolveNewCursor"/>. Returns TRUE
+    /// only when the source enumerator reached its natural end with NO error, NO
+    /// cancellation, and NO early exit (e.g. a MaxObjects truncation). Returns FALSE
+    /// for any partial / failed / cancelled / truncated read.
+    ///
+    /// The orchestrator MUST require this to be TRUE before it computes ANY
+    /// delete-delta (tombstones). A partial read that yield-break'd on a swallowed
+    /// error is indistinguishable from a clean drain by the stream alone — this
+    /// sentinel is the ONLY signal that disambiguates them, so it is the linchpin
+    /// of delete-detection safety.
+    ///
+    /// DEFAULT IS FALSE. An adapter that does not explicitly prove a complete read
+    /// inherits the safe default and will NEVER trigger tombstoning. Never default
+    /// this to true. Set it true only at the enumerator's proven natural terminus.
+    /// </summary>
+    public Func<bool> WasCompleteRead { get; init; } = () => false;
 }
 
 public sealed class ConnectorTestResult

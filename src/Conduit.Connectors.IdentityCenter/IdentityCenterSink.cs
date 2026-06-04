@@ -18,7 +18,7 @@ namespace Conduit.Connectors.IdentityCenter;
 /// canonical source, and IC absorbs the projection straight into its Objects
 /// table. See <c>ObjectsController.BulkUpsert</c> for the reasoning.
 /// </summary>
-public sealed class IdentityCenterSink : IConnectorSink
+public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
 {
     private readonly Guid _tenantId;
     private readonly IHttpClientFactory _httpFactory;
@@ -72,6 +72,129 @@ public sealed class IdentityCenterSink : IConnectorSink
             var failures = new List<SinkWriteResult>(batch.Count);
             for (var i = 0; i < batch.Count; i++) failures.Add(SinkWriteResult.Fail(ex.Message));
             return failures;
+        }
+    }
+
+    /// <summary>
+    /// Phase 2.2 tombstone emission. POSTs the SourceUniqueIds that Conduit
+    /// detected as DISAPPEARED from a COMPLETE source read to IC's
+    /// <c>POST /api/objects/tombstones</c> for soft-delete. The destructive action
+    /// happens entirely on IC's side; Conduit only sends ids.
+    ///
+    /// <paramref name="source"/> MUST be the SAME value the upsert path stamps
+    /// (<c>"Conduit"</c>) so IC resolves the SAME auto-seeded SourceConnectionId it
+    /// upserts into — that resolution + IC's SourceConnectionId SQL guard is what
+    /// gives per-connection scoping. IC enforces a 50% cap (returns Aborted=true
+    /// rather than deleting) unless Override is set; Conduit does NOT set Override.
+    ///
+    /// IC caps a single request at 1000 ids; we chunk to stay under it. The caller
+    /// (orchestrator) has already gated this on WasCompleteRead()==true.
+    /// </summary>
+    public async Task<TombstoneEmitResult> EmitTombstonesAsync(
+        string source,
+        IReadOnlyList<string> sourceUniqueIds,
+        CancellationToken cancellationToken)
+    {
+        var distinct = new List<string>(sourceUniqueIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in sourceUniqueIds)
+            if (!string.IsNullOrWhiteSpace(id) && seen.Add(id))
+                distinct.Add(id);
+
+        if (distinct.Count == 0)
+            return TombstoneEmitResult.Nothing();
+
+        try
+        {
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId)
+                ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
+            var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+
+            const int icHardCap = 1000;
+            int totalRequested = 0, totalMatched = 0, totalSoftDeleted = 0;
+            bool anyAborted = false;
+            string? abortReason = null;
+            // Ids IC actually soft-deleted, so the orchestrator can prune exactly
+            // those from SinkRecordHashes. We can only know the COUNT per batch from
+            // IC's response, not the per-id outcome — so we treat a non-aborted
+            // batch as "these requested ids were processed" and let the orchestrator
+            // prune the ids whose batch was not aborted. Aborted batches are NOT
+            // pruned (the records still exist in IC, un-deleted).
+            var confirmedDeletedIds = new List<string>(distinct.Count);
+
+            for (var offset = 0; offset < distinct.Count; offset += icHardCap)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var count = Math.Min(icHardCap, distinct.Count - offset);
+                var slice = distinct.GetRange(offset, count);
+
+                var body = new
+                {
+                    BatchId = Guid.NewGuid(),
+                    Source = source,
+                    SourceUniqueIds = slice,
+                    Override = false   // never override the IC 50% cap from Conduit
+                };
+
+                using var resp = await client.PostAsJsonAsync(
+                    $"{creds.BaseUrl}/api/objects/tombstones", body, cancellationToken);
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    _logger.LogError(
+                        "IC tombstone POST failed (tenant={TenantId}, slice={Count}): HTTP {Status} {Detail}",
+                        _tenantId, slice.Count, (int)resp.StatusCode, detail);
+                    return TombstoneEmitResult.Failed(
+                        $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}", confirmedDeletedIds);
+                }
+
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
+                var root = doc.RootElement;
+                var aborted = root.TryGetProperty("aborted", out var aEl) && aEl.ValueKind == JsonValueKind.True;
+                int matched = root.TryGetProperty("matched", out var mEl) && mEl.ValueKind == JsonValueKind.Number ? mEl.GetInt32() : 0;
+                int softDeleted = root.TryGetProperty("softDeleted", out var sEl) && sEl.ValueKind == JsonValueKind.Number ? sEl.GetInt32() : 0;
+                int requested = root.TryGetProperty("requested", out var rEl) && rEl.ValueKind == JsonValueKind.Number ? rEl.GetInt32() : slice.Count;
+
+                totalRequested += requested;
+                totalMatched += matched;
+                totalSoftDeleted += softDeleted;
+
+                if (aborted)
+                {
+                    anyAborted = true;
+                    abortReason ??= root.TryGetProperty("abortReason", out var arEl) ? arEl.GetString() : "IC 50% cap tripped.";
+                    _logger.LogWarning(
+                        "IC tombstone batch ABORTED by IC 50% cap (tenant={TenantId}, slice={Count}): {Reason}",
+                        _tenantId, slice.Count, abortReason);
+                    // Do NOT prune these — IC did not delete them.
+                }
+                else
+                {
+                    // Non-aborted: IC processed this slice. Prune the slice ids the
+                    // orchestrator sent so they aren't re-emitted next run. (Ids that
+                    // didn't match a live IC row are harmless to prune from Conduit's
+                    // hash cache — they're gone from the sink either way.)
+                    confirmedDeletedIds.AddRange(slice);
+                }
+            }
+
+            return new TombstoneEmitResult
+            {
+                Succeeded = true,
+                Aborted = anyAborted,
+                AbortReason = abortReason,
+                Requested = totalRequested,
+                Matched = totalMatched,
+                SoftDeleted = totalSoftDeleted,
+                PrunableIds = confirmedDeletedIds
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "IC tombstone emission failed (tenant={TenantId}, count={Count})", _tenantId, distinct.Count);
+            return TombstoneEmitResult.Failed(ex.Message, Array.Empty<string>());
         }
     }
 

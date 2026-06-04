@@ -48,7 +48,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
         string objectClass,
         SyncProjectScope scope,
         CancellationToken cancellationToken)
-        => EnumerateInternalAsync(objectClass, scope, null, new AdWatermark(), cancellationToken);
+        => EnumerateInternalAsync(objectClass, scope, null, new AdWatermark(), null, cancellationToken);
 
     /// <summary>
     /// Phase 2 incremental: wraps the project's LDAP filter with
@@ -72,7 +72,13 @@ public sealed class ActiveDirectorySource : IConnectorSource
     {
         var watermark = new AdWatermark();
         var isIncremental = cursor is not null && !string.IsNullOrWhiteSpace(cursor.Token);
-        var stream = EnumerateWithTombstonesAsync(objectClass, scope, cursor?.Token, watermark, isIncremental, cancellationToken);
+        // Complete-read sentinel (Phase 2.2 tombstones). Starts FALSE. The primary
+        // live-object enumerator flips it to true ONLY when it falls off the natural
+        // end of paging (empty LDAP cookie) with no exception, no cancellation, and
+        // no MaxObjects truncation. Any other exit path leaves it false, so the
+        // orchestrator will not compute a delete-delta against a partial read.
+        var completion = new ReadCompletion();
+        var stream = EnumerateWithTombstonesAsync(objectClass, scope, cursor?.Token, watermark, isIncremental, completion, cancellationToken);
         return Task.FromResult(new SyncEnumerationResult
         {
             Objects = stream,
@@ -81,8 +87,21 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 Token = watermark.IsoSafeOrNow(),
                 IssuedAt = DateTime.UtcNow
             },
-            IsIncremental = isIncremental
+            IsIncremental = isIncremental,
+            WasCompleteRead = () => completion.IsComplete
         });
+    }
+
+    /// <summary>
+    /// Mutable completion flag threaded through the live-object enumerator. Defaults
+    /// to FALSE; only the natural empty-cookie terminus of the primary search loop
+    /// sets it true. A throw, a cancellation, or a MaxObjects truncation yield-break
+    /// never reaches the set-site, so the flag faithfully reports "this was a clean,
+    /// full drain of the source" — the precondition for emitting tombstones.
+    /// </summary>
+    private sealed class ReadCompletion
+    {
+        public bool IsComplete { get; set; }
     }
 
     private async IAsyncEnumerable<ConnectorObject> EnumerateWithTombstonesAsync(
@@ -91,10 +110,14 @@ public sealed class ActiveDirectorySource : IConnectorSource
         string? sinceIsoUtc,
         AdWatermark watermark,
         bool isIncremental,
+        ReadCompletion completion,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        // Primary live-object enumeration.
-        await foreach (var obj in EnumerateInternalAsync(objectClass, scope, sinceIsoUtc, watermark, cancellationToken))
+        // Primary live-object enumeration. EnumerateInternalAsync owns the
+        // completion flag: it sets completion.IsComplete = true ONLY when its paged
+        // search drains to the natural empty-cookie terminus. If it throws or the
+        // consumer stops early, the flag stays false and no tombstones are computed.
+        await foreach (var obj in EnumerateInternalAsync(objectClass, scope, sinceIsoUtc, watermark, completion, cancellationToken))
             yield return obj;
 
         // Tombstone enumeration only on incremental runs — full runs treat absence
@@ -260,6 +283,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
         SyncProjectScope scope,
         string? sinceIsoUtc,
         AdWatermark watermark,
+        ReadCompletion? completion,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
@@ -314,6 +338,9 @@ public sealed class ActiveDirectorySource : IConnectorSource
             foreach (SearchResultEntry entry in response.Entries)
             {
                 if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value)
+                    // Deliberate early exit on the MaxObjects cap. This is a TRUNCATED
+                    // read, not a complete drain — leave completion.IsComplete FALSE so
+                    // the orchestrator does NOT tombstone against a partial population.
                     yield break;
 
                 // Phase 2 cursor: track max whenChanged seen.
@@ -341,7 +368,16 @@ public sealed class ActiveDirectorySource : IConnectorSource
             // Advance the cookie. Empty cookie = last page.
             var responseControl = FindPageResponseControl(response.Controls);
             if (responseControl is null || responseControl.Cookie.Length == 0)
+            {
+                // NATURAL TERMINUS — paging drained to the last page with no error,
+                // no cancellation, and no MaxObjects truncation. This is the ONLY
+                // site that proves a complete read, so it is the ONLY site that may
+                // set the sentinel. (A thrown DirectoryOperationException above
+                // rethrows before reaching here; a MaxObjects truncation yield-breaks
+                // before reaching here; a cancellation throws OperationCanceledException.)
+                if (completion is not null) completion.IsComplete = true;
                 yield break;
+            }
             pageControl.Cookie = responseControl.Cookie;
         }
     }

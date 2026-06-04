@@ -779,6 +779,36 @@ public sealed class SyncProjectOrchestrator
             await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es).");
         var writtenHashes = new List<KeyValuePair<string, string>>(256);
 
+        // ── Phase 2.2 delete-detection setup ────────────────────────────────────
+        // Tombstoning is opt-in by SINK CAPABILITY (only IC implements the reversible
+        // soft-delete contract). It runs INDEPENDENTLY of skip-unchanged, so we load
+        // the prior-synced id set even when skip-unchanged is off — otherwise a
+        // project that doesn't opt into skip-unchanged could never detect leavers.
+        //
+        // The prior set is the SinkRecordHashes keys for THIS (project, sink) — that
+        // table is uniquely keyed (SyncProjectId, SinkTenantId, ExternalId), so the
+        // diff is inherently per-connection: no cross-project / cross-connection bleed.
+        var tombstoneSink = sink as ITombstoneEmittingSink;
+        var deleteDetectionOn = tombstoneSink is not null;
+        HashSet<string> priorIdsForDelete;
+        if (deleteDetectionOn && !skipUnchanged)
+        {
+            var map = await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id);
+            priorIdsForDelete = new HashSet<string>(map.Keys, StringComparer.Ordinal);
+        }
+        else
+        {
+            // Reuse the already-loaded skip-unchanged map keys when both are on.
+            priorIdsForDelete = new HashSet<string>(priorHashes.Keys, StringComparer.Ordinal);
+        }
+        // Every stable SourceId seen this run — INCLUDING skipped-unchanged records,
+        // which are still present in the source and must NOT be tombstoned.
+        var seenSourceIds = deleteDetectionOn
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
+        if (deleteDetectionOn)
+            await Log(run, "Info", $"    Delete-detection ARMED (sink supports tombstones); loaded {priorIdsForDelete.Count} prior id(s). Emission gated on a COMPLETE source read.");
+
         await Log(run, "Info",
             $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={project.ObjectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}; SkipUnchanged={skipUnchanged}.");
 
@@ -811,6 +841,12 @@ public sealed class SyncProjectOrchestrator
                 sinkObj.Attributes["targetOU"] = scope.BaseDN;
 
             emitted.Add(sinkObj);
+
+            // Delete-detection: record EVERY stable id seen this run, BEFORE the
+            // skip-unchanged gate below. A skipped-unchanged record is still present
+            // in the source — it must count as "seen" so it is never tombstoned.
+            if (seenSourceIds is not null && !string.IsNullOrEmpty(sinkObj.SourceId))
+                seenSourceIds.Add(sinkObj.SourceId);
 
             // Skip-unchanged gate. Only applies when opt-in AND the record carries
             // a stable external id. Compute the hash once; reuse it on write.
@@ -858,6 +894,144 @@ public sealed class SyncProjectOrchestrator
         {
             try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, writtenHashes); }
             catch (Exception ex) { await Log(run, "Warning", $"    Could not persist sink hashes: {ex.Message}"); }
+        }
+
+        // ── Phase 2.2 delete-detection + tombstone emission ─────────────────────
+        // SAFETY GATE: the linchpin. We emit tombstones ONLY when EVERY one of these
+        // holds. Any failure leaves the sink untouched (upsert-only this run):
+        //   (1) the sink supports the reversible soft-delete contract;
+        //   (2) the source proved a COMPLETE read (WasCompleteRead() == true) — a
+        //       partial/failed/cancelled/truncated read is indistinguishable from a
+        //       clean drain by the stream alone, so this sentinel is mandatory;
+        //   (3) the run is not being torn down (no cancellation requested);
+        //   (4) we have a non-empty prior id set to diff against;
+        //   (5) the current read returned a plausible (non-zero) population — a
+        //       "complete" read that returned ZERO live objects while we hold a
+        //       non-empty prior set is treated as SUSPECT and is NOT emitted (it is
+        //       almost always a silently-empty bind, not a real full depopulation).
+        bool readWasComplete = false;
+        if (deleteDetectionOn)
+        {
+            try { readWasComplete = enumeration.WasCompleteRead(); }
+            catch { readWasComplete = false; }
+        }
+
+        if (deleteDetectionOn && seenSourceIds is not null && tombstoneSink is not null)
+        {
+            var complete = readWasComplete;
+
+            if (!complete)
+            {
+                await Log(run, "Warning",
+                    "    Tombstoning SKIPPED: source read was NOT complete (partial/failed/truncated). Upsert-only this run — no deletes computed.");
+            }
+            else if (ct.IsCancellationRequested)
+            {
+                await Log(run, "Warning", "    Tombstoning SKIPPED: run cancellation requested.");
+            }
+            else if (priorIdsForDelete.Count == 0)
+            {
+                await Log(run, "Info", "    Tombstoning: no prior id set (first run for this sink) — nothing to delete-detect.");
+            }
+            else if (read == 0 || seenSourceIds.Count == 0)
+            {
+                // Suspicious: a "complete" read that saw nothing, yet we have prior
+                // records. Refuse to wipe the population on a likely-empty bind.
+                await Log(run, "Error",
+                    $"    Tombstoning REFUSED: read reported complete but saw 0 objects while {priorIdsForDelete.Count} prior id(s) exist. Treating as a suspect read — NO tombstones emitted. Investigate the source bind/filter.");
+            }
+            else
+            {
+                // The delta: prior-synced ids NOT seen in this complete read = leavers.
+                var disappeared = new List<string>();
+                foreach (var priorId in priorIdsForDelete)
+                    if (!seenSourceIds.Contains(priorId))
+                        disappeared.Add(priorId);
+
+                if (disappeared.Count == 0)
+                {
+                    await Log(run, "Info", "    Tombstoning: complete read, no disappeared records. Nothing to delete.");
+                }
+                else
+                {
+                    // IC keys the soft-delete on the SAME Source string the IC sink
+                    // stamps on its upserts (IdentityCenterSink.PostBatchAsync →
+                    // Source = "Conduit"). Passing the same value makes IC resolve
+                    // the SAME auto-seeded SourceConnectionId, which (plus IC's
+                    // SourceConnectionId SQL guard) is what scopes the delete to this
+                    // connection. If that upsert constant ever changes, change it here.
+                    const string icUpsertSource = "Conduit";
+
+                    await Log(run, "Warning",
+                        $"    Tombstoning: complete read detected {disappeared.Count} disappeared record(s) of {priorIdsForDelete.Count} prior; emitting to sink (IC enforces a 50% cap as the backstop).");
+
+                    try
+                    {
+                        var emit = await tombstoneSink.EmitTombstonesAsync(icUpsertSource, disappeared, ct);
+                        if (!emit.Succeeded)
+                        {
+                            await Log(run, "Error", $"    Tombstone emission FAILED: {emit.ErrorMessage}. No prune; will retry next complete run.");
+                        }
+                        else if (emit.Aborted)
+                        {
+                            await Log(run, "Error",
+                                $"    Tombstone emission ABORTED by sink safety cap: {emit.AbortReason} (requested={emit.Requested}, matched={emit.Matched}). Records NOT deleted; NOT pruned.");
+                        }
+                        else
+                        {
+                            await Log(run, "Info",
+                                $"    Tombstones applied: requested={emit.Requested}, matched={emit.Matched}, softDeleted={emit.SoftDeleted}.");
+                        }
+
+                        // Prune ONLY the ids the sink durably actioned, so they aren't
+                        // re-emitted every run. If one reappears in the source later,
+                        // a normal upsert revives it on the IC side (DeletedAt cleared)
+                        // and re-registers its hash. Aborted/failed ids are NOT pruned.
+                        if (emit.PrunableIds.Count > 0)
+                        {
+                            try
+                            {
+                                await _hashRepo.DeleteManyAsync(project.Id, sinkTenant.Id, emit.PrunableIds);
+                                await Log(run, "Info", $"    Pruned {emit.PrunableIds.Count} tombstoned id(s) from the sink hash registry.");
+                            }
+                            catch (Exception ex)
+                            {
+                                await Log(run, "Warning", $"    Could not prune tombstoned ids from hash registry: {ex.Message}");
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        await Log(run, "Error", $"    Tombstone emission threw: {ex.Message}. Upsert results stand; no deletes pruned.");
+                    }
+                }
+            }
+        }
+
+        // Maintain the per-connection prior-synced id REGISTRY. Delete-detection
+        // diffs against SinkRecordHashes keys, so those keys must reflect "what we
+        // last successfully synced to this sink" — INDEPENDENT of skip-unchanged.
+        // When skip-unchanged is OFF we still register the ids the sink accepted
+        // this run (with a sentinel hash) so the NEXT complete run can detect their
+        // absence. When skip-unchanged is ON the writtenHashes above already did this.
+        //
+        // ONLY register on a COMPLETE read. A partial read holds a partial seen-set;
+        // registering it would silently drop real ids from the prior set, degrading
+        // delete-detection over repeated partial runs. Skipping registration on a
+        // partial read keeps the last complete registry intact (safe-leaning: a real
+        // leaver may go undetected for a cycle, but a present record is never wiped).
+        if (deleteDetectionOn && readWasComplete && !skipUnchanged && seenSourceIds is not null && seenSourceIds.Count > 0)
+        {
+            // Register every id seen this run (present in source). Use a sentinel
+            // hash — the value is irrelevant for delete-detection (only the key is),
+            // and skip-unchanged is off so no one reads it back as a content hash.
+            const string registryHash = "TOMBSTONE-REGISTRY-NO-CONTENT-HASH--------00";
+            var registry = new List<KeyValuePair<string, string>>(seenSourceIds.Count);
+            foreach (var id in seenSourceIds)
+                registry.Add(new KeyValuePair<string, string>(id, registryHash));
+            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, registry); }
+            catch (Exception ex) { await Log(run, "Warning", $"    Could not update prior-synced id registry: {ex.Message}"); }
         }
 
         SyncCursor? newCursor = null;
