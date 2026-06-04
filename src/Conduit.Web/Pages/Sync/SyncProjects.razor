@@ -1092,7 +1092,7 @@
                     {
                         <div class="mb-3">
                             <label class="form-label fw-semibold">Object Class</label>
-                            <select class="form-select" @bind="form.ObjectClass">
+                            <select class="form-select" @bind="form.ObjectClass" @bind:after="OnObjectClassChanged">
                                 <option value="User">User</option>
                                 <option value="Group">Group</option>
                                 @if (SinkIsAwsSso)
@@ -1110,15 +1110,45 @@
                                 The kind of object this project reads from the source and writes to the target.
                             </small>
                         </div>
+                        @* Context-aware workflow template picker (ARS Synchronization-Service model).
+                           The applicable set is derived from the chosen Source + Target + Object Class
+                           and gated against the target adapter's capabilities. Inapplicable templates
+                           are HIDDEN; the highest-specificity match is auto-pre-selected as "Recommended". *@
                         <div class="mb-3">
                             <label class="form-label fw-semibold">Workflow Template</label>
+                            <div class="sync-template-context">
+                                <i class="fas fa-route me-1"></i>
+                                Recommended for
+                                <strong>@TenantName(form.SourceTenantId)</strong>
+                                <i class="fas fa-arrow-right mx-1"></i>
+                                <strong>@TenantName(form.SinkTenantId)</strong>
+                                (<span class="sync-template-context-class">@form.ObjectClass</span>)
+                            </div>
                             <select class="form-select" value="@selectedTemplateId" @onchange="OnTemplateChanged">
-                                @foreach (var tpl in WorkflowTemplateCatalog.All)
+                                @foreach (var tpl in ApplicableTemplates)
                                 {
-                                    <option value="@tpl.Id">@tpl.DisplayName</option>
+                                    var isRec = tpl.Id == RecommendedTemplateId && tpl.Id != WorkflowTemplateCatalog.EmptyId;
+                                    var label = isRec ? string.Concat(tpl.DisplayName, "  ★ Recommended") : tpl.DisplayName;
+                                    <option value="@tpl.Id">@label</option>
                                 }
                             </select>
                             <small class="form-text text-muted">@SelectedTemplate.Description</small>
+                            @if (SelectedTemplate.Correlation is not null)
+                            {
+                                <small class="form-text text-muted d-block">
+                                    <i class="fas fa-link me-1"></i>Correlates on
+                                    <code>@SelectedTemplate.Correlation.SourceKeyAttr</code>
+                                    <i class="fas fa-arrow-right mx-1"></i>
+                                    <code>@SelectedTemplate.Correlation.TargetKeyAttr</code>
+                                </small>
+                            }
+                            @if (HiddenTemplateCount > 0)
+                            {
+                                <small class="form-text text-muted d-block">
+                                    <i class="fas fa-eye-slash me-1"></i>
+                                    @HiddenTemplateCount template(s) hidden — not valid for this Source → Target (@form.ObjectClass) combination.
+                                </small>
+                            }
                         </div>
                         <div class="alert alert-secondary py-2 mb-3">
                             <i class="fas fa-shoe-prints me-1"></i>
@@ -1921,6 +1951,76 @@
     // template; ObjectClass is suggested + the tree is materialized on Save.
     private string selectedTemplateId = WorkflowTemplateCatalog.EmptyId;
     private WorkflowTemplate SelectedTemplate => WorkflowTemplateCatalog.GetById(selectedTemplateId);
+
+    // Context-aware template applicability (ARS Synchronization-Service model).
+    // Computed from the chosen Source + Target + Object Class, gated against the
+    // TARGET adapter's live capabilities. The wizard renders only this set and
+    // auto-pre-selects the highest-specificity match as "Recommended".
+    private string RecommendedTemplateId = WorkflowTemplateCatalog.EmptyId;
+
+    /// <summary>The target adapter's capability snapshot (null when no target / unknown adapter).</summary>
+    private ConnectorCapabilities? TargetCapabilities
+    {
+        get
+        {
+            var a = AdapterFor(form.SinkTenantId);
+            return a?.Capabilities;
+        }
+    }
+
+    private bool TargetSupportsSink
+    {
+        get
+        {
+            var a = AdapterFor(form.SinkTenantId);
+            return a?.SupportsSink ?? false;
+        }
+    }
+
+    /// <summary>Templates legal for the current (source, target, objectClass) triple, ranked.</summary>
+    private IReadOnlyList<WorkflowTemplate> ApplicableTemplates =>
+        WorkflowTemplateCatalog.Applicable(
+            SourceSystemType,
+            TenantType(form.SinkTenantId),
+            form.ObjectClass ?? "User",
+            TargetCapabilities,
+            TargetSupportsSink);
+
+    /// <summary>How many catalog templates are hidden because they don't fit the current triple.</summary>
+    private int HiddenTemplateCount => WorkflowTemplateCatalog.All.Count - ApplicableTemplates.Count;
+
+    /// <summary>
+    /// Recompute the applicable set and auto-pre-select the recommended template.
+    /// Called when entering the Object Class step and whenever the object class
+    /// changes. If the operator's current pick is no longer applicable, snap to
+    /// the recommended one; otherwise leave their choice intact.
+    /// </summary>
+    private void RecomputeTemplateApplicability()
+    {
+        var applicable = ApplicableTemplates;
+        var rec = WorkflowTemplateCatalog.Recommended(
+            SourceSystemType,
+            TenantType(form.SinkTenantId),
+            form.ObjectClass ?? "User",
+            TargetCapabilities,
+            TargetSupportsSink);
+        RecommendedTemplateId = rec.Id;
+
+        var stillValid = applicable.Any(t =>
+            string.Equals(t.Id, selectedTemplateId, StringComparison.OrdinalIgnoreCase));
+        if (!stillValid)
+        {
+            // Snap to the recommended pick and mirror its suggested object class
+            // only when the operator hasn't already chosen one this differs from.
+            selectedTemplateId = rec.Id;
+        }
+    }
+
+    /// <summary>Object Class changed on the wizard's Object step — re-derive the legal template set.</summary>
+    private void OnObjectClassChanged()
+    {
+        RecomputeTemplateApplicability();
+    }
 
     // Phase 8: per-step Mapping editor state. Keyed by WorkflowStep.Id, populated
     // on demand when the operator opens a Mapping step's detail panel. The
@@ -2741,6 +2841,16 @@
         {
             form.ObjectClass = tpl.SuggestedObjectClass;
         }
+        // Picking a template can change the object class (e.g. Group Membership
+        // Reconcile → Group). Refresh the recommendation marker + hidden count so
+        // the list label stays consistent, but DON'T snap away from the operator's
+        // explicit pick — it is valid by construction (it came from this list).
+        RecommendedTemplateId = WorkflowTemplateCatalog.Recommended(
+            SourceSystemType,
+            TenantType(form.SinkTenantId),
+            form.ObjectClass ?? "User",
+            TargetCapabilities,
+            TargetSupportsSink).Id;
     }
 
     /// <summary>
@@ -3086,6 +3196,7 @@
         if (step >= wizardStep) return;
         wizardStep = step;
         formTab = CurrentTabForStep(step);
+        if (formTab == "object") RecomputeTemplateApplicability();
         await Task.CompletedTask;
     }
 
@@ -3154,6 +3265,9 @@
         if (wizardStep >= WizardStepCount) return;
         wizardStep++;
         formTab = CurrentTabForStep(wizardStep);
+        // Entering the Object Class step: derive the legal template set from the
+        // Source + Target + Object Class triple and auto-pick the recommendation.
+        if (formTab == "object") RecomputeTemplateApplicability();
     }
 
     private void PrevWizardStep()
