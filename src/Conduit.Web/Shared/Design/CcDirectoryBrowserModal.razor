@@ -72,9 +72,10 @@
 
                     @if (!string.IsNullOrEmpty(selectedDn))
                     {
-                        <div class="mt-3 small">
-                            <span class="text-muted">Selected:</span>
-                            <code>@selectedDn</code>
+                        <div class="cc-dn-selected mt-3">
+                            <i class="bi bi-check2-circle cc-dn-selected-icon"></i>
+                            <span class="cc-dn-selected-label">Selected</span>
+                            <code class="cc-dn-selected-dn">@selectedDn</code>
                         </div>
                     }
                 </div>
@@ -282,38 +283,41 @@
         var rowClass = node.Dn == selectedDn ? "cc-dn-row selected" : "cc-dn-row";
         var indent = string.Concat((depth * 18).ToString(), "px");
 
-        <div class="@rowClass" style="padding-left:@indent">
+        <div class="@rowClass" style="padding-left:@indent" @onclick="@(() => Select(node))">
             @if (node.HasChildren)
             {
-                <span class="cc-dn-chevron" @onclick="@(() => ToggleAsync(node))" @onclick:stopPropagation>
+                <span class="cc-dn-chevron" role="button" aria-expanded="@node.IsExpanded" @onclick="@(() => ToggleAsync(node))" @onclick:stopPropagation>
                     <i class="bi @(node.IsExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
                 </span>
             }
             else
             {
-                <span class="cc-dn-chevron"></span>
+                <span class="cc-dn-chevron cc-dn-chevron-empty"></span>
             }
-            <span class="cc-dn-icon"><i class="bi bi-folder"></i></span>
-            <span class="cc-dn-name" title="@node.Dn" @onclick="@(() => Select(node))">@node.Name</span>
-            @if (!string.IsNullOrEmpty(node.Description))
-            {
-                <span class="cc-dn-desc text-muted">(@node.Description)</span>
-            }
+            <span class="cc-dn-icon"><i class="bi @(node.IsExpanded ? "bi-folder2-open" : "bi-folder-fill")"></i></span>
+            <span class="cc-dn-text" title="@node.Dn">
+                <span class="cc-dn-name">@node.Name</span>
+                @if (!string.IsNullOrEmpty(node.Description))
+                {
+                    <span class="cc-dn-desc">@node.Description</span>
+                }
+            </span>
         </div>
 
         @if (node.IsExpanded && node.IsLoading)
         {
             var loadIndent = string.Concat(((depth + 1) * 18).ToString(), "px");
-            <div class="cc-dn-row text-muted" style="padding-left:@loadIndent">
-                <span class="cc-dn-chevron"></span>
-                <i class="bi bi-arrow-repeat cc-dn-spin me-1"></i> Loading…
+            <div class="cc-dn-row cc-dn-status" style="padding-left:@loadIndent">
+                <span class="cc-dn-chevron cc-dn-chevron-empty"></span>
+                <i class="bi bi-arrow-repeat cc-dn-spin me-1"></i>
+                <span class="cc-dn-statustext">Loading…</span>
             </div>
         }
         else if (node.IsExpanded && !string.IsNullOrEmpty(node.LoadError))
         {
             var errIndent = string.Concat(((depth + 1) * 18).ToString(), "px");
             <div class="cc-dn-row cc-dn-error" style="padding-left:@errIndent" title="@node.LoadError">
-                <span class="cc-dn-chevron"></span>
+                <span class="cc-dn-chevron cc-dn-chevron-empty"></span>
                 <i class="bi bi-exclamation-triangle me-1"></i>
                 <span class="cc-dn-errtext">@node.LoadError</span>
                 <button type="button" class="btn btn-link btn-sm p-0 ms-2 cc-dn-retry" @onclick="@(() => RetryAsync(node))" @onclick:stopPropagation>retry</button>
@@ -331,38 +335,131 @@
 
 <style>
     .cc-dn-tree {
-        border: 1px solid var(--bs-border-color, #2a3550);
-        border-radius: 8px;
-        padding: .5rem;
-        max-height: 420px;
+        border: 1px solid var(--border, rgba(120,160,220,0.10));
+        border-radius: 10px;
+        padding: .4rem;
+        max-height: 440px;
         overflow-y: auto;
+        background: var(--surface-inset, var(--panel-2, #131F36));
     }
+
+    /* Row: comfortable height, whole row is the select target, clear hover/selected. */
     .cc-dn-row {
         display: flex;
         align-items: center;
-        gap: .35rem;
-        padding: .2rem .35rem;
-        border-radius: 6px;
-        cursor: default;
+        gap: .5rem;
+        padding: .45rem .55rem;
+        border-radius: 8px;
+        cursor: pointer;
         white-space: nowrap;
+        transition: background-color .12s ease;
+    }
+    .cc-dn-row:hover {
+        background: var(--accent-50, rgba(34,211,238,0.06));
     }
     .cc-dn-row.selected {
-        background: var(--bs-primary-bg-subtle, rgba(13,110,253,.18));
+        background: var(--accent-100, rgba(34,211,238,0.14));
+        box-shadow: inset 2px 0 0 var(--accent, #22d3ee);
     }
+
+    /* Chevron: obvious hit target, rotates open/closed, dims when no children. */
     .cc-dn-chevron {
-        width: 1rem;
+        flex: 0 0 auto;
+        width: 1.4rem;
+        height: 1.4rem;
         display: inline-flex;
+        align-items: center;
         justify-content: center;
+        border-radius: 6px;
         cursor: pointer;
-        color: var(--bs-secondary-color, #94a3b8);
+        color: var(--text-secondary, var(--text-2, #9DB0CC));
+        transition: background-color .12s ease, color .12s ease;
     }
-    .cc-dn-icon { color: #f0ad4e; }
-    .cc-dn-name { cursor: pointer; }
-    .cc-dn-name:hover { text-decoration: underline; }
-    .cc-dn-desc { font-size: .85em; }
-    .cc-dn-spin { animation: cc-dn-spin 1s linear infinite; display:inline-block; }
+    .cc-dn-chevron:hover {
+        background: var(--accent-100, rgba(34,211,238,0.14));
+        color: var(--accent, #22d3ee);
+    }
+    .cc-dn-chevron-empty {
+        cursor: inherit;
+        pointer-events: none;
+    }
+    .cc-dn-chevron-empty:hover {
+        background: transparent;
+    }
+
+    /* Folder/container icon — distinct, warm, sized to read as a node marker. */
+    .cc-dn-icon {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        color: #f0b450;
+        font-size: 1.02rem;
+    }
+
+    /* Text block: name on top (primary), description demoted to a legible second line. */
+    .cc-dn-text {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.25;
+        min-width: 0;
+        overflow: hidden;
+    }
+    .cc-dn-name {
+        font-weight: 600;
+        font-size: .92rem;
+        color: var(--text-primary, var(--text, #E4EDFB));
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .cc-dn-desc {
+        font-size: .78rem;
+        color: var(--text-secondary, var(--text-2, #9DB0CC));
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* Loading / status rows */
+    .cc-dn-status { cursor: default; color: var(--text-secondary, var(--text-2, #9DB0CC)); }
+    .cc-dn-status:hover { background: transparent; }
+    .cc-dn-statustext { font-size: .85rem; }
+    .cc-dn-spin { animation: cc-dn-spin 1s linear infinite; display: inline-block; }
     @@keyframes cc-dn-spin { to { transform: rotate(360deg); } }
-    .cc-dn-error { color: var(--bs-danger, #dc3545); white-space: normal; }
-    .cc-dn-errtext { font-size: .85em; }
-    .cc-dn-retry { font-size: .85em; }
+
+    /* Error row + retry */
+    .cc-dn-error {
+        color: var(--bs-danger, #f1707a);
+        white-space: normal;
+        cursor: default;
+    }
+    .cc-dn-error:hover { background: transparent; }
+    .cc-dn-errtext { font-size: .82rem; }
+    .cc-dn-retry { font-size: .82rem; font-weight: 600; }
+
+    /* Selected-DN confirmation strip in the modal body. */
+    .cc-dn-selected {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .55rem .7rem;
+        border-radius: 8px;
+        background: var(--accent-100, rgba(34,211,238,0.14));
+        border: 1px solid var(--accent-200, rgba(34,211,238,0.22));
+    }
+    .cc-dn-selected-icon { color: var(--accent, #22d3ee); font-size: 1.05rem; flex: 0 0 auto; }
+    .cc-dn-selected-label {
+        font-size: .72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: var(--accent, #22d3ee);
+        flex: 0 0 auto;
+    }
+    .cc-dn-selected-dn {
+        font-size: .85rem;
+        color: var(--text-primary, var(--text, #E4EDFB));
+        background: transparent;
+        padding: 0;
+        word-break: break-all;
+        white-space: normal;
+    }
 </style>
