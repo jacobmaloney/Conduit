@@ -1,5 +1,7 @@
 @page "/connected-systems"
 @attribute [Authorize]
+@using System.Net.Http.Json
+@using Microsoft.Extensions.Configuration
 @using Conduit.Core.Models
 @using Conduit.DataAccess.Repositories
 @using Conduit.Sync.Connectors
@@ -16,6 +18,8 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject IWebHostEnvironment Environment
+@inject IHttpClientFactory HttpFactory
+@inject IConfiguration Configuration
 @inject Conduit.Sync.Security.CredentialProtector CredentialProtector
 @inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
 @inject Conduit.DataAccess.Repositories.ConnectionCredentialRepository CredRepo
@@ -490,6 +494,35 @@
                     {
                         <div class="conn-test-detail">@formTestMessage</div>
                     }
+                }
+
+                @* Day 5: IdentityCenter auto-registration status. Non-fatal — the
+                   connection is already saved when this shows. Retry re-runs the
+                   registration against the saved connection (no re-save). *@
+                @if (autoRegStatus is not null)
+                {
+                    <div class="conn-test-strip @(autoRegSuccess ? "ok" : "err")">
+                        <div class="conn-test-left">
+                            <i class="oi @(autoRegSuccess ? "oi-circle-check" : "oi-warning")"></i>
+                            <span>@autoRegStatus</span>
+                        </div>
+                        @if (!autoRegSuccess)
+                        {
+                            <button class="btn btn-outline-primary btn-sm" type="button"
+                                    @onclick="RetryAutoRegisterAsync" disabled="@autoRegInProgress">
+                                @if (autoRegInProgress)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                                    <span>Retrying…</span>
+                                }
+                                else
+                                {
+                                    <i class="oi oi-loop-circular"></i>
+                                    <span class="ms-1">Retry registration</span>
+                                }
+                            </button>
+                        }
+                    </div>
                 }
             </div>
             <div class="modal-footer">
@@ -1808,6 +1841,7 @@
         editingId = null;
         form = new Tenant { SystemType = "Emulator", IsActive = true };
         errorMessage = "";
+        ClearAutoRegStatus();
         ResetCreateCredentialState();
         showModal = true;
     }
@@ -1819,14 +1853,30 @@
         editingId = id;
         form = existing;
         errorMessage = "";
+        ClearAutoRegStatus();
         await LoadCreateCredentialsAsync(existing.Id, existing.SystemType);
         showModal = true;
     }
 
-    private void CloseModal()
+    private async Task CloseModal()
     {
         showModal = false;
         errorMessage = "";
+        // A connection may have been saved while the editor stayed open (e.g. IC
+        // auto-registration failed and the operator chose to close rather than
+        // retry). Refresh the grid so that saved system is reflected.
+        var hadAutoReg = autoRegTenantId is not null;
+        ClearAutoRegStatus();
+        if (hadAutoReg) await Load();
+    }
+
+    private void ClearAutoRegStatus()
+    {
+        autoRegStatus = null;
+        autoRegSuccess = false;
+        autoRegInProgress = false;
+        autoRegTenantId = null;
+        autoRegSlug = null;
     }
 
     private void OnNameChanged()
@@ -1918,6 +1968,25 @@
                 savedTenantId = created.Id;
             }
             await PersistCreateCredentialsAsync(savedTenantId);
+
+            // Auto-register Conduit back into IdentityCenter (Day 5). Only for
+            // IdentityCenter-type systems, and only after the credential (IC base
+            // URL + IC API key) is persisted above. Registration is NON-FATAL: the
+            // connection is already saved at this point. On failure we keep the
+            // modal open with a clear, retryable status; on success we close.
+            if (string.Equals(form.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+            {
+                var ok = await AutoRegisterWithIdentityCenterAsync(savedTenantId, form.Slug);
+                if (!ok)
+                {
+                    // Saved, but registration failed. Leave the editor open so the
+                    // operator sees the status and the Retry button. Refresh the
+                    // card grid underneath is deferred until they close.
+                    saving = false;
+                    return;
+                }
+            }
+
             showModal = false;
             await Load();
         }
@@ -1929,6 +1998,144 @@
         {
             saving = false;
         }
+    }
+
+    // ── Day 5: Conduit auto-registers into IdentityCenter ───────────────────────
+    //
+    // When an IdentityCenter-type connection is created/saved (it already carries
+    // IC's base URL + IC API key in the 'identitycenter' credential), Conduit mints
+    // its OWN api token and POSTs it to IC's /api/conduit/register so the IC↔Conduit
+    // PULL seam (IC reading Conduit's sync-run history) works with zero manual paste
+    // on the IC side. The IC API key authenticates the call AND — via IC's per-tenant
+    // key resolution (Day 4) — decides which IC tenant we register into.
+    //
+    // GRACEFUL + RETRYABLE: any failure (IC unreachable / 401 / bad URL) is folded
+    // into autoRegStatus and surfaced non-fatally; the connection stays saved and the
+    // operator can hit Retry. We do NOT mint a fresh token on every save — the token
+    // is named deterministically per IC connection and the prior one is replaced.
+
+    private bool autoRegInProgress;
+    private bool autoRegSuccess;
+    private string? autoRegStatus;
+    private Guid? autoRegTenantId;
+    private string? autoRegSlug;
+
+    // Stable, per-connection token name so re-save replaces (not duplicates) it.
+    private static string AutoRegTokenName(string slug) => $"ic-autoreg-{slug}";
+
+    private async Task<bool> AutoRegisterWithIdentityCenterAsync(Guid tenantId, string slug)
+    {
+        autoRegInProgress = true;
+        autoRegSuccess = false;
+        autoRegStatus = null;
+        autoRegTenantId = tenantId;
+        autoRegSlug = slug;
+        StateHasChanged();
+
+        try
+        {
+            // 1) Read back the IC credential we just persisted (base URL + IC key).
+            string? icBaseUrl = null, icApiKey = null;
+            try
+            {
+                var raw = await CredentialProtector.RetrieveAsync(tenantId, "identitycenter");
+                if (!string.IsNullOrEmpty(raw)
+                    && System.Text.Json.Nodes.JsonNode.Parse(raw) is System.Text.Json.Nodes.JsonObject jo)
+                {
+                    icBaseUrl = jo["BaseUrl"]?.GetValue<string>();
+                    icApiKey = jo["ApiKey"]?.GetValue<string>();
+                }
+            }
+            catch { /* fall through to the validation below */ }
+
+            if (string.IsNullOrWhiteSpace(icBaseUrl) || string.IsNullOrWhiteSpace(icApiKey))
+            {
+                autoRegStatus = "Connection saved, but the IdentityCenter base URL or API key could not be read back for auto-registration. Open Credentials & test, then Retry.";
+                return false;
+            }
+            icBaseUrl = icBaseUrl!.TrimEnd('/');
+
+            // 2) Mint (or replace) Conduit's own token for THIS IC connection. The IC
+            //    pull path is read-only history; today's token scheme that authorizes
+            //    the /api/v1/sync-runs* endpoints is the Admin scope (DECISION: see
+            //    flagged note — Conduit's run-history endpoints accept Admin/Tenant
+            //    bearer; Admin is used so IC can read CROSS-project history, which is
+            //    what the IC "Sync History (Conduit)" page shows). Replace any prior
+            //    auto-reg token first so saves don't accumulate tokens.
+            var tokenName = AutoRegTokenName(slug);
+            try
+            {
+                var existing = await Tokens.GetAllTokensAsync();
+                foreach (var t in existing.Where(t => string.Equals(t.Name, tokenName, StringComparison.OrdinalIgnoreCase)))
+                    await Tokens.DeleteTokenAsync(t.Id);
+            }
+            catch { /* best-effort cleanup; minting still proceeds */ }
+
+            string conduitToken = await Tokens.CreateTokenAsync(
+                name: tokenName,
+                description: $"Auto-registration token for IdentityCenter pull (connection '{slug}').",
+                expiresAt: null,
+                tenantId: null,
+                scope: "Admin",
+                fixedRawValue: null);
+
+            // 3) Conduit's own public base URL. Configurable via Conduit:PublicBaseUrl;
+            //    defaults to the URL the browser reached this app on (correct in prod —
+            //    reflects the real public host — and = http://localhost:5500 in dev).
+            var conduitBaseUrl = ResolveConduitPublicBaseUrl();
+
+            // 4) POST to IC. The IC API key goes in X-API-Key; the minted Conduit
+            //    token is the only secret we share back.
+            var client = HttpFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.Remove("X-API-Key");
+            client.DefaultRequestHeaders.Add("X-API-Key", icApiKey);
+
+            var body = new { conduitBaseUrl, conduitToken };
+            using var resp = await client.PostAsJsonAsync($"{icBaseUrl}/api/conduit/register", body);
+
+            if (resp.IsSuccessStatusCode)
+            {
+                autoRegSuccess = true;
+                autoRegStatus = $"Registered with IdentityCenter at {icBaseUrl}. IdentityCenter will now pull sync history from this Conduit.";
+                return true;
+            }
+
+            // Non-2xx: report status code without echoing any secret.
+            var reason = resp.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                ? "the IdentityCenter API key was rejected (401)"
+                : $"IdentityCenter returned HTTP {(int)resp.StatusCode}";
+            autoRegStatus = $"Connection saved, but auto-registration with IdentityCenter failed: {reason}. You can Retry.";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Transport failure (IC unreachable, DNS, TLS). Never include the token.
+            autoRegStatus = $"Connection saved, but auto-registration with IdentityCenter failed: {ex.Message}. You can Retry.";
+            return false;
+        }
+        finally
+        {
+            autoRegInProgress = false;
+            StateHasChanged();
+        }
+    }
+
+    // Retry handler bound to the status banner's button. Re-runs registration
+    // against the already-saved connection (no re-save needed).
+    private async Task RetryAutoRegisterAsync()
+    {
+        if (autoRegTenantId is null || string.IsNullOrEmpty(autoRegSlug)) return;
+        await AutoRegisterWithIdentityCenterAsync(autoRegTenantId.Value, autoRegSlug!);
+    }
+
+    private string ResolveConduitPublicBaseUrl()
+    {
+        var configured = Configuration["Conduit:PublicBaseUrl"];
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured.TrimEnd('/');
+        // Request-derived: the host the operator actually reached Conduit on.
+        return Navigation.BaseUri.TrimEnd('/');
     }
 
     private async Task DeactivateSystem(TenantStats s)
