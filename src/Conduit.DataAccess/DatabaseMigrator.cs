@@ -1056,6 +1056,34 @@ END;
 "
             });
 
+            // Migration 22: Per-endpoint IdentityCenter table selection. Moves the
+            // IC table choice (Objects | Identities) OFF the connection credential and
+            // ONTO the Sync Project's two endpoints, so ONE IdentityCenter connection
+            // can be source=Identities AND sink=Objects in a single project
+            // (IC/Identities → IC/Objects). The columns are only meaningful when that
+            // endpoint's connector is IdentityCenter; null/ignored for every other
+            // connector. Back-compat: NULL is read as "Objects" by the connector, so
+            // pre-existing AD→IC/Objects projects keep working unchanged.
+            //
+            // Additive + idempotent: both column adds are guarded by COL_LENGTH.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 22,
+                Name = "SyncProjects per-endpoint IC table (SourceTable/SinkTable)",
+                Description = "Adds SyncProjects.SourceTable + SinkTable (nullable 'Objects'|'Identities'); relocates the IdentityCenter table choice from the connection credential to the project's source/sink endpoints. NULL = Objects (back-compat).",
+                SqlScript = @"
+IF COL_LENGTH('dbo.SyncProjects','SourceTable') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [SourceTable] NVARCHAR(20) NULL;
+END;
+
+IF COL_LENGTH('dbo.SyncProjects','SinkTable') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [SinkTable] NVARCHAR(20) NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

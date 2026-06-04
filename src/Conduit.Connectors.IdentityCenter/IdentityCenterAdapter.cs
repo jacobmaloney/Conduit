@@ -50,22 +50,13 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
             {
                 new CredentialFieldSpec { Key = "BaseUrl", Label = "Base URL", Placeholder = "https://identitycenter.local:7048", IsRequired = true },
                 new CredentialFieldSpec { Key = "ApiKey",  Label = "API Key",  IsRequired = true, IsSecret = true },
-                // Table selector — which IC table THIS endpoint reads from / writes to.
-                // Independent per credential side, so a project can SOURCE from
-                // Identities and SINK into Objects (IC/Identities → IC/Objects).
-                // Objects = directory accounts (/api/objects/*); Identities = people
-                // golden records (/api/identities/*). Default Objects (pre-existing
-                // behaviour). The connection editor renders this as a dropdown via
-                // AllowedValues.
-                new CredentialFieldSpec
-                {
-                    Key = "Table",
-                    Label = "IC Table",
-                    Help = "Which IdentityCenter table this endpoint syncs: Objects (directory accounts) or Identities (people).",
-                    IsRequired = false,
-                    DefaultValue = "Objects",
-                    AllowedValues = new[] { "Objects", "Identities" },
-                },
+                // V22: the IC table (Objects | Identities) is NO LONGER a connection
+                // credential field. It moved onto the Sync Project's source/sink
+                // endpoints (SyncProject.SourceTable / SinkTable) so ONE IdentityCenter
+                // connection can be source=Identities AND sink=Objects in a single
+                // project (IC/Identities → IC/Objects). The connector reads it per side
+                // from IdentityCenterTableContext, which the orchestrator stamps from
+                // the project. Picked once in the New/Edit Sync Project wizard.
             }
         }
     };
@@ -99,10 +90,14 @@ internal static class IdentityCenterCredentialReader
     public const string CredentialName = "identitycenter";
 
     /// <summary>
-    /// Reads the IC credential for the GIVEN side so the table choice is read
-    /// from THAT side's stored blob — letting a project source from Identities
-    /// and sink into Objects independently. Falls back to the other side's blob
-    /// only when the requested side has none stored (single-credential installs).
+    /// Reads the IC credential for the GIVEN side. The credential blob now carries
+    /// ONLY BaseUrl + ApiKey; the table (Objects | Identities) is resolved per side
+    /// from <see cref="IdentityCenterTableContext"/>, which the orchestrator stamps
+    /// from the project's SourceTable / SinkTable (V22). This is what lets one IC
+    /// connection source from Identities AND sink into Objects in one project.
+    /// Falls back to the other side's blob only when the requested side has none
+    /// stored (single-credential installs) — the TABLE always tracks the requested
+    /// side regardless of which blob supplied the URL/key.
     /// </summary>
     public static async Task<IdentityCenterCredentials?> ReadAsync(
         CredentialProtector p, Guid tenantId, CredentialSide side = CredentialSide.Source)
@@ -123,10 +118,14 @@ internal static class IdentityCenterCredentialReader
             var url = doc.RootElement.TryGetProperty("BaseUrl", out var uEl) ? uEl.GetString() : null;
             var key = doc.RootElement.TryGetProperty("ApiKey",  out var kEl) ? kEl.GetString() : null;
             if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key)) return null;
-            var tableStr = doc.RootElement.TryGetProperty("Table", out var tEl) ? tEl.GetString() : null;
-            var table = string.Equals(tableStr, "Identities", StringComparison.OrdinalIgnoreCase)
+            // V22: table comes from the per-side project endpoint (ambient context the
+            // orchestrator stamps from SyncProject.SourceTable / SinkTable), NOT the
+            // credential blob. Explicit "Identities" → Identities; unset / unknown /
+            // "Objects" → Objects (back-compat default).
+            var tableKey = IdentityCenterTableContext.Resolve(side);
+            var table = string.Equals(tableKey, "Identities", StringComparison.OrdinalIgnoreCase)
                 ? IcTable.Identities
-                : IcTable.Objects;   // default + any unknown value → Objects (pre-existing behaviour)
+                : IcTable.Objects;
             return new IdentityCenterCredentials(url!.TrimEnd('/'), key!, table);
         }
         catch { return null; }

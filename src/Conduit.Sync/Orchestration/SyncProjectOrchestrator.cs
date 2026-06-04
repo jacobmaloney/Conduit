@@ -206,6 +206,15 @@ public sealed class SyncProjectOrchestrator
             CredentialNameContext.Source = project.SourceCredentialName;
             CredentialNameContext.Sink = project.SinkCredentialName;
 
+            // V22: per-endpoint IdentityCenter table selection. Push the project's
+            // SourceTable / SinkTable onto the ambient table context so the IC
+            // connector reads the right table per side (Objects | Identities). Set
+            // by string key (no compile-time dep on the connector enum) — the
+            // IdentityCenter connector resolves it; other connectors ignore it.
+            // Null/unset → the connector defaults to Objects (back-compat).
+            IdentityCenterTableContext.Source = project.SourceTable;
+            IdentityCenterTableContext.Sink = project.SinkTable;
+
             var source = sourceAdapter.CreateSource(sourceTenant.Id)
                 ?? throw new InvalidOperationException($"Source tenant '{sourceTenant.Name}' ({sourceTenant.SystemType}) does not support source operations.");
             var sink = sinkAdapter.CreateSink(sinkTenant.Id)

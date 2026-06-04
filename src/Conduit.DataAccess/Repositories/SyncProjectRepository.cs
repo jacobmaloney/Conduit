@@ -44,12 +44,12 @@ public class SyncProjectRepository : BaseRepository
         const string sql = @"
             INSERT INTO SyncProjects
                 (Id, WorkspaceId, Name, Description, SourceTenantId, SinkTenantId, ObjectClass,
-                 SourceCredentialName, SinkCredentialName,
+                 SourceCredentialName, SinkCredentialName, SourceTable, SinkTable,
                  CronSchedule, IsEnabled, IsRunning, SkipUnchanged, LastRunAt, LastRunStatus, LastRunId,
                  NextScheduledRunAt, TotalRuns, SuccessfulRuns, FailedRuns, CreatedAt, LastModified)
             VALUES
                 (@Id, @WorkspaceId, @Name, @Description, @SourceTenantId, @SinkTenantId, @ObjectClass,
-                 @SourceCredentialName, @SinkCredentialName,
+                 @SourceCredentialName, @SinkCredentialName, @SourceTable, @SinkTable,
                  @CronSchedule, @IsEnabled, @IsRunning, @SkipUnchanged, @LastRunAt, @LastRunStatus, @LastRunId,
                  @NextScheduledRunAt, @TotalRuns, @SuccessfulRuns, @FailedRuns, @CreatedAt, @LastModified);";
         await ExecuteAsync(sql, p);
@@ -69,6 +69,8 @@ public class SyncProjectRepository : BaseRepository
                    ObjectClass = @ObjectClass,
                    SourceCredentialName = @SourceCredentialName,
                    SinkCredentialName = @SinkCredentialName,
+                   SourceTable = @SourceTable,
+                   SinkTable = @SinkTable,
                    CronSchedule = @CronSchedule,
                    IsEnabled = @IsEnabled,
                    SkipUnchanged = @SkipUnchanged,
@@ -108,12 +110,12 @@ public class SyncProjectRepository : BaseRepository
             await conn.ExecuteAsync(@"
                 INSERT INTO SyncProjects
                     (Id, WorkspaceId, Name, Description, SourceTenantId, SinkTenantId, ObjectClass,
-                     SourceCredentialName, SinkCredentialName,
+                     SourceCredentialName, SinkCredentialName, SourceTable, SinkTable,
                      CronSchedule, IsEnabled, IsRunning, SkipUnchanged, LastRunAt, LastRunStatus, LastRunId,
                      NextScheduledRunAt, TotalRuns, SuccessfulRuns, FailedRuns, CreatedAt, LastModified)
                 VALUES
                     (@Id, @WorkspaceId, @Name, @Description, @SourceTenantId, @SinkTenantId, @ObjectClass,
-                     @SourceCredentialName, @SinkCredentialName,
+                     @SourceCredentialName, @SinkCredentialName, @SourceTable, @SinkTable,
                      NULL, 0, 0, @SkipUnchanged, NULL, NULL, NULL,
                      NULL, 0, 0, 0, @CreatedAt, @LastModified);",
                 new
@@ -127,6 +129,8 @@ public class SyncProjectRepository : BaseRepository
                     source.ObjectClass,
                     source.SourceCredentialName,
                     source.SinkCredentialName,
+                    source.SourceTable,
+                    source.SinkTable,
                     source.SkipUnchanged,
                     CreatedAt = now,
                     LastModified = now

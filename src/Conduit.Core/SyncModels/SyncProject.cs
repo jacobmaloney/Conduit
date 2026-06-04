@@ -40,6 +40,24 @@ public class SyncProject
     /// <summary>Phase 2 multi-credential UX: which credential name on the sink tenant.</summary>
     public string? SinkCredentialName { get; set; }
 
+    /// <summary>
+    /// Per-endpoint IdentityCenter table selection (V22). When the SOURCE endpoint's
+    /// connector is IdentityCenter, this picks which IC table the project reads FROM:
+    /// "Objects" (directory accounts, /api/objects/*) or "Identities" (people golden
+    /// records, /api/identities/*). NULL/empty = "Objects" (back-compat default).
+    /// Meaningless and ignored when the source connector is not IdentityCenter.
+    /// </summary>
+    public string? SourceTable { get; set; }
+
+    /// <summary>
+    /// Per-endpoint IdentityCenter table selection (V22). When the SINK endpoint's
+    /// connector is IdentityCenter, this picks which IC table the project writes TO:
+    /// "Objects" or "Identities". NULL/empty = "Objects" (back-compat default).
+    /// Tombstone soft-delete only applies to an Objects sink; an Identities sink is a
+    /// safe no-op. Meaningless and ignored when the sink connector is not IdentityCenter.
+    /// </summary>
+    public string? SinkTable { get; set; }
+
     /// <summary>Cron expression for scheduled execution. Null = manual run only.</summary>
     public string? CronSchedule { get; set; }
 

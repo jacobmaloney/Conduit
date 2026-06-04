@@ -432,6 +432,18 @@
                         <small class="form-text text-muted">Only connectors that can read are listed. The chosen target is excluded.</small>
                     </div>
 
+                    @if (AutoGenSourceIsIdentityCenter)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Source Table</label>
+                            <select class="form-select" @bind="autoGenSourceTable">
+                                <option value="Objects">Objects (directory accounts)</option>
+                                <option value="Identities">Identities (people)</option>
+                            </select>
+                            <small class="form-text text-muted">Which IdentityCenter table to read from.</small>
+                        </div>
+                    }
+
                     <div class="mb-3 text-center text-muted">
                         <i class="fas fa-arrow-down-long"></i> <span class="small">data flows to</span>
                     </div>
@@ -447,6 +459,17 @@
                         </select>
                         <small class="form-text text-muted">Only connectors that can write are listed. The chosen source is excluded.</small>
                     </div>
+                    @if (AutoGenSinkIsIdentityCenter)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Target Table</label>
+                            <select class="form-select" @bind="autoGenSinkTable">
+                                <option value="Objects">Objects (directory accounts)</option>
+                                <option value="Identities">Identities (people)</option>
+                            </select>
+                            <small class="form-text text-muted">Which IdentityCenter table to write to.</small>
+                        </div>
+                    }
                     @if (AutoGenIsSelfSync)
                     {
                         <div class="alert alert-danger py-2">
@@ -878,6 +901,17 @@
                                                     }
                                                 </div>
                                             }
+                                            @if (SourceIsIdentityCenter)
+                                            {
+                                                <div class="mt-2">
+                                                    <label class="form-label fw-semibold mb-1">Source Table</label>
+                                                    <select class="form-select" @bind="form.SourceTable">
+                                                        <option value="Objects">Objects (directory accounts)</option>
+                                                        <option value="Identities">Identities (people)</option>
+                                                    </select>
+                                                    <small class="form-text text-muted">Which IdentityCenter table to read from.</small>
+                                                </div>
+                                            }
                                             @if (editingId.HasValue)
                                             {
                                                 <small class="form-text text-muted">Source cannot change after creation.</small>
@@ -925,6 +959,17 @@
                                                     {
                                                         <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
                                                     }
+                                                </div>
+                                            }
+                                            @if (SinkIsIdentityCenter)
+                                            {
+                                                <div class="mt-2">
+                                                    <label class="form-label fw-semibold mb-1">Target Table</label>
+                                                    <select class="form-select" @bind="form.SinkTable">
+                                                        <option value="Objects">Objects (directory accounts)</option>
+                                                        <option value="Identities">Identities (people)</option>
+                                                    </select>
+                                                    <small class="form-text text-muted">Which IdentityCenter table to write to.</small>
                                                 </div>
                                             }
                                             @if (editingId.HasValue)
@@ -1678,10 +1723,20 @@
                             }
                             <dt>Source <span class="text-muted">(read from)</span></dt>
                             <dd>@TenantName(form.SourceTenantId) <span class="text-muted">(@TenantType(form.SourceTenantId))</span>@(string.IsNullOrEmpty(form.SourceCredentialName) ? "" : $" · cred: {form.SourceCredentialName}")</dd>
+                            @if (SourceIsIdentityCenter)
+                            {
+                                <dt>Source table</dt>
+                                <dd>@(string.IsNullOrEmpty(form.SourceTable) ? "Objects" : form.SourceTable)</dd>
+                            }
                             <dt>Direction</dt>
                             <dd><span class="sync-dir-tag">FROM</span> @TenantName(form.SourceTenantId) <i class="fas fa-arrow-right mx-1"></i> <span class="sync-dir-tag">TO</span> @TenantName(form.SinkTenantId)</dd>
                             <dt>Target <span class="text-muted">(write to)</span></dt>
                             <dd>@TenantName(form.SinkTenantId) <span class="text-muted">(@TenantType(form.SinkTenantId))</span>@(string.IsNullOrEmpty(form.SinkCredentialName) ? "" : $" · cred: {form.SinkCredentialName}")</dd>
+                            @if (SinkIsIdentityCenter)
+                            {
+                                <dt>Target table</dt>
+                                <dd>@(string.IsNullOrEmpty(form.SinkTable) ? "Objects" : form.SinkTable)</dd>
+                            }
                             <dt>Object class</dt>
                             <dd>@form.ObjectClass</dd>
                             <dt>Workflow template</dt>
@@ -2255,6 +2310,32 @@
         && tenantById.TryGetValue(form.SinkTenantId, out var t)
         && string.Equals(t.SystemType, "EntraID", StringComparison.OrdinalIgnoreCase);
 
+    // V22: per-endpoint IdentityCenter table picker. The IC table (Objects |
+    // Identities) is chosen per project endpoint, not on the connection. Show the
+    // dropdown ONLY when that endpoint's connector is IdentityCenter; hide it for
+    // every other connector. The bound SourceTable / SinkTable default to "Objects"
+    // when unset so AD → IC/Objects keeps working without the operator touching it.
+    private bool SourceIsIdentityCenter =>
+        form.SourceTenantId != Guid.Empty
+        && tenantById.TryGetValue(form.SourceTenantId, out var t)
+        && string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase);
+
+    private bool SinkIsIdentityCenter =>
+        form.SinkTenantId != Guid.Empty
+        && tenantById.TryGetValue(form.SinkTenantId, out var t)
+        && string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase);
+
+    // Auto-Generate modal counterparts — keyed off the modal's own source/sink.
+    private bool AutoGenSourceIsIdentityCenter =>
+        autoGenSourceId != Guid.Empty
+        && tenantById.TryGetValue(autoGenSourceId, out var t)
+        && string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase);
+
+    private bool AutoGenSinkIsIdentityCenter =>
+        autoGenSinkId != Guid.Empty
+        && tenantById.TryGetValue(autoGenSinkId, out var t)
+        && string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase);
+
     private bool ShowAssignmentTemplatePanel =>
         SinkIsAwsSso
         && string.Equals(form.ObjectClass, "Assignment", StringComparison.OrdinalIgnoreCase);
@@ -2387,6 +2468,10 @@
     private bool autoGenEnable = true;
     private bool autoGenInProgress;
     private string autoGenError = string.Empty;
+    // V22: per-endpoint IC table for auto-generated projects. Default Objects; only
+    // meaningful when that side is an IdentityCenter connector.
+    private string autoGenSourceTable = "Objects";
+    private string autoGenSinkTable = "Objects";
 
     private Tenant? AutoGenSource =>
         autoGenSourceId == Guid.Empty ? null : allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
@@ -2600,6 +2685,11 @@
             form.SinkTenantId = Guid.Empty;
         }
 
+        // V22: seed the IC table defaults to match whatever sides defaulted to an
+        // IC connection above (back-compat: AD → IC/Objects). Non-IC sides stay null.
+        form.SourceTable = SourceIsIdentityCenter ? "Objects" : null;
+        form.SinkTable = SinkIsIdentityCenter ? "Objects" : null;
+
         scopeForm = new SyncProjectScope { PageSize = 1000 };
         mappingForm = new List<AttributeMapping>();
         formError = string.Empty;
@@ -2697,6 +2787,8 @@
             SinkTenantId = selectedProject.SinkTenantId,
             SourceCredentialName = selectedProject.SourceCredentialName,
             SinkCredentialName = selectedProject.SinkCredentialName,
+            SourceTable = selectedProject.SourceTable,
+            SinkTable = selectedProject.SinkTable,
             ObjectClass = selectedProject.ObjectClass,
             CronSchedule = selectedProject.CronSchedule,
             IsEnabled = selectedProject.IsEnabled,
@@ -2832,12 +2924,31 @@
     private async Task OnSourceTenantChanged()
     {
         showSourceValidation = false;
+        // V22: default the IC table to Objects when an IC source is picked and the
+        // operator hasn't chosen yet (back-compat). Clear it when the source is no
+        // longer IC so a stale table value never persists on a non-IC endpoint.
+        if (SourceIsIdentityCenter)
+        {
+            if (string.IsNullOrEmpty(form.SourceTable)) form.SourceTable = "Objects";
+        }
+        else
+        {
+            form.SourceTable = null;
+        }
         await LoadCredentialsForFormAsync();
     }
 
     private async Task OnSinkTenantChanged()
     {
         showSinkValidation = false;
+        if (SinkIsIdentityCenter)
+        {
+            if (string.IsNullOrEmpty(form.SinkTable)) form.SinkTable = "Objects";
+        }
+        else
+        {
+            form.SinkTable = null;
+        }
         await LoadCredentialsForFormAsync();
     }
 
@@ -3429,6 +3540,8 @@
         autoGenCronSchedule = string.Empty;
         autoGenEnable = true;
         autoGenError = string.Empty;
+        autoGenSourceTable = "Objects";
+        autoGenSinkTable = "Objects";
         showAutoGenerateModal = true;
     }
 
@@ -3501,9 +3614,17 @@
         autoGenInProgress = true;
         try
         {
+            // V22: stamp the per-endpoint IC table onto each generated project. Only
+            // when that side is an IdentityCenter connector; otherwise leave null so
+            // the column stays meaningless for non-IC connectors.
+            var srcTable = AutoGenSourceIsIdentityCenter ? autoGenSourceTable : null;
+            var sinkTable = AutoGenSinkIsIdentityCenter ? autoGenSinkTable : null;
+
             foreach (var g in generated)
             {
                 g.Project.IsEnabled = autoGenEnable;
+                g.Project.SourceTable = srcTable;
+                g.Project.SinkTable = sinkTable;
                 await ProjectRepo.CreateAsync(g.Project);
                 await WorkflowRepo.CreateAsync(g.Workflow);
                 await WorkflowRepo.CreateStepAsync(g.Step);
