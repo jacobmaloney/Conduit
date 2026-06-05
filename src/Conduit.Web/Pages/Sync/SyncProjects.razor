@@ -469,14 +469,34 @@
                     </p>
 
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Mode</label>
-                        <select class="form-select" @bind="autoGenMode">
+                        <label class="form-label fw-bold">Template</label>
+                        <div class="autogen-tpl-grid">
                             @foreach (var m in AvailableModes)
                             {
-                                <option value="@m">@ModeLabel(m)</option>
+                                var mRef = m;
+                                var classes = AutoGenClassesForMode(mRef);
+                                var isSel = autoGenMode == mRef;
+                                var isRecommended = mRef == Conduit.Sync.Templates.GenerationMode.Core;
+                                <div class="autogen-tpl-card @(isSel ? "selected" : "")"
+                                     @onclick="() => SetAutoGenMode(mRef)">
+                                    <div class="autogen-tpl-card-head">
+                                        <span class="autogen-tpl-card-name">@ModeLabel(mRef)</span>
+                                        @if (isRecommended)
+                                        {
+                                            <span class="autogen-tpl-badge">Recommended</span>
+                                        }
+                                    </div>
+                                    <div class="autogen-tpl-card-count">@classes.Count class@(classes.Count == 1 ? "" : "es")</div>
+                                    <div class="autogen-tpl-card-classes">@AutoGenClassListLabel(classes)</div>
+                                </div>
                             }
-                        </select>
+                        </div>
                         <small class="form-text text-muted">@AutoGeneratePreviewText</small>
+                    </div>
+
+                    <div class="autogen-attr-note">
+                        <i class="fas fa-circle-info me-1"></i>
+                        Full user attributes (~40 fields including address, login timestamps, extension attributes) are mapped automatically per object class.
                     </div>
 
                     <div class="mb-3">
@@ -3110,6 +3130,38 @@
         {
             autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
         }
+    }
+
+    private void SetAutoGenMode(Conduit.Sync.Templates.GenerationMode mode)
+    {
+        autoGenMode = mode;
+    }
+
+    // The object classes a template card represents — same source of truth the
+    // generator uses, so the preview matches exactly what Auto-Generate builds.
+    // Before a source is chosen the cards fall back to the generic set so the
+    // user still sees representative classes.
+    private IReadOnlyList<string> AutoGenClassesForMode(Conduit.Sync.Templates.GenerationMode mode)
+    {
+        var type = AutoGenSource?.SystemType ?? string.Empty;
+        return ProjectGenerator.GetObjectClasses(type, mode);
+    }
+
+    // A friendly, capped, comma-joined class list for a template card.
+    private static string AutoGenClassListLabel(IReadOnlyList<string> classes)
+    {
+        if (classes.Count == 0)
+        {
+            return "No object classes";
+        }
+        const int cap = 6;
+        if (classes.Count <= cap)
+        {
+            return string.Join(", ", classes);
+        }
+        var shown = string.Join(", ", classes.Take(cap));
+        var remaining = classes.Count - cap;
+        return string.Concat(shown, ", +", remaining.ToString(), " more");
     }
 
     // Filtered project lists by tab.

@@ -3194,6 +3194,71 @@ details summary::-webkit-details-marker { color: var(--accent); }
 
 /* Bulk all-class step builder (IC-parity) — the manual analogue of Auto-Generate
    inside an existing project's Workflows tab. */
+/* ── Auto-Generate template cards (IC "Auto-Generate Sync Project" parity) ── */
+.autogen-tpl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 6px;
+}
+.autogen-tpl-card {
+    padding: 12px 14px;
+    border: 1px solid var(--border-2, rgba(120, 160, 220, 0.18));
+    border-radius: var(--radius-sm, 7px);
+    background: var(--panel-2, rgba(255, 255, 255, 0.02));
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+.autogen-tpl-card:hover {
+    border-color: var(--accent, #22D3EE);
+    background: var(--accent-50, rgba(34, 211, 238, 0.06));
+}
+.autogen-tpl-card.selected {
+    border-color: var(--accent, #22D3EE);
+    background: var(--accent-100, rgba(34, 211, 238, 0.14));
+    box-shadow: 0 0 0 1px var(--accent, #22D3EE) inset;
+}
+.autogen-tpl-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.autogen-tpl-card-name {
+    font-weight: 600;
+    color: var(--text, #E4EDFB);
+}
+.autogen-tpl-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 2px 6px;
+    border-radius: 999px;
+    color: #05202A;
+    background: var(--ok, #10B981);
+}
+.autogen-tpl-card-count {
+    font-size: 11px;
+    color: var(--text-3, #6B809E);
+}
+.autogen-tpl-card-classes {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-2, #9DB0CC);
+    line-height: 1.35;
+}
+.autogen-attr-note {
+    margin-bottom: 14px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--text-2, #9DB0CC);
+    border: 1px solid var(--border, rgba(120, 160, 220, 0.10));
+    border-radius: var(--radius-sm, 7px);
+    background: var(--accent-50, rgba(34, 211, 238, 0.06));
+}
+
 .workflow-bulk-builder {
     margin-bottom: 12px;
     padding: 12px;
