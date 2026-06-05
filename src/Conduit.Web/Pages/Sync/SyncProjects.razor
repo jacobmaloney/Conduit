@@ -6,6 +6,7 @@
 @using Conduit.Sync.Orchestration
 @using Conduit.Sync.Templates
 @using Conduit.Sync.Connectors
+@using Microsoft.Extensions.DependencyInjection
 @inject ConnectorRegistry Connectors
 @inject SyncProjectRepository ProjectRepo
 @inject SyncRunRepository RunRepo
@@ -13,6 +14,8 @@
 @inject ConnectionCredentialRepository CredRepo
 @inject WorkflowRepository WorkflowRepo
 @inject SyncProjectOrchestrator Orchestrator
+@inject IServiceScopeFactory ScopeFactory
+@inject Microsoft.Extensions.Logging.ILogger<SyncProjects> Logger
 @inject Conduit.Sync.Orchestration.SyncCancellationRegistry CancellationRegistry
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
@@ -4321,22 +4324,53 @@
     private async Task RunNowConfirmed()
     {
         if (selectedProject is null || selectedProject.IsRunning) return;
-        runNowInProgress = true;
-        try
+
+        var projectId = selectedProject.Id;
+        var projectName = selectedProject.Name;
+
+        // IC SystemCenter Run-Now pattern (WebPortal/Pages/Admin/SystemCenter.razor
+        // RunProjectNow): close the confirm, flip the project to Running, and start
+        // the run in the BACKGROUND so the UI thread is never blocked on the full
+        // (synchronous) orchestrator pass. The old code awaited ExecuteAsync inline,
+        // so the modal sat open with a spinner for the entire run — looking "stuck".
+        //
+        // Conduit twist over IC: the orchestrator is a SCOPED service tied to THIS
+        // circuit, and we navigate away to the live-progress view below. A bare
+        // Task.Run over the injected Orchestrator would have its scope (and DB
+        // connections) disposed out from under the run. So the background task
+        // resolves a FRESH orchestrator from a dedicated DI scope it owns and
+        // disposes itself — never the circuit's scoped services.
+        showRunConfirmModal = false;
+        runNowInProgress = false;
+
+        // Optimistic local flip so the project shows Running the instant the modal
+        // closes; the orchestrator persists IsRunning=1 a beat later and the
+        // run-history page reflects the authoritative state.
+        selectedProject.IsRunning = true;
+        await Reload();
+
+        _ = Task.Run(async () =>
         {
-            var runId = await Orchestrator.ExecuteAsync(selectedProject.Id, "Manual", CancellationToken.None);
-            showRunConfirmModal = false;
-            await Reload();
-            Navigation.NavigateTo($"/sync-history/{runId}");
-        }
-        catch (Exception ex)
-        {
-            toastError = $"Run failed: {ex.Message}";
-        }
-        finally
-        {
-            runNowInProgress = false;
-        }
+            try
+            {
+                using var scope = ScopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
+                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // The orchestrator stamps the SyncRun Failed and releases IsRunning
+                // on every exit path; surfacing here is best-effort logging only.
+                // The page has navigated away, so do NOT touch circuit-scoped UI
+                // state from this background context.
+                Logger.LogError(ex, "Background Run-Now failed for project {ProjectId} ({ProjectName})", projectId, projectName);
+            }
+        });
+
+        // Take the user to the project's live run history — the Running run row
+        // (and its per-step counts) updates there. This is Conduit's existing
+        // "View Live Progress" destination for an in-flight project.
+        Navigation.NavigateTo($"/sync-history?project={projectId}");
     }
 
     // ─── Stop-Sync modal ────────────────────────────────────────────────────
