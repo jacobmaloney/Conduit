@@ -43,7 +43,7 @@
     }
     else
     {
-        @if (ShowLegend)
+        @if (ShowLegend && !IsSingle)
         {
             <div class="st-legend">
                 <span class="st-legend-item"><span class="st-scope-glyph st-included" aria-hidden="true"></span> Explicitly Included</span>
@@ -56,16 +56,38 @@
                 </div>
             </div>
         }
+        else if (ShowLegend && IsSingle)
+        {
+            <div class="st-legend">
+                <span class="st-legend-item"><span class="st-scope-glyph st-single-on" aria-hidden="true"></span> Selected Base DN</span>
+                <span class="st-legend-item"><span class="st-scope-glyph st-notselected" aria-hidden="true"></span> Not selected</span>
+                <div class="st-legend-hint">
+                    Pick exactly one container as the Base DN. Selecting another replaces it.
+                </div>
+            </div>
+        }
 
         <div class="st-tree">
             @RenderNode(rootNode, 0)
         </div>
 
-        <div class="st-summary">
-            <span class="st-scope-glyph st-included" aria-hidden="true"></span>
-            <span class="st-summary-label">Scope</span>
-            <span class="st-summary-text">@SelectedScopes.Count included, @BlockedScopes.Count blocked</span>
-        </div>
+        @if (!IsSingle)
+        {
+            <div class="st-summary">
+                <span class="st-scope-glyph st-included" aria-hidden="true"></span>
+                <span class="st-summary-label">Scope</span>
+                <span class="st-summary-text">@SelectedScopes.Count included, @BlockedScopes.Count blocked</span>
+            </div>
+        }
+        else
+        {
+            var hasPick = !string.IsNullOrEmpty(SelectedDistinguishedName);
+            <div class="st-summary">
+                <span class="st-scope-glyph st-single-on" aria-hidden="true"></span>
+                <span class="st-summary-label">Base DN</span>
+                <span class="st-summary-text">@(hasPick ? SelectedDistinguishedName : "none selected")</span>
+            </div>
+        }
     }
 </div>
 
@@ -92,6 +114,26 @@
     /// </summary>
     [Parameter] public string? ContextKey { get; set; }
 
+    /// <summary>
+    /// Selection behavior. <see cref="ScopeSelectionMode.Multi"/> (DEFAULT) is the
+    /// IC-parity 4-state multi-select bound on <see cref="SelectedScopes"/> /
+    /// <see cref="BlockedScopes"/>. <see cref="ScopeSelectionMode.Single"/> picks
+    /// exactly one container (a Base DN) — radio-style, no Blocked state, surfaced via
+    /// <see cref="SelectedDistinguishedName"/> + <see cref="OnSingleSelected"/>.
+    /// The default MUST remain Multi so IC and the existing scope modal are unaffected.
+    /// </summary>
+    [Parameter] public ScopeSelectionMode SelectionMode { get; set; } = ScopeSelectionMode.Multi;
+
+    /// <summary>
+    /// SINGLE mode only: the currently-selected container DN. Two-way bindable.
+    /// Empty/null = nothing picked. Ignored in Multi mode.
+    /// </summary>
+    [Parameter] public string? SelectedDistinguishedName { get; set; }
+    [Parameter] public EventCallback<string?> SelectedDistinguishedNameChanged { get; set; }
+
+    /// <summary>SINGLE mode only: raised with the chosen DN each time the selection changes.</summary>
+    [Parameter] public EventCallback<string?> OnSingleSelected { get; set; }
+
     /// <summary>Show the 4-state legend above the tree. Default true.</summary>
     [Parameter] public bool ShowLegend { get; set; } = true;
 
@@ -103,6 +145,8 @@
     [Parameter] public bool DefaultRootWhenEmpty { get; set; } = true;
 
     [Parameter] public string LoadingText { get; set; } = "Loading containers…";
+
+    private bool IsSingle => SelectionMode == ScopeSelectionMode.Single;
 
     private TreeNode? rootNode;
     private bool IsLoading;
@@ -173,7 +217,8 @@
                 rootNode.Children.Add(new TreeNode { Model = n });
 
             // IC parity: default selection to the domain root when nothing is selected.
-            if (DefaultRootWhenEmpty && SelectedScopes.Count == 0 && BlockedScopes.Count == 0 && !string.IsNullOrEmpty(rootDn))
+            // Single mode never auto-selects — a Base DN is an explicit operator choice.
+            if (!IsSingle && DefaultRootWhenEmpty && SelectedScopes.Count == 0 && BlockedScopes.Count == 0 && !string.IsNullOrEmpty(rootDn))
             {
                 SelectedScopes.Add(rootDn);
                 await SelectedScopesChanged.InvokeAsync(SelectedScopes);
@@ -271,6 +316,23 @@
         StateHasChanged();
     }
 
+    /// <summary>
+    /// SINGLE mode: radio-style pick. Selecting a node makes it THE selection; selecting
+    /// it again clears it. Exactly one DN can be selected at a time. No Blocked state.
+    /// </summary>
+    private async Task SelectSingle(TreeNode node)
+    {
+        var dn = node.Dn;
+        if (string.IsNullOrWhiteSpace(dn)) return;
+
+        SelectedDistinguishedName =
+            string.Equals(SelectedDistinguishedName, dn, StringComparison.OrdinalIgnoreCase) ? null : dn;
+
+        await SelectedDistinguishedNameChanged.InvokeAsync(SelectedDistinguishedName);
+        await OnSingleSelected.InvokeAsync(SelectedDistinguishedName);
+        StateHasChanged();
+    }
+
     private ScopeState StateOf(string dn)
     {
         if (BlockedScopes.Contains(dn)) return ScopeState.Blocked;
@@ -341,9 +403,21 @@
             ScopeState.Inherited => "Inherited (ancestor included)",
             _ => "Not selected — click to include",
         };
-        var hasKids = node.Children.Count > 0 || node.Model.HasChildren;
 
-        <div class="st-row" style="padding-left:@($"{depth * 16}px")">
+        // SINGLE mode overrides the glyph + click: radio-style pick, no Blocked/Inherited.
+        var isSinglePicked = IsSingle && string.Equals(SelectedDistinguishedName, node.Dn, StringComparison.OrdinalIgnoreCase);
+        if (IsSingle)
+        {
+            scopeClass = isSinglePicked ? "st-scope-glyph st-single-on" : "st-scope-glyph st-notselected";
+            scopeTitle = isSinglePicked ? "Selected Base DN — click to clear" : "Click to use as Base DN";
+        }
+
+        var hasKids = node.Children.Count > 0 || node.Model.HasChildren;
+        // One handler for the scope glyph: 4-state cycle in Multi, radio pick in Single.
+        Func<Task> scopeClick = IsSingle ? (() => SelectSingle(node)) : (() => CycleScopeState(node));
+        var rowClass = isSinglePicked ? "st-row st-row-picked" : "st-row";
+
+        <div class="@rowClass" style="padding-left:@($"{depth * 16}px")">
             @if (hasKids)
             {
                 <span class="st-chevron @(node.IsExpanded ? "st-chevron-open" : "")"
@@ -356,7 +430,7 @@
             }
 
             <span class="@scopeClass" role="button" title="@scopeTitle"
-                  @onclick="@(() => CycleScopeState(node))" @onclick:stopPropagation></span>
+                  @onclick="@scopeClick" @onclick:stopPropagation></span>
 
             <span class="st-typeicon @TypeIconClass(node.Model.NodeType)" aria-hidden="true"></span>
 

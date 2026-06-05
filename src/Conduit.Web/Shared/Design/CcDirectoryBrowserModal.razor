@@ -30,7 +30,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">
-                        <i class="bi bi-diagram-3 me-2"></i>@(ScopeMode ? "Select Scope Locations" : "Browse containers")
+                        <i class="bi bi-diagram-3 me-2"></i>@(ScopeMode ? "Select Scope Locations" : "Select Base DN")
                     </h5>
                     <button type="button" class="btn-close" @onclick="Cancel" aria-label="Close"></button>
                 </div>
@@ -69,8 +69,12 @@
                     }
                     else
                     {
+                        @* Single-select Base DN picker — the SAME shared ScopeTree as the
+                           scope modal, in Single mode (radio-style, exactly one container,
+                           no Blocked state). Picking a node sets selectedDn; the text field
+                           in the wizard stays editable for manual entry. *@
                         <p class="text-muted small mb-3">
-                            Select a container to use as the Base DN for this read.
+                            Select a single container to use as the Base DN for this read.
                             Only objects within it (and its children) are synchronized.
                         </p>
 
@@ -80,7 +84,7 @@
                                 <div class="spinner-border text-primary" role="status">
                                     <span class="visually-hidden">Loading…</span>
                                 </div>
-                                <p class="mt-2 mb-0 text-muted">Binding and loading containers…</p>
+                                <p class="mt-2 mb-0 text-muted">Binding to the source directory…</p>
                             </div>
                         }
                         else if (!string.IsNullOrEmpty(ErrorMessage))
@@ -89,30 +93,14 @@
                                 <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
                             </div>
                         }
-                        else if (rootNodes.Count == 0)
+                        else if (_scopeDataSource is not null)
                         {
-                            <div class="alert alert-info mb-0" role="alert">
-                                <i class="bi bi-info-circle me-2"></i>
-                                No containers found under the directory root.
-                            </div>
-                        }
-                        else
-                        {
-                            <div class="cc-dn-tree">
-                                @foreach (var node in rootNodes)
-                                {
-                                    @RenderNode(node, 0)
-                                }
-                            </div>
-                        }
-
-                        @if (!string.IsNullOrEmpty(selectedDn))
-                        {
-                            <div class="cc-dn-selected mt-3">
-                                <i class="bi bi-check2-circle cc-dn-selected-icon"></i>
-                                <span class="cc-dn-selected-label">Selected</span>
-                                <code class="cc-dn-selected-dn">@selectedDn</code>
-                            </div>
+                            <ScopeTree DataSource="_scopeDataSource"
+                                       SelectionMode="ScopeSelectionMode.Single"
+                                       SelectedDistinguishedName="selectedDn"
+                                       SelectedDistinguishedNameChanged="OnSingleDnChanged"
+                                       DefaultRootWhenEmpty="false"
+                                       ContextKey="@_scopeContextKey" />
                         }
                     }
                 </div>
@@ -129,7 +117,7 @@
                     else
                     {
                         <button type="button" class="btn btn-primary" disabled="@(string.IsNullOrEmpty(selectedDn))" @onclick="Apply">
-                            <i class="bi bi-check-circle me-1"></i>Use this container
+                            <i class="bi bi-check-circle me-1"></i>Use this DN
                         </button>
                     }
                 </div>
@@ -171,21 +159,6 @@
     private IScopeDataSource? _scopeDataSource;
     private string? _scopeContextKey;
 
-    private readonly List<Node> rootNodes = new();
-
-    private sealed class Node
-    {
-        public string Name { get; set; } = "";
-        public string Dn { get; set; } = "";
-        public string? Description { get; set; }
-        public bool HasChildren { get; set; }
-        public bool IsExpanded { get; set; }
-        public bool IsLoading { get; set; }
-        public bool Loaded { get; set; }
-        public string? LoadError { get; set; }
-        public List<Node> Children { get; } = new();
-    }
-
     /// <summary>
     /// Open the browser for the given source tenant. <paramref name="credentialName"/>
     /// is the per-project source credential override (may be null/blank for the
@@ -200,7 +173,6 @@
         _credentialName = credentialName;
         selectedDn = null;
         ErrorMessage = null;
-        rootNodes.Clear();
         _browser = null;
         _scopeDataSource = null;
         IsVisible = true;
@@ -238,7 +210,6 @@
         _credentialName = credentialName;
         selectedDn = null;
         ErrorMessage = null;
-        rootNodes.Clear();
         _browser = null;
         _scopeDataSource = null;
         IsVisible = true;
@@ -283,99 +254,21 @@
             return;
         }
 
-        // Option-A pilot: scope mode delegates ALL loading to the shared ScopeTree
-        // via the adapter — the modal no longer hand-loads/renders the scope tree.
-        if (ScopeMode)
-        {
-            _scopeDataSource = new ConduitScopeDataSource(_browser, _credentialName);
-            _scopeContextKey = Guid.NewGuid().ToString("N");
-            return;
-        }
-
-        // Single-pick (Base DN) mode keeps the modal's own lazy tree unchanged.
-        try
-        {
-            var result = await _browser.BrowseContainersAsync(null, CancellationToken.None);
-            if (!string.IsNullOrEmpty(result.ErrorMessage))
-            {
-                ErrorMessage = result.ErrorMessage;
-                return;
-            }
-            foreach (var n in result.Nodes)
-                rootNodes.Add(ToNode(n));
-        }
-        catch (Exception ex)
-        {
-            ErrorMessage = ex.Message;
-        }
+        // Option-A pilot: BOTH modes now delegate ALL loading + rendering to the shared
+        // ScopeTree via the adapter — multi-select scope mode AND single-select Base DN
+        // mode run the SAME component code (Single just flips SelectionMode). The modal
+        // no longer hand-loads/renders its own tree.
+        _scopeDataSource = new ConduitScopeDataSource(_browser, _credentialName);
+        _scopeContextKey = Guid.NewGuid().ToString("N");
     }
 
-    private static Node ToNode(Conduit.Sync.Connectors.DirectoryContainerNode n) => new()
+    /// <summary>
+    /// Single-select callback from the shared ScopeTree (Base DN mode). The tree is
+    /// radio-style, so this is the one chosen DN (or null when cleared).
+    /// </summary>
+    private void OnSingleDnChanged(string? dn)
     {
-        Name = n.Name,
-        Dn = n.DistinguishedName,
-        Description = n.Description,
-        HasChildren = n.HasChildren
-    };
-
-    private async Task ToggleAsync(Node node)
-    {
-        if (_browser is null) return;
-
-        if (!node.IsExpanded && !node.Loaded)
-        {
-            node.IsLoading = true;
-            node.LoadError = null;
-            StateHasChanged();
-            using var scope = Conduit.Sync.Security.CredentialNameContext.Push(_credentialName, null);
-            try
-            {
-                var result = await _browser.BrowseContainersAsync(node.Dn, CancellationToken.None);
-                node.Children.Clear();
-                if (!string.IsNullOrEmpty(result.ErrorMessage))
-                {
-                    // Surface the child-load failure on the node instead of
-                    // silently collapsing it to a phantom leaf. A swallowed error
-                    // here is exactly what reads as "can't expand the tree".
-                    node.LoadError = result.ErrorMessage;
-                    node.Loaded = false; // allow retry on next expand
-                }
-                else
-                {
-                    foreach (var c in result.Nodes)
-                        node.Children.Add(ToNode(c));
-                    node.HasChildren = node.Children.Count > 0;
-                    node.Loaded = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                node.Children.Clear();
-                node.LoadError = ex.Message;
-                node.Loaded = false; // allow retry on next expand
-            }
-            finally
-            {
-                node.IsLoading = false;
-            }
-        }
-
-        node.IsExpanded = !node.IsExpanded;
-        StateHasChanged();
-    }
-
-    private async Task RetryAsync(Node node)
-    {
-        // Node is still unloaded after a failed expand (Loaded==false), so just
-        // re-run the load path. Collapse first so ToggleAsync takes the load branch.
-        node.IsExpanded = false;
-        node.LoadError = null;
-        await ToggleAsync(node);
-    }
-
-    private void Select(Node node)
-    {
-        selectedDn = node.Dn;
+        selectedDn = dn;
         StateHasChanged();
     }
 
@@ -397,50 +290,6 @@
              new HashSet<string>(blockedScopes, StringComparer.OrdinalIgnoreCase)));
     }
 
-    /// <summary>
-    /// IC-parity 4-state cycle on the node's explicit state:
-    /// NotSelected → Included → Blocked → NotSelected.
-    /// Inherited is never an explicit state — it falls out of an Included ancestor.
-    /// </summary>
-    private void CycleScope(Node node)
-    {
-        var dn = node.Dn;
-        if (string.IsNullOrWhiteSpace(dn)) return;
-
-        if (blockedScopes.Contains(dn))
-        {
-            blockedScopes.Remove(dn); // Blocked → NotSelected
-        }
-        else if (includedScopes.Contains(dn))
-        {
-            includedScopes.Remove(dn); // Included → Blocked
-            blockedScopes.Add(dn);
-        }
-        else
-        {
-            includedScopes.Add(dn);    // NotSelected → Included
-        }
-        StateHasChanged();
-    }
-
-    /// <summary>True when an ancestor DN of <paramref name="dn"/> is explicitly Included.</summary>
-    private bool IsAncestorIncluded(string dn) => IsAncestorInSet(dn, includedScopes);
-
-    /// <summary>True when an ancestor DN of <paramref name="dn"/> is explicitly Blocked.</summary>
-    private bool IsAncestorBlocked(string dn) => IsAncestorInSet(dn, blockedScopes);
-
-    private static bool IsAncestorInSet(string dn, HashSet<string> set)
-    {
-        if (string.IsNullOrEmpty(dn) || set.Count == 0) return false;
-        var parts = dn.Split(',');
-        for (int i = 1; i < parts.Length; i++)
-        {
-            var ancestor = string.Join(",", parts.Skip(i));
-            if (set.Contains(ancestor)) return true;
-        }
-        return false;
-    }
-
     private void Cancel()
     {
         IsVisible = false;
@@ -448,86 +297,6 @@
     }
 
     public void Dispose() { }
-
-    private RenderFragment RenderNode(Node node, int depth) => __builder =>
-    {
-        var isSelectedRow = !ScopeMode && node.Dn == selectedDn;
-        var rowClass = isSelectedRow ? "cc-dn-row selected" : "cc-dn-row";
-        var indent = string.Concat((depth * 18).ToString(), "px");
-        // In scope mode the whole row toggles expand (drill-in); state is set via the
-        // icon. In single-pick mode the row selects.
-        Action rowClick = ScopeMode ? (() => { _ = ToggleAsync(node); }) : (() => Select(node));
-
-        <div class="@rowClass" style="padding-left:@indent" @onclick="@rowClick">
-            @if (node.HasChildren)
-            {
-                <span class="cc-dn-chevron" role="button" aria-expanded="@node.IsExpanded" @onclick="@(() => ToggleAsync(node))" @onclick:stopPropagation>
-                    <i class="bi @(node.IsExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
-                </span>
-            }
-            else
-            {
-                <span class="cc-dn-chevron cc-dn-chevron-empty"></span>
-            }
-            @if (ScopeMode)
-            {
-                var isBlocked = blockedScopes.Contains(node.Dn);
-                var isIncluded = includedScopes.Contains(node.Dn);
-                var ancestorBlocked = !isBlocked && !isIncluded && IsAncestorBlocked(node.Dn);
-                var ancestorIncluded = !isBlocked && !isIncluded && !ancestorBlocked && IsAncestorIncluded(node.Dn);
-                var scopeIcon =
-                    isBlocked        ? "bi-slash-circle-fill text-danger"
-                  : isIncluded       ? "bi-check-circle-fill text-success"
-                  : ancestorBlocked  ? "bi-dash-circle text-danger"
-                  : ancestorIncluded ? "bi-check-circle text-success"
-                  :                    "bi-circle text-muted";
-                var scopeTitle =
-                    isBlocked        ? "Explicitly Blocked — click to clear"
-                  : isIncluded       ? "Explicitly Included — click to block"
-                  : ancestorBlocked  ? "Inherited Blocked (ancestor blocked)"
-                  : ancestorIncluded ? "Inherited (ancestor included)"
-                  :                    "Not selected — click to include";
-                <span class="cc-dn-scope" role="button" title="@scopeTitle" @onclick="@(() => CycleScope(node))" @onclick:stopPropagation>
-                    <i class="bi @scopeIcon"></i>
-                </span>
-            }
-            <span class="cc-dn-icon"><i class="bi @(node.IsExpanded ? "bi-folder2-open" : "bi-folder-fill")"></i></span>
-            <span class="cc-dn-text" title="@node.Dn">
-                <span class="cc-dn-name">@node.Name</span>
-                @if (!string.IsNullOrEmpty(node.Description))
-                {
-                    <span class="cc-dn-desc">@node.Description</span>
-                }
-            </span>
-        </div>
-
-        @if (node.IsExpanded && node.IsLoading)
-        {
-            var loadIndent = string.Concat(((depth + 1) * 18).ToString(), "px");
-            <div class="cc-dn-row cc-dn-status" style="padding-left:@loadIndent">
-                <span class="cc-dn-chevron cc-dn-chevron-empty"></span>
-                <i class="bi bi-arrow-repeat cc-dn-spin me-1"></i>
-                <span class="cc-dn-statustext">Loading…</span>
-            </div>
-        }
-        else if (node.IsExpanded && !string.IsNullOrEmpty(node.LoadError))
-        {
-            var errIndent = string.Concat(((depth + 1) * 18).ToString(), "px");
-            <div class="cc-dn-row cc-dn-error" style="padding-left:@errIndent" title="@node.LoadError">
-                <span class="cc-dn-chevron cc-dn-chevron-empty"></span>
-                <i class="bi bi-exclamation-triangle me-1"></i>
-                <span class="cc-dn-errtext">@node.LoadError</span>
-                <button type="button" class="btn btn-link btn-sm p-0 ms-2 cc-dn-retry" @onclick="@(() => RetryAsync(node))" @onclick:stopPropagation>retry</button>
-            </div>
-        }
-        else if (node.IsExpanded)
-        {
-            @foreach (var child in node.Children)
-            {
-                @RenderNode(child, depth + 1)
-            }
-        }
-    };
 }
 
 <style>

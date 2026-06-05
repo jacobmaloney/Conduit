@@ -108,6 +108,15 @@
     background-color: var(--st-text-3);
     -webkit-mask-image: var(--svg-circle); mask-image: var(--svg-circle);
 }
+/* ── Single-select (Base DN) picked state — radio-style, accent-colored ── */
+.st-single-on {
+    background-color: var(--st-accent);
+    -webkit-mask-image: var(--svg-check-circle-fill); mask-image: var(--svg-check-circle-fill);
+}
+.st-row-picked {
+    background: var(--st-accent-50);
+    box-shadow: inset 2px 0 0 var(--st-accent);
+}
 
 /* ── Type icon (domain / ou / cn) ── */
 .st-typeicon {
