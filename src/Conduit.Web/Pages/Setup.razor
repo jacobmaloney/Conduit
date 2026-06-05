@@ -604,19 +604,30 @@
             return;
         }
 
-        // Apply setup
-        var success = await SetupService.ApplySetupAsync(config);
-        if (success)
+        // Apply setup. The service performs an authoritative server-side completion
+        // check; if setup is already done it throws and we send the operator to the
+        // login page instead of re-applying anything.
+        try
         {
-            setupComplete = true;
-            await Task.Delay(2000);
-            // Force a hard reload to ensure the application restarts and picks up the new configuration
-            await JSRuntime.InvokeVoidAsync("eval", "window.location.href = '/';");
+            var success = await SetupService.ApplySetupAsync(config);
+            if (success)
+            {
+                setupComplete = true;
+                await Task.Delay(2000);
+                // Force a hard reload to ensure the application restarts and picks up the new configuration
+                await JSRuntime.InvokeVoidAsync("eval", "window.location.href = '/';");
+            }
+            else
+            {
+                errors.Add("Setup failed. Please check the logs for more information.");
+                isProcessing = false;
+            }
         }
-        else
+        catch (SetupAlreadyCompletedException)
         {
-            errors.Add("Setup failed. Please check the logs for more information.");
+            // Setup was completed by another request/session. Bounce to the app root.
             isProcessing = false;
+            Navigation.NavigateTo("/", forceLoad: true);
         }
     }
 }

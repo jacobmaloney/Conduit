@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -56,12 +57,14 @@ namespace Conduit.Web.Middleware
                 requestBody = await reader.ReadToEndAsync();
                 context.Request.Body.Position = 0;
                 
-                // Log request body (truncated for security)
+                // Log request body (truncated AND secret-redacted). A SCIM password-set
+                // PATCH (or a token/secret field) must never land in the logs in clear.
                 if (!string.IsNullOrEmpty(requestBody))
                 {
-                    var truncatedBody = requestBody.Length > 500 
-                        ? requestBody.Substring(0, 500) + "..." 
-                        : requestBody;
+                    var safeBody = RedactSecrets(requestBody);
+                    var truncatedBody = safeBody.Length > 500
+                        ? safeBody.Substring(0, 500) + "..."
+                        : safeBody;
                     _logger.LogDebug($"[{requestId}] Request Body: {truncatedBody}");
                 }
             }
@@ -115,6 +118,10 @@ namespace Conduit.Web.Middleware
                 userName = context.User.Identity.Name;
             }
             
+            // The request body is also persisted to the audit DB below; redact secrets
+            // there too so password/token/secret values never rest in the audit table.
+            var auditRequestBody = requestBody != null ? RedactSecrets(requestBody) : null;
+
             // Build details for audit log
             var details = $"Auth: {authType}, Path: {path}";
             if (statusCode >= 400)
@@ -129,7 +136,7 @@ namespace Conduit.Web.Middleware
                 userId: userId,
                 userName: userName,
                 details: details,
-                oldValue: requestBody?.Length > 1000 ? requestBody.Substring(0, 1000) + "..." : requestBody,
+                oldValue: auditRequestBody?.Length > 1000 ? auditRequestBody.Substring(0, 1000) + "..." : auditRequestBody,
                 newValue: responseBody?.Length > 1000 ? responseBody.Substring(0, 1000) + "..." : responseBody,
                 statusCode: statusCode,
                 ipAddress: ipAddress,
@@ -150,6 +157,35 @@ namespace Conduit.Web.Middleware
                     $"  Duration: {stopwatch.ElapsedMilliseconds}ms\n" +
                     $"  Response: {responseBody?.Substring(0, Math.Min(responseBody.Length, 500))}");
             }
+        }
+
+        // Keys whose values are masked anywhere they appear in a logged/audited body.
+        private const string SecretKeyPattern = "password|secret|token|clientsecret|privatekey|credential|pwd|apikey";
+
+        // JSON value form:  "password": "hunter2"  ->  "password": "***REDACTED***"
+        private static readonly Regex JsonValueRegex = new(
+            "(\"(?:" + SecretKeyPattern + ")\"\\s*:\\s*)\"(?:[^\"\\\\]|\\\\.)*\"",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // SCIM PATCH form: {"path":"password", ... "value":"hunter2"} — when the op
+        // targets a secret path, mask the sibling "value".
+        private static readonly Regex ScimPatchValueRegex = new(
+            "(\"path\"\\s*:\\s*\"(?:" + SecretKeyPattern + ")\"[^}]*?\"value\"\\s*:\\s*)\"(?:[^\"\\\\]|\\\\.)*\"",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// Masks likely-secret values (password/secret/token/...) in a JSON body before
+        /// it is written to logs or the audit table. JSON-aware via regex so the rest of
+        /// the body stays useful for diagnostics. Non-JSON bodies pass through unchanged.
+        /// </summary>
+        private static string RedactSecrets(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return body;
+
+            const string mask = "\"***REDACTED***\"";
+            var result = JsonValueRegex.Replace(body, "$1" + mask);
+            result = ScimPatchValueRegex.Replace(result, "$1" + mask);
+            return result;
         }
     }
 }

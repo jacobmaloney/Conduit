@@ -364,6 +364,21 @@ namespace Conduit.Web.Services
         /// </summary>
         public async Task<bool> ApplySetupAsync(SetupConfiguration config)
         {
+            // SECURITY: server-side first-run gate. The /setup route is intentionally
+            // anonymous (first-run) and only client-side redirects away once complete.
+            // A crafted circuit/SignalR client could dispatch this submit before the
+            // redirect tears down the circuit, overwriting admin creds and rewriting
+            // the connection string. Re-verify completion HERE, authoritatively, before
+            // any state mutation. A second apply after completion is a hard refusal —
+            // never a credential overwrite. The legitimate first run (setup IS required)
+            // proceeds unchanged.
+            if (!await IsSetupRequiredAsync())
+            {
+                _logger.LogWarning("Rejected ApplySetupAsync: setup is already complete. " +
+                    "Refusing to overwrite admin credentials or connection string.");
+                throw new SetupAlreadyCompletedException();
+            }
+
             try
             {
                 // Update the live singleton so the rest of the app uses the new connection string
@@ -466,6 +481,18 @@ namespace Conduit.Web.Services
         {
             var (hash, salt) = PasswordHasher.Hash(config.AdminPassword);
 
+            // SECURITY (defense in depth): this path may only CREATE the first admin
+            // during first-run. If any active admin already exists, setup is complete
+            // and we must never silently UPDATE an existing admin's password from the
+            // anonymous wizard. ApplySetupAsync already gates this, but we re-assert
+            // here so the credential-overwrite branch can never be reached post-install
+            // even if this method is ever called from a new path.
+            if (await _repository.CountActiveAdminsAsync() > 0)
+            {
+                _logger.LogWarning("Rejected admin creation: an active portal admin already exists.");
+                throw new SetupAlreadyCompletedException();
+            }
+
             var existingId = await _repository.GetAdminIdByUserNameAsync(config.AdminUsername);
 
             if (existingId.HasValue)
@@ -479,6 +506,18 @@ namespace Conduit.Web.Services
                 _logger.LogInformation("Created portal admin: {Username}", config.AdminUsername);
             }
         }
+    }
+
+    /// <summary>
+    /// Thrown when the setup wizard is re-submitted after setup is already complete.
+    /// The /setup route is anonymous by design (first-run); this is the server-side
+    /// gate that refuses a second apply so admin credentials and the connection string
+    /// can never be overwritten post-install.
+    /// </summary>
+    public class SetupAlreadyCompletedException : InvalidOperationException
+    {
+        public SetupAlreadyCompletedException()
+            : base("Setup has already been completed. Re-running setup is not permitted.") { }
     }
 
     /// <summary>

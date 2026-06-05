@@ -118,6 +118,13 @@ var authBuilder = builder.Services.AddAuthentication(options =>
     options.SlidingExpiration = true;
     options.Cookie.Name = "scim.admin";
     options.Cookie.HttpOnly = true;
+    // SECURITY: SameSite=Lax (not Strict) is deliberate. Strict withholds the cookie
+    // on the cross-site-initiated top-level navigation that follows an OIDC IdP redirect
+    // back to our callback, which would bounce a freshly-SSO-authenticated user back to
+    // /login once. Lax sends the cookie on top-level GET navigations (the SSO-return
+    // shape) while still withholding it on cross-site POST/subresource requests — the
+    // CSRF-relevant protection. HttpOnly blocks script access; SecurePolicy is
+    // Always-over-HTTPS in production. Keep Lax to preserve the SSO return flow.
     options.Cookie.SameSite = SameSiteMode.Lax;
     // API callers (SCIM, generic REST, SQL emulator, ARS proxy) get a clean 401
     // with WWW-Authenticate: Bearer instead of an HTML login redirect. Browser
