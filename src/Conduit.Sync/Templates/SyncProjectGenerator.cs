@@ -21,17 +21,27 @@ namespace Conduit.Sync.Templates
     }
 
     /// <summary>
-    /// A fully-populated, in-memory sync-project graph for a single object class:
-    /// project -> one workflow -> one Mapping step -> scope + attribute mappings.
+    /// One generated Mapping step within a project's workflow: the step itself plus
+    /// its per-step scope and attribute mappings, all for a single object class.
+    /// </summary>
+    public class GeneratedSyncStep
+    {
+        public WorkflowStep Step { get; set; } = new();
+        public SyncProjectScope Scope { get; set; } = new();
+        public List<AttributeMapping> Mappings { get; set; } = new();
+    }
+
+    /// <summary>
+    /// A fully-populated, in-memory sync-project graph spanning MANY object classes
+    /// (V23 redesign): ONE project -> ONE workflow -> N Mapping steps, one per object
+    /// class, each step carrying its own ObjectClass + scope + attribute mappings.
     /// Nothing is persisted here; the caller writes it through the repositories.
     /// </summary>
     public class GeneratedSyncProject
     {
         public SyncProject Project { get; set; } = new();
         public Workflow Workflow { get; set; } = new();
-        public WorkflowStep Step { get; set; } = new();
-        public SyncProjectScope Scope { get; set; } = new();
-        public List<AttributeMapping> Mappings { get; set; } = new();
+        public List<GeneratedSyncStep> Steps { get; set; } = new();
     }
 
     public interface ISyncProjectGenerator
@@ -40,10 +50,13 @@ namespace Conduit.Sync.Templates
         IReadOnlyList<string> GetObjectClasses(string sourceSystemType, GenerationMode mode);
 
         /// <summary>
-        /// Builds one in-memory sync-project graph per object class in the source
-        /// connector's set for the given mode. Attribute mappings are auto-filled via
-        /// the Phase 2 <see cref="IAttributeMapService"/>. Project names are de-duplicated
-        /// against <paramref name="existingNames"/> (#2/#3 suffix like IC).
+        /// V23: builds ONE in-memory sync-project graph for the (source, sink, mode)
+        /// pair — a single project whose one workflow holds N Mapping steps, one per
+        /// object class in the source connector's set. Each step carries its own
+        /// ObjectClass, default scope/filter, and auto-filled attribute mappings (via
+        /// the Phase 2 <see cref="IAttributeMapService"/>). The project name is
+        /// de-duplicated against <paramref name="existingNames"/> (#2/#3 suffix like IC).
+        /// Returns a list for forward-compatibility, but today yields a single project.
         /// </summary>
         IReadOnlyList<GeneratedSyncProject> Generate(
             Tenant sourceTenant,
@@ -165,40 +178,50 @@ namespace Conduit.Sync.Templates
 
             var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
             var modeLabel = ModeLabel(mode);
-            var result = new List<GeneratedSyncProject>();
 
+            if (objectClasses.Count == 0)
+                return new List<GeneratedSyncProject>();
+
+            // V23: ONE project + ONE workflow for the whole (source, sink, mode) pair.
+            // Each object class becomes a Mapping STEP under that single workflow.
+            var projectId = Guid.NewGuid();
+            var workflowId = Guid.NewGuid();
+
+            var baseName = $"{sourceTenant.Name} to {sinkTenant.Name} ({modeLabel})";
+            var projectName = UniqueName(baseName, taken);
+            taken.Add(projectName);
+
+            var project = new SyncProject
+            {
+                Id = projectId,
+                Name = projectName,
+                Description = $"Auto-generated {modeLabel} sync from {sourceTenant.Name} to {sinkTenant.Name} ({objectClasses.Count} object class(es))",
+                SourceTenantId = sourceTenant.Id,
+                SinkTenantId = sinkTenant.Id,
+                // ObjectClass is NOT NULL on the project and is now only a back-compat
+                // fallback; the authoritative per-class data lives on each step. Stamp
+                // the first class so legacy readers and the fallback path stay sane.
+                ObjectClass = objectClasses[0],
+                CronSchedule = cron,
+                IsEnabled = false
+            };
+
+            var workflow = new Workflow
+            {
+                Id = workflowId,
+                SyncProjectId = projectId,
+                Name = $"{modeLabel} sync",
+                Ordinal = 0,
+                Enabled = true
+            };
+
+            var steps = new List<GeneratedSyncStep>(objectClasses.Count);
+            var ordinal = 0;
             foreach (var objectClass in objectClasses)
             {
-                var baseName = $"{sourceTenant.Name} to {sinkTenant.Name} - {objectClass} ({modeLabel})";
-                var projectName = UniqueName(baseName, taken);
-                taken.Add(projectName);
-
-                var projectId = Guid.NewGuid();
-                var workflowId = Guid.NewGuid();
                 var stepId = Guid.NewGuid();
 
-                var project = new SyncProject
-                {
-                    Id = projectId,
-                    Name = projectName,
-                    Description = $"Auto-generated {modeLabel} sync from {sourceTenant.Name} to {sinkTenant.Name}",
-                    SourceTenantId = sourceTenant.Id,
-                    SinkTenantId = sinkTenant.Id,
-                    ObjectClass = objectClass,
-                    CronSchedule = cron,
-                    IsEnabled = false
-                };
-
-                var workflow = new Workflow
-                {
-                    Id = workflowId,
-                    SyncProjectId = projectId,
-                    Name = $"{objectClass} sync",
-                    Ordinal = 0,
-                    Enabled = true
-                };
-
-                // Only a Mapping step. The orchestrator skips every non-Mapping (governance)
+                // Only Mapping steps. The orchestrator skips every non-Mapping (governance)
                 // step type, so we never emit Lookup / GroupMembership / License / SignInLog /
                 // UsageReport / AppRole steps — those are IC governance, not the free pump.
                 var step = new WorkflowStep
@@ -207,7 +230,8 @@ namespace Conduit.Sync.Templates
                     WorkflowId = workflowId,
                     Name = $"{objectClass} mapping",
                     StepType = WorkflowStepTypes.Mapping,
-                    Ordinal = 0,
+                    ObjectClass = objectClass,
+                    Ordinal = ordinal++,
                     Enabled = true
                 };
 
@@ -227,17 +251,23 @@ namespace Conduit.Sync.Templates
                     m.WorkflowStepId = stepId;
                 }
 
-                result.Add(new GeneratedSyncProject
+                steps.Add(new GeneratedSyncStep
                 {
-                    Project = project,
-                    Workflow = workflow,
                     Step = step,
                     Scope = scope,
                     Mappings = mappings
                 });
             }
 
-            return result;
+            return new List<GeneratedSyncProject>
+            {
+                new GeneratedSyncProject
+                {
+                    Project = project,
+                    Workflow = workflow,
+                    Steps = steps
+                }
+            };
         }
 
         private static string ModeLabel(GenerationMode mode) => mode switch

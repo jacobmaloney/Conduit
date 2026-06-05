@@ -431,9 +431,13 @@ public static class WorkflowTemplateCatalog
     /// Lowers a template into Workflow + WorkflowStep entities for the given
     /// project. Ordinals are assigned 0..N in the template's declared order.
     /// Caller persists via <see cref="DataAccess.Repositories.WorkflowRepository"/>.
+    /// V23: the single-class manual flow stamps <paramref name="objectClass"/> onto
+    /// every materialized step so each step carries its own class (instead of relying
+    /// on the project-level fallback). Null leaves steps class-less (orchestrator then
+    /// falls back to the project's class).
     /// </summary>
     public static (List<Workflow> Workflows, Dictionary<Guid, List<WorkflowStep>> StepsByWorkflow)
-        Materialize(WorkflowTemplate template, Guid syncProjectId)
+        Materialize(WorkflowTemplate template, Guid syncProjectId, string? objectClass = null)
     {
         var workflows = new List<Workflow>();
         var steps = new Dictionary<Guid, List<WorkflowStep>>();
@@ -460,6 +464,7 @@ public static class WorkflowTemplateCatalog
                     WorkflowId = wf.Id,
                     Name = ts.Name,
                     StepType = ts.StepType,
+                    ObjectClass = objectClass,
                     Ordinal = j,
                     Enabled = true
                 });

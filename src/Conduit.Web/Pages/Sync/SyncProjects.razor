@@ -186,9 +186,19 @@
                             <i class="fas fa-arrow-right mx-1"></i>
                             <span class="sync-dir-tag">TO</span> @TenantName(selectedProject.SinkTenantId)
                         </span>
-                        <span class="sync-badge sync-badge-workflows">
+                        <span class="sync-badge sync-badge-workflows" title="@string.Join(", ", SelectedMappingClasses)">
                             <i class="fas fa-layer-group me-1"></i>
-                            @selectedProject.ObjectClass
+                            @{
+                                var classCount = SelectedMappingClasses.Count;
+                            }
+                            @if (classCount == 1)
+                            {
+                                @SelectedMappingClasses[0]
+                            }
+                            else
+                            {
+                                @($"{classCount} object classes")
+                            }
                         </span>
                         @if (selectedProject.IsRunning)
                         {
@@ -322,8 +332,8 @@
                             </div>
                         </div>
                         <div class="sync-detail-cell">
-                            <div class="sync-detail-label">OBJECT CLASS</div>
-                            <div class="sync-detail-value">@selectedProject.ObjectClass</div>
+                            <div class="sync-detail-label">OBJECT CLASSES</div>
+                            <div class="sync-detail-value">@string.Join(", ", SelectedMappingClasses)</div>
                         </div>
                         <div class="sync-detail-cell">
                             <div class="sync-detail-label">SCHEDULE</div>
@@ -337,6 +347,54 @@
                             <div class="sync-detail-label">RUNS</div>
                             <div class="sync-detail-value">@selectedProject.TotalRuns total, @selectedProject.SuccessfulRuns ok, @selectedProject.FailedRuns failed</div>
                         </div>
+                    </div>
+
+                    <div class="sync-detail-section">
+                        <div class="sync-detail-section-title">Workflow steps</div>
+                        @{
+                            var mappingSteps = selectedProjectSteps
+                                .Where(s => s.StepType == WorkflowStepTypes.Mapping)
+                                .OrderBy(s => s.Ordinal)
+                                .ToList();
+                        }
+                        @if (mappingSteps.Count == 0)
+                        {
+                            <div class="sync-detail-empty-row">No workflow steps. This project runs its legacy project-level mapping (@selectedProject.ObjectClass).</div>
+                        }
+                        else
+                        {
+                            <table class="sync-runs-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Step</th>
+                                        <th>Object class</th>
+                                        <th>Enabled</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var st in mappingSteps)
+                                    {
+                                        var stClass = string.IsNullOrWhiteSpace(st.ObjectClass) ? selectedProject.ObjectClass : st.ObjectClass!;
+                                        <tr>
+                                            <td>@(st.Ordinal + 1)</td>
+                                            <td>@st.Name</td>
+                                            <td><span class="sync-badge sync-badge-workflows"><i class="fas fa-layer-group me-1"></i>@stClass</span></td>
+                                            <td>
+                                                @if (st.Enabled)
+                                                {
+                                                    <span class="sync-stat sync-stat-success"><i class="fas fa-check me-1"></i>Enabled</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="sync-stat sync-stat-failed"><i class="fas fa-pause me-1"></i>Disabled</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
                     </div>
 
                     <div class="sync-detail-section">
@@ -402,11 +460,12 @@
 
                     <p class="text-muted">
                         Pick a source and a target, then a mode. Data is read from the
-                        source and written to the target. We'll create one sync project
-                        per object class in the source connector's set for that mode,
-                        each with a Mapping workflow, a default scope filter, and
-                        passthrough attribute mappings auto-filled from the source → target
-                        attribute catalog. Per-class governance steps are an IC concern.
+                        source and written to the target. We'll create ONE sync project
+                        whose workflow holds a Mapping step per object class in the source
+                        connector's set for that mode — each step with its own object
+                        class, default scope filter, and passthrough attribute mappings
+                        auto-filled from the source → target attribute catalog. Per-class
+                        governance steps are an IC concern.
                     </p>
 
                     <div class="mb-3">
@@ -1090,8 +1149,16 @@
                     }
                     else if (formTab == "object")
                     {
+                        <div class="alert alert-secondary py-2 mb-3">
+                            <i class="fas fa-diagram-project me-1"></i>
+                            A sync project is a pipeline of <strong>workflow steps</strong> — each step carries its
+                            <strong>own object class</strong>, template, scope and mappings. Define the
+                            <strong>first step</strong> here; after the project exists, open the
+                            <strong>Workflows</strong> tab to add more steps for other object classes
+                            (users, groups, computers, …).
+                        </div>
                         <div class="mb-3">
-                            <label class="form-label fw-semibold">Object Class</label>
+                            <label class="form-label fw-semibold">First step — Object Class</label>
                             <select class="form-select" @bind="form.ObjectClass" @bind:after="OnObjectClassChanged">
                                 <option value="User">User</option>
                                 <option value="Group">Group</option>
@@ -1107,7 +1174,8 @@
                                 }
                             </select>
                             <small class="form-text text-muted">
-                                The kind of object this project reads from the source and writes to the target.
+                                The object class for this project's <strong>first workflow step</strong>. The class lives on
+                                the step, not the project — add steps for other classes from the Workflows tab later.
                             </small>
                         </div>
                         @* Context-aware workflow template picker (ARS Synchronization-Service model).
@@ -1496,6 +1564,37 @@
                                                 </select>
                                             </div>
                                         </div>
+                                        @if (string.Equals(st.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <div class="row g-3 mt-1">
+                                                <div class="col-md-7">
+                                                    <label class="form-label fw-semibold">Object Class</label>
+                                                    @* V23 fix: option values MUST match what the generator + GetObjectClasses
+                                                       emit (lowercase native class names, IC convention) so a generated step's
+                                                       persisted ObjectClass selects an existing <option> instead of rendering
+                                                       blank. StepObjectClassOptions adds an extra "(current)" entry for any
+                                                       class outside the known set so the value is never silently dropped. *@
+                                                    <select class="form-select" @bind="st.ObjectClass">
+                                                        @foreach (var opt in StepObjectClassOptionsFor(st.ObjectClass))
+                                                        {
+                                                            <option value="@opt.Value">@opt.Label</option>
+                                                        }
+                                                    </select>
+                                                    <small class="form-text text-muted">
+                                                        The object class this step reads from the source. Each step in a
+                                                        project can target a different class.
+                                                    </small>
+                                                </div>
+                                                <div class="col-md-5 d-flex align-items-end">
+                                                    <button type="button" class="btn btn-outline-primary btn-sm w-100"
+                                                            @onclick="@(() => AutoMapStepForClass(st.Id))"
+                                                            disabled="@(form.SourceTenantId == Guid.Empty)"
+                                                            title="Populate this step's mappings from the template for its object class">
+                                                        <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }
                                         <div class="form-check form-switch mt-3">
                                             <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{st.Id}")" @bind="st.Enabled" />
                                             <label class="form-check-label" for="@($"stepEnabled_{st.Id}")">
@@ -1767,9 +1866,9 @@
                                 <dt>Target table</dt>
                                 <dd>@(string.IsNullOrEmpty(form.SinkTable) ? "Objects" : form.SinkTable)</dd>
                             }
-                            <dt>Object class</dt>
-                            <dd>@form.ObjectClass</dd>
-                            <dt>Workflow template</dt>
+                            <dt>First step — object class</dt>
+                            <dd>@form.ObjectClass <span class="text-muted">(add more classes as steps in the Workflows tab)</span></dd>
+                            <dt>First step — workflow template</dt>
                             <dd>@SelectedTemplate.DisplayName</dd>
                             <dt>Scope</dt>
                             <dd>@ScopeSummary()</dd>
@@ -1848,6 +1947,10 @@
     private List<Tenant> allTenants = new();
     private Dictionary<Guid, Tenant> tenantById = new();
     private SyncProject? selectedProject;
+    // V23: the selected project's Mapping steps, one per object class. Loaded on
+    // selection + after reload so the detail panel shows the project AS its per-class
+    // steps instead of a single project-level ObjectClass.
+    private List<WorkflowStep> selectedProjectSteps = new();
     private List<Conduit.Core.SyncModels.SyncRun> recentRuns = new();
     private string searchTerm = string.Empty;
     private string activeTab = "target";
@@ -1934,7 +2037,7 @@
     private static readonly WizardStepDef[] WizardStepDefs =
     {
         new(1, "setup",    "Connections"),
-        new(2, "object",   "Object Class"),
+        new(2, "object",   "First Workflow Step"),
         new(3, "scope",    "Scope & Filter"),
         new(4, "mappings", "Mappings"),
         new(5, "schedule", "Schedule"),
@@ -2210,6 +2313,106 @@
     }
 
     /// <summary>
+    /// Populate a step's own mappings from the attribute template for THIS step's
+    /// object class (context-aware: source family → target family → step class).
+    /// Flips the step off "inherit from project" so the seeded rows are what runs.
+    /// This is the per-step analogue of the wizard's project-level Auto-map; it is
+    /// what makes object class a step-level decision — each step gets the mappings
+    /// for its own class.
+    /// </summary>
+    private async Task AutoMapStepForClass(Guid stepId)
+    {
+        var step = StepById(stepId);
+        if (step is null) return;
+
+        var sourceType = tenantById.TryGetValue(form.SourceTenantId, out var src) ? src.SystemType : string.Empty;
+        var sinkType = tenantById.TryGetValue(form.SinkTenantId, out var snk) ? snk.SystemType : string.Empty;
+        if (string.IsNullOrWhiteSpace(sourceType))
+        {
+            await JS.InvokeVoidAsync("alert", "Pick a source Connected System on the Setup tab first.");
+            return;
+        }
+
+        var stepClass = string.IsNullOrWhiteSpace(step.ObjectClass) ? "User" : step.ObjectClass!;
+        var suggested = AttributeMapper.BuildMappings(sourceType, sinkType, stepClass);
+        if (suggested.Count == 0)
+        {
+            var msg = string.Concat("No attribute template available for ", sourceType, " ", stepClass, ".");
+            await JS.InvokeVoidAsync("alert", msg);
+            return;
+        }
+
+        var current = GetStepMappings(stepId);
+        var hasEdits = current.Any(m =>
+            !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute));
+        var replace = true;
+        if (hasEdits)
+        {
+            replace = await JS.InvokeAsync<bool>("confirm",
+                "Replace this step's mappings with the auto-mapped set for its object class? Choose Cancel to keep what's there.");
+            if (!replace) return;
+        }
+
+        // Re-stamp SortOrder so the seeded rows persist in template order.
+        for (int i = 0; i < suggested.Count; i++) suggested[i].SortOrder = i;
+        stepMappings[stepId] = suggested;
+        stepMappingsLoaded.Add(stepId);
+        stepMappingsInherit[stepId] = false; // step now OWNS its class-specific mappings
+        workflowsDirty = true;
+    }
+
+    private WorkflowStep? StepById(Guid stepId)
+    {
+        foreach (var kv in stepsByWorkflow)
+        {
+            var hit = kv.Value.FirstOrDefault(s => s.Id == stepId);
+            if (hit is not null) return hit;
+        }
+        return null;
+    }
+
+    /// <summary>One per-step Object Class &lt;option&gt;: the persisted value + its label.</summary>
+    private sealed record StepClassOption(string Value, string Label);
+
+    /// <summary>
+    /// V23 fix: the per-step Object Class option set. Values are the LOWERCASE native
+    /// class names the generator and <c>SyncProjectGenerator.GetObjectClasses</c> actually
+    /// persist (user, group, computer, organizationalUnit, contact) — IC uses the same
+    /// lowercase convention. Sink-specific extras are appended for AWS SSO / Entra. If
+    /// the step's current class falls outside this set (e.g. an AD-infrastructure class
+    /// on a non-AD sink), it is appended as a "(current)" option so a freshly-generated
+    /// step never renders a blank select or silently loses its class on edit.
+    /// </summary>
+    private List<StepClassOption> StepObjectClassOptionsFor(string? currentClass)
+    {
+        var options = new List<StepClassOption>
+        {
+            new("user", "User"),
+            new("group", "Group"),
+            new("computer", "Computer"),
+            new("organizationalUnit", "Organizational Unit"),
+            new("contact", "Contact")
+        };
+        if (SinkIsAwsSso)
+        {
+            options.Add(new("assignment", "Assignment (AWS SSO)"));
+            options.Add(new("groupMembership", "Group Membership"));
+        }
+        else if (SinkIsEntraID)
+        {
+            options.Add(new("servicePrincipal", "Service Principal"));
+            options.Add(new("application", "Application"));
+            options.Add(new("device", "Device"));
+        }
+        if (!string.IsNullOrWhiteSpace(currentClass)
+            && !options.Any(o => string.Equals(o.Value, currentClass, StringComparison.OrdinalIgnoreCase)))
+        {
+            options.Add(new(currentClass!, $"{currentClass} (current)"));
+        }
+        return options;
+    }
+
+    /// <summary>
     /// Phase 8. Operator flipped the "inherit from project" toggle for a step's
     /// mappings. When checked → we'll write zero rows on Save (orchestrator
     /// falls through to project-level). When unchecked → preserve whatever the
@@ -2248,6 +2451,7 @@
             WorkflowId = workflowId,
             Name = $"Step {list.Count + 1}",
             StepType = WorkflowStepTypes.Mapping,
+            ObjectClass = "user", // lowercase native class name (matches generator + option set)
             Ordinal = list.Count,
             Enabled = true
         };
@@ -2625,7 +2829,7 @@
             }
             var classes = ProjectGenerator.GetObjectClasses(source.SystemType, autoGenMode);
             var joined = string.Join(", ", classes);
-            return $"Generates {classes.Count} sync project(s): {joined}";
+            return $"Generates 1 sync project with {classes.Count} per-class step(s): {joined}";
         }
     }
 
@@ -2663,7 +2867,15 @@
             if (selectedProject is not null)
             {
                 selectedProject = allProjects.FirstOrDefault(p => p.Id == selectedProject.Id);
-                if (selectedProject is not null) await LoadRecentRuns();
+                if (selectedProject is not null)
+                {
+                    await LoadSelectedProjectSteps();
+                    await LoadRecentRuns();
+                }
+                else
+                {
+                    selectedProjectSteps = new();
+                }
             }
         }
         catch (Exception ex)
@@ -2707,6 +2919,7 @@
     private async Task HandleSelect(SyncProject p)
     {
         selectedProject = p;
+        await LoadSelectedProjectSteps();
         await LoadRecentRuns();
     }
 
@@ -2718,6 +2931,49 @@
         {
             toastError = $"Run history load failed: {ex.Message}";
             recentRuns = new();
+        }
+    }
+
+    /// <summary>
+    /// V23: load the selected project's Mapping steps (one per object class) so the
+    /// detail panel can present the project AS its per-class steps. Flattens every
+    /// workflow's steps; the panel filters to Mapping steps for the class summary.
+    /// </summary>
+    private async Task LoadSelectedProjectSteps()
+    {
+        if (selectedProject is null) { selectedProjectSteps = new(); return; }
+        try
+        {
+            var workflows = await WorkflowRepo.GetByProjectAsync(selectedProject.Id);
+            var all = new List<WorkflowStep>();
+            foreach (var wf in workflows)
+                all.AddRange(await WorkflowRepo.GetStepsAsync(wf.Id));
+            selectedProjectSteps = all;
+        }
+        catch (Exception ex)
+        {
+            toastError = $"Step load failed: {ex.Message}";
+            selectedProjectSteps = new();
+        }
+    }
+
+    /// <summary>
+    /// The distinct object classes this project syncs, derived from its Mapping steps
+    /// (V23). Falls back to the project-level ObjectClass for legacy projects whose
+    /// steps carry no class. Used by the detail badge + per-step view.
+    /// </summary>
+    private IReadOnlyList<string> SelectedMappingClasses
+    {
+        get
+        {
+            if (selectedProject is null) return Array.Empty<string>();
+            var classes = selectedProjectSteps
+                .Where(s => s.StepType == WorkflowStepTypes.Mapping)
+                .Select(s => string.IsNullOrWhiteSpace(s.ObjectClass) ? selectedProject.ObjectClass : s.ObjectClass!)
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return classes.Count > 0 ? classes : new List<string> { selectedProject.ObjectClass };
         }
     }
 
@@ -2863,7 +3119,7 @@
         var tpl = SelectedTemplate;
         if (tpl.Id == WorkflowTemplateCatalog.EmptyId) return;
         if (tpl.Workflows.Count == 0) return;
-        var (wfs, stepsMap) = WorkflowTemplateCatalog.Materialize(tpl, projectId);
+        var (wfs, stepsMap) = WorkflowTemplateCatalog.Materialize(tpl, projectId, form.ObjectClass);
         foreach (var wf in wfs)
         {
             await WorkflowRepo.CreateAsync(wf);
@@ -3406,6 +3662,12 @@
                 : $"Sync project '{persisted.Name}' created.";
             await Reload();
             selectedProject = allProjects.FirstOrDefault(p => p.Id == persisted.Id);
+            // V23 fix: refresh the per-class steps for the just-saved project so the
+            // detail view's "Workflow steps" section + the object-class badge reflect
+            // what was materialized on create instead of the previously-selected
+            // project's (stale) steps. Reload() only reloads steps when selectedProject
+            // is already set on entry; on first create it is set AFTER Reload, so do it here.
+            await LoadSelectedProjectSteps();
             await LoadRecentRuns();
         }
         catch (Exception ex)
@@ -3734,6 +3996,11 @@
             var srcTable = AutoGenSourceIsIdentityCenter ? autoGenSourceTable : null;
             var sinkTable = AutoGenSinkIsIdentityCenter ? autoGenSinkTable : null;
 
+            // V23: each generated graph is ONE project + ONE workflow + N Mapping
+            // steps (one per object class). Persist project -> workflow -> each step
+            // (+ its per-step scope + mappings). Today the generator yields a single
+            // project, but we loop to stay forward-compatible.
+            var totalSteps = 0;
             foreach (var g in generated)
             {
                 g.Project.IsEnabled = autoGenEnable;
@@ -3741,16 +4008,20 @@
                 g.Project.SinkTable = sinkTable;
                 await ProjectRepo.CreateAsync(g.Project);
                 await WorkflowRepo.CreateAsync(g.Workflow);
-                await WorkflowRepo.CreateStepAsync(g.Step);
-                await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, g.Step.Id, g.Scope);
-                if (g.Mappings.Count > 0)
+                foreach (var st in g.Steps)
                 {
-                    await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, g.Step.Id, g.Mappings);
+                    await WorkflowRepo.CreateStepAsync(st.Step);
+                    await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
+                    if (st.Mappings.Count > 0)
+                    {
+                        await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                    }
+                    totalSteps++;
                 }
             }
 
             showAutoGenerateModal = false;
-            toastSuccess = $"Auto-generated {generated.Count} sync project(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
+            toastSuccess = $"Auto-generated 1 sync project with {totalSteps} per-class step(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
             await Reload();
         }
         catch (Exception ex)

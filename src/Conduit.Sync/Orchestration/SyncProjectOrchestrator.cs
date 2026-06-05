@@ -488,7 +488,14 @@ public sealed class SyncProjectOrchestrator
                  ?? await _projectRepo.GetProjectScopeAsync(ctx.Project.Id)
                  ?? new SyncProjectScope { SyncProjectId = ctx.Project.Id, PageSize = 1000 };
 
-        var pump = await PumpAsync(ctx, mappings, scope, ct);
+        // V23: per-step object class, falling back to the project's class for legacy
+        // single-class steps whose ObjectClass was backfilled (or for any step that
+        // genuinely has none). This is the resolution the plan calls load-bearing.
+        var objectClass = !string.IsNullOrWhiteSpace(step.ObjectClass)
+            ? step.ObjectClass!
+            : ctx.Project.ObjectClass;
+
+        var pump = await PumpAsync(ctx, mappings, scope, objectClass, ct);
         return new StepResult
         {
             Delta = pump.Delta,
@@ -508,7 +515,8 @@ public sealed class SyncProjectOrchestrator
         var mappings = await _projectRepo.GetMappingsAsync(ctx.Project.Id);
         var scope = await _projectRepo.GetProjectScopeAsync(ctx.Project.Id)
                  ?? new SyncProjectScope { SyncProjectId = ctx.Project.Id, PageSize = 1000 };
-        var pump = await PumpAsync(ctx, mappings, scope, ct);
+        // Legacy path (no Workflows): there are no steps, so the class is the project's.
+        var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, ct);
         return new LegacyResult(pump.Delta, pump.NewCursor, pump.WasIncremental);
     }
 
@@ -742,6 +750,7 @@ public sealed class SyncProjectOrchestrator
         RunContext ctx,
         IReadOnlyList<AttributeMapping> mappings,
         SyncProjectScope scope,
+        string objectClass,
         CancellationToken ct)
     {
         var run = ctx.RunId;
@@ -819,9 +828,14 @@ public sealed class SyncProjectOrchestrator
             await Log(run, "Info", $"    Delete-detection ARMED (sink supports tombstones); loaded {priorIdsForDelete.Count} prior id(s). Emission gated on a COMPLETE source read.");
 
         await Log(run, "Info",
-            $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={project.ObjectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}; SkipUnchanged={skipUnchanged}.");
+            $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={objectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}; SkipUnchanged={skipUnchanged}.");
 
-        var enumeration = await source.EnumerateAsync(project.ObjectClass, scope, priorCursor, ct);
+        // V23: read THIS step's object class (resolved by the caller as
+        // step.ObjectClass ?? project.ObjectClass), not the project-level one. Each
+        // Mapping step is its own complete per-class read — its own cursor, its own
+        // scope, its own skip-unchanged / tombstone diff — so threading the class here
+        // is the whole behavioural change: one project, N per-class pumps.
+        var enumeration = await source.EnumerateAsync(objectClass, scope, priorCursor, ct);
         var wasIncremental = enumeration.IsIncremental;
 
         var buffer = new List<ConnectorObject>(Math.Min(batchSize, 256));

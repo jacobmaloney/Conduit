@@ -1084,6 +1084,67 @@ END;
 "
             });
 
+            // Migration 23: Per-STEP object class. The redesign collapses the old
+            // one-project-per-object-class shape into ONE project whose Workflow holds
+            // N Mapping steps — one per object class. The object class therefore moves
+            // OFF the project and ONTO each step: a single AD→IC project can sync user,
+            // group, computer, contact as four steps, each a complete per-class read.
+            //
+            //   (a) Add WorkflowSteps.ObjectClass NVARCHAR(50) NULL. The orchestrator
+            //       resolves step.ObjectClass ?? project.ObjectClass at read time, so a
+            //       NULL step transparently falls back to its project's class.
+            //
+            //   (b) Backfill every EXISTING step's ObjectClass from its parent project's
+            //       SyncProjects.ObjectClass (joined via Workflows). This keeps every
+            //       pre-existing per-class project runnable AFTER the orchestrator change
+            //       — each legacy step now carries its own (project-derived) class, so it
+            //       reads the right object class with no project fallback needed.
+            //
+            // SyncProjects.ObjectClass is INTENTIONALLY left in place (NOT dropped, NOT
+            // made nullable) as the back-compat fallback. No grouping/merge migration is
+            // performed: legacy one-class projects stay as they are; the operator re-runs
+            // Auto-Generate for the new one-project shape and deletes the old ones by hand.
+            //
+            // Additive + idempotent: the column add is guarded by COL_LENGTH; the backfill
+            // only touches steps whose ObjectClass is still NULL, so re-running is a no-op.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 23,
+                Name = "WorkflowSteps per-step ObjectClass (one project, N per-class steps)",
+                Description = "Adds WorkflowSteps.ObjectClass (nullable); backfills each existing step's class from its parent SyncProjects.ObjectClass via Workflows. SyncProjects.ObjectClass retained as back-compat fallback. No grouping/merge of existing projects.",
+                SqlScript = @"
+-- (a) New per-step object class. NULL falls back to the project's class at read time.
+IF COL_LENGTH('dbo.WorkflowSteps','ObjectClass') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[WorkflowSteps] ADD [ObjectClass] NVARCHAR(50) NULL;
+END;
+"
+            });
+
+            // (b) Backfill existing steps' ObjectClass from their parent project's class.
+            // Split into its own migration so the ALTER above is committed before this
+            // statement references the new column (same-batch DDL+DML on a just-added
+            // column fails to compile in SQL Server). Only fills steps still NULL, so
+            // it is idempotent and never clobbers an explicitly-set step class.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 24,
+                Name = "Backfill WorkflowSteps.ObjectClass from parent project",
+                Description = "Sets each existing step's ObjectClass to its parent SyncProjects.ObjectClass (joined via Workflows) where the step's ObjectClass is still NULL. Idempotent.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.WorkflowSteps','ObjectClass') IS NOT NULL
+BEGIN
+    UPDATE st
+       SET st.[ObjectClass] = p.[ObjectClass]
+      FROM [dbo].[WorkflowSteps] st
+      INNER JOIN [dbo].[Workflows]    w ON w.[Id] = st.[WorkflowId]
+      INNER JOIN [dbo].[SyncProjects] p ON p.[Id] = w.[SyncProjectId]
+     WHERE st.[ObjectClass] IS NULL
+       AND p.[ObjectClass] IS NOT NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

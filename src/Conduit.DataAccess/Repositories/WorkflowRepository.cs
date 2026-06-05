@@ -87,8 +87,8 @@ public class WorkflowRepository : BaseRepository
         s.CreatedAt = DateTime.UtcNow;
         s.ModifiedAt = s.CreatedAt;
         await ExecuteAsync(@"
-            INSERT INTO WorkflowSteps (Id, WorkflowId, Name, StepType, Ordinal, Enabled, Configuration, CreatedAt, ModifiedAt)
-            VALUES (@Id, @WorkflowId, @Name, @StepType, @Ordinal, @Enabled, @Configuration, @CreatedAt, @ModifiedAt);", s);
+            INSERT INTO WorkflowSteps (Id, WorkflowId, Name, StepType, ObjectClass, Ordinal, Enabled, Configuration, CreatedAt, ModifiedAt)
+            VALUES (@Id, @WorkflowId, @Name, @StepType, @ObjectClass, @Ordinal, @Enabled, @Configuration, @CreatedAt, @ModifiedAt);", s);
         return s;
     }
 
@@ -99,6 +99,7 @@ public class WorkflowRepository : BaseRepository
             UPDATE WorkflowSteps
                SET Name = @Name,
                    StepType = @StepType,
+                   ObjectClass = @ObjectClass,
                    Ordinal = @Ordinal,
                    Enabled = @Enabled,
                    Configuration = @Configuration,

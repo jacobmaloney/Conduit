@@ -266,6 +266,14 @@ public class WorkflowStep
     public string StepType { get; set; } = "Mapping";
     /// <summary>Steps execute in ascending Ordinal order within a workflow.</summary>
     public int Ordinal { get; set; }
+    /// <summary>
+    /// V23: the object class this step reads (e.g. "user", "group", "computer").
+    /// One project's workflow holds N Mapping steps — one per object class. The
+    /// orchestrator resolves <c>step.ObjectClass ?? project.ObjectClass</c> at read
+    /// time, so a NULL value transparently falls back to the parent project's class
+    /// (the pre-V23 single-class shape). Only meaningful for Mapping steps.
+    /// </summary>
+    public string? ObjectClass { get; set; }
     public bool Enabled { get; set; } = true;
     /// <summary>Free-form JSON for per-StepType config (e.g. PersonCreate template attrs).</summary>
     public string? Configuration { get; set; }
