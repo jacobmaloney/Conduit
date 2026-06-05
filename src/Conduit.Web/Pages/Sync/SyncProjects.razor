@@ -4224,43 +4224,69 @@
 
     private async Task GenerateAutoSyncProject()
     {
-        autoGenError = string.Empty;
-        if (autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty)
-        {
-            autoGenError = "Both source and sink are required.";
-            return;
-        }
-
-        if (AutoGenIsSelfSync)
-        {
-            autoGenError = "Source and target must be different connections.";
-            return;
-        }
-
-        var src = allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
-        var sink = allTenants.FirstOrDefault(t => t.Id == autoGenSinkId);
-        if (src is null || sink is null)
-        {
-            autoGenError = "Selected systems no longer exist.";
-            return;
-        }
-
-        // The modal's live preview line already shows the operator the object-class
-        // count + names for (source, mode) before they confirm. Build the whole
-        // graph in memory via the Phase 3
-        // generator, then persist project -> workflow -> step -> scope -> mappings
-        // through the repositories. Only Mapping steps are emitted -- no governance.
-        var existingNames = allProjects.Select(p => p.Name).ToList();
-        var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule, existingNames);
-        if (generated.Count == 0)
-        {
-            autoGenError = "This source connector + mode produced no object classes.";
-            return;
-        }
-
+        // Re-entrancy guard FIRST — set before any validation or await, exactly as IC
+        // does (SystemCenter.CreateObjectSyncProjectFromWizard sets isCreatingProject
+        // as its first statement). A fast double-click / Blazor double-dispatch can
+        // enqueue two @onclick invocations before the DOM re-renders with the disabled
+        // attribute; without raising the flag synchronously up front, both invocations
+        // sail past and persist two projects (the second getting the "#2" dedup suffix).
+        if (autoGenInProgress) return;
         autoGenInProgress = true;
+        StateHasChanged();
+
         try
         {
+            autoGenError = string.Empty;
+            if (autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty)
+            {
+                autoGenError = "Both source and sink are required.";
+                return;
+            }
+
+            if (AutoGenIsSelfSync)
+            {
+                autoGenError = "Source and target must be different connections.";
+                return;
+            }
+
+            var src = allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
+            var sink = allTenants.FirstOrDefault(t => t.Id == autoGenSinkId);
+            if (src is null || sink is null)
+            {
+                autoGenError = "Selected systems no longer exist.";
+                return;
+            }
+
+            // Idempotency, defensively like IC: if a project already exists for this
+            // exact source -> sink + mode (the auto-generated base name), do not create
+            // a second one. Guards the residual double-fire window AND a deliberate
+            // re-click of an already-generated pair. The generator's UniqueName would
+            // otherwise silently mint a "#2" duplicate.
+            var baseName = $"{src.Name} to {sink.Name} ({ModeLabel(autoGenMode)})";
+            var alreadyExists = allProjects.Any(p =>
+                p.SourceTenantId == src.Id &&
+                p.SinkTenantId == sink.Id &&
+                string.Equals(p.Name, baseName, StringComparison.OrdinalIgnoreCase));
+            if (alreadyExists)
+            {
+                showAutoGenerateModal = false;
+                toastSuccess = $"A sync project already exists from {src.Name} to {sink.Name} ({ModeLabel(autoGenMode)}).";
+                return;
+            }
+
+            // The modal's live preview line already shows the operator the object-class
+            // count + names for (source, mode) before they confirm. Build the whole
+            // graph in memory via the Phase 3
+            // generator, then persist project -> workflow -> step -> scope -> mappings
+            // through the repositories. Only Mapping steps are emitted -- no governance.
+            var existingNames = allProjects.Select(p => p.Name).ToList();
+            var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule, existingNames);
+            if (generated.Count == 0)
+            {
+                autoGenError = "This source connector + mode produced no object classes.";
+                return;
+            }
+
             // V22: stamp the per-endpoint IC table onto each generated project. Only
             // when that side is an IdentityCenter connector; otherwise leave null so
             // the column stays meaningless for non-IC connectors.
@@ -4291,6 +4317,7 @@
                 }
             }
 
+            // Close the modal only AFTER the single successful persist.
             showAutoGenerateModal = false;
             toastSuccess = $"Auto-generated 1 sync project with {totalSteps} per-class step(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
             await Reload();
