@@ -1172,83 +1172,85 @@
                         <div class="alert alert-secondary py-2 mb-3">
                             <i class="fas fa-diagram-project me-1"></i>
                             A sync project is a pipeline of <strong>workflow steps</strong> — each step carries its
-                            <strong>own object class</strong>, template, scope and mappings. Define the
-                            <strong>first step</strong> here; after the project exists, open the
-                            <strong>Workflows</strong> tab to add more steps for other object classes
-                            (users, groups, computers, …).
+                            <strong>own object class</strong>, template, scope and mappings. Pick <strong>all the
+                            object classes</strong> you want below; the wizard builds <strong>one step per class</strong>,
+                            each auto-mapped to the recommended template for this Source → Target. Refine any step
+                            later from the <strong>Workflows</strong> tab.
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">First step — Object Class</label>
-                            <select class="form-select" @bind="form.ObjectClass" @bind:after="OnObjectClassChanged">
-                                <option value="User">User</option>
-                                <option value="Group">Group</option>
-                                @if (SinkIsAwsSso)
-                                {
-                                    <option value="Assignment">Assignment (AWS SSO)</option>
-                                    <option value="GroupMembership">Group Membership</option>
-                                }
-                                else if (SinkIsEntraID)
-                                {
-                                    <option value="GroupMemberships">Group Memberships</option>
-                                    <option value="ManagerRefresh">Manager Refresh</option>
-                                }
-                            </select>
-                            <small class="form-text text-muted">
-                                The object class for this project's <strong>first workflow step</strong>. The class lives on
-                                the step, not the project — add steps for other classes from the Workflows tab later.
-                            </small>
+
+                        @* Tier presets — same source of truth as Auto-Generate (ISyncProjectGenerator).
+                           Core / connector-specific / Full each pre-fill the checklist below. *@
+                        <div class="mb-2">
+                            <label class="form-label fw-semibold">Object classes to sync</label>
                         </div>
-                        @* Context-aware workflow template picker (ARS Synchronization-Service model).
-                           The applicable set is derived from the chosen Source + Target + Object Class
-                           and gated against the target adapter's capabilities. Inapplicable templates
-                           are HIDDEN; the highest-specificity match is auto-pre-selected as "Recommended". *@
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Workflow Template</label>
-                            <div class="sync-template-context">
-                                <i class="fas fa-route me-1"></i>
-                                Recommended for
-                                <strong>@TenantName(form.SourceTenantId)</strong>
-                                <i class="fas fa-arrow-right mx-1"></i>
-                                <strong>@TenantName(form.SinkTenantId)</strong>
-                                (<span class="sync-template-context-class">@form.ObjectClass</span>)
+                        <div class="row g-2 mb-3">
+                            @foreach (var m in WizardClassModes)
+                            {
+                                var mRef = m;
+                                var isSel = wizardClassMode == mRef;
+                                var tierCount = SourceSystemType.Length == 0 ? 0 : ProjectGenerator.GetObjectClasses(SourceSystemType, mRef).Count;
+                                var cardCls = isSel ? "sync-class-tier-card selected" : "sync-class-tier-card";
+                                <div class="col-6 col-md-3">
+                                    <div class="@cardCls" @onclick="() => SetWizardClassMode(mRef)">
+                                        <div class="sync-class-tier-name">@ModeLabel(mRef)</div>
+                                        <div class="sync-class-tier-count">@tierCount class(es)</div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+
+                        @if (SourceSystemType.Length == 0)
+                        {
+                            <div class="alert alert-warning py-2 mb-3">
+                                <i class="fas fa-triangle-exclamation me-1"></i>
+                                Pick a source Connected System on the Connections step first — the object-class set comes from it.
                             </div>
-                            <select class="form-select" value="@selectedTemplateId" @onchange="OnTemplateChanged">
-                                @foreach (var tpl in ApplicableTemplates)
+                        }
+                        else
+                        {
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <small class="text-muted">@WizardClassSummary</small>
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-secondary" @onclick="WizardSelectAllClasses">Select all</button>
+                                    <button type="button" class="btn btn-outline-secondary" @onclick="WizardClearClasses">Clear</button>
+                                </div>
+                            </div>
+                            <div class="sync-class-grid mb-3">
+                                @foreach (var cls in WizardAllClasses)
                                 {
-                                    var isRec = tpl.Id == RecommendedTemplateId && tpl.Id != WorkflowTemplateCatalog.EmptyId;
-                                    var label = isRec ? string.Concat(tpl.DisplayName, "  ★ Recommended") : tpl.DisplayName;
-                                    <option value="@tpl.Id">@label</option>
+                                    var clsRef = cls;
+                                    var checkedNow = wizardSelectedClasses.Contains(clsRef);
+                                    var recTpl = WizardRecommendedTemplateFor(clsRef);
+                                    var inputId = string.Concat("wiz_cls_", clsRef);
+                                    <div class="sync-class-grid-item">
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="@inputId"
+                                                   checked="@checkedNow"
+                                                   @onchange="(e) => ToggleWizardClass(clsRef, (bool)(e.Value ?? false))" />
+                                            <label class="form-check-label" for="@inputId">
+                                                <span class="sync-class-grid-name">@clsRef</span>
+                                                <span class="sync-class-grid-tpl">@recTpl.DisplayName</span>
+                                            </label>
+                                        </div>
+                                    </div>
                                 }
-                            </select>
-                            <small class="form-text text-muted">@SelectedTemplate.Description</small>
-                            @if (SelectedTemplate.Correlation is not null)
-                            {
-                                <small class="form-text text-muted d-block">
-                                    <i class="fas fa-link me-1"></i>Correlates on
-                                    <code>@SelectedTemplate.Correlation.SourceKeyAttr</code>
-                                    <i class="fas fa-arrow-right mx-1"></i>
-                                    <code>@SelectedTemplate.Correlation.TargetKeyAttr</code>
-                                </small>
-                            }
-                            @if (HiddenTemplateCount > 0)
-                            {
-                                <small class="form-text text-muted d-block">
-                                    <i class="fas fa-eye-slash me-1"></i>
-                                    @HiddenTemplateCount template(s) hidden — not valid for this Source → Target (@form.ObjectClass) combination.
-                                </small>
-                            }
-                        </div>
+                            </div>
+                        }
+                        @* Per-class templates: each selected class is auto-mapped to its OWN context-aware
+                           recommended template (shown beside it in the grid above), derived from the chosen
+                           Source + Target and gated against the target adapter's capabilities — the same
+                           resolver Auto-Generate uses. No single template is forced across all classes. *@
                         <div class="alert alert-secondary py-2 mb-3">
-                            <i class="fas fa-shoe-prints me-1"></i>
-                            The simple path creates a Default workflow with a single Mapping step. After the project
-                            exists you can open the <strong>Workflows</strong> tab to compose multi-step pipelines.
+                            <i class="fas fa-route me-1"></i>
+                            Each class gets its own <strong>recommended workflow template</strong> (shown beside it
+                            above) and that template's auto-mapped attributes. Tune any individual step's template,
+                            scope or mappings from the <strong>Workflows</strong> tab after the project is created.
                         </div>
                         <div class="alert alert-info py-2 mb-0 d-flex align-items-center justify-content-between">
                             <span>
                                 <i class="fas fa-magic me-1"></i>
-                                Want the <strong>full object-class set</strong> at once — a workflow + auto-populated
-                                mappings per class (users, groups, computers, …) — instead of one project? Auto-Generate
-                                builds them all for this Source and Target.
+                                Shortcut: <strong>Auto-Generate</strong> builds a project for the <strong>full
+                                tier</strong> in one click (no per-class picking) for this Source and Target.
                             </span>
                             <button type="button" class="btn btn-sm btn-success ms-3 flex-shrink-0" @onclick="SwitchToAutoGenerateFromWizard">
                                 <i class="fas fa-magic me-1"></i>Auto-Generate the set
@@ -1930,10 +1932,8 @@
                                 <dt>Target table</dt>
                                 <dd>@(string.IsNullOrEmpty(form.SinkTable) ? "Objects" : form.SinkTable)</dd>
                             }
-                            <dt>First step — object class</dt>
-                            <dd>@form.ObjectClass <span class="text-muted">(add more classes as steps in the Workflows tab)</span></dd>
-                            <dt>First step — workflow template</dt>
-                            <dd>@SelectedTemplate.DisplayName</dd>
+                            <dt>Object-class steps</dt>
+                            <dd>@WizardClassSummary <span class="text-muted">(one workflow step per class, auto-mapped)</span></dd>
                             <dt>Scope</dt>
                             <dd>@ScopeSummary()</dd>
                             <dt>Mappings</dt>
@@ -2101,7 +2101,7 @@
     private static readonly WizardStepDef[] WizardStepDefs =
     {
         new(1, "setup",    "Connections"),
-        new(2, "object",   "First Workflow Step"),
+        new(2, "object",   "Object Classes"),
         new(3, "scope",    "Scope & Filter"),
         new(4, "mappings", "Mappings"),
         new(5, "schedule", "Schedule"),
@@ -2287,6 +2287,61 @@
 
     private Conduit.Sync.Templates.GenerationMode workflowsClassMode = Conduit.Sync.Templates.GenerationMode.Core;
     private string bulkBuilderMessage = string.Empty;
+
+    // ─── Wizard multi-class selector (IC-parity) ────────────────────────────
+    // The manual wizard's Object-Classes step. Mirrors IC's SystemCenter wizard:
+    // a tier preset (Core / connector-specific / Full) + a multi-check class grid.
+    // Each selected class becomes its OWN workflow step on create, with the
+    // context-aware template's auto-mapped attribute mappings — the same one-
+    // project/N-per-class-steps shape Auto-Generate produces, but operator-chosen.
+    private Conduit.Sync.Templates.GenerationMode wizardClassMode = Conduit.Sync.Templates.GenerationMode.Core;
+    private HashSet<string> wizardSelectedClasses = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every object class the current source connector can emit (the Full set) — the checklist universe.</summary>
+    private IReadOnlyList<string> WizardAllClasses =>
+        SourceSystemType.Length == 0
+            ? Array.Empty<string>()
+            : ProjectGenerator.GetObjectClasses(SourceSystemType, Conduit.Sync.Templates.GenerationMode.Full);
+
+    /// <summary>Class tiers offered in the wizard — same source of truth as Auto-Generate / the bulk builder.</summary>
+    private IReadOnlyList<Conduit.Sync.Templates.GenerationMode> WizardClassModes => AvailableWorkflowModes;
+
+    /// <summary>Pre-fill the checklist from a tier preset (Core / Infrastructure / Full / …).</summary>
+    private void SetWizardClassMode(Conduit.Sync.Templates.GenerationMode mode)
+    {
+        wizardClassMode = mode;
+        wizardSelectedClasses = new HashSet<string>(
+            ProjectGenerator.GetObjectClasses(SourceSystemType, mode),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void ToggleWizardClass(string cls, bool isChecked)
+    {
+        if (isChecked) wizardSelectedClasses.Add(cls);
+        else           wizardSelectedClasses.Remove(cls);
+    }
+
+    private void WizardSelectAllClasses() =>
+        wizardSelectedClasses = new HashSet<string>(WizardAllClasses, StringComparer.OrdinalIgnoreCase);
+
+    private void WizardClearClasses() => wizardSelectedClasses = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The context-aware template recommended for one specific object class (source → sink).</summary>
+    private WorkflowTemplate WizardRecommendedTemplateFor(string objectClass) =>
+        WorkflowTemplateCatalog.Recommended(
+            SourceSystemType,
+            TenantType(form.SinkTenantId),
+            objectClass,
+            TargetCapabilities,
+            TargetSupportsSink);
+
+    private string WizardClassSummary =>
+        wizardSelectedClasses.Count == 0
+            ? "No classes selected — pick at least one to build the project."
+            : string.Concat(
+                wizardSelectedClasses.Count.ToString(),
+                wizardSelectedClasses.Count == 1 ? " step: " : " steps: ",
+                string.Join(", ", WizardAllClasses.Where(c => wizardSelectedClasses.Contains(c))));
 
     // NOTE: SourceSystemType is already defined in the wizard-navigation region
     // (form.SourceTenantId → SystemType); reused here for the bulk builder.
@@ -3383,6 +3438,10 @@
         await LoadCredentialsForFormAsync();
         ResetAssignmentTemplateForm();
         ResetWorkflowFormState();
+        // Multi-class wizard: default to the Core tier; the actual set is (re)seeded
+        // when the operator reaches the Object-Classes step (source is known by then).
+        wizardClassMode = Conduit.Sync.Templates.GenerationMode.Core;
+        wizardSelectedClasses = new(StringComparer.OrdinalIgnoreCase);
         showFormModal = true;
     }
 
@@ -3451,6 +3510,67 @@
                 foreach (var s in steps) await WorkflowRepo.CreateStepAsync(s);
             }
         }
+    }
+
+    /// <summary>
+    /// Multi-class wizard create path. Builds an in-memory workflow tree (ONE
+    /// workflow, ONE Mapping step per operator-selected class) into workflowsForm /
+    /// stepsByWorkflow / stepMappings, exactly like the Workflows-tab "Add all"
+    /// (AddStepsForAllClasses) does — but for the wizard's chosen set. SaveForm's
+    /// existing PersistWorkflowsAsync(persisted.Id) call then writes the whole tree
+    /// + per-step mappings. Each step is stamped with its lowercase native class and
+    /// its class-appropriate auto-mapped attributes (inherits project-level mappings
+    /// when a class has no template, never blank-runs).
+    /// </summary>
+    private void BuildWizardClassSteps()
+    {
+        // Iterate in the connector's canonical order (WizardAllClasses) filtered to
+        // the operator's selection, so step ordinals are stable + predictable.
+        var classes = WizardAllClasses.Where(c => wizardSelectedClasses.Contains(c)).ToList();
+        if (classes.Count == 0) return;
+
+        var workflow = new Workflow
+        {
+            Id = Guid.NewGuid(),
+            Name = $"{ModeLabel(wizardClassMode)} sync",
+            Ordinal = 0,
+            Enabled = true
+        };
+        workflowsForm = new List<Workflow> { workflow };
+        var steps = new List<WorkflowStep>();
+        stepsByWorkflow = new Dictionary<Guid, List<WorkflowStep>> { [workflow.Id] = steps };
+        selectedWorkflowId = workflow.Id;
+
+        var sinkType = SinkSystemType;
+        for (int i = 0; i < classes.Count; i++)
+        {
+            var objectClass = classes[i];
+            var step = new WorkflowStep
+            {
+                Id = Guid.NewGuid(),
+                WorkflowId = workflow.Id,
+                Name = $"{objectClass} mapping",
+                StepType = WorkflowStepTypes.Mapping,
+                ObjectClass = objectClass, // lowercase native name — matches generator + option set
+                Ordinal = i,
+                Enabled = true
+            };
+            steps.Add(step);
+
+            // Pre-fill each step's own class-appropriate mappings (same as Auto-Generate
+            // + the bulk builder). When the template is empty the step inherits the
+            // project-level mappings rather than blank-running.
+            var mappings = AttributeMapper.BuildMappings(SourceSystemType, sinkType, objectClass);
+            if (mappings.Count > 0)
+            {
+                for (int j = 0; j < mappings.Count; j++) mappings[j].SortOrder = j;
+                stepMappings[step.Id] = mappings;
+                stepMappingsLoaded.Add(step.Id);
+                stepMappingsInherit[step.Id] = false; // step owns its class-specific mappings
+            }
+        }
+
+        workflowsDirty = true; // ensure PersistWorkflowsAsync flushes the tree
     }
 
     private void ResetAssignmentTemplateForm()
@@ -3775,7 +3895,7 @@
         if (step >= wizardStep) return;
         wizardStep = step;
         formTab = CurrentTabForStep(step);
-        if (formTab == "object") RecomputeTemplateApplicability();
+        if (formTab == "object") { RecomputeTemplateApplicability(); EnsureWizardClassesSeeded(); }
         await Task.CompletedTask;
     }
 
@@ -3844,9 +3964,26 @@
         if (wizardStep >= WizardStepCount) return;
         wizardStep++;
         formTab = CurrentTabForStep(wizardStep);
-        // Entering the Object Class step: derive the legal template set from the
-        // Source + Target + Object Class triple and auto-pick the recommendation.
-        if (formTab == "object") RecomputeTemplateApplicability();
+        // Entering the Object Classes step: derive the legal template set from the
+        // Source + Target + Object Class triple and seed the class checklist from
+        // the source connector's Core tier (operator can change the tier / pick).
+        if (formTab == "object") { RecomputeTemplateApplicability(); EnsureWizardClassesSeeded(); }
+    }
+
+    /// <summary>
+    /// Seed the wizard's class checklist the first time the operator lands on the
+    /// Object-Classes step (source is known by then). Defaults to the current tier
+    /// preset. Leaves an existing operator selection alone on re-entry.
+    /// </summary>
+    private void EnsureWizardClassesSeeded()
+    {
+        if (wizardSelectedClasses.Count > 0) return;
+        if (SourceSystemType.Length == 0) return;
+        if (!WizardClassModes.Contains(wizardClassMode))
+            wizardClassMode = Conduit.Sync.Templates.GenerationMode.Core;
+        wizardSelectedClasses = new HashSet<string>(
+            ProjectGenerator.GetObjectClasses(SourceSystemType, wizardClassMode),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     private void PrevWizardStep()
@@ -3944,6 +4081,15 @@
             return;
         }
 
+        // Multi-class wizard: stamp the project-level ObjectClass with the first
+        // selected class so the legacy/back-compat fallback (detail view, project
+        // mapping) stays coherent with the per-class steps we're about to build.
+        if (!editingId.HasValue && isWizard && wizardSelectedClasses.Count > 0)
+        {
+            var firstClass = WizardAllClasses.FirstOrDefault(c => wizardSelectedClasses.Contains(c));
+            if (!string.IsNullOrWhiteSpace(firstClass)) form.ObjectClass = firstClass;
+        }
+
         saving = true;
         try
         {
@@ -3960,12 +4106,23 @@
                 persisted = await ProjectRepo.CreateAsync(form);
             }
 
-            // Phase 8: materialize the chosen workflow template on first save.
-            // Empty template is a no-op; the orchestrator's V17 backfill will
-            // stamp a Default workflow on the first run if nothing else exists.
+            // Phase 8 / multi-class wizard: materialize the workflow tree on first save.
+            // The wizard's Object-Classes step yields N selected classes → build ONE
+            // workflow with ONE Mapping step per class, each auto-mapped to its own
+            // class-appropriate template (the same one-project/N-steps shape Auto-
+            // Generate produces). Falls back to the single-template path only when no
+            // classes were chosen. Empty template is a no-op; the orchestrator's V17
+            // backfill stamps a Default workflow on first run if nothing else exists.
             if (isCreate)
             {
-                await ApplyTemplateAsync(persisted.Id);
+                if (isWizard && wizardSelectedClasses.Count > 0)
+                {
+                    BuildWizardClassSteps();
+                }
+                else
+                {
+                    await ApplyTemplateAsync(persisted.Id);
+                }
             }
 
             scopeForm.SyncProjectId = persisted.Id;
