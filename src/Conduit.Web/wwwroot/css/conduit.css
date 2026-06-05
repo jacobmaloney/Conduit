@@ -3192,6 +3192,29 @@ details summary::-webkit-details-marker { color: var(--accent); }
     margin-bottom: 10px;
 }
 
+/* Bulk all-class step builder (IC-parity) — the manual analogue of Auto-Generate
+   inside an existing project's Workflows tab. */
+.workflow-bulk-builder {
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px solid var(--border, #2a3243);
+    border-radius: 6px;
+    background: var(--surface-2, rgba(255, 255, 255, 0.02));
+}
+.workflow-bulk-builder-head {
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    color: var(--text, #e2e8f0);
+}
+.workflow-bulk-builder-status {
+    font-size: 12px;
+    color: var(--text-muted, #94a3b8);
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--surface-3, rgba(0, 188, 212, 0.08));
+}
+
 .workflow-tree-empty,
 .workflow-detail-empty {
     padding: 16px;

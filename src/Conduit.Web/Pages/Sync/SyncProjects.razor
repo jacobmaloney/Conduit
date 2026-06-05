@@ -1489,6 +1489,50 @@
                                         <i class="fas fa-plus me-1"></i>Add workflow
                                     </button>
                                 </div>
+
+                                @* ───── Bulk all-class step builder (IC-parity) ─────
+                                   The manual analogue of Auto-Generate, inside an existing
+                                   project. Picks the source connector's object-class set for
+                                   the chosen tier and adds ONE Mapping step per class that
+                                   the active workflow doesn't already have — each pre-stamped
+                                   with its lowercase native class + auto-mapped attributes.
+                                   Mirrors IC's "add workflows for every object class" backfill. *@
+                                <div class="workflow-bulk-builder">
+                                    <div class="workflow-bulk-builder-head">
+                                        <i class="fas fa-layer-group me-2"></i>
+                                        <span class="fw-semibold">Build steps for all object classes</span>
+                                    </div>
+                                    <div class="input-group input-group-sm mt-2">
+                                        <select class="form-select" @bind="workflowsClassMode">
+                                            @foreach (var m in AvailableWorkflowModes)
+                                            {
+                                                <option value="@m">@ModeLabel(m)</option>
+                                            }
+                                        </select>
+                                        <button type="button" class="btn btn-outline-primary"
+                                                @onclick="AddStepsForAllClasses"
+                                                disabled="@(SourceSystemType.Length == 0)"
+                                                title="Add a Mapping step for every object class in this tier the active workflow doesn't already have">
+                                            <i class="fas fa-wand-magic-sparkles me-1"></i>Add all
+                                        </button>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center mt-2">
+                                        <small class="text-muted">@BulkBuilderPreviewText</small>
+                                        <button type="button" class="btn btn-link btn-sm p-0"
+                                                @onclick="AutoMapAllSteps"
+                                                disabled="@(SourceSystemType.Length == 0 || MappingStepCount == 0)"
+                                                title="Re-run auto-map for every Mapping step using each step's own object class">
+                                            <i class="fas fa-magic me-1"></i>Auto-map all steps
+                                        </button>
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(bulkBuilderMessage))
+                                    {
+                                        <div class="workflow-bulk-builder-status mt-2">
+                                            <i class="fas fa-info-circle me-1"></i>@bulkBuilderMessage
+                                        </div>
+                                    }
+                                </div>
+
                                 @if (workflowsForm.Count == 0)
                                 {
                                     <div class="workflow-tree-empty">
@@ -2211,6 +2255,233 @@
         selectedWorkflowId = wf.Id;
         selectedStepId = null;
         workflowsDirty = true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Bulk all-class step builder (IC-parity). Lets the operator establish steps
+    // for every object class in one action, inside an existing project's Workflows
+    // tab — the manual analogue of Auto-Generate. Same source of truth as
+    // Auto-Generate (ISyncProjectGenerator.GetObjectClasses) so the class list and
+    // the LOWERCASE native names match the generator exactly (no casing drift).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private Conduit.Sync.Templates.GenerationMode workflowsClassMode = Conduit.Sync.Templates.GenerationMode.Core;
+    private string bulkBuilderMessage = string.Empty;
+
+    // NOTE: SourceSystemType is already defined in the wizard-navigation region
+    // (form.SourceTenantId → SystemType); reused here for the bulk builder.
+
+    /// <summary>The editing project's SINK connector SystemType (auto-map target family). Empty when unknown.</summary>
+    private string SinkSystemType =>
+        form.SinkTenantId != Guid.Empty && tenantById.TryGetValue(form.SinkTenantId, out var t)
+            ? t.SystemType
+            : string.Empty;
+
+    /// <summary>Count of Mapping steps across all workflows (gates "Auto-map all steps").</summary>
+    private int MappingStepCount =>
+        stepsByWorkflow.Values
+            .SelectMany(l => l)
+            .Count(s => string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Class tiers available for the bulk builder, keyed off the editing project's
+    /// SOURCE connector — same logic as the Auto-Generate modal's AvailableModes
+    /// but driven by the project (not the modal). Core + Full always; the
+    /// connector-specific middle tier (AD Infrastructure / Entra Security /
+    /// SharePoint Collaboration) only when that source defines it.
+    /// </summary>
+    private IReadOnlyList<Conduit.Sync.Templates.GenerationMode> AvailableWorkflowModes
+    {
+        get
+        {
+            var modes = new List<Conduit.Sync.Templates.GenerationMode>
+            {
+                Conduit.Sync.Templates.GenerationMode.Core,
+                Conduit.Sync.Templates.GenerationMode.Full
+            };
+            switch (SourceSystemType)
+            {
+                case "ActiveDirectory":
+                    modes.Insert(1, Conduit.Sync.Templates.GenerationMode.AdInfrastructure);
+                    break;
+                case "EntraID":
+                    modes.Insert(1, Conduit.Sync.Templates.GenerationMode.EntraSecurity);
+                    break;
+                case "SharePoint":
+                    modes.Insert(1, Conduit.Sync.Templates.GenerationMode.SharePointCollaboration);
+                    break;
+            }
+            return modes;
+        }
+    }
+
+    /// <summary>Inline preview of what "Add all" will create for the current tier.</summary>
+    private string BulkBuilderPreviewText
+    {
+        get
+        {
+            if (SourceSystemType.Length == 0)
+                return "Pick a source Connected System on the Setup tab to enable all-class build.";
+            var classes = ProjectGenerator.GetObjectClasses(SourceSystemType, workflowsClassMode);
+            return $"{classes.Count} class(es): {string.Join(", ", classes)}";
+        }
+    }
+
+    /// <summary>
+    /// IC-parity: add ONE Mapping step per object class in the chosen tier that the
+    /// ACTIVE workflow doesn't already have, each pre-stamped with its lowercase
+    /// native class and auto-mapped attributes for the (source → sink → class)
+    /// triple. Skips classes already present (idempotent), so re-running only fills
+    /// the gaps. Mirrors IC's "already has workflows for every object class —
+    /// nothing to add" backfill behaviour and message.
+    /// </summary>
+    private async Task AddStepsForAllClasses()
+    {
+        bulkBuilderMessage = string.Empty;
+        if (!editingId.HasValue) return;
+        if (SourceSystemType.Length == 0)
+        {
+            bulkBuilderMessage = "Pick a source Connected System on the Setup tab first.";
+            return;
+        }
+
+        // Resolve (or create) the workflow the steps attach to. Prefer the selected
+        // workflow; otherwise the first; otherwise stand one up (matches AddStep's
+        // single-step path but for the whole class set).
+        var workflow = SelectedWorkflow ?? workflowsForm.FirstOrDefault();
+        if (workflow is null)
+        {
+            workflow = new Workflow
+            {
+                Id = Guid.NewGuid(),
+                SyncProjectId = editingId.Value,
+                Name = $"{ModeLabel(workflowsClassMode)} sync",
+                Ordinal = workflowsForm.Count,
+                Enabled = true
+            };
+            workflowsForm.Add(workflow);
+            stepsByWorkflow[workflow.Id] = new List<WorkflowStep>();
+        }
+        selectedWorkflowId = workflow.Id;
+
+        if (!stepsByWorkflow.TryGetValue(workflow.Id, out var list))
+        {
+            list = new List<WorkflowStep>();
+            stepsByWorkflow[workflow.Id] = list;
+        }
+
+        // Classes this workflow already covers (case-insensitive on native names).
+        var existing = new HashSet<string>(
+            list.Where(s => string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase)
+                            && !string.IsNullOrWhiteSpace(s.ObjectClass))
+                .Select(s => s.ObjectClass!),
+            StringComparer.OrdinalIgnoreCase);
+
+        var classes = ProjectGenerator.GetObjectClasses(SourceSystemType, workflowsClassMode);
+        var sinkType = SinkSystemType;
+        var added = 0;
+        WorkflowStep? lastAdded = null;
+
+        foreach (var objectClass in classes)
+        {
+            if (existing.Contains(objectClass)) continue;
+
+            var step = new WorkflowStep
+            {
+                Id = Guid.NewGuid(),
+                WorkflowId = workflow.Id,
+                Name = $"{objectClass} mapping",
+                StepType = WorkflowStepTypes.Mapping,
+                ObjectClass = objectClass, // lowercase native name — matches generator + option set
+                Ordinal = list.Count,
+                Enabled = true
+            };
+            list.Add(step);
+            existing.Add(objectClass);
+            lastAdded = step;
+            added++;
+
+            // Pre-fill each new step's own class-appropriate mappings, exactly like
+            // Auto-Generate does. Seed even when the auto-map comes back empty (the
+            // step then inherits the project-level mappings, never blank-runs).
+            var mappings = AttributeMapper.BuildMappings(SourceSystemType, sinkType, objectClass);
+            if (mappings.Count > 0)
+            {
+                for (int i = 0; i < mappings.Count; i++) mappings[i].SortOrder = i;
+                stepMappings[step.Id] = mappings;
+                stepMappingsLoaded.Add(step.Id);
+                stepMappingsInherit[step.Id] = false; // step owns its class-specific mappings
+            }
+        }
+
+        if (added == 0)
+        {
+            bulkBuilderMessage = "This workflow already has steps for every object class in that tier. Nothing to add.";
+            return;
+        }
+
+        if (lastAdded is not null) await SelectStep(lastAdded.Id);
+        workflowsDirty = true;
+        bulkBuilderMessage = added == 1
+            ? "Added 1 object-class step (auto-mapped). Click Save changes to persist."
+            : $"Added {added} object-class steps (auto-mapped). Click Save changes to persist.";
+    }
+
+    /// <summary>
+    /// Auto-map EVERY Mapping step in the project using each step's OWN object class
+    /// (the bulk analogue of the per-step "Auto-map for this class"). Each step that
+    /// resolves to a non-empty template gets its mappings replaced and flips off
+    /// "inherit from project". Steps whose class has no template are left untouched.
+    /// </summary>
+    private async Task AutoMapAllSteps()
+    {
+        bulkBuilderMessage = string.Empty;
+        if (SourceSystemType.Length == 0)
+        {
+            bulkBuilderMessage = "Pick a source Connected System on the Setup tab first.";
+            return;
+        }
+
+        var mappingSteps = stepsByWorkflow.Values
+            .SelectMany(l => l)
+            .Where(s => string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (mappingSteps.Count == 0)
+        {
+            bulkBuilderMessage = "No Mapping steps to auto-map.";
+            return;
+        }
+
+        var anyEdits = mappingSteps.Any(s =>
+            GetStepMappings(s.Id).Any(m =>
+                !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute)));
+        if (anyEdits)
+        {
+            var ok = await JS.InvokeAsync<bool>("confirm",
+                "Re-map every Mapping step from its object-class template? This replaces any per-step mappings you've edited. Choose Cancel to keep them.");
+            if (!ok) return;
+        }
+
+        var sinkType = SinkSystemType;
+        var mapped = 0;
+        var skipped = 0;
+        foreach (var step in mappingSteps)
+        {
+            var stepClass = string.IsNullOrWhiteSpace(step.ObjectClass) ? "user" : step.ObjectClass!;
+            var suggested = AttributeMapper.BuildMappings(SourceSystemType, sinkType, stepClass);
+            if (suggested.Count == 0) { skipped++; continue; }
+
+            for (int i = 0; i < suggested.Count; i++) suggested[i].SortOrder = i;
+            stepMappings[step.Id] = suggested;
+            stepMappingsLoaded.Add(step.Id);
+            stepMappingsInherit[step.Id] = false;
+            mapped++;
+        }
+
+        workflowsDirty = true;
+        bulkBuilderMessage = skipped == 0
+            ? $"Auto-mapped {mapped} step(s). Click Save changes to persist."
+            : $"Auto-mapped {mapped} step(s); {skipped} had no template for their class. Click Save changes to persist.";
     }
 
     private void SelectWorkflow(Guid id)
