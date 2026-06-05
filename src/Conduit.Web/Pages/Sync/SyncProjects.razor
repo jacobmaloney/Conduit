@@ -474,7 +474,7 @@
                             @foreach (var m in AvailableModes)
                             {
                                 var mRef = m;
-                                var classes = AutoGenClassesForMode(mRef);
+                                var classes = AutoGenConstrainedClassesForMode(mRef);
                                 var isSel = autoGenMode == mRef;
                                 var isRecommended = mRef == Conduit.Sync.Templates.GenerationMode.Core;
                                 <div class="autogen-tpl-card @(isSel ? "selected" : "")"
@@ -984,7 +984,7 @@
                                             {
                                                 <div class="mt-2">
                                                     <label class="form-label fw-semibold mb-1">Source Table</label>
-                                                    <select class="form-select" @bind="form.SourceTable">
+                                                    <select class="form-select" @bind="form.SourceTable" @bind:after="OnIcTableChanged">
                                                         <option value="Objects">Objects (directory accounts)</option>
                                                         <option value="Identities">Identities (people)</option>
                                                     </select>
@@ -1044,7 +1044,7 @@
                                             {
                                                 <div class="mt-2">
                                                     <label class="form-label fw-semibold mb-1">Target Table</label>
-                                                    <select class="form-select" @bind="form.SinkTable">
+                                                    <select class="form-select" @bind="form.SinkTable" @bind:after="OnIcTableChanged">
                                                         <option value="Objects">Objects (directory accounts)</option>
                                                         <option value="Identities">Identities (people)</option>
                                                     </select>
@@ -1188,7 +1188,7 @@
                             {
                                 var mRef = m;
                                 var isSel = wizardClassMode == mRef;
-                                var tierCount = SourceSystemType.Length == 0 ? 0 : ProjectGenerator.GetObjectClasses(SourceSystemType, mRef).Count;
+                                var tierCount = WizardClassesForMode(mRef).Count;
                                 var cardCls = isSel ? "sync-class-tier-card selected" : "sync-class-tier-card";
                                 <div class="col-6 col-md-3">
                                     <div class="@cardCls" @onclick="() => SetWizardClassMode(mRef)">
@@ -1208,6 +1208,14 @@
                         }
                         else
                         {
+                            var identitiesOnlyGrid = WizardIcIdentitiesInvolved;
+                            @if (identitiesOnlyGrid)
+                            {
+                                <div class="alert alert-info py-2 mb-2">
+                                    <i class="fas fa-user me-1"></i>
+                                    The IdentityCenter <strong>Identities</strong> table holds people only — sync is limited to the <strong>user</strong> class.
+                                </div>
+                            }
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <small class="text-muted">@WizardClassSummary</small>
                                 <div class="btn-group btn-group-sm">
@@ -2297,11 +2305,13 @@
     private Conduit.Sync.Templates.GenerationMode wizardClassMode = Conduit.Sync.Templates.GenerationMode.Core;
     private HashSet<string> wizardSelectedClasses = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Every object class the current source connector can emit (the Full set) — the checklist universe.</summary>
+    /// <summary>
+    /// Every object class the current source connector can emit (the Full set) — the
+    /// checklist universe. Collapses to { user } whenever an IC/Identities endpoint is
+    /// involved (Identities holds people only), via the single ApplyIdentitiesConstraint rule.
+    /// </summary>
     private IReadOnlyList<string> WizardAllClasses =>
-        SourceSystemType.Length == 0
-            ? Array.Empty<string>()
-            : ProjectGenerator.GetObjectClasses(SourceSystemType, Conduit.Sync.Templates.GenerationMode.Full);
+        WizardClassesForMode(Conduit.Sync.Templates.GenerationMode.Full);
 
     /// <summary>Class tiers offered in the wizard — same source of truth as Auto-Generate / the bulk builder.</summary>
     private IReadOnlyList<Conduit.Sync.Templates.GenerationMode> WizardClassModes => AvailableWorkflowModes;
@@ -2311,7 +2321,7 @@
     {
         wizardClassMode = mode;
         wizardSelectedClasses = new HashSet<string>(
-            ProjectGenerator.GetObjectClasses(SourceSystemType, mode),
+            WizardClassesForMode(mode),
             StringComparer.OrdinalIgnoreCase);
     }
 
@@ -2319,6 +2329,25 @@
     {
         if (isChecked) wizardSelectedClasses.Add(cls);
         else           wizardSelectedClasses.Remove(cls);
+    }
+
+    /// <summary>
+    /// Post-switch reconcile (V22 table picker). When the operator flips an IC
+    /// endpoint to the people-only Identities table AFTER selecting classes, drop
+    /// every non-user selection so the wizard can't stand up a group/computer/OU
+    /// step that Identities can never hold. No-op when neither endpoint is on
+    /// Identities. Single source of truth: WizardIcIdentitiesInvolved.
+    /// </summary>
+    private void OnIcTableChanged()
+    {
+        if (!WizardIcIdentitiesInvolved) return;
+        if (wizardSelectedClasses.Count > 0
+            && wizardSelectedClasses.Any(c => !string.Equals(c, "user", StringComparison.OrdinalIgnoreCase)))
+        {
+            wizardSelectedClasses = new HashSet<string>(
+                wizardSelectedClasses.Where(c => string.Equals(c, "user", StringComparison.OrdinalIgnoreCase)),
+                StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     private void WizardSelectAllClasses() =>
@@ -2397,7 +2426,7 @@
         {
             if (SourceSystemType.Length == 0)
                 return "Pick a source Connected System on the Setup tab to enable all-class build.";
-            var classes = ProjectGenerator.GetObjectClasses(SourceSystemType, workflowsClassMode);
+            var classes = WizardClassesForMode(workflowsClassMode);
             return $"{classes.Count} class(es): {string.Join(", ", classes)}";
         }
     }
@@ -2452,7 +2481,7 @@
                 .Select(s => s.ObjectClass!),
             StringComparer.OrdinalIgnoreCase);
 
-        var classes = ProjectGenerator.GetObjectClasses(SourceSystemType, workflowsClassMode);
+        var classes = WizardClassesForMode(workflowsClassMode);
         var sinkType = SinkSystemType;
         var added = 0;
         WorkflowStep? lastAdded = null;
@@ -2731,6 +2760,20 @@
     /// </summary>
     private List<StepClassOption> StepObjectClassOptionsFor(string? currentClass)
     {
+        // IDENTITIES RULE: an IC/Identities-targeted project may only carry user
+        // steps — offer user alone (the "(current)" fallback below still preserves
+        // any pre-existing non-user step's value so the select never renders blank).
+        if (WizardIcIdentitiesInvolved)
+        {
+            var idOptions = new List<StepClassOption> { new("user", "User") };
+            if (!string.IsNullOrWhiteSpace(currentClass)
+                && !string.Equals(currentClass, "user", StringComparison.OrdinalIgnoreCase))
+            {
+                idOptions.Add(new(currentClass!, $"{currentClass} (current)"));
+            }
+            return idOptions;
+        }
+
         var options = new List<StepClassOption>
         {
             new("user", "User"),
@@ -2986,6 +3029,65 @@
         && tenantById.TryGetValue(autoGenSinkId, out var t)
         && string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase);
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SINGLE SOURCE OF TRUTH: IdentityCenter "Identities" table = PEOPLE only.
+    // The Objects table holds every AD object class (user/group/computer/contact/
+    // OU/…); the Identities table holds only people, so the only object class you
+    // can create or sync there is "user". Whenever EITHER project endpoint is an
+    // IdentityCenter connector whose table = Identities, the class set collapses
+    // to { user }. Every place that offers an object-class set (Auto-Generate
+    // cards + preview, the manual multi-class grid, and the Workflows-tab add-all
+    // + per-step Object Class select) routes its GetObjectClasses(...) result
+    // through ApplyIdentitiesConstraint so the rule is enforced in ONE place.
+    // ─────────────────────────────────────────────────────────────────────────
+    private static readonly IReadOnlyList<string> IdentitiesOnlyClasses = new[] { "user" };
+
+    /// <summary>True when a chosen IC endpoint's table is the people-only "Identities" table.</summary>
+    private static bool IsIcIdentitiesTable(bool endpointIsIdentityCenter, string? table) =>
+        endpointIsIdentityCenter
+        && string.Equals(table, "Identities", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// THE table-aware filter. Given a source-derived class set and whether an
+    /// IC/Identities endpoint is involved, returns the set unchanged for Objects
+    /// (or non-IC) endpoints, or collapsed to { user } when Identities is in play.
+    /// Intersects rather than blindly replaces, so a source that genuinely emits
+    /// no users yields an empty set instead of a phantom user step.
+    /// </summary>
+    private static IReadOnlyList<string> ApplyIdentitiesConstraint(
+        IReadOnlyList<string> classes, bool icIdentitiesEndpointInvolved)
+    {
+        if (!icIdentitiesEndpointInvolved) return classes;
+        var filtered = classes
+            .Where(c => string.Equals(c, "user", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        // The IC connector can always CREATE a user in Identities even if the
+        // counterpart's catalog happens to omit it, so guarantee the people class.
+        return filtered.Count > 0 ? filtered : IdentitiesOnlyClasses;
+    }
+
+    /// <summary>Wizard / Workflows-tab context: does the editing project's source OR sink land in IC Identities?</summary>
+    private bool WizardIcIdentitiesInvolved =>
+        IsIcIdentitiesTable(SourceIsIdentityCenter, form.SourceTable)
+        || IsIcIdentitiesTable(SinkIsIdentityCenter, form.SinkTable);
+
+    /// <summary>Auto-Generate-modal context: does the modal's source OR sink land in IC Identities?</summary>
+    private bool AutoGenIcIdentitiesInvolved =>
+        IsIcIdentitiesTable(AutoGenSourceIsIdentityCenter, autoGenSourceTable)
+        || IsIcIdentitiesTable(AutoGenSinkIsIdentityCenter, autoGenSinkTable);
+
+    /// <summary>Wizard / Workflows-tab class set: GetObjectClasses(source, mode) filtered by the Identities rule.</summary>
+    private IReadOnlyList<string> WizardClassesForMode(Conduit.Sync.Templates.GenerationMode mode) =>
+        ApplyIdentitiesConstraint(
+            SourceSystemType.Length == 0
+                ? Array.Empty<string>()
+                : ProjectGenerator.GetObjectClasses(SourceSystemType, mode),
+            WizardIcIdentitiesInvolved);
+
+    /// <summary>Auto-Generate class set for a tier: GetObjectClasses(source, mode) filtered by the Identities rule.</summary>
+    private IReadOnlyList<string> AutoGenConstrainedClassesForMode(Conduit.Sync.Templates.GenerationMode mode) =>
+        ApplyIdentitiesConstraint(AutoGenClassesForMode(mode), AutoGenIcIdentitiesInvolved);
+
     private bool ShowAssignmentTemplatePanel =>
         SinkIsAwsSso
         && string.Equals(form.ObjectClass, "Assignment", StringComparison.OrdinalIgnoreCase);
@@ -3173,7 +3275,9 @@
             {
                 return "Select a source Connected System to preview the generated object classes.";
             }
-            var classes = ProjectGenerator.GetObjectClasses(source.SystemType, autoGenMode);
+            var classes = ApplyIdentitiesConstraint(
+                ProjectGenerator.GetObjectClasses(source.SystemType, autoGenMode),
+                AutoGenIcIdentitiesInvolved);
             var joined = string.Join(", ", classes);
             return $"Generates 1 sync project with {classes.Count} per-class step(s): {joined}";
         }
@@ -3982,7 +4086,7 @@
         if (!WizardClassModes.Contains(wizardClassMode))
             wizardClassMode = Conduit.Sync.Templates.GenerationMode.Core;
         wizardSelectedClasses = new HashSet<string>(
-            ProjectGenerator.GetObjectClasses(SourceSystemType, wizardClassMode),
+            WizardClassesForMode(wizardClassMode),
             StringComparer.OrdinalIgnoreCase);
     }
 
@@ -4506,12 +4610,24 @@
             // steps (one per object class). Persist project -> workflow -> each step
             // (+ its per-step scope + mappings). Today the generator yields a single
             // project, but we loop to stay forward-compatible.
+            // IDENTITIES RULE: the generator is table-blind (shared IC-parity signature),
+            // so when an IC/Identities endpoint is involved we drop every non-user step
+            // here — Identities holds people only. Same single source of truth the modal
+            // preview + cards already filter through (ApplyIdentitiesConstraint).
+            var identitiesOnly = AutoGenIcIdentitiesInvolved;
             var totalSteps = 0;
             foreach (var g in generated)
             {
                 g.Project.IsEnabled = autoGenEnable;
                 g.Project.SourceTable = srcTable;
                 g.Project.SinkTable = sinkTable;
+                if (identitiesOnly)
+                {
+                    g.Steps = g.Steps
+                        .Where(s => string.IsNullOrWhiteSpace(s.Step.ObjectClass)
+                                    || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
                 await ProjectRepo.CreateAsync(g.Project);
                 await WorkflowRepo.CreateAsync(g.Workflow);
                 foreach (var st in g.Steps)
