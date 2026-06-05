@@ -111,24 +111,75 @@ internal static class IdentityCenterCredentialReader
             if (!string.Equals(otherName, name, StringComparison.OrdinalIgnoreCase))
                 raw = await p.RetrieveAsync(tenantId, otherName);
         }
+        // A null/empty raw means NO credential row exists for this tenant+name —
+        // the genuine "not configured" case; the caller surfaces "No credential".
         if (string.IsNullOrEmpty(raw)) return null;
+
+        // A row EXISTS but failed to parse is a DIFFERENT failure (corrupt /
+        // hand-stamped blob). Returning null here previously masqueraded as
+        // "no credential", which is misleading and was painful to diagnose.
+        // Parse leniently and, when the strict JSON parse fails on an otherwise
+        // recoverable blob (e.g. a manually stored {Key:value} without quotes),
+        // fall back to a tolerant extractor rather than silently failing a run.
+        string? url, key;
+        if (!TryParseCredentialBlob(raw, out url, out key))
+            throw new InvalidOperationException(
+                "The stored 'identitycenter' credential exists but is malformed " +
+                "(could not read BaseUrl + ApiKey). Re-save the IdentityCenter connection's " +
+                "credential in Connected Systems to repair it.");
+
+        // V22: table comes from the per-side project endpoint (ambient context the
+        // orchestrator stamps from SyncProject.SourceTable / SinkTable), NOT the
+        // credential blob. Explicit "Identities" → Identities; unset / unknown /
+        // "Objects" → Objects (back-compat default).
+        var tableKey = IdentityCenterTableContext.Resolve(side);
+        var table = string.Equals(tableKey, "Identities", StringComparison.OrdinalIgnoreCase)
+            ? IcTable.Identities
+            : IcTable.Objects;
+        return new IdentityCenterCredentials(url!.TrimEnd('/'), key!, table);
+    }
+
+    /// <summary>
+    /// Reads BaseUrl + ApiKey from a stored credential blob. Prefers a strict
+    /// JSON parse; on failure (a malformed blob — e.g. one hand-stored without
+    /// quoting) falls back to a tolerant key/value scan so an otherwise usable
+    /// credential doesn't silently fail an entire sync run. Returns false only
+    /// when neither path can recover both fields.
+    /// </summary>
+    internal static bool TryParseCredentialBlob(string raw, out string? baseUrl, out string? apiKey)
+    {
+        baseUrl = null;
+        apiKey = null;
         try
         {
             using var doc = JsonDocument.Parse(raw);
-            var url = doc.RootElement.TryGetProperty("BaseUrl", out var uEl) ? uEl.GetString() : null;
-            var key = doc.RootElement.TryGetProperty("ApiKey",  out var kEl) ? kEl.GetString() : null;
-            if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key)) return null;
-            // V22: table comes from the per-side project endpoint (ambient context the
-            // orchestrator stamps from SyncProject.SourceTable / SinkTable), NOT the
-            // credential blob. Explicit "Identities" → Identities; unset / unknown /
-            // "Objects" → Objects (back-compat default).
-            var tableKey = IdentityCenterTableContext.Resolve(side);
-            var table = string.Equals(tableKey, "Identities", StringComparison.OrdinalIgnoreCase)
-                ? IcTable.Identities
-                : IcTable.Objects;
-            return new IdentityCenterCredentials(url!.TrimEnd('/'), key!, table);
+            baseUrl = doc.RootElement.TryGetProperty("BaseUrl", out var uEl) ? uEl.GetString() : null;
+            apiKey = doc.RootElement.TryGetProperty("ApiKey", out var kEl) ? kEl.GetString() : null;
         }
-        catch { return null; }
+        catch (JsonException)
+        {
+            baseUrl = ExtractLoose(raw, "BaseUrl");
+            apiKey = ExtractLoose(raw, "ApiKey");
+        }
+        return !string.IsNullOrEmpty(baseUrl) && !string.IsNullOrEmpty(apiKey);
+    }
+
+    /// <summary>
+    /// Last-resort extractor for a malformed brace blob like
+    /// <c>{BaseUrl:http://h:5062,ApiKey:abc}</c> (no quotes). Reads the value
+    /// after <c>field:</c> up to the next top-level comma or closing brace.
+    /// </summary>
+    private static string? ExtractLoose(string raw, string field)
+    {
+        var idx = raw.IndexOf(field, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return null;
+        var colon = raw.IndexOf(':', idx + field.Length);
+        if (colon < 0) return null;
+        var start = colon + 1;
+        var end = start;
+        while (end < raw.Length && raw[end] != ',' && raw[end] != '}') end++;
+        if (end <= start) return null;
+        return raw.Substring(start, end - start).Trim().Trim('"');
     }
 
     public static HttpClient BuildClient(IHttpClientFactory factory, IdentityCenterCredentials creds)
