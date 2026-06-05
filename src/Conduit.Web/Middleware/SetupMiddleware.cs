@@ -11,7 +11,6 @@ namespace Conduit.Web.Middleware
     public class SetupMiddleware
     {
         private readonly RequestDelegate _next;
-        private static bool? _setupRequired;
 
         /// <summary>
         /// Initializes a new instance of the SetupMiddleware class
@@ -22,17 +21,24 @@ namespace Conduit.Web.Middleware
         }
 
         /// <summary>
-        /// Invokes the middleware
+        /// Invokes the middleware. Routes by the three-state database status:
+        ///   Unreachable → /db-offline (NEVER the wizard — a network blip must not expose
+        ///   first-run setup), NotConfigured → /setup (legitimate first run), Ready → normal.
+        /// De-hammering / brief caching lives in SetupService.GetDatabaseStatusAsync so a
+        /// transient outage can recover without a latched middleware flag.
         /// </summary>
         public async Task InvokeAsync(HttpContext context, SetupService setupService)
         {
-            // Skip setup check for static files and framework files
+            // Skip setup check for static files, framework files, and the anonymous
+            // bootstrap routes (including the offline page itself, so it can render even
+            // while the DB is down).
             var path = context.Request.Path.Value?.ToLower() ?? "";
             if (path.StartsWith("/_") ||
                 path.StartsWith("/css") ||
                 path.StartsWith("/js") ||
                 path.StartsWith("/lib") ||
                 path.StartsWith("/setup") ||
+                path.StartsWith("/db-offline") ||
                 path.StartsWith("/login") ||
                 path.StartsWith("/logout"))
             {
@@ -40,28 +46,31 @@ namespace Conduit.Web.Middleware
                 return;
             }
 
-            // Check if setup is required (cache the result)
-            if (_setupRequired == null)
-            {
-                _setupRequired = await setupService.IsSetupRequiredAsync();
-            }
+            var status = await setupService.GetDatabaseStatusAsync();
 
-            if (_setupRequired.Value)
+            switch (status)
             {
-                // Redirect to setup page
-                context.Response.Redirect("/setup");
-                return;
+                case DatabaseStatus.Unreachable:
+                    // Transient/infra-down: show a clear retrying page, NOT the wizard.
+                    context.Response.Redirect("/db-offline");
+                    return;
+                case DatabaseStatus.NotConfigured:
+                    // Genuine first run.
+                    context.Response.Redirect("/setup");
+                    return;
+                default:
+                    await _next(context);
+                    return;
             }
-
-            await _next(context);
         }
 
         /// <summary>
-        /// Clears the setup required cache
+        /// Clears the cached database status (invoked after setup completes so the next
+        /// request re-evaluates immediately rather than waiting for the cache TTL).
         /// </summary>
         public static void ClearCache()
         {
-            _setupRequired = null;
+            SetupService.ClearStatusCache();
         }
     }
 

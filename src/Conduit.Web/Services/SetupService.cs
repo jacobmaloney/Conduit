@@ -26,6 +26,17 @@ namespace Conduit.Web.Services
         // back into /setup every restart because the marker file "disappears."
         private readonly string _setupCompleteFile;
 
+        // Fast-fail timeout (seconds) for the status probe connection so a dead host
+        // doesn't hang each request on the default 15s open.
+        private const int ProbeConnectTimeoutSeconds = 4;
+
+        // Brief status cache so a flood of requests/pollers against a dead host doesn't
+        // re-hammer it (and spam logs). Short enough that recovery is detected promptly.
+        private static readonly TimeSpan StatusCacheTtl = TimeSpan.FromSeconds(5);
+        private static readonly object _statusLock = new();
+        private static DatabaseStatus? _cachedStatus;
+        private static DateTime _cachedStatusAtUtc = DateTime.MinValue;
+
         public SetupService(IConfiguration configuration, ILogger<SetupService> logger,
             DatabaseConfig databaseConfig, SetupRepository repository, IHostEnvironment env)
         {
@@ -46,29 +57,105 @@ namespace Conduit.Web.Services
         /// </summary>
         public async Task<bool> IsSetupRequiredAsync()
         {
+            // Setup is "required" only when the DB is reachable but not configured. An
+            // unreachable DB is NOT a setup signal — see GetDatabaseStatusAsync.
+            return await GetDatabaseStatusAsync() == DatabaseStatus.NotConfigured;
+        }
+
+        /// <summary>
+        /// Classifies the database into one of three states so callers can tell a transient
+        /// outage from a genuine first-run:
+        ///   <list type="bullet">
+        ///     <item><see cref="DatabaseStatus.Ready"/> — reachable, schema present, an
+        ///       active portal admin exists (or a marker file confirms prior setup).</item>
+        ///     <item><see cref="DatabaseStatus.NotConfigured"/> — reachable, but no schema /
+        ///       no admin yet. This is the legitimate first-run; route to /setup.</item>
+        ///     <item><see cref="DatabaseStatus.Unreachable"/> — the host is down / the
+        ///       connection cannot be opened (network class). Route to the offline page and
+        ///       retry; NEVER expose the setup wizard for this.</item>
+        ///   </list>
+        /// The result is cached for a few seconds so a dead host isn't re-probed on every
+        /// request. The cache never latches: once the host returns, the next probe after
+        /// TTL detects Ready/NotConfigured and the app proceeds normally.
+        /// </summary>
+        public async Task<DatabaseStatus> GetDatabaseStatusAsync()
+        {
+            lock (_statusLock)
+            {
+                if (_cachedStatus.HasValue && DateTime.UtcNow - _cachedStatusAtUtc < StatusCacheTtl)
+                {
+                    return _cachedStatus.Value;
+                }
+            }
+
+            var status = await ProbeDatabaseStatusAsync();
+
+            lock (_statusLock)
+            {
+                _cachedStatus = status;
+                _cachedStatusAtUtc = DateTime.UtcNow;
+            }
+            return status;
+        }
+
+        /// <summary>
+        /// Invalidates the cached database status so the next probe runs immediately.
+        /// Called after setup completes so the freshly-configured DB is recognized at once.
+        /// </summary>
+        /// <summary>
+        /// Returns the SQL server/host portion of the configured connection string for
+        /// display on the offline page. Never returns credentials. Empty if unknown.
+        /// </summary>
+        public string GetConfiguredServerName()
+        {
+            try
+            {
+                var cs = _configuration.GetConnectionString("DefaultConnection");
+                if (string.IsNullOrWhiteSpace(cs)) return string.Empty;
+                return new SqlConnectionStringBuilder(cs).DataSource ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        public static void ClearStatusCache()
+        {
+            lock (_statusLock)
+            {
+                _cachedStatus = null;
+                _cachedStatusAtUtc = DateTime.MinValue;
+            }
+        }
+
+        private async Task<DatabaseStatus> ProbeDatabaseStatusAsync()
+        {
             var connectionString = _configuration.GetConnectionString("DefaultConnection");
+
+            // No usable connection string at all → genuine first run.
             if (string.IsNullOrWhiteSpace(connectionString) || IsPlaceholderConnectionString(connectionString))
             {
-                return true;
+                return DatabaseStatus.NotConfigured;
             }
 
             try
             {
-                // 1. Schema present?
+                // 1. Schema present? (Throws DatabaseUnreachableException on connect failure.)
                 var configured = await IsDatabaseConfiguredAsync(connectionString);
                 if (!configured)
                 {
-                    return true;
+                    return DatabaseStatus.NotConfigured;
                 }
 
                 // 2. Active portal admin present? This is the real signal — the operator
                 //    can sign in only if there's a row here. If the table doesn't exist
-                //    yet (pre-v10 schema) we treat that as "setup required" since the
+                //    yet (pre-v10 schema) we treat that as "not configured" since the
                 //    next migration will create it.
                 var hasTable = await _repository.PortalAdminsTableExistsAsync();
                 if (!hasTable)
                 {
-                    return true;
+                    return DatabaseStatus.NotConfigured;
                 }
                 var activeAdmins = await _repository.CountActiveAdminsAsync();
                 if (activeAdmins > 0)
@@ -77,17 +164,29 @@ namespace Conduit.Web.Services
                     // downstream code that still reads it agrees.
                     try { if (!File.Exists(_setupCompleteFile)) File.WriteAllText(_setupCompleteFile, DateTime.UtcNow.ToString("O")); }
                     catch { /* best-effort; harmless if it fails */ }
-                    return false;
+                    return DatabaseStatus.Ready;
                 }
+
+                // Reachable, schema present, but no active admin and no marker file →
+                // still first-run; otherwise consider it set up.
+                return File.Exists(_setupCompleteFile) ? DatabaseStatus.Ready : DatabaseStatus.NotConfigured;
+            }
+            catch (DatabaseUnreachableException ex)
+            {
+                // ONE clean WARN line — no cascading stack trace storm. The status cache
+                // suppresses repeats for the TTL window.
+                _logger.LogWarning("Database unreachable: {Server} — retrying. ({Reason})",
+                    ex.Server, ex.InnerException?.Message ?? ex.Message);
+                return DatabaseStatus.Unreachable;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Could not connect to database, setup required");
-                return true;
+                // Unexpected non-connect failure: don't expose setup on a mystery error and
+                // don't latch. Treat as Unreachable so we retry rather than wiping into the
+                // wizard or throwing into the request pipeline.
+                _logger.LogWarning(ex, "Unexpected error probing database status — treating as unreachable and retrying.");
+                return DatabaseStatus.Unreachable;
             }
-
-            // No active admin and no marker file → run the wizard.
-            return !File.Exists(_setupCompleteFile);
         }
 
         /// <summary>
@@ -270,42 +369,139 @@ namespace Conduit.Web.Services
         }
 
         /// <summary>
-        /// Checks if the database is properly configured
+        /// Checks if the database is properly configured (schema present).
+        ///
+        /// IMPORTANT: this method deliberately does NOT swallow connect/network failures.
+        /// A failure to OPEN the probe connection (host down, login timeout, pre-login
+        /// handshake) is a fundamentally different condition from "connected fine but the
+        /// schema isn't there yet" and the two must not be conflated — conflating them is
+        /// what used to dump a first-run operator into the setup wizard on a transient
+        /// network blip. We rethrow connect-class SqlExceptions as
+        /// <see cref="DatabaseUnreachableException"/> so callers can branch on them; a
+        /// clean connect that simply shows no schema returns <c>false</c> as before.
         /// </summary>
         private async Task<bool> IsDatabaseConfiguredAsync(string connectionString)
         {
+            // Short connect timeout on the status probe so a dead host fails fast (a few
+            // seconds) instead of hanging the UI ~15s per request.
+            var probeString = WithProbeTimeout(connectionString);
+
+            var builder = new SqlConnectionStringBuilder(probeString);
+            var databaseName = builder.InitialCatalog;
+            builder.InitialCatalog = "master";
+
+            // --- Phase 1: open against master. A failure HERE is a connectivity failure. ---
+            SqlConnection connection;
             try
             {
-                var builder = new SqlConnectionStringBuilder(connectionString);
-                var databaseName = builder.InitialCatalog;
-                builder.InitialCatalog = "master";
-
-                using var connection = new SqlConnection(builder.ConnectionString);
+                connection = new SqlConnection(builder.ConnectionString);
                 await connection.OpenAsync();
+            }
+            catch (SqlException ex) when (IsConnectivityFailure(ex))
+            {
+                throw new DatabaseUnreachableException(builder.DataSource, ex);
+            }
 
-                // Check if database exists
-                var count = await connection.ExecuteScalarAsync<int>(
-                    "SELECT COUNT(*) FROM sys.databases WHERE name = @name",
-                    new { name = databaseName });
-                if (count <= 0)
+            try
+            {
+                using (connection)
                 {
-                    return false;
+                    // Check if database exists
+                    var count = await connection.ExecuteScalarAsync<int>(
+                        "SELECT COUNT(*) FROM sys.databases WHERE name = @name",
+                        new { name = databaseName });
+                    if (count <= 0)
+                    {
+                        // Connected fine, target DB simply not created yet → NotConfigured.
+                        return false;
+                    }
                 }
 
-                // Check if tables exist
+                // --- Phase 2: open against the target DB. Opening an existing DB that
+                //     rejects the connection (e.g. 4060) is also connectivity-class. ---
                 builder.InitialCatalog = databaseName;
-                using var dbConnection = new SqlConnection(builder.ConnectionString);
-                await dbConnection.OpenAsync();
+                SqlConnection dbConnection;
+                try
+                {
+                    dbConnection = new SqlConnection(builder.ConnectionString);
+                    await dbConnection.OpenAsync();
+                }
+                catch (SqlException ex) when (IsConnectivityFailure(ex))
+                {
+                    throw new DatabaseUnreachableException(builder.DataSource, ex);
+                }
 
-                var tableCount = await dbConnection.ExecuteScalarAsync<int>(
-                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Users'");
-                return tableCount > 0;
+                using (dbConnection)
+                {
+                    var tableCount = await dbConnection.ExecuteScalarAsync<int>(
+                        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Users'");
+                    return tableCount > 0;
+                }
+            }
+            catch (DatabaseUnreachableException)
+            {
+                throw; // already classified — let callers handle it
             }
             catch (Exception ex)
             {
+                // A query against an already-open connection failed for a non-connect
+                // reason. Treat as "not configured" (legacy behavior) rather than offline.
                 _logger.LogError(ex, "Error checking database configuration");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Returns a short-connect-timeout variant of the supplied connection string so the
+        /// status probe fails fast when the host is down instead of hanging on the default
+        /// 15s timeout. Best-effort: if the string can't be parsed we hand it back as-is.
+        /// </summary>
+        private static string WithProbeTimeout(string connectionString)
+        {
+            try
+            {
+                return new SqlConnectionStringBuilder(connectionString)
+                {
+                    ConnectTimeout = ProbeConnectTimeoutSeconds
+                }.ConnectionString;
+            }
+            catch
+            {
+                return connectionString;
+            }
+        }
+
+        /// <summary>
+        /// Decides whether a <see cref="SqlException"/> is a CONNECT/network-class failure
+        /// (host unreachable, transport, pre-login handshake, login timeout, DB-open
+        /// rejection) versus a genuine authentication failure or a query error against an
+        /// already-open connection. Connectivity failures = the DB is "offline"; everything
+        /// else is left to the normal not-configured / error paths.
+        ///
+        /// Numbers covered: 53 (network path/server not found), 40 (could not open
+        /// connection), -2 (client-side command/connect timeout), 10060 (TCP connect
+        /// timeout), 10061 (connection refused), 11001 (host not found), 4060 (cannot open
+        /// database), 233 (no process on the pipe / shared-memory). 18456 is explicitly
+        /// EXCLUDED — that's an auth failure (bad password), not network-down.
+        /// </summary>
+        private static bool IsConnectivityFailure(SqlException ex)
+        {
+            foreach (SqlError err in ex.Errors)
+            {
+                switch (err.Number)
+                {
+                    case 53:     // network path not found / server not found
+                    case 40:     // could not open a connection to SQL Server
+                    case -2:     // timeout (client)
+                    case 10060:  // TCP connect timeout
+                    case 10061:  // connection actively refused
+                    case 11001:  // host not found (DNS)
+                    case 233:    // no process is on the other end of the pipe
+                    case 4060:   // cannot open database requested by the login
+                        return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -518,6 +714,36 @@ namespace Conduit.Web.Services
     {
         public SetupAlreadyCompletedException()
             : base("Setup has already been completed. Re-running setup is not permitted.") { }
+    }
+
+    /// <summary>
+    /// Three-state classification of the configured database, used to keep a transient
+    /// outage from being misread as a first-run.
+    /// </summary>
+    public enum DatabaseStatus
+    {
+        /// <summary>Reachable, schema present, prior setup confirmed → normal operation.</summary>
+        Ready,
+        /// <summary>Reachable but no schema/admin yet → legitimate first run; route to /setup.</summary>
+        NotConfigured,
+        /// <summary>Host down / connection cannot be opened → route to the offline page and retry.</summary>
+        Unreachable
+    }
+
+    /// <summary>
+    /// Raised internally when the status probe cannot OPEN a connection to SQL Server
+    /// (network-class SqlException). Distinct from a query failure against an already-open
+    /// connection so the setup decision can branch "offline" vs "needs setup."
+    /// </summary>
+    public class DatabaseUnreachableException : Exception
+    {
+        public string Server { get; }
+
+        public DatabaseUnreachableException(string server, Exception inner)
+            : base($"Database server '{server}' is unreachable.", inner)
+        {
+            Server = server;
+        }
     }
 
     /// <summary>
