@@ -26,9 +26,14 @@ namespace Conduit.Web.Services
         // back into /setup every restart because the marker file "disappears."
         private readonly string _setupCompleteFile;
 
-        // Fast-fail timeout (seconds) for the status probe connection so a dead host
-        // doesn't hang each request on the default 15s open.
-        private const int ProbeConnectTimeoutSeconds = 4;
+        // Connect timeout (seconds) for the status probe. Must NOT undercut a healthy-but-slow
+        // server: a 4s probe falsely reported "unreachable" when .56's pre-login handshake took
+        // ~4.5s, routing every request to /db-offline even though the real init connection (15s)
+        // connected fine and applied migrations. Match the default connection timeout so a slow
+        // handshake is never mistaken for a dead host. A truly-down host (no TCP / "network path
+        // not found") still fails in <1s at the transport layer, and the 5s status cache means at
+        // most one probe per window pays the full wait.
+        private const int ProbeConnectTimeoutSeconds = 15;
 
         // Brief status cache so a flood of requests/pollers against a dead host doesn't
         // re-hammer it (and spam logs). Short enough that recovery is detected promptly.
@@ -478,31 +483,13 @@ namespace Conduit.Web.Services
         /// already-open connection. Connectivity failures = the DB is "offline"; everything
         /// else is left to the normal not-configured / error paths.
         ///
-        /// Numbers covered: 53 (network path/server not found), 40 (could not open
-        /// connection), -2 (client-side command/connect timeout), 10060 (TCP connect
-        /// timeout), 10061 (connection refused), 11001 (host not found), 4060 (cannot open
-        /// database), 233 (no process on the pipe / shared-memory). 18456 is explicitly
-        /// EXCLUDED — that's an auth failure (bad password), not network-down.
+        /// The error-number list itself lives in <see cref="SqlConnectivity.IsTransient"/>
+        /// (Conduit.DataAccess) so SetupService and DatabaseInitializer share one source of
+        /// truth. See that helper for the covered numbers (53/40/-2/10060/10061/11001/233/4060)
+        /// and the explicit 18456 (auth) exclusion.
         /// </summary>
         private static bool IsConnectivityFailure(SqlException ex)
-        {
-            foreach (SqlError err in ex.Errors)
-            {
-                switch (err.Number)
-                {
-                    case 53:     // network path not found / server not found
-                    case 40:     // could not open a connection to SQL Server
-                    case -2:     // timeout (client)
-                    case 10060:  // TCP connect timeout
-                    case 10061:  // connection actively refused
-                    case 11001:  // host not found (DNS)
-                    case 233:    // no process is on the other end of the pipe
-                    case 4060:   // cannot open database requested by the login
-                        return true;
-                }
-            }
-            return false;
-        }
+            => SqlConnectivity.IsTransient(ex);
 
         /// <summary>
         /// Checks if a connection string is a placeholder/template value

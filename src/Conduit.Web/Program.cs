@@ -252,6 +252,14 @@ builder.Services.AddHostedService<LoginThrottlePruner>();
 builder.Services.AddSingleton<OpenAccessState>();
 builder.Services.AddHostedService<StartupService>();
 
+// Resilient DB startup: bounded retry-with-backoff inline (handles a brief blip), then a
+// background self-heal service that keeps retrying if the DB is still down at boot so the
+// app recovers without a manual restart. The hosted service is a no-op unless the inline
+// retry flips the signal (so zero cost on the happy path / on a fatal auth-or-schema error).
+builder.Services.AddSingleton(StartupRetryOptions.FromConfiguration(builder.Configuration));
+builder.Services.AddSingleton<DatabaseSelfHealSignal>();
+builder.Services.AddHostedService<DatabaseSelfHealService>();
+
 // CORS is driven by Cors:AllowedOrigins in configuration. If no origins are
 // configured, the policy allows nothing cross-origin — which is the right default
 // for an identity service. Same-origin browser sessions and SCIM clients with
@@ -471,23 +479,36 @@ using (var scope = app.Services.CreateScope())
     if (!setupRequired)
     {
         var dbInitializer = scope.ServiceProvider.GetRequiredService<DatabaseInitializer>();
-        try
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        var retryOptions = app.Services.GetRequiredService<StartupRetryOptions>();
+
+        // Bounded inline retry-with-backoff. Retries ONLY connectivity-class failures; a fatal
+        // (auth/permission/schema) error surfaces immediately and is NOT retried.
+        var initResult = await DatabaseStartup.TryInitializeWithRetryAsync(dbInitializer, retryOptions, logger);
+
+        if (initResult == StartupInitResult.StillUnreachable)
         {
-            await dbInitializer.InitializeAsync();
+            // DB down at boot. Do NOT crash and do NOT block — start the host so /db-offline can
+            // serve, and arm the background self-heal service to keep retrying until the DB returns.
+            app.Services.GetRequiredService<DatabaseSelfHealSignal>().Request();
+            SetupMiddleware.ClearCache();
         }
-        catch (Exception ex)
+        else if (initResult == StartupInitResult.Fatal)
         {
-            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            logger.LogError(ex, "Database initialization failed at startup; routing user to /setup");
+            // Misconfiguration that will not fix itself by waiting. Already logged as ERROR.
+            // Fall through to setup/error routing rather than self-healing forever.
             SetupMiddleware.ClearCache();
         }
 
-        // Load Portal.OpenAccess from SystemConfigurations into the singleton cache.
-        try { await app.Services.GetRequiredService<OpenAccessState>().InitializeAsync(); }
-        catch (Exception ex)
+        // Load Portal.OpenAccess from SystemConfigurations into the singleton cache. Skipped
+        // when the DB is unreachable (the self-heal service warms it on success instead).
+        if (initResult == StartupInitResult.Initialized)
         {
-            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            logger.LogWarning(ex, "Could not load Portal.OpenAccess at startup; defaulting to disabled.");
+            try { await app.Services.GetRequiredService<OpenAccessState>().InitializeAsync(); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not load Portal.OpenAccess at startup; defaulting to disabled.");
+            }
         }
     }
 }
