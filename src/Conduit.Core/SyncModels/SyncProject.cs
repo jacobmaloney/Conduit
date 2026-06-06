@@ -277,6 +277,20 @@ public class WorkflowStep
     public bool Enabled { get; set; } = true;
     /// <summary>Free-form JSON for per-StepType config (e.g. PersonCreate template attrs).</summary>
     public string? Configuration { get; set; }
+
+    /// <summary>
+    /// V25: per-STEP incremental cursor. Each Mapping step is its own complete
+    /// per-class read with its own high-water mark (e.g. AD highestCommittedUSN /
+    /// uSNChanged for THAT class's enumeration), so the cursor is keyed at the
+    /// step — NOT the project. Sharing one project-level cursor across N per-class
+    /// steps would let one class's high-water mark clobber another's. NULL = no
+    /// prior cursor → full enumeration next run (always SAFE). Only meaningful for
+    /// Mapping steps on a source connector whose Capabilities.SupportsIncremental.
+    /// </summary>
+    public string? IncrementalCursor { get; set; }
+    /// <summary>V25: when <see cref="IncrementalCursor"/> was last advanced (UTC). NULL until first set.</summary>
+    public DateTime? CursorUpdatedAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime ModifiedAt { get; set; } = DateTime.UtcNow;
 }

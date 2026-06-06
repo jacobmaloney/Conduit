@@ -1145,6 +1145,52 @@ END;
 "
             });
 
+            // Migration 25: Per-STEP incremental cursor. The redesign (V23/V24) gave
+            // a single SyncProject ONE workflow with N Mapping steps — one complete
+            // per-class read each (user, group, computer, contact…). The incremental
+            // cursor, however, was still recovered/persisted at the PROJECT level: the
+            // orchestrator read SyncRuns.[Cursor] from the last successful RUN and the
+            // last step's resolved cursor clobbered every prior step's. With incremental
+            // enabled on a multi-step project, the group step's high-water mark would
+            // overwrite the user step's (and vice-versa), silently skipping changes.
+            //
+            // Fix: store the cursor on the STEP. Add WorkflowSteps.IncrementalCursor
+            // (the opaque token — e.g. AD highestCommittedUSN / uSNChanged high-water
+            // mark for THAT class) + CursorUpdatedAt (when it last advanced). The
+            // orchestrator now loads the cursor for THIS WorkflowStepId before its pump
+            // and saves the advanced cursor back keyed to the SAME step — each per-class
+            // step reads + advances ONLY its own cursor.
+            //
+            // No backfill. The only pre-existing cursor is SyncRuns.[Cursor] on the last
+            // successful run — a SINGLE value that is whichever step happened to run last
+            // (the clobbered value). Seeding that onto every step would corrupt every
+            // other class's high-water mark, so existing steps stay NULL. A NULL step
+            // cursor = full enumeration next run, which is SAFE (and matches today's
+            // default: incremental is OFF, AD runs full enumeration). SyncRuns.[Cursor]
+            // is INTENTIONALLY left in place as the back-compat run-history record (NOT
+            // dropped) — it is no longer the load/save authority for incremental.
+            //
+            // Additive + idempotent: both column adds are guarded by COL_LENGTH, so
+            // re-running is a no-op. No statement here references the just-added column,
+            // so no DDL+DML same-batch split (unlike V23→V24) is required.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 25,
+                Name = "WorkflowSteps per-step incremental cursor (IncrementalCursor/CursorUpdatedAt)",
+                Description = "Adds WorkflowSteps.IncrementalCursor (nullable opaque token) + CursorUpdatedAt (nullable UTC). Moves incremental-cursor load/save from the project-level SyncRuns.[Cursor] (one value, clobbered by the last step) to the STEP, so N per-class steps no longer share/clobber one high-water mark. No backfill (existing steps stay NULL = full enumeration next run, SAFE). SyncRuns.[Cursor] retained as back-compat run-history.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.WorkflowSteps','IncrementalCursor') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[WorkflowSteps] ADD [IncrementalCursor] NVARCHAR(MAX) NULL;
+END;
+
+IF COL_LENGTH('dbo.WorkflowSteps','CursorUpdatedAt') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[WorkflowSteps] ADD [CursorUpdatedAt] DATETIME2 NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

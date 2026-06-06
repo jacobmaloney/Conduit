@@ -87,8 +87,8 @@ public class WorkflowRepository : BaseRepository
         s.CreatedAt = DateTime.UtcNow;
         s.ModifiedAt = s.CreatedAt;
         await ExecuteAsync(@"
-            INSERT INTO WorkflowSteps (Id, WorkflowId, Name, StepType, ObjectClass, Ordinal, Enabled, Configuration, CreatedAt, ModifiedAt)
-            VALUES (@Id, @WorkflowId, @Name, @StepType, @ObjectClass, @Ordinal, @Enabled, @Configuration, @CreatedAt, @ModifiedAt);", s);
+            INSERT INTO WorkflowSteps (Id, WorkflowId, Name, StepType, ObjectClass, Ordinal, Enabled, Configuration, IncrementalCursor, CursorUpdatedAt, CreatedAt, ModifiedAt)
+            VALUES (@Id, @WorkflowId, @Name, @StepType, @ObjectClass, @Ordinal, @Enabled, @Configuration, @IncrementalCursor, @CursorUpdatedAt, @CreatedAt, @ModifiedAt);", s);
         return s;
     }
 
@@ -114,6 +114,22 @@ public class WorkflowRepository : BaseRepository
             DELETE FROM SyncProjectScopes  WHERE WorkflowStepId = @Id;
             DELETE FROM WorkflowSteps      WHERE Id = @Id;",
             new { Id = id });
+
+    /// <summary>
+    /// V25: persist the post-enumeration incremental cursor for ONE step. Kept
+    /// separate from <see cref="UpdateStepAsync"/> so a config edit (Name/StepType/
+    /// scope/etc.) never clobbers the cursor and an orchestrator cursor advance never
+    /// touches step config. Each per-class Mapping step advances ONLY its own cursor.
+    /// A NULL cursor (reset / connector dropped incremental) means full enumeration
+    /// next run — SAFE.
+    /// </summary>
+    public Task SetStepCursorAsync(Guid stepId, string? cursor) =>
+        ExecuteAsync(@"
+            UPDATE WorkflowSteps
+               SET IncrementalCursor = @Cursor,
+                   CursorUpdatedAt   = SYSUTCDATETIME()
+             WHERE Id = @Id;",
+            new { Id = stepId, Cursor = cursor });
 
     /// <summary>
     /// Bulk reorder for a workflow's steps. Caller supplies the desired order;

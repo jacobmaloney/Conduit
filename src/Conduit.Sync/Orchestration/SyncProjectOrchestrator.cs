@@ -320,12 +320,14 @@ public sealed class SyncProjectOrchestrator
                             succeededSteps++;
                         }
 
-                        // Hoist incremental cursor only from a Mapping step.
-                        if (stepResult.NewCursor is not null)
-                        {
-                            newCursor = stepResult.NewCursor;
-                            wasIncremental = stepResult.WasIncremental;
-                        }
+                        // V25: per-class Mapping steps now persist their OWN cursor
+                        // (per WorkflowStepId, inside ExecuteMappingStepAsync) and
+                        // return NewCursor = null, so nothing is hoisted to the single
+                        // run-level value anymore — that hoist is what clobbered N
+                        // per-class cursors into one. Track wasIncremental for logging,
+                        // but never let a step's cursor become the run-level cursor.
+                        if (stepResult.WasIncremental)
+                            wasIncremental = true;
 
                         // Forward inter-step state.
                         if (stepResult.EmittedBatch is not null) lastBatch = stepResult.EmittedBatch;
@@ -414,8 +416,12 @@ public sealed class SyncProjectOrchestrator
                 persistedFailed = 1;
 
             await _runRepo.UpdateCountersAsync(run.Id, totals.Read, totals.Created, totals.Updated, totals.Skipped, persistedFailed);
-            // Only persist the cursor if the run actually succeeded — otherwise next
-            // run would silently skip data the failed run never wrote downstream.
+            // Persist the RUN-level cursor on success. V25: per-class Mapping steps now
+            // own their cursors (saved per-step in ExecuteMappingStepAsync), so newCursor
+            // is only non-null on the LEGACY single-pass path (no Workflows) — there it
+            // still records the run's cursor on SyncRuns.[Cursor] for that path's resume
+            // and for run history. Only persist on success so a failed run doesn't let
+            // the next run silently skip data it never wrote downstream.
             if (status == "Succeeded" && newCursor is not null)
             {
                 await _runRepo.SetCursorAsync(run.Id, newCursor.Token, wasIncremental);
@@ -495,11 +501,28 @@ public sealed class SyncProjectOrchestrator
             ? step.ObjectClass!
             : ctx.Project.ObjectClass;
 
-        var pump = await PumpAsync(ctx, mappings, scope, objectClass, ct);
+        var pump = await PumpAsync(ctx, mappings, scope, objectClass, step, ct);
+
+        // V25 per-STEP cursor save. Persist the advanced cursor back to THIS step —
+        // and ONLY this step — so each per-class read advances its own high-water mark
+        // independently. We persist only when this run actually enumerated incrementally
+        // and produced a cursor; a full enumeration (incremental disabled, or no prior
+        // cursor) returns NewCursor null/non-incremental and leaves the stored cursor
+        // untouched. The cursor is saved here per step rather than hoisted to a single
+        // run-level value, which is exactly what stops one class's cursor clobbering
+        // another's. (No cross-step leakage: the save is keyed to step.Id.)
+        if (pump.WasIncremental && pump.NewCursor is not null)
+        {
+            await _workflowRepo.SetStepCursorAsync(step.Id, pump.NewCursor.Token);
+            await Log(ctx.RunId, "Info", $"    Incremental: advanced step '{step.Name}' cursor.");
+        }
+
         return new StepResult
         {
             Delta = pump.Delta,
-            NewCursor = pump.NewCursor,
+            // V25: the cursor is now persisted per-step above. Do NOT bubble it up to
+            // the run-level newCursor (that path clobbered N steps into one value).
+            NewCursor = null,
             WasIncremental = pump.WasIncremental,
             EmittedBatch = pump.EmittedBatch
         };
@@ -515,8 +538,9 @@ public sealed class SyncProjectOrchestrator
         var mappings = await _projectRepo.GetMappingsAsync(ctx.Project.Id);
         var scope = await _projectRepo.GetProjectScopeAsync(ctx.Project.Id)
                  ?? new SyncProjectScope { SyncProjectId = ctx.Project.Id, PageSize = 1000 };
-        // Legacy path (no Workflows): there are no steps, so the class is the project's.
-        var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, ct);
+        // Legacy path (no Workflows): there are no steps, so the class is the project's
+        // and the cursor falls back to the project-level last-run cursor (step = null).
+        var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, null, ct);
         return new LegacyResult(pump.Delta, pump.NewCursor, pump.WasIncremental);
     }
 
@@ -751,6 +775,7 @@ public sealed class SyncProjectOrchestrator
         IReadOnlyList<AttributeMapping> mappings,
         SyncProjectScope scope,
         string objectClass,
+        WorkflowStep? step,
         CancellationToken ct)
     {
         var run = ctx.RunId;
@@ -761,19 +786,47 @@ public sealed class SyncProjectOrchestrator
         var sinkAdapter = ctx.SinkAdapter;
         var sinkTenant = ctx.SinkTenant;
 
-        // Recover cursor from last successful run if source supports it.
+        // Recover the prior incremental cursor if the source supports it.
+        //
+        // V25 per-STEP cursor: each per-class Mapping step owns its OWN high-water
+        // mark. When a step is supplied (the Workflow path) we read THIS step's
+        // IncrementalCursor — never the project-level/last-run value — so the user
+        // step's cursor can never be clobbered by the group step's, and vice-versa.
+        //
+        // The legacy single-pass path (no Workflows yet) has no step; it falls back to
+        // the last successful RUN's cursor (SyncRuns.[Cursor]) exactly as before, so
+        // that back-compat behavior is unchanged.
         SyncCursor? priorCursor = null;
         if (sourceAdapter.Capabilities.SupportsIncremental)
         {
-            var last = await _runRepo.GetLastSuccessfulAsync(project.Id);
-            if (last is not null && !string.IsNullOrEmpty(last.Cursor))
+            if (step is not null)
             {
-                priorCursor = new SyncCursor { Token = last.Cursor!, IssuedAt = last.StartedAt };
-                await Log(run, "Info", $"    Incremental: resuming from cursor issued {last.StartedAt:o}.");
+                if (!string.IsNullOrEmpty(step.IncrementalCursor))
+                {
+                    priorCursor = new SyncCursor
+                    {
+                        Token = step.IncrementalCursor!,
+                        IssuedAt = step.CursorUpdatedAt ?? DateTime.UtcNow
+                    };
+                    await Log(run, "Info", $"    Incremental: resuming step '{step.Name}' from its own cursor (updated {(step.CursorUpdatedAt?.ToString("o") ?? "unknown")}).");
+                }
+                else
+                {
+                    await Log(run, "Info", $"    Incremental: step '{step.Name}' has no prior cursor — running full enumeration for this class.");
+                }
             }
             else
             {
-                await Log(run, "Info", "    Incremental: no prior cursor — running full enumeration.");
+                var last = await _runRepo.GetLastSuccessfulAsync(project.Id);
+                if (last is not null && !string.IsNullOrEmpty(last.Cursor))
+                {
+                    priorCursor = new SyncCursor { Token = last.Cursor!, IssuedAt = last.StartedAt };
+                    await Log(run, "Info", $"    Incremental: resuming from last-run cursor issued {last.StartedAt:o} (legacy project-level path).");
+                }
+                else
+                {
+                    await Log(run, "Info", "    Incremental: no prior cursor — running full enumeration.");
+                }
             }
         }
 
