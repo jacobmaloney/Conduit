@@ -304,10 +304,6 @@ public sealed class ActiveDirectorySource : IConnectorSource
         // is read as a Subtree. Excluded DNs prune any entry at/under them — exactly
         // IC's SearchBases / ExcludedSearchBases model.
         var includedBases = OptimizeBases(scope.GetIncludedBaseList());
-        if (includedBases.Count == 0)
-            throw new InvalidOperationException(
-                "AD source requires at least one included Base DN in the SyncProjectScope (set a Base DN or pick an Included container in the scope tree).");
-
         var excludedBases = scope.GetExcludedBaseList();
 
         var creds = await ReadCredsAsync()
@@ -315,6 +311,26 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 $"No 'ldap' credential stored for tenant {_tenantId}. Save credentials before running.");
 
         using var connection = CreateBoundConnection(host, port, creds);
+
+        // IC-parity empty-scope fallback. IC's DirectoryQueryService treats a blank
+        // SearchBase as "sync the whole domain" by resolving the directory's
+        // defaultNamingContext from RootDSE at run time (DirectoryQueryService
+        // .GetDefaultNamingContextAnonymous). Conduit auto-generated projects (and
+        // any manual project where the operator picked no container) arrive with an
+        // empty included set, so mirror IC here rather than hard-failing: bind, read
+        // RootDSE.defaultNamingContext, and read the whole domain root as a Subtree.
+        // Only when the directory advertises no naming context do we throw.
+        if (includedBases.Count == 0)
+        {
+            var rootDn = ResolveDefaultNamingContext(connection);
+            if (string.IsNullOrWhiteSpace(rootDn))
+                throw new InvalidOperationException(
+                    "AD source has no included Base DN and the directory did not advertise a defaultNamingContext on RootDSE. Pick an Included container in the scope tree.");
+            _logger.LogInformation(
+                "AD source for tenant {TenantId} had an empty scope; defaulting to the domain root {RootDn} (RootDSE defaultNamingContext), matching IC's whole-domain default.",
+                _tenantId, rootDn);
+            includedBases = new List<string> { rootDn! };
+        }
 
         // RFC 2696 paged results. PageSize bounded by scope; default 1000.
         var pageSize = scope.PageSize > 0 ? scope.PageSize : 1000;
@@ -424,6 +440,42 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 optimized.Add(b);
         }
         return optimized;
+    }
+
+    /// <summary>
+    /// IC-parity whole-domain default. When a scope carries no included Base DN,
+    /// resolve the directory's domain root by reading RootDSE.defaultNamingContext
+    /// (with rootDomainNamingContext as the fallback, exactly like IC's
+    /// DirectoryQueryService.GetDefaultNamingContextAnonymous). Returns null when
+    /// neither attribute is advertised so the caller can fail loud rather than
+    /// silently enumerate nothing. The connection is already bound.
+    /// </summary>
+    private string? ResolveDefaultNamingContext(LdapConnection connection)
+    {
+        try
+        {
+            var rootReq = new SearchRequest("", "(objectClass=*)", SearchScope.Base,
+                new[] { "defaultNamingContext", "rootDomainNamingContext" });
+            var rootResp = (SearchResponse)connection.SendRequest(rootReq);
+            if (rootResp.Entries.Count == 0) return null;
+            var attrs = rootResp.Entries[0].Attributes;
+            if (attrs.Contains("defaultNamingContext"))
+            {
+                var v = attrs["defaultNamingContext"][0]?.ToString();
+                if (!string.IsNullOrWhiteSpace(v)) return v;
+            }
+            if (attrs.Contains("rootDomainNamingContext"))
+            {
+                var v = attrs["rootDomainNamingContext"][0]?.ToString();
+                if (!string.IsNullOrWhiteSpace(v)) return v;
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AD RootDSE defaultNamingContext probe failed for tenant {TenantId}", _tenantId);
+            return null;
+        }
     }
 
     /// <summary>
