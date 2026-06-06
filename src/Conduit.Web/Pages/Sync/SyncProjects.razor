@@ -503,6 +503,12 @@
                     </div>
 
                     <div class="mb-3">
+                        <label class="form-label fw-bold">Project Name</label>
+                        <input class="form-control" maxlength="200" @bind="autoGenProjectName" @bind:after="OnAutoGenNameEdited" />
+                        <small class="form-text text-muted">Auto-filled from source, target, and template. Edit to override.</small>
+                    </div>
+
+                    <div class="mb-3">
                         <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(read from)</span></label>
                         <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
                             <option value="@Guid.Empty">-- Pick a source --</option>
@@ -532,7 +538,7 @@
 
                     <div class="mb-3">
                         <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(write to)</span></label>
-                        <select class="form-select" @bind="autoGenSinkId">
+                        <select class="form-select" @bind="autoGenSinkId" @bind:after="OnAutoGenSinkChanged">
                             <option value="@Guid.Empty">-- Pick a target --</option>
                             @foreach (var t in AutoGenSinkTenants)
                             {
@@ -3227,6 +3233,10 @@
     // meaningful when that side is an IdentityCenter connector.
     private string autoGenSourceTable = "Objects";
     private string autoGenSinkTable = "Objects";
+    // Editable project name. Pre-filled from source/target/mode and kept in sync as
+    // those change — UNLESS the operator has manually edited it (autoGenNameEdited).
+    private string autoGenProjectName = string.Empty;
+    private bool autoGenNameEdited;
 
     private Tenant? AutoGenSource =>
         autoGenSourceId == Guid.Empty ? null : allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
@@ -3292,11 +3302,43 @@
         {
             autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
         }
+        RefreshAutoGenDefaultName();
+    }
+
+    private void OnAutoGenSinkChanged()
+    {
+        RefreshAutoGenDefaultName();
     }
 
     private void SetAutoGenMode(Conduit.Sync.Templates.GenerationMode mode)
     {
         autoGenMode = mode;
+        RefreshAutoGenDefaultName();
+    }
+
+    private void OnAutoGenNameEdited()
+    {
+        autoGenNameEdited = true;
+    }
+
+    // The default derived name — must match the generator's format EXACTLY:
+    // "{src.Name} to {sink.Name} ({ModeLabel(mode)})". No literal double-quotes in
+    // the interpolation (Razor SG would mis-tokenize them inside @code).
+    private string AutoGenDefaultName()
+    {
+        var s = allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
+        var k = allTenants.FirstOrDefault(t => t.Id == autoGenSinkId);
+        if (s is null || k is null) return string.Empty;
+        return $"{s.Name} to {k.Name} ({ModeLabel(autoGenMode)})";
+    }
+
+    // Re-seed the name from the current selection, but never clobber an operator edit.
+    private void RefreshAutoGenDefaultName()
+    {
+        if (!autoGenNameEdited)
+        {
+            autoGenProjectName = AutoGenDefaultName();
+        }
     }
 
     // The object classes a template card represents — same source of truth the
@@ -4536,6 +4578,8 @@
         autoGenError = string.Empty;
         autoGenSourceTable = "Objects";
         autoGenSinkTable = "Objects";
+        autoGenNameEdited = false;
+        autoGenProjectName = string.Empty;
         showAutoGenerateModal = true;
     }
 
@@ -4604,20 +4648,26 @@
                 return;
             }
 
+            // Effective name = the operator's edited value, trimmed; fall back to the
+            // derived default if blank/whitespace so we never persist an empty name.
+            var defaultName = $"{src.Name} to {sink.Name} ({ModeLabel(autoGenMode)})";
+            var chosenName = string.IsNullOrWhiteSpace(autoGenProjectName)
+                ? defaultName
+                : autoGenProjectName.Trim();
+
             // Idempotency, defensively like IC: if a project already exists for this
-            // exact source -> sink + mode (the auto-generated base name), do not create
-            // a second one. Guards the residual double-fire window AND a deliberate
-            // re-click of an already-generated pair. The generator's UniqueName would
-            // otherwise silently mint a "#2" duplicate.
-            var baseName = $"{src.Name} to {sink.Name} ({ModeLabel(autoGenMode)})";
+            // exact source -> sink + CHOSEN name, do not create a second one. Guards the
+            // residual double-fire window AND a deliberate re-click of an already-created
+            // pair. A different name for the same pair is allowed. The generator's
+            // UniqueName would otherwise silently mint a "#2" duplicate.
             var alreadyExists = allProjects.Any(p =>
                 p.SourceTenantId == src.Id &&
                 p.SinkTenantId == sink.Id &&
-                string.Equals(p.Name, baseName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(p.Name, chosenName, StringComparison.OrdinalIgnoreCase));
             if (alreadyExists)
             {
                 showAutoGenerateModal = false;
-                toastSuccess = $"A sync project already exists from {src.Name} to {sink.Name} ({ModeLabel(autoGenMode)}).";
+                toastSuccess = $"A sync project named '{chosenName}' already exists from {src.Name} to {sink.Name}.";
                 return;
             }
 
@@ -4655,6 +4705,10 @@
                 g.Project.IsEnabled = autoGenEnable;
                 g.Project.SourceTable = srcTable;
                 g.Project.SinkTable = sinkTable;
+                // Override the generator's derived name with the operator's chosen name.
+                // Post-redesign the generator yields ONE project, so this names it; the
+                // loop stays forward-compatible. Empty→default already resolved above.
+                g.Project.Name = chosenName;
                 if (identitiesOnly)
                 {
                     g.Steps = g.Steps
