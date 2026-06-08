@@ -90,6 +90,13 @@ internal static class IdentityCenterCredentialReader
     public const string CredentialName = "identitycenter";
 
     /// <summary>
+    /// HttpClient timeout for the IC sink. Raised from the prior 120s to 300s so a
+    /// large bulk batch against a slow target SQL completes rather than being
+    /// cancelled by HttpClient.Timeout mid-write. See <see cref="BuildClient"/>.
+    /// </summary>
+    private const int IcSinkTimeoutSeconds = 300;
+
+    /// <summary>
     /// Reads the IC credential for the GIVEN side. The credential blob now carries
     /// ONLY BaseUrl + ApiKey; the table (Objects | Identities) is resolved per side
     /// from <see cref="IdentityCenterTableContext"/>, which the orchestrator stamps
@@ -185,7 +192,11 @@ internal static class IdentityCenterCredentialReader
     public static HttpClient BuildClient(IHttpClientFactory factory, IdentityCenterCredentials creds)
     {
         var client = factory.CreateClient("IdentityCenterConnector");
-        client.Timeout = TimeSpan.FromSeconds(120);
+        // A full bulk batch (up to 1000 objects, each with ~20 attributes) against a
+        // slow target SQL can take minutes. 120s was tripping HttpClient.Timeout on
+        // .56 before the IC /api/objects/bulk N+1 was collapsed; keep 300s as headroom
+        // so a slow-but-progressing batch is never cancelled mid-write.
+        client.Timeout = TimeSpan.FromSeconds(IcSinkTimeoutSeconds);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         // IC's ApiKeyAuthenticationHandler reads X-API-Key.
         client.DefaultRequestHeaders.Remove("X-API-Key");
