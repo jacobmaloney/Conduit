@@ -259,6 +259,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
         {
             var attrs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             string? originalSource = null;
+            string? sourceConnection = null;
             foreach (var (k, v) in o.Attributes)
             {
                 // SyncProjectOrchestrator stamps "_source" onto every inbound
@@ -272,13 +273,31 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
                     originalSource = v?.ToString();
                     continue;
                 }
+                // "_sourceConnection" is the SOURCE CONNECTION (domain) name, e.g.
+                // "domain.local2", stamped by the orchestrator from
+                // ctx.SourceTenant.Name. IC auto-seeds a DirectoryConnection named
+                // exactly this value and groups the objects under that domain node
+                // (matching IC's native domain nodes) instead of a literal "Conduit"
+                // node. Like "_source", it is internal plumbing: lift it out so it is
+                // NEVER written into IC's ObjectAttributes table.
+                if (string.Equals(k, "_sourceConnection", StringComparison.OrdinalIgnoreCase))
+                {
+                    sourceConnection = v?.ToString();
+                    continue;
+                }
                 attrs[k] = v?.ToString();
             }
             items.Add(new
             {
                 SourceUniqueId = o.SourceId,
                 ObjectClass = (o.ObjectClass ?? "User").ToLowerInvariant(),
-                Source = "Conduit",
+                // Source = the source connection (domain) name so IC's DirectoryConnection
+                // auto-seed names the connection after the domain, not "Conduit". Fall
+                // back to "Conduit" for back-compat / safety if the stamp is missing.
+                // NOTE: this MUST match the value the orchestrator passes to
+                // EmitTombstonesAsync (ctx.SourceTenant.Name) so IC resolves the SAME
+                // auto-seeded SourceConnectionId for upserts and tombstones.
+                Source = string.IsNullOrWhiteSpace(sourceConnection) ? "Conduit" : sourceConnection,
                 OriginalSource = originalSource ?? string.Empty,
                 Attributes = attrs
             });

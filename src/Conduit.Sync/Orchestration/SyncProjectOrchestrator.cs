@@ -929,6 +929,18 @@ public sealed class SyncProjectOrchestrator
             if (!sinkObj.Attributes.ContainsKey("_source"))
                 sinkObj.Attributes["_source"] = sourceAdapter.SystemType;
 
+            // Stamp the source CONNECTION name (the domain, e.g. "domain.local2")
+            // onto every record so the IC sink can use it as the upsert Source.
+            // IC auto-seeds a DirectoryConnection named exactly this value and
+            // groups the objects under a domain node — matching IC's native
+            // domain nodes instead of a literal "Conduit" node. Mirrors how
+            // "_source" carries the SystemType (→ IC's OriginalSource); this
+            // internal "_" key is lifted out by the sink, never written as a
+            // real ObjectAttribute. ApplyMappings returns a fresh object that
+            // doesn't carry "_"-prefixed keys, so stamp it on sinkObj here.
+            if (!string.IsNullOrWhiteSpace(ctx.SourceTenant.Name) && !sinkObj.Attributes.ContainsKey("_sourceConnection"))
+                sinkObj.Attributes["_sourceConnection"] = ctx.SourceTenant.Name;
+
             if (!string.IsNullOrWhiteSpace(scope.BaseDN) && !sinkObj.Attributes.ContainsKey("targetOU"))
                 sinkObj.Attributes["targetOU"] = scope.BaseDN;
 
@@ -1047,12 +1059,17 @@ public sealed class SyncProjectOrchestrator
                 else
                 {
                     // IC keys the soft-delete on the SAME Source string the IC sink
-                    // stamps on its upserts (IdentityCenterSink.PostBatchAsync →
-                    // Source = "Conduit"). Passing the same value makes IC resolve
-                    // the SAME auto-seeded SourceConnectionId, which (plus IC's
-                    // SourceConnectionId SQL guard) is what scopes the delete to this
-                    // connection. If that upsert constant ever changes, change it here.
-                    const string icUpsertSource = "Conduit";
+                    // stamps on its upserts. The sink now derives Source per-record
+                    // from "_sourceConnection" (the source connection / domain name,
+                    // e.g. "domain.local2"), which the orchestrator stamps above from
+                    // ctx.SourceTenant.Name — with a "Conduit" fallback in the sink if
+                    // the attribute is ever missing. Pass that SAME source connection
+                    // name here so IC resolves the SAME auto-seeded SourceConnectionId
+                    // (plus IC's SourceConnectionId SQL guard) and the delete is scoped
+                    // to this connection. These two MUST agree or tombstones mis-target.
+                    var icUpsertSource = !string.IsNullOrWhiteSpace(ctx.SourceTenant.Name)
+                        ? ctx.SourceTenant.Name
+                        : "Conduit";
 
                     await Log(run, "Warning",
                         $"    Tombstoning: complete read detected {disappeared.Count} disappeared record(s) of {priorIdsForDelete.Count} prior; emitting to sink (IC enforces a 50% cap as the backstop).");
