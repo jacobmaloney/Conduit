@@ -33,6 +33,28 @@ public sealed class ActiveDirectorySource : IConnectorSource
     private readonly CredentialProtector _protector;
     private readonly ILogger<ActiveDirectorySource> _logger;
 
+    /// <summary>
+    /// Structural attributes the connector ITSELF depends on regardless of which
+    /// attributes a step maps. These are ALWAYS unioned into the requested set so a
+    /// trimmed projection can never starve SourceId resolution (objectGUID), the
+    /// incremental cursor (whenChanged), class/category gating, or the common
+    /// identity keys the orchestrator/sinks rely on. distinguishedName is returned
+    /// implicitly by every entry (SearchResultEntry.DistinguishedName) so it need
+    /// not be listed. If a mapping references an attribute NOT in the step's mapped
+    /// set AND not here, that attribute would come back null — by design the mapped
+    /// set (plumbed from the orchestrator) covers exactly the mapped attributes.
+    /// </summary>
+    private static readonly string[] StructuralAttributes =
+    {
+        "objectGUID",      // primary SourceId
+        "objectClass",
+        "objectCategory",
+        "whenChanged",     // incremental cursor / watermark
+        "sAMAccountName",
+        "userPrincipalName",
+        "userAccountControl",
+    };
+
     public ActiveDirectorySource(
         Guid tenantId,
         TenantRepository tenantRepo,
@@ -336,6 +358,34 @@ public sealed class ActiveDirectorySource : IConnectorSource
         var pageSize = scope.PageSize > 0 ? scope.PageSize : 1000;
         var emitted = 0;
 
+        // Attribute projection. When the orchestrator stamped the step's mapped
+        // SOURCE attributes onto scope.RequestedAttributes, request ONLY those plus
+        // the structural floor — NOT all attributes. Pulling every attribute (the
+        // old attributeList:null) costs ~4x on the wire and forces the DC to
+        // materialize expensive constructed/operational attributes per entry, and
+        // makes EntryToConnectorObject iterate a far larger attribute bag. A null
+        // hint preserves the old read-all behavior for any caller that doesn't set
+        // it. The structural set is ALWAYS unioned in so trimming can't break
+        // SourceId / cursor / class gating.
+        string[]? attributeList = null;
+        if (scope.RequestedAttributes is { Count: > 0 })
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var a in scope.RequestedAttributes)
+                if (!string.IsNullOrWhiteSpace(a)) set.Add(a.Trim());
+            foreach (var s in StructuralAttributes) set.Add(s);
+            attributeList = set.ToArray();
+            _logger.LogInformation(
+                "AD source for tenant {TenantId} requesting a projected {Count}-attribute set (mapped + structural) for class {Class} instead of all attributes.",
+                _tenantId, attributeList.Length, objectClass);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "AD source for tenant {TenantId} has no attribute projection hint; reading ALL attributes for class {Class} (slower).",
+                _tenantId, objectClass);
+        }
+
         // Walk each Included base in turn. The complete-read sentinel may ONLY be
         // set after the FINAL base drains to its natural LDAP terminus, so a partial
         // drain of any earlier base never green-lights tombstones.
@@ -353,7 +403,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
                     searchBase,
                     ldapFilter,
                     SearchScope.Subtree,
-                    attributeList: null);   // null = all attributes
+                    attributeList);   // null = all attributes; else mapped + structural projection
                 request.Controls.Add(pageControl);
 
                 SearchResponse response;
@@ -550,7 +600,13 @@ public sealed class ActiveDirectorySource : IConnectorSource
             AuthType = AuthType.Negotiate
         };
         connection.SessionOptions.ProtocolVersion = 3;
-        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.All;
+        // Single-domain read: never chase referrals. ReferralChasingOptions.All
+        // makes the DC hand back continuation referrals (subordinate/external
+        // naming contexts), and S.DS.P then tries to bind+search each one — DNS
+        // resolution, fresh binds, and timeouts that add seconds-to-minutes of
+        // dead latency per page on a Subtree search. We read exactly the included
+        // bases we were given, so suppress chasing entirely.
+        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
 
         NetworkCredential netCred;
         if (creds.Username.Contains('\\'))

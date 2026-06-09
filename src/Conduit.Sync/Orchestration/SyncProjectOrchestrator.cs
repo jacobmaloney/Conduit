@@ -883,6 +883,22 @@ public sealed class SyncProjectOrchestrator
         await Log(run, "Info",
             $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={objectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}; SkipUnchanged={skipUnchanged}.");
 
+        // Attribute projection hint. We know EXACTLY which source attributes this
+        // step maps, so stamp them onto the scope (in-memory, not persisted). A
+        // source connector that honors the hint (AD does) then requests only those
+        // attributes + its own structural floor instead of every attribute — the
+        // dominant cost in a large directory read. Sources that ignore the hint are
+        // unaffected. We only set it when there's at least one mapped attribute; an
+        // empty list would (correctly) read nothing useful, so leave null = read-all
+        // in that degenerate case. The connector always re-adds its structural set,
+        // so a mapped attribute that the connector also needs is never double-trouble.
+        var mappedSourceAttrs = mappings
+            .Select(m => m.SourceAttribute)
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        scope.RequestedAttributes = mappedSourceAttrs.Count > 0 ? mappedSourceAttrs : null;
+
         // V23: read THIS step's object class (resolved by the caller as
         // step.ObjectClass ?? project.ObjectClass), not the project-level one. Each
         // Mapping step is its own complete per-class read — its own cursor, its own

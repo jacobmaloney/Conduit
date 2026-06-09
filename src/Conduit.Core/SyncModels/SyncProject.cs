@@ -125,6 +125,17 @@ public class SyncProjectScope
     public int PageSize { get; set; } = 1000;
     public int? MaxObjects { get; set; }
     public bool IncludeDeleted { get; set; }
+    /// <summary>
+    /// In-memory attribute projection hint (NOT persisted). When the orchestrator
+    /// knows which SOURCE attributes a step actually maps, it stamps them here so
+    /// the source connector can request ONLY those (plus its own structural floor)
+    /// instead of pulling every attribute. NULL = no hint → read all attributes
+    /// (back-compat). A source connector that honors this MUST still union in the
+    /// structural attributes it depends on (id / cursor / class), so an under- or
+    /// over-specified hint can never starve correctness. Set by the orchestrator
+    /// per run; never round-tripped to the DB.
+    /// </summary>
+    public List<string>? RequestedAttributes { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastModified { get; set; } = DateTime.UtcNow;
 
