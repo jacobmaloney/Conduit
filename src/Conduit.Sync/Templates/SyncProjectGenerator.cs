@@ -203,7 +203,12 @@ namespace Conduit.Sync.Templates
                 // the first class so legacy readers and the fallback path stay sane.
                 ObjectClass = objectClasses[0],
                 CronSchedule = cron,
-                IsEnabled = false
+                IsEnabled = false,
+                // Default ON: re-syncs of the same directory skip rows whose content
+                // hash is unchanged, so repeat runs are near-instant. The first run
+                // still writes everything (and populates the hashes); subsequent runs
+                // only push real changes.
+                SkipUnchanged = true
             };
 
             var workflow = new Workflow
