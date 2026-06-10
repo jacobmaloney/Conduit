@@ -436,7 +436,11 @@ builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob>(sp =>
     return new ScheduledJobScopedWrapper(scopeFactory,
         s => new Conduit.Sync.Orchestration.ScheduledSyncRunnerJob(
             s.GetRequiredService<Conduit.DataAccess.Repositories.SyncProjectRepository>(),
-            s.GetRequiredService<Conduit.Sync.Orchestration.SyncProjectOrchestrator>(),
+            // Fix 5: the job receives the scope FACTORY, not a scoped orchestrator.
+            // Fired runs outlive the tick scope (the wrapper disposes it as soon as
+            // the tick returns), so each run creates + owns + disposes its own scope
+            // and resolves a fresh orchestrator inside it.
+            s.GetRequiredService<IServiceScopeFactory>(),
             s.GetRequiredService<ILogger<Conduit.Sync.Orchestration.ScheduledSyncRunnerJob>>()));
 });
 

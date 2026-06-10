@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NCrontab;
 using Conduit.DataAccess.Repositories;
@@ -22,6 +23,17 @@ namespace Conduit.Sync.Orchestration;
 ///   anything unparseable — ignored (no scheduled fire; manual only)
 ///
 /// Manual / API run-now bypasses this entirely.
+///
+/// Scope ownership (Fix 5): the scheduler tick runs inside a per-tick scope that
+/// ScheduledJobScopedWrapper DISPOSES as soon as ExecuteAsync returns — but the
+/// sync runs it fires are fire-and-forget and outlive the tick. Each fired run
+/// therefore creates, owns, and disposes its OWN DI scope and resolves a fresh
+/// orchestrator from it; it never uses the tick's scoped services.
+///
+/// Run ownership (Fix 3): the tick pre-claims the project's IsRunning flag via
+/// the atomic CAS BEFORE firing; a lost CAS means another run is in flight and
+/// the tick skips. The fired run gets preClaimed: true so the orchestrator
+/// honors (and releases) the claim instead of re-claiming.
 /// </summary>
 public sealed class ScheduledSyncRunnerJob : IScheduledJob
 {
@@ -29,16 +41,16 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
     public TimeSpan Interval => TimeSpan.FromMinutes(1);
 
     private readonly SyncProjectRepository _projectRepo;
-    private readonly SyncProjectOrchestrator _orchestrator;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ScheduledSyncRunnerJob> _logger;
 
     public ScheduledSyncRunnerJob(
         SyncProjectRepository projectRepo,
-        SyncProjectOrchestrator orchestrator,
+        IServiceScopeFactory scopeFactory,
         ILogger<ScheduledSyncRunnerJob> logger)
     {
         _projectRepo = projectRepo;
-        _orchestrator = orchestrator;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -53,15 +65,62 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
             if (project.IsRunning) continue;
             if (!IsDue(project.CronSchedule, project.LastRunAt, now)) continue;
 
+            // Pre-claim the single-run flag (atomic 0→1 CAS). Guid.Empty is the
+            // placeholder run id — the orchestrator stamps the real one once the
+            // run row exists. A lost CAS = another run started between our read
+            // and now; skip this tick.
+            bool claimed;
             try
             {
-                _logger.LogInformation("Firing scheduled sync project {ProjectName} ({ProjectId})", project.Name, project.Id);
-                _ = _orchestrator.ExecuteAsync(project.Id, "Scheduled", CancellationToken.None);
+                claimed = await _projectRepo.SetRunningAsync(project.Id, Guid.Empty);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to fire scheduled sync project {ProjectId}", project.Id);
+                _logger.LogError(ex, "Failed to pre-claim scheduled sync project {ProjectId}", project.Id);
+                continue;
             }
+            if (!claimed)
+            {
+                _logger.LogInformation(
+                    "Scheduled sync project {ProjectName} ({ProjectId}) skipped: a run is already in progress.",
+                    project.Name, project.Id);
+                continue;
+            }
+
+            _logger.LogInformation("Firing scheduled sync project {ProjectName} ({ProjectId})", project.Name, project.Id);
+
+            var projectId = project.Id;
+            var projectName = project.Name;
+            _ = Task.Run(async () =>
+            {
+                // Own scope for the whole run — the tick scope (and its repos /
+                // orchestrator) is disposed by ScheduledJobScopedWrapper right
+                // after the tick returns, long before a real sync finishes.
+                using var scope = _scopeFactory.CreateScope();
+                try
+                {
+                    var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
+                    await orchestrator.ExecuteAsync(projectId, "Scheduled", CancellationToken.None, preClaimed: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Scheduled sync project {ProjectId} ({ProjectName}) threw at the scheduler boundary", projectId, projectName);
+
+                    // Defense in depth: the orchestrator releases the flag on its
+                    // own failure paths (it owns the pre-claim we handed it), but
+                    // if it threw before/around that, free the project so the next
+                    // tick isn't blocked forever.
+                    try
+                    {
+                        await scope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
+                            .ClearRunningAsync(projectId);
+                    }
+                    catch (Exception clearEx)
+                    {
+                        _logger.LogError(clearEx, "Failed to release IsRunning for scheduled project {ProjectId} after a failed run", projectId);
+                    }
+                }
+            });
         }
     }
 

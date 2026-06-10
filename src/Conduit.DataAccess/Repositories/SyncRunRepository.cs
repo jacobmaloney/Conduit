@@ -146,4 +146,42 @@ public class SyncRunRepository : BaseRepository
             new { RunId = runId, Take = take });
         return rows.ToList();
     }
+
+    /// <summary>
+    /// Fix 7 (live tailing): only the log rows AFTER a known Id, ascending. Backs
+    /// the SyncHistory poll loop — instead of re-fetching the first TOP-N every
+    /// tick (which freezes long runs at the first N lines), the page appends just
+    /// the new rows. IX_SyncRunLogs_SyncRunId covers the seek.
+    /// </summary>
+    public async Task<List<SyncRunLog>> GetLogsAfterAsync(Guid runId, long afterId, int take = 2000)
+    {
+        var rows = await QueryAsync<SyncRunLog>(@"
+            SELECT TOP (@Take) Id, SyncRunId, Level, Message, Timestamp
+              FROM SyncRunLogs
+             WHERE SyncRunId = @RunId
+               AND Id > @AfterId
+             ORDER BY Id ASC",
+            new { RunId = runId, AfterId = afterId, Take = take });
+        return rows.ToList();
+    }
+
+    /// <summary>
+    /// Fix 7 (initial load): the most-recent <paramref name="take"/> rows in
+    /// ascending order (DESC seek, reversed in memory). For runs shorter than the
+    /// cap this is identical to <see cref="GetLogsAsync"/>; for longer runs it
+    /// shows the TAIL — where the outcome lives — instead of freezing on the
+    /// first N lines.
+    /// </summary>
+    public async Task<List<SyncRunLog>> GetLogsTailAsync(Guid runId, int take = 2000)
+    {
+        var rows = await QueryAsync<SyncRunLog>(@"
+            SELECT TOP (@Take) Id, SyncRunId, Level, Message, Timestamp
+              FROM SyncRunLogs
+             WHERE SyncRunId = @RunId
+             ORDER BY Id DESC",
+            new { RunId = runId, Take = take });
+        var list = rows.ToList();
+        list.Reverse();
+        return list;
+    }
 }

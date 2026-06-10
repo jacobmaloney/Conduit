@@ -43,6 +43,64 @@ namespace Conduit.DataAccess
             {
                 await RunMigrationsAsync();
             }
+
+            await SweepInterruptedRunsAsync();
+        }
+
+        /// <summary>
+        /// Stuck-run recovery (startup sweep). A process killed/restarted mid-run
+        /// leaves SyncRuns rows stuck in 'Running' and SyncProjects.IsRunning=1
+        /// forever — the single-run CAS then refuses every future run. On startup
+        /// (single-node assumption, documented in ProcessingCenter) no run can
+        /// actually be executing, so anything still marked Running is provably
+        /// dead: stamp it Interrupted and release the project flags.
+        ///
+        /// Runs after migrations on every InitializeAsync path (inline retry,
+        /// background self-heal, setup completion). Table-existence guards make it
+        /// a no-op on a fresh database or when AutoMigrate is off.
+        /// </summary>
+        private async Task SweepInterruptedRunsAsync()
+        {
+            const string sql = @"
+IF OBJECT_ID('dbo.SyncRuns','U') IS NOT NULL
+BEGIN
+    UPDATE SyncRuns
+       SET Status = 'Interrupted',
+           ErrorMessage = 'Process restarted mid-run.',
+           CompletedAt = COALESCE(CompletedAt, SYSUTCDATETIME())
+     WHERE Status = 'Running';
+END;
+
+IF OBJECT_ID('dbo.SyncProjects','U') IS NOT NULL
+BEGIN
+    UPDATE SyncProjects
+       SET IsRunning = 0,
+           LastRunStatus = 'Interrupted'
+     WHERE IsRunning = 1;
+END;";
+            try
+            {
+                using var connection = new SqlConnection(_config.ConnectionString);
+                await connection.OpenAsync();
+                var swept = await connection.ExecuteAsync(sql);
+                if (swept > 0)
+                {
+                    _logger.LogWarning(
+                        "Startup sweep: released {Count} sync run(s)/project flag(s) left 'Running' by a previous process. They are marked Interrupted.",
+                        swept);
+                }
+            }
+            catch (SqlException)
+            {
+                // Connectivity-class failures are the retry wrapper's problem —
+                // rethrow so DatabaseStartup classifies them; anything else here
+                // must never block boot over a housekeeping UPDATE.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Startup sweep for interrupted sync runs failed (non-fatal).");
+            }
         }
 
         /// <summary>

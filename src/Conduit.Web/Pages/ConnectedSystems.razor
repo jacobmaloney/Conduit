@@ -24,7 +24,8 @@
 @inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
 @inject Conduit.DataAccess.Repositories.ConnectionCredentialRepository CredRepo
 @inject Conduit.DataAccess.Repositories.SyncProjectRepository ProjectRepo
-@inject Conduit.Sync.Orchestration.SyncProjectOrchestrator Orchestrator
+@inject IServiceScopeFactory ScopeFactory
+@inject Microsoft.Extensions.Logging.ILogger<ConnectedSystems> Logger
 
 <PageTitle>Connections - Conduit</PageTitle>
 
@@ -1537,7 +1538,10 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Quick Sync cred lookup failed for tenant {s.TenantId}: {ex.Message}");
+            // Fix 8: surface to the operator instead of swallowing to console —
+            // a failed lookup means the smart credential pick silently degrades.
+            quickSyncStatus = $"Credential lookup failed ({ex.Message}) — the connector's default credential will be used.";
+            Logger.LogWarning(ex, "Quick Sync cred lookup failed for tenant {TenantId}", s.TenantId);
             quickSyncAvailableCredNames = new();
         }
         if (quickSyncAvailableCredNames.Count > 0)
@@ -1611,9 +1615,11 @@
             }
             StateHasChanged();
 
+            // Object class names are lowercase native names ("user", "group") —
+            // the orchestrator/workflow layer treats them as such everywhere.
             var classes = new List<string>();
-            if (quickSyncIncludeUser) classes.Add("User");
-            if (quickSyncIncludeGroup && QuickSyncSupportsGroup(quickSyncFor.SystemType)) classes.Add("Group");
+            if (quickSyncIncludeUser) classes.Add("user");
+            if (quickSyncIncludeGroup && QuickSyncSupportsGroup(quickSyncFor.SystemType)) classes.Add("group");
 
             var firstProjectId = Guid.Empty;
             var cron = string.IsNullOrWhiteSpace(quickSyncCronSchedule) ? null : quickSyncCronSchedule.Trim();
@@ -1652,11 +1658,28 @@
                 await ProjectRepo.ReplaceMappingsAsync(saved.Id, Array.Empty<Conduit.Core.SyncModels.AttributeMapping>());
                 if (firstProjectId == Guid.Empty) firstProjectId = saved.Id;
 
-                // Fire-and-forget Run Now — the History page will render the live run.
+                // Fire-and-forget Run Now — the History page will render the live
+                // run. Fix 5: the background task must NOT use this circuit's
+                // scoped orchestrator (we navigate away below and the circuit
+                // scope — with its DB plumbing — can be torn down mid-run). Same
+                // fresh-scope pattern as SyncProjects.RunNowConfirmed: resolve a
+                // new orchestrator from a dedicated DI scope the task owns and
+                // disposes itself. No pre-claim here: the project was created
+                // milliseconds ago, so the orchestrator's own CAS is the guard.
+                var quickSyncProjectId = saved.Id;
                 _ = Task.Run(async () =>
                 {
-                    try { await Orchestrator.ExecuteAsync(saved.Id, "QuickSync", CancellationToken.None); }
-                    catch (Exception ex) { Console.WriteLine($"Quick Sync run failed for project {saved.Id}: {ex.Message}"); }
+                    try
+                    {
+                        using var scope = ScopeFactory.CreateScope();
+                        var orchestrator = scope.ServiceProvider.GetRequiredService<Conduit.Sync.Orchestration.SyncProjectOrchestrator>();
+                        await orchestrator.ExecuteAsync(quickSyncProjectId, "QuickSync", CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Page has navigated away — never touch circuit UI state here.
+                        Logger.LogError(ex, "Quick Sync run failed for project {ProjectId}", quickSyncProjectId);
+                    }
                 });
             }
 
@@ -1851,7 +1874,13 @@
     {
         loading = true;
         try { stats = await TenantRepo.GetStatsAsync(); }
-        catch (Exception ex) { Console.WriteLine($"Failed to load connected systems: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            // Fix 8: surface the load failure on the page instead of swallowing
+            // to console — an empty grid with no message looked like "no systems".
+            errorMessage = $"Failed to load connected systems: {ex.Message}";
+            Logger.LogError(ex, "Failed to load connected systems");
+        }
         finally { loading = false; }
         // Tell the sidebar (and anyone else listening) that the tenant list may
         // have changed — switcher refreshes without a full page reload.

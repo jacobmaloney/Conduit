@@ -78,22 +78,23 @@ public sealed class SyncProjectOrchestrator
     /// Run a project once. Creates a SyncRun row, walks the workflow tree,
     /// updates counters per step, marks the run Succeeded or Failed at the end.
     /// Returns the SyncRun.Id so callers (UI, Quartz) can deep-link to history.
+    ///
+    /// <paramref name="preClaimed"/>: pass true ONLY when the caller already won
+    /// the IsRunning CAS (controller StartRun, UI Run-Now, scheduler) — we then
+    /// own the release but never re-claim. When false (default) WE perform the
+    /// CAS here; losing it means another run is in flight, so the just-created
+    /// SyncRun is stamped "Skipped" and we return WITHOUT executing and WITHOUT
+    /// touching the flag (it belongs to the other run).
     /// </summary>
-    public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken)
+    public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken, bool preClaimed = false)
     {
         // Worf HIGH-1: the IsRunning flag must be released on EVERY exit path,
         // including the early throws that happen before a SyncRun row exists
-        // (GetById null, CreateAsync, tenant resolution). The whole body runs
-        // under a guard that clears the flag on any failure.
-        //
-        // Ownership semantics: the controller's manual Run-Now path pre-claims
-        // IsRunning (CAS 0→1) before calling us, so SetRunningAsync below is a
-        // no-op there but WE still own the release. The scheduler path does NOT
-        // pre-claim, so SetRunningAsync below is the actual claim; if it returns
-        // false the project was already running under another invocation and we
-        // must NOT clear that other invocation's flag.
+        // (GetById null, CreateAsync, tenant resolution) — but ONLY when this
+        // invocation actually owns the flag (won the CAS or was pre-claimed).
+        // A lost CAS means another run owns it; we must never clear theirs.
         SyncRun? run = null;
-        bool ownsFlag = false;
+        bool ownsFlag = preClaimed;
 
         try
         {
@@ -108,16 +109,27 @@ public sealed class SyncProjectOrchestrator
                 StartedAt = DateTime.UtcNow
             });
 
-            // Returns false when the controller already won the CAS for a manual
-            // Run-Now (the row's already IsRunning=1) OR when a scheduled run
-            // overlaps an in-flight run. Either way the flag is set; in the
-            // pre-claimed manual case we own its release. We can't distinguish
-            // "controller pre-claimed for me" from "someone else is running" via
-            // the bool alone, so the controller path also releases as defense in
-            // depth (see ApiV1SyncRunsController.StartRun).
-            var won = await _projectRepo.SetRunningAsync(project.Id, run.Id);
-            ownsFlag = true;
-            _ = won;
+            if (preClaimed)
+            {
+                // The caller's CAS used a placeholder run id (the run row didn't
+                // exist yet). Stamp the real run id so LastRunId deep-links work.
+                await _projectRepo.StampLastRunIdAsync(project.Id, run.Id);
+            }
+            else
+            {
+                // Single-run ownership CAS. Losing means a run is already in
+                // flight for this project (scheduler overlap, double-click, …):
+                // record the skip honestly and leave the other run's flag alone.
+                var won = await _projectRepo.SetRunningAsync(project.Id, run.Id);
+                if (!won)
+                {
+                    const string skipReason = "A run is already in progress for this project.";
+                    await _runRepo.FinishAsync(run.Id, "Skipped", skipReason, 0);
+                    await Log(run.Id, "Warning", $"Run skipped: {skipReason}");
+                    return run.Id;
+                }
+                ownsFlag = true;
+            }
             await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
 
             // Register this run with the in-process cancellation registry so the
@@ -150,13 +162,10 @@ public sealed class SyncProjectOrchestrator
             {
                 await _projectRepo.FinishRunAsync(projectId, "Failed");
             }
-            else
-            {
-                // GetById/CreateAsync threw before we set the flag. Nothing was
-                // stamped, but a stale flag from a prior crashed run could exist;
-                // clear it defensively without touching run stats.
-                await _projectRepo.ClearRunningAsync(projectId);
-            }
+            // When we do NOT own the flag (lost/never-attempted CAS) we must not
+            // touch it — it belongs to another in-flight run. Stale flags from a
+            // crashed process are recovered by the startup sweep and the UI's
+            // Force-release action, not by this path.
             throw;
         }
     }
@@ -273,17 +282,36 @@ public sealed class SyncProjectOrchestrator
                     // needs the misses; AssignManager needs an objectExternalId.
                     List<ConnectorObject>? lastBatch = null;
 
-                    foreach (var step in steps)
+                    for (int stepIndex = 0; stepIndex < steps.Count; stepIndex++)
                     {
+                        var step = steps[stepIndex];
                         cancellationToken.ThrowIfCancellationRequested();
                         await Log(run.Id, "Info", $"  Step '{step.Name}' [{step.StepType}] starting (ordinal {step.Ordinal}).");
+
+                        // Fix 6 (hot-loop memory): a Mapping step only needs to
+                        // accumulate its full emitted batch when a LATER enabled
+                        // step in this workflow consumes EmittedBatch. Otherwise
+                        // the pump skips the per-record List.Add entirely.
+                        bool needEmitted = false;
+                        for (int j = stepIndex + 1; j < steps.Count; j++)
+                        {
+                            var t = steps[j].StepType;
+                            if (t == WorkflowStepTypes.PersonMatch
+                                || t == WorkflowStepTypes.PersonCreate
+                                || t == WorkflowStepTypes.AssignManager
+                                || t == WorkflowStepTypes.AssignGroupOwner)
+                            {
+                                needEmitted = true;
+                                break;
+                            }
+                        }
 
                         StepResult stepResult;
                         try
                         {
                             stepResult = step.StepType switch
                             {
-                                WorkflowStepTypes.Mapping            => await ExecuteMappingStepAsync(ctx, step, cancellationToken),
+                                WorkflowStepTypes.Mapping            => await ExecuteMappingStepAsync(ctx, step, needEmitted, cancellationToken),
                                 WorkflowStepTypes.PersonMatch        => await ExecutePersonMatchStepAsync(ctx, step, lastBatch, cancellationToken),
                                 WorkflowStepTypes.PersonCreate       => await ExecutePersonCreateStepAsync(ctx, step, lastBatch, lastMatches, cancellationToken),
                                 WorkflowStepTypes.AssignManager      => await ExecuteAssignManagerStepAsync(ctx, step, lastBatch, cancellationToken),
@@ -361,14 +389,17 @@ public sealed class SyncProjectOrchestrator
                 status = "Failed";
                 errorMessage = firstStepError;
             }
-            else if (anyMappingRan && totals.Read == 0)
+            else if (anyMappingRan && totals.Read == 0 && !wasIncremental)
             {
-                // "Query never returned" sentinel normalization. A Mapping pass that
-                // enumerated the source but read ZERO objects is almost always a
-                // misconfiguration (bad BaseDN/filter, bind that silently returned
+                // "Query never returned" sentinel normalization. A FULL Mapping pass
+                // that enumerated the source but read ZERO objects is almost always
+                // a misconfiguration (bad BaseDN/filter, bind that silently returned
                 // nothing) rather than a legitimately empty directory. Surface it as
                 // a failure with a real reason instead of a silent green / 0-records
                 // success — the long-standing false-success symptom.
+                //
+                // INCREMENTAL passes are exempt: a delta read that found 0 changes
+                // since the cursor is a legitimate, common SUCCESS, not a bad bind.
                 status = "Failed";
                 errorMessage = "Source enumeration returned 0 objects. Check the connection credential, BaseDN, and LDAP filter — a truthful 0-record run is treated as a failure to avoid a silent green success.";
                 await Log(run.Id, "Error", errorMessage);
@@ -486,7 +517,7 @@ public sealed class SyncProjectOrchestrator
     /// own per-step mappings + optional per-step scope. Falls through to the
     /// project-level scope when the step has none.
     /// </summary>
-    private async Task<StepResult> ExecuteMappingStepAsync(RunContext ctx, WorkflowStep step, CancellationToken ct)
+    private async Task<StepResult> ExecuteMappingStepAsync(RunContext ctx, WorkflowStep step, bool needEmitted, CancellationToken ct)
     {
         var mappings = await _workflowRepo.GetMappingsByStepAsync(step.Id);
         // Per-step scope first, then project scope, then default.
@@ -501,20 +532,35 @@ public sealed class SyncProjectOrchestrator
             ? step.ObjectClass!
             : ctx.Project.ObjectClass;
 
-        var pump = await PumpAsync(ctx, mappings, scope, objectClass, step, ct);
+        var pump = await PumpAsync(ctx, mappings, scope, objectClass, step, needEmitted, ct);
 
         // V25 per-STEP cursor save. Persist the advanced cursor back to THIS step —
         // and ONLY this step — so each per-class read advances its own high-water mark
-        // independently. We persist only when this run actually enumerated incrementally
-        // and produced a cursor; a full enumeration (incremental disabled, or no prior
-        // cursor) returns NewCursor null/non-incremental and leaves the stored cursor
-        // untouched. The cursor is saved here per step rather than hoisted to a single
-        // run-level value, which is exactly what stops one class's cursor clobbering
-        // another's. (No cross-step leakage: the save is keyed to step.Id.)
-        if (pump.WasIncremental && pump.NewCursor is not null)
+        // independently. (No cross-step leakage: the save is keyed to step.Id.)
+        //
+        // Fix 2 (incremental actually engages): persist the resolved cursor whenever
+        // the pump produced one from a trustworthy pass — not only when the pass was
+        // already incremental. That SEEDS the cursor on the first successful FULL run
+        // so run 2+ resumes incrementally; before this, the cursor was only saved on
+        // a WasIncremental pass, which could never happen without a stored cursor —
+        // the chicken-and-egg that kept incremental permanently disengaged.
+        //
+        // Trust gates (all required):
+        //   - a NewCursor was resolved (source supports cursors at all);
+        //   - ZERO step-level failed records (a failed write means the data at this
+        //     high-water mark was NOT durably applied — advancing would skip it);
+        //   - the read is trustworthy: a COMPLETE read (proven by the source), or an
+        //     already-incremental pass (today's behavior, kept so sources that don't
+        //     implement WasCompleteRead don't regress their existing incremental).
+        var advanceCursor = pump.NewCursor is not null
+            && pump.Delta.Failed == 0
+            && (pump.ReadWasComplete || pump.WasIncremental);
+        if (advanceCursor)
         {
-            await _workflowRepo.SetStepCursorAsync(step.Id, pump.NewCursor.Token);
-            await Log(ctx.RunId, "Info", $"    Incremental: advanced step '{step.Name}' cursor.");
+            await _workflowRepo.SetStepCursorAsync(step.Id, pump.NewCursor!.Token);
+            await Log(ctx.RunId, "Info", pump.WasIncremental
+                ? $"    Incremental: advanced step '{step.Name}' cursor."
+                : $"    Incremental: seeded step '{step.Name}' cursor from this complete full read — next run resumes incrementally.");
         }
 
         return new StepResult
@@ -524,7 +570,7 @@ public sealed class SyncProjectOrchestrator
             // the run-level newCursor (that path clobbered N steps into one value).
             NewCursor = null,
             WasIncremental = pump.WasIncremental,
-            EmittedBatch = pump.EmittedBatch
+            EmittedBatch = needEmitted ? pump.EmittedBatch : null
         };
     }
 
@@ -540,7 +586,8 @@ public sealed class SyncProjectOrchestrator
                  ?? new SyncProjectScope { SyncProjectId = ctx.Project.Id, PageSize = 1000 };
         // Legacy path (no Workflows): there are no steps, so the class is the project's
         // and the cursor falls back to the project-level last-run cursor (step = null).
-        var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, null, ct);
+        // No later steps exist to consume EmittedBatch → needEmitted: false.
+        var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, null, needEmitted: false, ct);
         return new LegacyResult(pump.Delta, pump.NewCursor, pump.WasIncremental);
     }
 
@@ -768,6 +815,7 @@ public sealed class SyncProjectOrchestrator
         RunDelta Delta,
         SyncCursor? NewCursor,
         bool WasIncremental,
+        bool ReadWasComplete,
         List<ConnectorObject> EmittedBatch);
 
     private async Task<PumpResult> PumpAsync(
@@ -776,6 +824,7 @@ public sealed class SyncProjectOrchestrator
         SyncProjectScope scope,
         string objectClass,
         WorkflowStep? step,
+        bool needEmitted,
         CancellationToken ct)
     {
         var run = ctx.RunId;
@@ -844,10 +893,10 @@ public sealed class SyncProjectOrchestrator
         // no stable SourceId are never skipped. When in doubt, write.
         bool skipUnchanged = project.SkipUnchanged;
         Dictionary<string, string> priorHashes = skipUnchanged
-            ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id)
+            ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, objectClass)
             : new Dictionary<string, string>(StringComparer.Ordinal);
         if (skipUnchanged)
-            await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es).");
+            await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es) for class '{objectClass}'.");
         var writtenHashes = new List<KeyValuePair<string, string>>(256);
 
         // ── Phase 2.2 delete-detection setup ────────────────────────────────────
@@ -856,15 +905,18 @@ public sealed class SyncProjectOrchestrator
         // the prior-synced id set even when skip-unchanged is off — otherwise a
         // project that doesn't opt into skip-unchanged could never detect leavers.
         //
-        // The prior set is the SinkRecordHashes keys for THIS (project, sink) — that
-        // table is uniquely keyed (SyncProjectId, SinkTenantId, ExternalId), so the
-        // diff is inherently per-connection: no cross-project / cross-connection bleed.
+        // V26 per-CLASS scope: the prior set is the SinkRecordHashes keys for THIS
+        // (project, sink, objectClass). Before V26 the registry was shared by every
+        // class in the project, so a two-class project's user step diffed the WHOLE
+        // registry against user-only seen ids and tombstoned every group record
+        // (and vice versa). Scoping the load, diff, prune, and registry write to
+        // this pump's class is the fix — plus the existing per-connection scoping.
         var tombstoneSink = sink as ITombstoneEmittingSink;
         var deleteDetectionOn = tombstoneSink is not null;
         HashSet<string> priorIdsForDelete;
         if (deleteDetectionOn && !skipUnchanged)
         {
-            var map = await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id);
+            var map = await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, objectClass);
             priorIdsForDelete = new HashSet<string>(map.Keys, StringComparer.Ordinal);
         }
         else
@@ -878,7 +930,15 @@ public sealed class SyncProjectOrchestrator
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
         if (deleteDetectionOn)
-            await Log(run, "Info", $"    Delete-detection ARMED (sink supports tombstones); loaded {priorIdsForDelete.Count} prior id(s). Emission gated on a COMPLETE source read.");
+            await Log(run, "Info", $"    Delete-detection ARMED (sink supports tombstones); loaded {priorIdsForDelete.Count} prior id(s) for class '{objectClass}'. Emission gated on a COMPLETE source read.");
+
+        // Fix 2: source-emitted tombstones (Attributes["_deleted"] == true; AD
+        // recycle-bin pass on incremental runs, Entra delta @removed). These are
+        // NOT live objects: they must never be mapped/upserted, never hashed,
+        // never counted as seen, never enter the emitted batch. Their SourceIds
+        // are collected here and forwarded through the sink's tombstone contract
+        // after the read (same safety gates as the diff path).
+        var sourceTombstoneIds = new List<string>();
 
         await Log(run, "Info",
             $"    Source={ctx.SourceTenant.Name} ({ctx.SourceTenant.SystemType}) → Sink={sinkTenant.Name} ({sinkTenant.SystemType}); ObjectClass={objectClass}; Mappings={mappings.Count}; BatchSize={batchSize}; Incremental={sourceAdapter.Capabilities.SupportsIncremental}; SkipUnchanged={skipUnchanged}.");
@@ -921,6 +981,19 @@ public sealed class SyncProjectOrchestrator
         {
             read++;
 
+            // Fix 2: divert source-emitted tombstone records BEFORE mapping. A
+            // tombstone is not a live object — upserting it would resurrect an
+            // AD recycle-bin entry as a live sink record. Collect its id for the
+            // post-read tombstone emission and skip everything else (mapping,
+            // seenSourceIds, skip-unchanged hashing, the emitted batch).
+            if (sourceObj.Attributes.TryGetValue("_deleted", out var deletedFlag)
+                && deletedFlag is bool isDeleted && isDeleted)
+            {
+                if (!string.IsNullOrEmpty(sourceObj.SourceId))
+                    sourceTombstoneIds.Add(sourceObj.SourceId);
+                continue;
+            }
+
             if (!sourceObj.Attributes.ContainsKey("_source"))
                 sourceObj.Attributes["_source"] = sourceAdapter.SystemType;
 
@@ -944,7 +1017,11 @@ public sealed class SyncProjectOrchestrator
             if (!string.IsNullOrWhiteSpace(scope.BaseDN) && !sinkObj.Attributes.ContainsKey("targetOU"))
                 sinkObj.Attributes["targetOU"] = scope.BaseDN;
 
-            emitted.Add(sinkObj);
+            // Fix 6: only accumulate the full emitted list when a later step in
+            // this workflow actually consumes it — otherwise this is pure memory
+            // growth proportional to the directory size.
+            if (needEmitted)
+                emitted.Add(sinkObj);
 
             // Delete-detection: record EVERY stable id seen this run, BEFORE the
             // skip-unchanged gate below. A skipped-unchanged record is still present
@@ -993,12 +1070,21 @@ public sealed class SyncProjectOrchestrator
         }
 
         // Persist hashes for records the sink accepted this run. Done once at the
-        // end (bounded by the change set) so the next run can skip them.
+        // end (bounded by the change set) so the next run can skip them. V26:
+        // scoped to this pump's class.
         if (skipUnchanged && writtenHashes.Count > 0)
         {
-            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, writtenHashes); }
+            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, objectClass, writtenHashes); }
             catch (Exception ex) { await Log(run, "Warning", $"    Could not persist sink hashes: {ex.Message}"); }
         }
+
+        // Complete-read sentinel. Computed unconditionally because three consumers
+        // need it: the diff-based tombstone gate, the source-emitted tombstone gate,
+        // and the caller's cursor-seeding gate (Fix 2). Sources that don't implement
+        // it report false (the safe default).
+        bool readWasComplete;
+        try { readWasComplete = enumeration.WasCompleteRead(); }
+        catch { readWasComplete = false; }
 
         // ── Phase 2.2 delete-detection + tombstone emission ─────────────────────
         // SAFETY GATE: the linchpin. We emit tombstones ONLY when EVERY one of these
@@ -1012,15 +1098,13 @@ public sealed class SyncProjectOrchestrator
         //   (5) the current read returned a plausible (non-zero) population — a
         //       "complete" read that returned ZERO live objects while we hold a
         //       non-empty prior set is treated as SUSPECT and is NOT emitted (it is
-        //       almost always a silently-empty bind, not a real full depopulation).
-        bool readWasComplete = false;
-        if (deleteDetectionOn)
-        {
-            try { readWasComplete = enumeration.WasCompleteRead(); }
-            catch { readWasComplete = false; }
-        }
-
-        if (deleteDetectionOn && seenSourceIds is not null && tombstoneSink is not null)
+        //       almost always a silently-empty bind, not a real full depopulation);
+        //   (6) Fix 2: the read was a FULL enumeration. An INCREMENTAL pass only
+        //       sees records changed since the cursor, so its seen-set is partial
+        //       by design — diffing the prior registry against it would tombstone
+        //       every unchanged record. On incremental passes, deletes come ONLY
+        //       from source-emitted tombstone records (handled below).
+        if (deleteDetectionOn && seenSourceIds is not null && tombstoneSink is not null && !wasIncremental)
         {
             var complete = readWasComplete;
 
@@ -1054,7 +1138,10 @@ public sealed class SyncProjectOrchestrator
 
                 if (disappeared.Count == 0)
                 {
-                    await Log(run, "Info", "    Tombstoning: complete read, no disappeared records. Nothing to delete.");
+                    // Per-class proof (V26): a multi-class project's steps each diff
+                    // ONLY their own class registry, so a stable two-class run logs
+                    // this line once per class with zero tombstones.
+                    await Log(run, "Info", $"    Tombstoning (class '{objectClass}'): complete read, no disappeared records. Nothing to delete.");
                 }
                 else
                 {
@@ -1072,7 +1159,7 @@ public sealed class SyncProjectOrchestrator
                         : "Conduit";
 
                     await Log(run, "Warning",
-                        $"    Tombstoning: complete read detected {disappeared.Count} disappeared record(s) of {priorIdsForDelete.Count} prior; emitting to sink (IC enforces a 50% cap as the backstop).");
+                        $"    Tombstoning (class '{objectClass}'): complete read detected {disappeared.Count} disappeared record(s) of {priorIdsForDelete.Count} prior; emitting to sink (IC enforces a 50% cap as the backstop).");
 
                     try
                     {
@@ -1100,8 +1187,8 @@ public sealed class SyncProjectOrchestrator
                         {
                             try
                             {
-                                await _hashRepo.DeleteManyAsync(project.Id, sinkTenant.Id, emit.PrunableIds);
-                                await Log(run, "Info", $"    Pruned {emit.PrunableIds.Count} tombstoned id(s) from the sink hash registry.");
+                                await _hashRepo.DeleteManyAsync(project.Id, sinkTenant.Id, objectClass, emit.PrunableIds);
+                                await Log(run, "Info", $"    Pruned {emit.PrunableIds.Count} tombstoned id(s) from the sink hash registry (class '{objectClass}').");
                             }
                             catch (Exception ex)
                             {
@@ -1118,18 +1205,91 @@ public sealed class SyncProjectOrchestrator
             }
         }
 
-        // Maintain the per-connection prior-synced id REGISTRY. Delete-detection
-        // diffs against SinkRecordHashes keys, so those keys must reflect "what we
-        // last successfully synced to this sink" — INDEPENDENT of skip-unchanged.
-        // When skip-unchanged is OFF we still register the ids the sink accepted
-        // this run (with a sentinel hash) so the NEXT complete run can detect their
-        // absence. When skip-unchanged is ON the writtenHashes above already did this.
+        // ── Fix 2: source-emitted tombstone forwarding ──────────────────────────
+        // Records the SOURCE itself flagged deleted (AD recycle-bin pass on an
+        // incremental read, Entra delta @removed). These were diverted out of the
+        // upsert loop above; forward them through the sink's reversible soft-delete
+        // contract under the SAME safety gates as the diff path: tombstone-capable
+        // sink, complete read, no teardown. Sinks without the contract get a
+        // Warning and the records are skipped entirely (never upserted as live).
+        if (sourceTombstoneIds.Count > 0)
+        {
+            if (tombstoneSink is null)
+            {
+                await Log(run, "Warning",
+                    $"    Source emitted {sourceTombstoneIds.Count} tombstone record(s) (class '{objectClass}') but the sink does not support the soft-delete contract — skipped (not upserted, not deleted).");
+            }
+            else if (!readWasComplete)
+            {
+                await Log(run, "Warning",
+                    $"    Source-emitted tombstones SKIPPED: source read was NOT complete (partial/failed/truncated). {sourceTombstoneIds.Count} candidate(s) will be re-evaluated next run.");
+            }
+            else if (ct.IsCancellationRequested)
+            {
+                await Log(run, "Warning", "    Source-emitted tombstones SKIPPED: run cancellation requested.");
+            }
+            else
+            {
+                var icUpsertSource = !string.IsNullOrWhiteSpace(ctx.SourceTenant.Name)
+                    ? ctx.SourceTenant.Name
+                    : "Conduit";
+                await Log(run, "Warning",
+                    $"    Source emitted {sourceTombstoneIds.Count} tombstone record(s) (class '{objectClass}'); emitting to sink (sink-side safety cap still applies).");
+                try
+                {
+                    var emit = await tombstoneSink.EmitTombstonesAsync(icUpsertSource, sourceTombstoneIds, ct);
+                    if (!emit.Succeeded)
+                    {
+                        await Log(run, "Error", $"    Source-tombstone emission FAILED: {emit.ErrorMessage}. Will retry next run.");
+                    }
+                    else if (emit.Aborted)
+                    {
+                        await Log(run, "Error",
+                            $"    Source-tombstone emission ABORTED by sink safety cap: {emit.AbortReason} (requested={emit.Requested}, matched={emit.Matched}).");
+                    }
+                    else
+                    {
+                        await Log(run, "Info",
+                            $"    Source tombstones applied: requested={emit.Requested}, matched={emit.Matched}, softDeleted={emit.SoftDeleted}.");
+                    }
+
+                    if (emit.PrunableIds.Count > 0)
+                    {
+                        try
+                        {
+                            await _hashRepo.DeleteManyAsync(project.Id, sinkTenant.Id, objectClass, emit.PrunableIds);
+                            await Log(run, "Info", $"    Pruned {emit.PrunableIds.Count} source-tombstoned id(s) from the sink hash registry (class '{objectClass}').");
+                        }
+                        catch (Exception ex)
+                        {
+                            await Log(run, "Warning", $"    Could not prune source-tombstoned ids from hash registry: {ex.Message}");
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    await Log(run, "Error", $"    Source-tombstone emission threw: {ex.Message}. Upsert results stand.");
+                }
+            }
+        }
+
+        // Maintain the per-connection, per-class prior-synced id REGISTRY.
+        // Delete-detection diffs against SinkRecordHashes keys, so those keys must
+        // reflect "what we last successfully synced to this sink" — INDEPENDENT of
+        // skip-unchanged. When skip-unchanged is OFF we still register the ids the
+        // sink accepted this run (with a sentinel hash) so the NEXT complete run can
+        // detect their absence. When skip-unchanged is ON the writtenHashes above
+        // already did this.
         //
         // ONLY register on a COMPLETE read. A partial read holds a partial seen-set;
         // registering it would silently drop real ids from the prior set, degrading
         // delete-detection over repeated partial runs. Skipping registration on a
         // partial read keeps the last complete registry intact (safe-leaning: a real
         // leaver may go undetected for a cycle, but a present record is never wiped).
+        // Incremental passes are additive here by construction (UpsertMany never
+        // removes keys), so registering their partial seen-set is safe and keeps
+        // newly created records delete-detectable.
         if (deleteDetectionOn && readWasComplete && !skipUnchanged && seenSourceIds is not null && seenSourceIds.Count > 0)
         {
             // Register every id seen this run (present in source). Use a sentinel
@@ -1139,7 +1299,7 @@ public sealed class SyncProjectOrchestrator
             var registry = new List<KeyValuePair<string, string>>(seenSourceIds.Count);
             foreach (var id in seenSourceIds)
                 registry.Add(new KeyValuePair<string, string>(id, registryHash));
-            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, registry); }
+            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, objectClass, registry); }
             catch (Exception ex) { await Log(run, "Warning", $"    Could not update prior-synced id registry: {ex.Message}"); }
         }
 
@@ -1154,6 +1314,7 @@ public sealed class SyncProjectOrchestrator
             new RunDelta(read, created, updated, skipped, failed, 0),
             newCursor,
             wasIncremental,
+            readWasComplete,
             emitted);
     }
 

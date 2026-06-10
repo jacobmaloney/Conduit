@@ -1191,6 +1191,92 @@ END;
 "
             });
 
+            // Migration 26: per-CLASS sink record hashes. The V23 redesign made ONE
+            // project pump N per-class Mapping steps (user, group, …), but
+            // SinkRecordHashes stayed keyed (SyncProjectId, SinkTenantId, ExternalId)
+            // — ONE registry per project+sink shared by every class. The orchestrator
+            // diffs "prior ids" against the ids SEEN BY THE CURRENT STEP, so on a
+            // two-class project the user step diffed the WHOLE project registry
+            // against user-only ids and tombstoned every group record (and the group
+            // step the users). Fix: scope the registry rows by ObjectClass.
+            //
+            //   (a) Add SinkRecordHashes.ObjectClass NVARCHAR(50) NULL. NULL = legacy
+            //       row written before this migration; the repository matches legacy
+            //       rows for ANY class and rewrites them with the real class on the
+            //       next upsert, so they converge without a destructive reset.
+            //   (b) Rebuild the unique index to include ObjectClass:
+            //       (SyncProjectId, SinkTenantId, ObjectClass, ExternalId). Existing
+            //       rows are unique on the old 3-column key, so widening the key
+            //       cannot collide. Drop+create both guarded by sys.indexes.
+            //
+            // The GO split keeps the CREATE INDEX (which references the just-added
+            // column) in its own batch — same-batch DDL referencing a just-added
+            // column fails to bind in SQL Server. The V27 BACKFILL (DML) stays a
+            // separate migration entirely, per the V23/V24 pattern.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 26,
+                Name = "SinkRecordHashes per-class scope (ObjectClass column + 4-part unique index)",
+                Description = "Adds SinkRecordHashes.ObjectClass (nullable; NULL = legacy any-class row) and rebuilds UX_SinkRecordHashes_Scope to (SyncProjectId, SinkTenantId, ObjectClass, ExternalId) so each per-class Mapping step diffs/tombstones ONLY its own class. Backfill is V27.",
+                SqlScript = @"
+SET QUOTED_IDENTIFIER ON;
+
+IF COL_LENGTH('dbo.SinkRecordHashes','ObjectClass') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SinkRecordHashes] ADD [ObjectClass] NVARCHAR(50) NULL;
+END;
+GO
+SET QUOTED_IDENTIFIER ON;
+
+IF EXISTS (SELECT 1 FROM sys.indexes
+            WHERE name = 'UX_SinkRecordHashes_Scope'
+              AND object_id = OBJECT_ID('dbo.SinkRecordHashes'))
+   AND NOT EXISTS (SELECT 1 FROM sys.index_columns ic
+                   JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                  WHERE ic.object_id = OBJECT_ID('dbo.SinkRecordHashes')
+                    AND ic.index_id = (SELECT index_id FROM sys.indexes
+                                        WHERE name = 'UX_SinkRecordHashes_Scope'
+                                          AND object_id = OBJECT_ID('dbo.SinkRecordHashes'))
+                    AND c.name = 'ObjectClass')
+BEGIN
+    DROP INDEX [UX_SinkRecordHashes_Scope] ON [dbo].[SinkRecordHashes];
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE name = 'UX_SinkRecordHashes_Scope'
+                  AND object_id = OBJECT_ID('dbo.SinkRecordHashes'))
+BEGIN
+    CREATE UNIQUE INDEX [UX_SinkRecordHashes_Scope]
+        ON [dbo].[SinkRecordHashes]([SyncProjectId], [SinkTenantId], [ObjectClass], [ExternalId]);
+END;
+"
+            });
+
+            // Migration 27: backfill V26's SinkRecordHashes.ObjectClass from the
+            // owning project's class (lowercased — object classes are lowercase
+            // native names everywhere else). Separate migration so the V26 ALTER is
+            // committed before DML references the new column (V23/V24 pattern).
+            // Only touches rows still NULL → idempotent; rows whose project has no
+            // class stay NULL and keep legacy any-class matching until rewritten.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 27,
+                Name = "Backfill SinkRecordHashes.ObjectClass from parent project",
+                Description = "Sets each existing SinkRecordHashes row's ObjectClass to LOWER(SyncProjects.ObjectClass) where still NULL. Idempotent.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.SinkRecordHashes','ObjectClass') IS NOT NULL
+BEGIN
+    UPDATE h
+       SET h.[ObjectClass] = LOWER(p.[ObjectClass])
+      FROM [dbo].[SinkRecordHashes] h
+      INNER JOIN [dbo].[SyncProjects] p ON p.[Id] = h.[SyncProjectId]
+     WHERE h.[ObjectClass] IS NULL
+       AND p.[ObjectClass] IS NOT NULL
+       AND LTRIM(RTRIM(p.[ObjectClass])) <> '';
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

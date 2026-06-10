@@ -387,7 +387,10 @@ namespace Conduit.Web.Controllers
             {
                 try
                 {
-                    await _orchestrator.ExecuteAsync(projectId, triggeredBy, CancellationToken.None)
+                    // preClaimed: this controller won the IsRunning CAS above, so
+                    // the orchestrator must not re-claim (it would see the flag
+                    // already set and skip its own run).
+                    await _orchestrator.ExecuteAsync(projectId, triggeredBy, CancellationToken.None, preClaimed: true)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -558,26 +561,49 @@ namespace Conduit.Web.Controllers
         }
 
         /// <summary>
-        /// Matches orchestrator-emitted "Step: <name> [<StepType>]" markers.
-        /// Tolerant of either bracketed or trailing-dash forms and of plain
-        /// "Step: <name>" without the type suffix.
+        /// Matches the orchestrator's REAL step-boundary marker (the same format
+        /// SyncHistory.razor parses):
+        ///   "  Step '&lt;name&gt;' [&lt;StepType&gt;] starting (ordinal N)."
+        /// The old hypothetical "Step: &lt;name&gt; [&lt;type&gt;]" form was never
+        /// emitted by anything, so Steps always came back empty (Fix 8). The
+        /// legacy "Step: " prefix is still accepted for tolerance.
         /// </summary>
         private static bool IsStepMarker(string message, out string name, out string? stepType)
         {
             name = string.Empty;
             stepType = null;
             if (string.IsNullOrWhiteSpace(message)) return false;
-            const string prefix = "Step: ";
-            if (!message.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
 
-            var rest = message.Substring(prefix.Length).Trim();
-            // Try "<name> [<type>]" form.
-            var open = rest.LastIndexOf('[');
-            var close = rest.LastIndexOf(']');
-            if (open > 0 && close > open && close == rest.Length - 1)
+            var trimmed = message.TrimStart();
+
+            // Canonical orchestrator marker: Step '<name>' [<Type>] starting …
+            if (trimmed.StartsWith("Step '", StringComparison.Ordinal)
+                && trimmed.Contains("' starting", StringComparison.Ordinal))
             {
-                name = rest.Substring(0, open).Trim();
-                stepType = rest.Substring(open + 1, close - open - 1).Trim();
+                var open = trimmed.IndexOf('\'');
+                var close = trimmed.IndexOf('\'', open + 1);
+                if (close > open)
+                {
+                    name = trimmed.Substring(open + 1, close - open - 1);
+                    var bOpen = trimmed.IndexOf('[', close + 1);
+                    var bClose = bOpen >= 0 ? trimmed.IndexOf(']', bOpen + 1) : -1;
+                    if (bOpen >= 0 && bClose > bOpen)
+                        stepType = trimmed.Substring(bOpen + 1, bClose - bOpen - 1).Trim();
+                    return true;
+                }
+            }
+
+            // Legacy tolerance: "Step: <name> [<type>]" / "Step: <name>".
+            const string prefix = "Step: ";
+            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+
+            var rest = trimmed.Substring(prefix.Length).Trim();
+            var lOpen = rest.LastIndexOf('[');
+            var lClose = rest.LastIndexOf(']');
+            if (lOpen > 0 && lClose > lOpen && lClose == rest.Length - 1)
+            {
+                name = rest.Substring(0, lOpen).Trim();
+                stepType = rest.Substring(lOpen + 1, lClose - lOpen - 1).Trim();
                 return true;
             }
             name = rest;

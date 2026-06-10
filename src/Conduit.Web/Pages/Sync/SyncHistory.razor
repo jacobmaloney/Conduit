@@ -201,6 +201,12 @@
                                 </button>
                             </div>
                             <div class="sync-log-trace-note">@TraceNote</div>
+                            @if (!string.IsNullOrEmpty(logLoadError))
+                            {
+                                <div class="alert alert-danger">
+                                    <i class="fas fa-exclamation-triangle me-2"></i>@logLoadError
+                                </div>
+                            }
                             @if (visibleLogs.Count == 0)
                             {
                                 <div class="sync-detail-empty-row">No log lines at this verbosity.</div>
@@ -480,6 +486,8 @@
     // "Disable Trace" collapses to workflow/step headers + warnings + errors.
     // No "Debug" level is emitted today; nothing is faked as a server trace level.
     private bool traceEnabled = true;
+    // Fix 8: log-pane error surfacing (load/poll failures were console-only).
+    private string logLoadError = string.Empty;
     private List<Conduit.Core.SyncModels.SyncRunLog> visibleLogs = new();
     private List<StepView> steps = new();
     private StepView? stepDetail;
@@ -623,16 +631,57 @@
         StartPollingIfNeeded();
     }
 
+    // Fix 7: rendered-log cap + high-water mark for incremental tailing. The poll
+    // loop appends only rows with Id > maxSeenLogId and drops from the HEAD once
+    // the in-memory list exceeds the cap, so a long run keeps streaming its tail
+    // instead of freezing at the first 2000 lines.
+    private const int LogRenderCap = 2000;
+    private long maxSeenLogId;
+
     private async Task LoadLogs()
     {
-        if (selectedRun is null) { logs = new(); RebuildDerivedViews(); return; }
-        try { logs = await RunRepo.GetLogsAsync(selectedRun.Id, take: 2000); }
+        if (selectedRun is null) { logs = new(); maxSeenLogId = 0; RebuildDerivedViews(); return; }
+        try
+        {
+            // Initial load = the TAIL of the run (identical to the old TOP-N for
+            // runs under the cap; the useful end of the log for runs over it).
+            logs = await RunRepo.GetLogsTailAsync(selectedRun.Id, take: LogRenderCap);
+            maxSeenLogId = logs.Count > 0 ? logs[^1].Id : 0;
+            logLoadError = string.Empty;
+        }
         catch (Exception ex)
         {
-            Console.WriteLine($"LoadLogs failed: {ex.Message}");
+            logLoadError = $"Could not load run logs: {ex.Message}";
             logs = new();
+            maxSeenLogId = 0;
         }
         RebuildDerivedViews();
+    }
+
+    /// <summary>
+    /// Fix 7: poll-tick log refresh. Appends only rows after the max seen Id and
+    /// trims the head to the render cap — no more full TOP-N re-fetch every 2s.
+    /// </summary>
+    private async Task AppendNewLogs()
+    {
+        if (selectedRun is null) return;
+        try
+        {
+            var fresh = await RunRepo.GetLogsAfterAsync(selectedRun.Id, maxSeenLogId, take: LogRenderCap);
+            logLoadError = string.Empty;
+            if (fresh.Count == 0) return;
+            logs.AddRange(fresh);
+            maxSeenLogId = logs[^1].Id;
+            if (logs.Count > LogRenderCap)
+            {
+                logs.RemoveRange(0, logs.Count - LogRenderCap);
+            }
+            RebuildDerivedViews();
+        }
+        catch (Exception ex)
+        {
+            logLoadError = $"Live log refresh failed: {ex.Message}";
+        }
     }
 
     // ─── Item 4: derive trace-filtered log + step view from real log lines ───
@@ -798,7 +847,8 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"LoadAsyncJobs failed: {ex.Message}");
+            // Fix 8: surface in the async-jobs pane's existing error field.
+            asyncJobError = $"Could not load async jobs: {ex.Message}";
             allAsyncJobs = new();
             filteredAsyncJobs = new();
             asyncJobTypes = new();
@@ -939,7 +989,9 @@
                 if (refreshed is not null)
                 {
                     selectedRun = refreshed;
-                    await LoadLogs();
+                    // Fix 7: append-only tail instead of re-fetching the first
+                    // TOP-N (which froze long runs at the first 2000 lines).
+                    await AppendNewLogs();
                     // Phase 5: keep async-job rows live while jobs are pending —
                     // the poller may advance them out of band on a 30s tick.
                     if (activeDetailTab == "asyncjobs" || allAsyncJobs.Any(j => j.State == "Pending"))
@@ -963,7 +1015,11 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"SyncHistory poll failed: {ex.Message}");
+            // Fix 8: surface the poll failure in the log pane rather than
+            // swallowing to console — the operator otherwise sees a silently
+            // frozen "Live" view.
+            logLoadError = $"Live refresh failed: {ex.Message}";
+            try { await InvokeAsync(StateHasChanged); } catch { /* circuit gone */ }
         }
         finally
         {
@@ -981,6 +1037,7 @@
         "Failed"         => "danger",
         "PartialSuccess" => "warning",
         "Cancelled"      => "warning",
+        "Interrupted"    => "warning",
         _                => "secondary"
     };
 

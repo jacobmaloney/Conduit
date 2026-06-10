@@ -337,6 +337,21 @@ public class SyncProjectRepository : BaseRepository
     }
 
     /// <summary>
+    /// Stamps the real SyncRun id onto a project AFTER a pre-claimed CAS. The
+    /// pre-claim happens before the run row exists, so callers CAS with a
+    /// placeholder id; the orchestrator calls this once the run row is created.
+    /// Guarded on IsRunning = 1 so a finished/force-released project is never
+    /// retro-stamped.
+    /// </summary>
+    public Task StampLastRunIdAsync(Guid projectId, Guid runId) =>
+        ExecuteAsync(@"
+            UPDATE SyncProjects
+               SET LastRunId = @RunId
+             WHERE Id = @ProjectId
+               AND IsRunning = 1;",
+            new { ProjectId = projectId, RunId = runId });
+
+    /// <summary>
     /// Releases the <c>IsRunning</c> flag for a project given ONLY its id, with
     /// no run-stats stamping. Used by the orchestrator's early-failure guard
     /// (Worf HIGH-1) when a run row may not exist yet (e.g. GetById returned

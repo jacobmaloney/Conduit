@@ -684,6 +684,20 @@
                     <button type="button" class="btn btn-secondary" @onclick="CloseStopConfirmModal" disabled="@stopInProgress">
                         <i class="fas fa-times me-1"></i>Keep Running
                     </button>
+                    @if (stopForceReleaseOffered)
+                    {
+                        <button type="button" class="btn btn-warning" @onclick="ForceReleaseConfirmed" disabled="@stopInProgress">
+                            @if (stopInProgress)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-unlock me-1"></i>
+                            }
+                            Force release
+                        </button>
+                    }
                     <button type="button" class="btn btn-danger" @onclick="StopSyncConfirmed" disabled="@stopInProgress">
                         @if (stopInProgress)
                         {
@@ -3213,6 +3227,9 @@
     private bool showStopConfirmModal;
     private bool stopInProgress;
     private string stopError = string.Empty;
+    // Fix 4: offered only after RequestCancel found nothing in-process while the
+    // DB row still says Running (orphaned flag) — renders the Force release button.
+    private bool stopForceReleaseOffered;
 
     // Copy-Template modal state
     private bool showCopyModal;
@@ -4385,9 +4402,22 @@
         showRunConfirmModal = false;
         runNowInProgress = false;
 
-        // Optimistic local flip so the project shows Running the instant the modal
-        // closes; the orchestrator persists IsRunning=1 a beat later and the
-        // run-history page reflects the authoritative state.
+        // Fix 3: pre-claim the single-run flag (atomic IsRunning 0→1 CAS) BEFORE
+        // firing the background run. Guid.Empty is the placeholder run id — the
+        // orchestrator stamps the real one once the run row exists. Losing the
+        // CAS means a run started between the modal opening and Confirm (another
+        // operator, the scheduler, the API): show the already-running message and
+        // do NOT fire a second run.
+        var claimed = await ProjectRepo.SetRunningAsync(projectId, Guid.Empty);
+        if (!claimed)
+        {
+            toastError = $"'{projectName}' already has a run in progress — view its live progress in Sync History.";
+            await Reload();
+            return;
+        }
+
+        // Local flip so the project shows Running the instant the modal closes;
+        // the CAS above already persisted IsRunning=1 authoritatively.
         selectedProject.IsRunning = true;
         await Reload();
 
@@ -4397,7 +4427,9 @@
             {
                 using var scope = ScopeFactory.CreateScope();
                 var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
-                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None);
+                // preClaimed: this page won the CAS above; the orchestrator owns
+                // the release from here on every exit path.
+                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None, preClaimed: true);
             }
             catch (Exception ex)
             {
@@ -4406,6 +4438,19 @@
                 // The page has navigated away, so do NOT touch circuit-scoped UI
                 // state from this background context.
                 Logger.LogError(ex, "Background Run-Now failed for project {ProjectId} ({ProjectName})", projectId, projectName);
+
+                // Defense in depth for the pre-claim: free the project if the
+                // orchestrator threw before its own release could run.
+                try
+                {
+                    using var cleanupScope = ScopeFactory.CreateScope();
+                    await cleanupScope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
+                        .ClearRunningAsync(projectId);
+                }
+                catch (Exception clearEx)
+                {
+                    Logger.LogError(clearEx, "Failed to release IsRunning for project {ProjectId} after a failed Run-Now", projectId);
+                }
             }
         });
 
@@ -4421,6 +4466,7 @@
     {
         if (selectedProject is null || !selectedProject.IsRunning) return;
         stopError = string.Empty;
+        stopForceReleaseOffered = false;
         showStopConfirmModal = true;
     }
 
@@ -4429,6 +4475,7 @@
         if (stopInProgress) return;
         showStopConfirmModal = false;
         stopError = string.Empty;
+        stopForceReleaseOffered = false;
     }
 
     private async Task StopSyncConfirmed()
@@ -4453,13 +4500,67 @@
             }
             else
             {
-                stopError = "No in-flight run was found for this project in this process. It may have already finished — refresh to confirm.";
+                // Fix 4: nothing to cancel in-process, but the DB row may STILL
+                // say Running (e.g. a previous process died mid-run before the
+                // startup sweep, or the flag got orphaned). Re-check the
+                // authoritative row; if it is still flagged, offer Force release.
+                var fresh = await ProjectRepo.GetByIdAsync(selectedProject.Id);
+                if (fresh is not null && fresh.IsRunning)
+                {
+                    stopError = "No in-flight run was found for this project in this process, but the project is still marked Running. If you are sure no run is executing, use Force release to clear the flag.";
+                    stopForceReleaseOffered = true;
+                }
+                else
+                {
+                    stopError = "No in-flight run was found for this project in this process. It may have already finished — refresh to confirm.";
+                }
             }
             await Reload();
         }
         catch (Exception ex)
         {
             stopError = $"Stop failed: {ex.Message}";
+        }
+        finally
+        {
+            stopInProgress = false;
+        }
+    }
+
+    /// <summary>
+    /// Fix 4: operator-confirmed recovery for a project whose IsRunning flag is
+    /// orphaned (no run executing in this process, row still flagged). Stamps any
+    /// dangling 'Running' run(s) Interrupted and releases the project flag via
+    /// FinishRunAsync (which also sets LastRunStatus). Never touches a healthy
+    /// run: the button is only offered after RequestCancel found nothing to cancel.
+    /// </summary>
+    private async Task ForceReleaseConfirmed()
+    {
+        if (selectedProject is null) return;
+        stopInProgress = true;
+        stopError = string.Empty;
+        try
+        {
+            var projectId = selectedProject.Id;
+            var name = selectedProject.Name;
+
+            // Stamp dangling run rows first so history agrees with the project row.
+            var recent = await RunRepo.GetByProjectAsync(projectId, take: 25);
+            foreach (var dangling in recent.Where(r => r.Status == "Running"))
+            {
+                await RunRepo.FinishAsync(dangling.Id, "Interrupted", "Force-released by operator.", 0);
+            }
+
+            await ProjectRepo.FinishRunAsync(projectId, "Interrupted");
+
+            showStopConfirmModal = false;
+            stopForceReleaseOffered = false;
+            toastSuccess = $"'{name}' force-released. Dangling run(s) marked Interrupted; Run Now is available again.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            stopError = $"Force release failed: {ex.Message}";
         }
         finally
         {
