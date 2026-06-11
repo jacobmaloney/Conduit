@@ -1,0 +1,4 @@
+# Local connection settings with real credentials — NEVER commit.
+appsettings.json
+appsettings.*.json
+!appsettings.sample.json

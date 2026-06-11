@@ -412,6 +412,10 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SharePoint.SharePointAdapter>();
 // Phase 2 — IdentityCenter as a Conduit connector (paired with IC's /api/objects/{query,bulk}).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.IdentityCenterAdapter>();
+// Active Roles — writes route THROUGH the AR Administration Service (EDMS://) so
+// policies/workflows/virtual-attributes fire (e.g. SoD denies a toxic role pairing
+// mid-sync). Requires the AR ADSI provider on the host that runs the connector.
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.ActiveRoles.ActiveRolesAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
 // Singleton: shared across the controller's fire-and-forget Run-Now task, the
 // scheduler, and every Blazor circuit so "Stop Sync" can trip the in-flight run.
