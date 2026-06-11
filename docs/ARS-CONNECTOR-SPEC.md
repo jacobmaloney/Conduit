@@ -1,8 +1,19 @@
 # Active Roles (ARS) Connector for Conduit — design spec
 
-**Status:** proposed / scoping
+**Status:** **Phase 1 SHIPPED** (commit `d4b23fe`, branch `feature/ic-sync-ui-port`) — proven live against ARS on .56
 **Author:** UNITE 2026 work
 **Audience:** whoever builds the connector
+
+> **GATE RESULT (2026-06-11):** Write-mechanism **#3 (S.DS.Protocols → AR LDAP port) was tested
+> live and is DEAD** — ARS does not speak LDAP on its service port 15172 (bind fails "LDAP server
+> unavailable"); 389/636 are the raw AD DC and return NO virtual attributes (bypass ARS). The chosen
+> + proven mechanism is **#1, the AR ADSI provider** (`System.DirectoryServices` `EDMS://` DirectoryEntry
+> + `CommitChanges`): reads resolve virtual attributes through ARS, and a toxic write is **denied by the
+> SoD policy** with the message surfaced via `DirectoryServicesCOMException`. **Deployment constraint:**
+> the connector RUNS only on a host with the **Active Roles ADSI provider / Management Tools** installed
+> (compiles anywhere; publish self-contained since the AR server may lack the .NET runtime). Phase 1 =
+> `src/Conduit.Connectors.ActiveRoles/` (Adapter/Source/Sink/credential) + standalone CLI harness
+> `src/Conduit.Connectors.ActiveRoles.Cli/` + one DI line in Program.cs.
 
 Add a connector that lets Conduit read from and write to **One Identity Active
 Roles (ARS)** — usable as a sync **source** or **target**. The point is *not* "another
