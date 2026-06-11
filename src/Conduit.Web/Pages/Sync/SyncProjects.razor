@@ -3770,10 +3770,22 @@
             SkipUnchanged = selectedProject.SkipUnchanged
         };
         await LoadCredentialsForFormAsync();
-        scopeForm = await ProjectRepo.GetScopeAsync(selectedProject.Id)
-                    ?? new SyncProjectScope { SyncProjectId = selectedProject.Id, PageSize = 1000 };
-        mappingForm = await ProjectRepo.GetMappingsAsync(selectedProject.Id);
+        // An exception that escapes an @onclick dispatch kills the whole circuit
+        // (and the framework's EndInvokeDotNet ack then masks it with an NRE), so
+        // surface load failures in the modal's error banner instead of throwing.
         formError = string.Empty;
+        try
+        {
+            scopeForm = await ProjectRepo.GetScopeAsync(selectedProject.Id)
+                        ?? new SyncProjectScope { SyncProjectId = selectedProject.Id, PageSize = 1000 };
+            mappingForm = await ProjectRepo.GetMappingsAsync(selectedProject.Id);
+        }
+        catch (Exception ex)
+        {
+            scopeForm = new SyncProjectScope { SyncProjectId = selectedProject.Id, PageSize = 1000 };
+            mappingForm = new List<AttributeMapping>();
+            formError = $"Failed to load the project's scope/mappings: {ex.Message}";
+        }
         formTab = "setup";
         ResetAssignmentTemplateForm();
         ResetWorkflowFormState();

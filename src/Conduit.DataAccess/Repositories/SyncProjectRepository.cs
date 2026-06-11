@@ -380,9 +380,14 @@ public class SyncProjectRepository : BaseRepository
 
     // ─── SyncProjectScope ────────────────────────────────────────────────
 
+    // Project-level scope ONLY (WorkflowStepId IS NULL). Per-step scope rows live in
+    // the same table (Phase 7) and are owned by WorkflowRepository; without this
+    // filter a multi-class project with per-step scopes returns multiple rows and
+    // QuerySingleOrDefault throws ("Sequence contains more than one element") —
+    // which killed the circuit on Manage-open. Mirrors UpsertScopeAsync's MERGE key.
     public Task<SyncProjectScope?> GetScopeAsync(Guid projectId) =>
         QuerySingleOrDefaultAsync<SyncProjectScope>(
-            "SELECT * FROM SyncProjectScopes WHERE SyncProjectId = @Id",
+            "SELECT * FROM SyncProjectScopes WHERE SyncProjectId = @Id AND WorkflowStepId IS NULL",
             new { Id = projectId });
 
     public async Task UpsertScopeAsync(SyncProjectScope scope)
@@ -428,9 +433,13 @@ public class SyncProjectRepository : BaseRepository
 
     public async Task<List<AttributeMapping>> GetMappingsAsync(Guid projectId)
     {
+        // Project-level mappings ONLY (WorkflowStepId IS NULL) — the symmetric read
+        // for ReplaceMappingsAsync, which deletes/re-inserts only unattached rows.
+        // Without the filter, the edit form loads per-step mappings into the
+        // project-level tab and Save re-inserts them as duplicated project rows.
         var rows = await QueryAsync<AttributeMapping>(@"
             SELECT * FROM AttributeMappings
-             WHERE SyncProjectId = @Id
+             WHERE SyncProjectId = @Id AND WorkflowStepId IS NULL
              ORDER BY SortOrder, SinkAttribute",
             new { Id = projectId });
         return rows.ToList();
