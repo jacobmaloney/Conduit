@@ -124,13 +124,17 @@ public static class AttributeTemplateCatalog
             E("whenCreated", "WhenCreated"),
             E("whenChanged", "WhenChanged"),
             E("sAMAccountName", "Username", true),
+            E("displayName", "DisplayName"),
             E("dNSHostName", "DNSHostName"),
             E("operatingSystem", "OperatingSystem"),
             E("operatingSystemVersion", "OSVersion"),
             E("description", "Description"),
             E("location", "Location"),
             E("managedBy", "ManagerSourceId"),
-            E("servicePrincipalName", "ServicePrincipalNames"),
+            // Sink key MUST be the camelCase AD name: IC stores non-column attributes
+            // verbatim in ObjectAttributes, and every IC consumer (SQL inventory SPN
+            // detection, NHI, License Center) queries AttributeName='servicePrincipalName'.
+            E("servicePrincipalName", "servicePrincipalName"),
             E("lastLogonTimestamp", "LastLogonTimestamp"),
             E("lastLogon", "LastLogon"),
             E("userAccountControl", "UserAccountControl", false, "Integer"),

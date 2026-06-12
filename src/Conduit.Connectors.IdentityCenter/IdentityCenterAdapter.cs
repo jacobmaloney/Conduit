@@ -50,6 +50,15 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
             {
                 new CredentialFieldSpec { Key = "BaseUrl", Label = "Base URL", Placeholder = "https://identitycenter.local:7048", IsRequired = true },
                 new CredentialFieldSpec { Key = "ApiKey",  Label = "API Key",  IsRequired = true, IsSecret = true },
+                // The sync source/sink always authenticate with ApiKey. AgentApiKey is
+                // consumed ONLY by IcAgentCommandPollerService (claim + heartbeat) — IC's
+                // TenantDataPolicy denies per-agent keys on the data endpoints, so the
+                // two channels need separate keys.
+                new CredentialFieldSpec
+                {
+                    Key = "AgentApiKey", Label = "Agent API Key", IsSecret = true,
+                    Help = "Per-agent key for the IC command channel; leave blank to use the API key (legacy mode)."
+                },
                 // V22: the IC table (Objects | Identities) is NO LONGER a connection
                 // credential field. It moved onto the Sync Project's source/sink
                 // endpoints (SyncProject.SourceTable / SinkTable) so ONE IdentityCenter

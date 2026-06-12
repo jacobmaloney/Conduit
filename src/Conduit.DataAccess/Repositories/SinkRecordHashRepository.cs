@@ -22,6 +22,16 @@ namespace Conduit.DataAccess.Repositories;
 /// Load-once: the orchestrator pulls the whole (project, sink, class) map at run
 /// start into a dictionary and reuses it across the hot loop — no per-record SELECT.
 /// </summary>
+/// <summary>
+/// One prior-run registry entry: the stored content hash plus when the record
+/// was last actually accepted by the sink (UpdatedAt, UTC). The timestamp backs
+/// the orchestrator's bounded-refresh TTL for volatile-hash sources: a record
+/// whose hash is excluded from volatile freshness attributes (SQL Discovery's
+/// sqlLastScannedAt etc.) can stay hash-stable forever, so without a periodic
+/// forced re-ingest the sink-side freshness column ages and falsely flips Stale.
+/// </summary>
+public readonly record struct SinkHashEntry(string ContentHash, DateTime UpdatedAt);
+
 public class SinkRecordHashRepository : BaseRepository
 {
     public SinkRecordHashRepository(DatabaseConfig config) : base(config) { }
@@ -34,21 +44,23 @@ public class SinkRecordHashRepository : BaseRepository
         string.IsNullOrWhiteSpace(objectClass) ? null : objectClass.Trim().ToLowerInvariant();
 
     /// <summary>
-    /// Load every known (ExternalId → ContentHash) for one project+sink+class.
+    /// Load every known (ExternalId → ContentHash + UpdatedAt) for one
+    /// project+sink+class. UpdatedAt rides along so the orchestrator can apply the
+    /// bounded-refresh TTL (see <see cref="SinkHashEntry"/>) without a second query.
     /// Legacy NULL-class rows are included (matched by any class) until rewritten.
     /// Ordinal comparer because ExternalIds are case-sensitive opaque keys
     /// (DN, GUID, UPN).
     /// </summary>
-    public async Task<Dictionary<string, string>> LoadMapAsync(Guid syncProjectId, Guid sinkTenantId, string? objectClass)
+    public async Task<Dictionary<string, SinkHashEntry>> LoadMapAsync(Guid syncProjectId, Guid sinkTenantId, string? objectClass)
     {
         const string sql = @"
-SELECT ExternalId, ContentHash FROM SinkRecordHashes
+SELECT ExternalId, ContentHash, UpdatedAt FROM SinkRecordHashes
  WHERE SyncProjectId = @syncProjectId AND SinkTenantId = @sinkTenantId
    AND (ObjectClass = @objectClass OR ObjectClass IS NULL OR @objectClass IS NULL);";
-        var rows = await QueryAsync<(string ExternalId, string ContentHash)>(
+        var rows = await QueryAsync<(string ExternalId, string ContentHash, DateTime UpdatedAt)>(
             sql, new { syncProjectId, sinkTenantId, objectClass = Canon(objectClass) });
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var r in rows) map[r.ExternalId] = r.ContentHash;
+        var map = new Dictionary<string, SinkHashEntry>(StringComparer.Ordinal);
+        foreach (var r in rows) map[r.ExternalId] = new SinkHashEntry(r.ContentHash, r.UpdatedAt);
         return map;
     }
 

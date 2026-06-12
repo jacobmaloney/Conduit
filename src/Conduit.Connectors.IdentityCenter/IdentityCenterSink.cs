@@ -285,7 +285,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
                     sourceConnection = v?.ToString();
                     continue;
                 }
-                attrs[k] = v?.ToString();
+                attrs[k] = AttributeValueToString(v);
             }
             items.Add(new
             {
@@ -646,6 +646,31 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
         var first = enumerator.Current;
         if (!first.TryGetProperty("id", out var idEl)) return null;
         return Guid.TryParse(idEl.GetString(), out var g) ? g : null;
+    }
+
+    /// <summary>
+    /// Render an attribute value for IC's string-typed bulk payload. Multi-valued
+    /// LDAP attributes (servicePrincipalName, memberOf, proxyAddresses) arrive from
+    /// the AD source as List&lt;object?&gt; — a bare ToString() would emit
+    /// "System.Collections.Generic.List`1[...]". IC's canonical multi-value format
+    /// (its own AD + Entra connectors, AttributeMappingService.ConvertAttributeValueToString)
+    /// is a semicolon-joined string, so match it.
+    /// </summary>
+    private static string? AttributeValueToString(object? v)
+    {
+        if (v is null) return null;
+        if (v is string s) return s;
+        if (v is System.Collections.IEnumerable e && v is not byte[])
+        {
+            var parts = new List<string>();
+            foreach (var item in e)
+            {
+                var sv = AttributeValueToString(item);
+                if (!string.IsNullOrEmpty(sv)) parts.Add(sv!);
+            }
+            return string.Join(";", parts);
+        }
+        return v.ToString();
     }
 
     private static string? LookupAttr(ConnectorObject obj, string key)

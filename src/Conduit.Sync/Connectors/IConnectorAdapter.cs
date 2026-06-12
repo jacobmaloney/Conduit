@@ -393,6 +393,28 @@ public sealed class ConnectorCapabilities
     /// <summary>Source can resume from a SyncCursor (delta / lastModified).</summary>
     public bool SupportsIncremental { get; init; }
 
+    /// <summary>
+    /// SOURCE-side safety declaration: a record missing from this source's read
+    /// is NOT evidence of deletion, so the orchestrator must never compute or
+    /// forward tombstones for runs whose source declares this — regardless of
+    /// the sink's tombstone capability. Set by discovery-style sources (e.g.
+    /// SQL Discovery, where a failed scan is indistinguishable from a
+    /// decommission). Default false (normal directory sources).
+    /// </summary>
+    public bool SuppressDeleteDetection { get; init; }
+
+    /// <summary>
+    /// SOURCE-side declaration: attribute names whose values change on every read
+    /// without representing a real object change (per-attempt timestamps and the
+    /// like). The orchestrator EXCLUDES these from the sink-side skip-unchanged
+    /// content hash so an otherwise-unchanged record is skipped, while every other
+    /// attribute still ingests normally (the excluded attributes themselves are
+    /// still written when the record DOES change). Default empty — hashing
+    /// semantics for every existing connector are untouched. Matched
+    /// case-insensitively.
+    /// </summary>
+    public IReadOnlyList<string> HashVolatileAttributes { get; init; } = Array.Empty<string>();
+
     // ─── Phase 7 person-aware step support ──────────────────────────────────
     /// <summary>Sink implements <see cref="IConnectorSink.MatchPersonAsync"/>.</summary>
     public bool SupportsPersonMatch { get; init; }

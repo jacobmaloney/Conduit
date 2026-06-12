@@ -412,6 +412,8 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SharePoint.SharePointAdapter>();
 // Phase 2 — IdentityCenter as a Conduit connector (paired with IC's /api/objects/{query,bulk}).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.IdentityCenterAdapter>();
+// SQL Discovery — source-only license-inventory scanner (SPN/instance-list enumeration → IC sink).
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SqlDiscovery.SqlDiscoveryAdapter>();
 // Active Roles — writes route THROUGH the AR Administration Service (EDMS://) so
 // policies/workflows/virtual-attributes fire (e.g. SoD denies a toxic role pairing
 // mid-sync). Requires the AR ADSI provider on the host that runs the connector.
@@ -462,6 +464,18 @@ builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob>(sp =>
 });
 
 builder.Services.AddHostedService<Conduit.Scheduling.SchedulerService>();
+
+// Outbound-only "Scan now": polls IC's agent-command API (when an IdentityCenter
+// connection is configured) and triggers Run-Now of the SQL Discovery project.
+// 404 from IC = feature not deployed yet — polled quietly, never crashes the host.
+// Hardened: 1 MB response cap, and no auto-redirect — X-API-Key is a default
+// request header, so following a 302 would replay the key to another host.
+builder.Services.AddHttpClient("IcAgentCommandPoller")
+    .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 1024 * 1024)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+// Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
+builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
+builder.Services.AddHostedService<Conduit.Web.Services.IcAgentCommandPollerService>();
 
 var app = builder.Build();
 

@@ -7,6 +7,7 @@
 @inject IConfiguration Config
 @inject NavigationManager Navigation
 @inject OpenAccessState OpenAccess
+@inject IcAgentStatusService IcAgentStatus
 
 <PageTitle>Configuration - Conduit</PageTitle>
 
@@ -58,6 +59,123 @@
                     @if (!string.IsNullOrEmpty(toggleError))
                     {
                         <div class="alert alert-danger small mt-2 mb-0">@toggleError</div>
+                    }
+                </div>
+            </div>
+
+            <!-- IC Agent enrollment status -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="oi oi-rss"></i> IC Agent</h5>
+                </div>
+                <div class="card-body">
+                    <p class="mb-3 text-muted">
+                        Enrollment against IdentityCenter's agent command channel. Identity (name,
+                        location, agent id) is assigned server-side when an admin registers this
+                        agent in IdentityCenter and mints its per-agent API key; it is read-only here.
+                        The keys live in the IdentityCenter connection's credential
+                        (<a href="/connected-systems">Connected Systems</a>) — the optional
+                        Agent API Key field drives this channel; when it is blank the shared
+                        API key is used (legacy mode).
+                    </p>
+
+                    @if (icAgentEndpoints.Count == 0)
+                    {
+                        <div class="small text-muted">
+                            No IdentityCenter connection with an API key is configured, or the poller
+                            has not completed its first cycle yet.
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var ep in icAgentEndpoints)
+                        {
+                            <dl class="row mb-2">
+                                <dt class="col-sm-4">Server:</dt>
+                                <dd class="col-sm-8"><code>@ep.BaseUrl</code></dd>
+
+                                <dt class="col-sm-4">API key configured:</dt>
+                                <dd class="col-sm-8">
+                                    @if (ep.KeyConfigured)
+                                    {
+                                        <span class="badge bg-success">Yes</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">No</span>
+                                    }
+                                </dd>
+
+                                <dt class="col-sm-4">Key source:</dt>
+                                <dd class="col-sm-8">
+                                    @if (ep.KeySource == "AgentApiKey")
+                                    {
+                                        <span class="badge bg-success">Agent API key (per-agent)</span>
+                                    }
+                                    else if (ep.KeySource == "ApiKey")
+                                    {
+                                        <span class="badge bg-warning text-dark">API key (shared, legacy mode)</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Unknown</span>
+                                    }
+                                </dd>
+
+                                <dt class="col-sm-4">Channel mode:</dt>
+                                <dd class="col-sm-8">
+                                    @if (ep.Mode == "Claim")
+                                    {
+                                        <span class="badge bg-success">Per-agent (claim)</span>
+                                    }
+                                    else if (ep.Mode == "Legacy")
+                                    {
+                                        <span class="badge bg-warning text-dark">Legacy shared key</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Unknown</span>
+                                    }
+                                </dd>
+
+                                <dt class="col-sm-4">Last heartbeat:</dt>
+                                <dd class="col-sm-8">
+                                    @if (ep.LastHeartbeatUtc.HasValue)
+                                    {
+                                        @if (ep.LastHeartbeatOk)
+                                        {
+                                            <span class="badge bg-success">OK</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-danger">Failed</span>
+                                        }
+                                        <span class="text-muted small ms-1">@ep.LastHeartbeatUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span>
+                                        @if (!ep.LastHeartbeatOk && !string.IsNullOrEmpty(ep.LastHeartbeatError))
+                                        {
+                                            <span class="text-muted small ms-1">(@ep.LastHeartbeatError)</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">none yet</span>
+                                    }
+                                </dd>
+
+                                @if (ep.AgentId.HasValue)
+                                {
+                                    <dt class="col-sm-4">Enrolled as:</dt>
+                                    <dd class="col-sm-8">
+                                        <strong>@ep.AgentName</strong>
+                                        @if (!string.IsNullOrEmpty(ep.AgentLocation))
+                                        {
+                                            <span class="text-muted"> — @ep.AgentLocation</span>
+                                        }
+                                        <div class="small text-muted"><code>@ep.AgentId</code></div>
+                                    </dd>
+                                }
+                            </dl>
+                        }
                     }
                 </div>
             </div>
@@ -264,8 +382,11 @@
     private bool toggling;
     private string toggleError = "";
 
+    private List<IcAgentStatusService.EndpointStatus> icAgentEndpoints = new();
+
     protected override async Task OnInitializedAsync()
     {
+        icAgentEndpoints = IcAgentStatus.Snapshot();
         await TestDatabaseConnection();
     }
 

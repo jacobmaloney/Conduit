@@ -224,6 +224,13 @@ public sealed class SyncProjectOrchestrator
             IdentityCenterTableContext.Source = project.SourceTable;
             IdentityCenterTableContext.Sink = project.SinkTable;
 
+            // Ambient per-run log appender for source connectors that produce
+            // per-record findings (SQL Discovery's per-server scan outcomes).
+            // AsyncLocal: flows into the source enumeration on this async chain,
+            // never leaks outside this run.
+            var runIdForSourceLog = run.Id;
+            SourceRunLogContext.Append = (level, message) => Log(runIdForSourceLog, level, message);
+
             var source = sourceAdapter.CreateSource(sourceTenant.Id)
                 ?? throw new InvalidOperationException($"Source tenant '{sourceTenant.Name}' ({sourceTenant.SystemType}) does not support source operations.");
             var sink = sinkAdapter.CreateSink(sinkTenant.Id)
@@ -892,12 +899,34 @@ public sealed class SyncProjectOrchestrator
         // writes never get a stored hash, so a retry re-writes them. Records with
         // no stable SourceId are never skipped. When in doubt, write.
         bool skipUnchanged = project.SkipUnchanged;
-        Dictionary<string, string> priorHashes = skipUnchanged
+        Dictionary<string, SinkHashEntry> priorHashes = skipUnchanged
             ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, objectClass)
-            : new Dictionary<string, string>(StringComparer.Ordinal);
+            : new Dictionary<string, SinkHashEntry>(StringComparer.Ordinal);
         if (skipUnchanged)
             await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es) for class '{objectClass}'.");
         var writtenHashes = new List<KeyValuePair<string, string>>(256);
+
+        // Source-declared volatile attributes (per-attempt timestamps) are excluded
+        // from the content hash so they alone never force a re-ingest. Empty for
+        // every connector that doesn't declare any — hash values are bit-identical
+        // to before in that case.
+        var hashVolatile = sourceAdapter.Capabilities.HashVolatileAttributes.Count > 0
+            ? new HashSet<string>(sourceAdapter.Capabilities.HashVolatileAttributes, StringComparer.OrdinalIgnoreCase)
+            : null;
+
+        // Bounded refresh — ONLY for sources that declare HashVolatileAttributes.
+        // Excluding volatile freshness attributes (sqlLastScannedAt etc.) means a
+        // stable healthy record can stay hash-identical forever, so the sink-side
+        // freshness column ages and the sink falsely reports it Stale (IC flips
+        // IsOnline after a 7-day window). Fix: a hash-matched record is skipped
+        // ONLY if it was last actually sent within the TTL; past that it re-ingests
+        // so the volatile attributes refresh. 3 days = half IC's staleness window,
+        // so a healthy server always refreshes well before flipping Stale. Sources
+        // with no volatile attributes keep the exact prior semantics: hash match =
+        // skip, regardless of age.
+        var refreshCutoff = hashVolatile is not null
+            ? DateTime.UtcNow - SinkHashRefreshTtl
+            : (DateTime?)null;
 
         // ── Phase 2.2 delete-detection setup ────────────────────────────────────
         // Tombstoning is opt-in by SINK CAPABILITY (only IC implements the reversible
@@ -912,6 +941,17 @@ public sealed class SyncProjectOrchestrator
         // (and vice versa). Scoping the load, diff, prune, and registry write to
         // this pump's class is the fix — plus the existing per-connection scoping.
         var tombstoneSink = sink as ITombstoneEmittingSink;
+        // SOURCE-side veto: a discovery-style source (SQL Discovery) declares that
+        // a missing record is NOT evidence of deletion — a failed scan and a
+        // decommission look identical from the read. Nulling the sink handle here
+        // disables BOTH tombstone paths (diff-based and source-emitted) and the
+        // prior-id registry maintenance for this pump, by construction.
+        if (tombstoneSink is not null && sourceAdapter.Capabilities.SuppressDeleteDetection)
+        {
+            await Log(run, "Info",
+                $"    Delete-detection DISABLED: source connector {sourceAdapter.SystemType} declares SuppressDeleteDetection (a missing record is not evidence of deletion). Upsert-only.");
+            tombstoneSink = null;
+        }
         var deleteDetectionOn = tombstoneSink is not null;
         HashSet<string> priorIdsForDelete;
         if (deleteDetectionOn && !skipUnchanged)
@@ -973,7 +1013,7 @@ public sealed class SyncProjectOrchestrator
         // actually accepted, so failures don't poison the cache.
         var bufferHashes = new List<string?>(Math.Min(batchSize, 256));
         var emitted = new List<ConnectorObject>(256);
-        int read = 0, created = 0, updated = 0, skipped = 0, failed = 0;
+        int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, ttlRefreshed = 0;
 
         var progress = Stopwatch.StartNew();
 
@@ -1034,11 +1074,18 @@ public sealed class SyncProjectOrchestrator
             string? hash = null;
             if (skipUnchanged && !string.IsNullOrEmpty(sinkObj.SourceId))
             {
-                hash = ComputeContentHash(sinkObj);
-                if (priorHashes.TryGetValue(sinkObj.SourceId, out var prev) && prev == hash)
+                hash = ComputeContentHash(sinkObj, hashVolatile);
+                if (priorHashes.TryGetValue(sinkObj.SourceId, out var prev) && prev.ContentHash == hash)
                 {
-                    skipped++;
-                    continue;
+                    if (refreshCutoff is null || prev.UpdatedAt >= refreshCutoff.Value)
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    // Hash-stable but past the refresh TTL: force a re-ingest so the
+                    // sink's volatile freshness attributes update. The successful
+                    // write refreshes UpdatedAt via the end-of-run hash upsert.
+                    ttlRefreshed++;
                 }
             }
 
@@ -1068,6 +1115,9 @@ public sealed class SyncProjectOrchestrator
             buffer.Clear();
             bufferHashes.Clear();
         }
+
+        if (ttlRefreshed > 0)
+            await Log(run, "Info", $"    Bounded refresh: {ttlRefreshed} hash-unchanged record(s) re-ingested anyway (last sent > {SinkHashRefreshTtl.TotalDays:0} days ago) to keep volatile freshness attributes current.");
 
         // Persist hashes for records the sink accepted this run. Done once at the
         // end (bounded by the change set) so the next run can skip them. V26:
@@ -1318,6 +1368,12 @@ public sealed class SyncProjectOrchestrator
             emitted);
     }
 
+    // Bounded-refresh TTL for the skip-unchanged path on volatile-hash sources:
+    // a hash-matched record last sent more than this long ago re-ingests anyway,
+    // refreshing sink-side volatile freshness attributes (sqlLastScannedAt etc.)
+    // before IC's 7-day staleness window can falsely flip the record Stale.
+    private static readonly TimeSpan SinkHashRefreshTtl = TimeSpan.FromDays(3);
+
     // Field/unit separators for the hash canonical form (ASCII FS/US control
     // chars) — chosen so they can't collide with attribute keys or values.
     private const char HashFieldSep = '\x1f';
@@ -1329,13 +1385,18 @@ public sealed class SyncProjectOrchestrator
     /// "_source"/"targetOU" routing hints are included because changing the target
     /// OU IS a real change the sink must see. Base64 of the 32-byte digest = 44
     /// chars, matching SinkRecordHashes.ContentHash CHAR(44).
+    /// <paramref name="volatileAttributes"/> (source-declared, usually null) names
+    /// attributes excluded from the canonical form — per-attempt timestamps that
+    /// would otherwise defeat skip-unchanged.
     /// </summary>
-    private static string ComputeContentHash(ConnectorObject obj)
+    private static string ComputeContentHash(ConnectorObject obj, HashSet<string>? volatileAttributes = null)
     {
         var sb = new System.Text.StringBuilder(256);
         sb.Append(obj.ObjectClass).Append(HashUnitSep);
         foreach (var key in obj.Attributes.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
+            if (volatileAttributes is not null && volatileAttributes.Contains(key))
+                continue;
             sb.Append(key).Append(HashFieldSep);
             var v = obj.Attributes[key];
             sb.Append(v is null

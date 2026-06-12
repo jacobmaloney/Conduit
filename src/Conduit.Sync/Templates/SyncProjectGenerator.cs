@@ -117,6 +117,8 @@ namespace Conduit.Sync.Templates
         private static readonly string[] LdapFull = { "user", "group", "organizationalUnit" };
         private static readonly string[] DatabaseCore = { "user" };
         private static readonly string[] DatabaseFull = { "user", "group" };
+        // SQL Discovery emits exactly one class: scanned SQL hosts as computers.
+        private static readonly string[] SqlDiscoveryClasses = { "computer" };
 
         // ── Fallback for connectors with no dedicated set (Emulator, Csv, IdentityCenter) ──
         private static readonly string[] GenericCore = { "user", "group" };
@@ -162,6 +164,8 @@ namespace Conduit.Sync.Templates
                     return mode == GenerationMode.Core ? LdapCore : LdapFull;
                 case "Database":
                     return mode == GenerationMode.Core ? DatabaseCore : DatabaseFull;
+                case "SqlDiscovery":
+                    return SqlDiscoveryClasses;
                 default:
                     return mode == GenerationMode.Core ? GenericCore : GenericFull;
             }
