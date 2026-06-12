@@ -99,6 +99,8 @@ internal static class Program
                     return await WriteAsync(args, new StaticArsConnectionResolver(MakeSettings(null)), loggerFactory, ct);
                 case "write-guid":
                     return await WriteGuidAsync(args, new StaticArsConnectionResolver(MakeSettings(null)), loggerFactory, ct);
+                case "write-guid-twice":
+                    return await WriteGuidTwiceAsync(args, new StaticArsConnectionResolver(MakeSettings(null)), loggerFactory, ct);
                 default:
                     Console.Error.WriteLine($"Unknown command '{cmd}'.");
                     PrintUsage();
@@ -332,6 +334,47 @@ internal static class Program
         return result.Outcome == SinkWriteOutcome.Failed ? 1 : 0;
     }
 
+    private static async Task<int> WriteGuidTwiceAsync(
+        string[] args, IArsConnectionResolver resolver, ILoggerFactory lf, CancellationToken ct)
+    {
+        // write-guid-twice <objectGUID> <attr> <true|false|value>
+        // Proves the Fix-1 per-run GUID→DN cache: two upserts of the SAME objectGUID
+        // on ONE sink instance must resolve GUID→DN via the DC only ONCE — the second
+        // upsert hits the cache (watch for "GUID→DN cache hit" at Debug, and the
+        // absence of a second raw-AD LDAP GUID bind).
+        if (args.Length < 4)
+        {
+            Console.Error.WriteLine("usage: write-guid-twice <objectGUID> <attr> <true|false>");
+            return 2;
+        }
+        var guid = args[1];
+        var attr = args[2];
+        var rawVal = args[3];
+        object val = bool.TryParse(rawVal, out var b) ? b : rawVal;
+
+        // Debug level so the cache-hit log line is visible.
+        using var dbgFactory = LoggerFactory.Create(bld => bld
+            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
+            .SetMinimumLevel(LogLevel.Debug));
+
+        var sink = new ActiveRolesSink(resolver, dbgFactory.CreateLogger<ActiveRolesSink>());
+        ConnectorObject MakeObj() => new ConnectorObject
+        {
+            SourceId = guid,
+            ObjectClass = "user",
+            Attributes = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { [attr] = val }
+        };
+
+        Console.WriteLine($"[write-guid-twice] objectGUID={guid}  {attr}={val}  (same sink, two upserts)");
+        Console.WriteLine("[write-guid-twice] --- upsert #1 (expect a raw-AD LDAP GUID bind) ---");
+        var r1 = await sink.UpsertAsync(MakeObj(), ct);
+        Console.WriteLine($"[write-guid-twice] #1 Outcome={r1.Outcome}{(string.IsNullOrWhiteSpace(r1.ErrorMessage) ? "" : " Error=" + r1.ErrorMessage)}");
+        Console.WriteLine("[write-guid-twice] --- upsert #2 (expect 'GUID→DN cache hit', NO second bind) ---");
+        var r2 = await sink.UpsertAsync(MakeObj(), ct);
+        Console.WriteLine($"[write-guid-twice] #2 Outcome={r2.Outcome}{(string.IsNullOrWhiteSpace(r2.ErrorMessage) ? "" : " Error=" + r2.ErrorMessage)}");
+        return (r1.Outcome == SinkWriteOutcome.Failed || r2.Outcome == SinkWriteOutcome.Failed) ? 1 : 0;
+    }
+
     private static string? Str(ConnectorObject obj, string key)
     {
         if (!obj.Attributes.TryGetValue(key, out var v) || v is null) return null;
@@ -349,6 +392,7 @@ internal static class Program
         Console.WriteLine("  arscli bench <objectClass> <baseDN> [count] [--va <attr> ...]");
         Console.WriteLine("  arscli write <userDN> <attr> <true|false>");
         Console.WriteLine("  arscli write-guid <objectGUID> <attr> <true|false>");
+        Console.WriteLine("  arscli write-guid-twice <objectGUID> <attr> <true|false>");
         Console.WriteLine();
         Console.WriteLine("Connection: appsettings.json (Ars:ServiceHost/BindUser/BindPassword,");
         Console.WriteLine("Ars:AdHost = a DC for the fast read, Ars:ArsSqlConnString = read-only conn");

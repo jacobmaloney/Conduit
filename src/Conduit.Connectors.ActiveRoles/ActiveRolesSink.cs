@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.DirectoryServices;
 using System.Runtime.InteropServices;
@@ -34,6 +35,17 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
     private readonly IArsConnectionResolver _resolver;
     private readonly ILogger<ActiveRolesSink> _logger;
 
+    /// <summary>
+    /// Per-run objectGUID → DN cache. The adapter creates ONE sink instance per run
+    /// (<see cref="ActiveRolesAdapter.CreateSink"/>), and the resolver it is built
+    /// with is tenant-scoped, so this cache is correctly scoped to a single run of a
+    /// single tenant and never shared across tenants/runs. For an AD→ARS sync keyed
+    /// by objectGUID, this collapses what was one serverless LDAP://&lt;GUID&gt; DC
+    /// bind PER object into one bind per DISTINCT guid (a re-synced object resolves
+    /// from the dictionary). Cleared implicitly when the instance is dropped.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, string> _guidDnCache = new();
+
     public ActiveRolesSink(IArsConnectionResolver resolver, ILogger<ActiveRolesSink> logger)
     {
         _resolver = resolver;
@@ -64,10 +76,11 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
             if (dn is null)
                 return SinkWriteResult.Fail(
                     $"Could not resolve a target Active Roles object for SourceId='{obj.SourceId}'. " +
-                    "Phase 1 resolves a target by (a) a DN SourceId, (b) a 'distinguishedName'/'dn' " +
-                    "attribute, (c) an objectGUID SourceId resolved to a DN via the raw AD DC " +
-                    "('adHost' on the 'ars' credential, falling back to the AR service host), or " +
-                    "(d) a 'sAMAccountName' attribute plus a 'baseDN'/'targetOU' to search under.");
+                    "Phase 1 resolves a target by (a) a DN SourceId, (b) a mapped DN attribute " +
+                    "('DN' canonical / 'distinguishedName' / 'dn'), (c) an objectGUID SourceId " +
+                    "resolved to a DN via the raw AD DC ('adHost' on the 'ars' credential, falling " +
+                    "back to the AR service host), or (d) a 'sAMAccountName' attribute plus a " +
+                    "'baseDN'/'targetOU' to search under.");
 
             using var entry = ArsBind.Bind(settings, dn);
             // RefreshCache makes the provider resolve the object (and virtual
@@ -153,16 +166,25 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
     /// Keys that address the object or carry routing hints rather than directory
     /// attributes — never written onto the AR entry.
     /// </summary>
-    private static bool IsReservedKey(string key) => key switch
+    private static bool IsReservedKey(string key)
     {
-        "_deleted" => true,
-        "dn" => true,
-        "distinguishedName" => true,
-        "baseDN" => true,
-        "targetOU" => true,
-        "objectClass" => true,
-        _ => false
-    };
+        // The DN keys address the object (resolution inputs) and must never be
+        // written back onto the AR entry — including the canonical 'DN' the
+        // Auto-Generate ARS template maps distinguishedName onto. Compared
+        // case-insensitively so 'DN'/'Dn'/'dn'/'distinguishedName' all match.
+        switch (key.ToLowerInvariant())
+        {
+            case "_deleted":
+            case "dn":
+            case "distinguishedname":
+            case "basedn":
+            case "targetou":
+            case "objectclass":
+                return true;
+            default:
+                return false;
+        }
+    }
 
     /// <summary>
     /// Coerce a ConnectorObject value into something the ADSI provider accepts.
@@ -199,12 +221,17 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
     /// <summary>
     /// Phase 1 DN resolution, in cheapest-first order:
     ///   (a) the SourceId is itself a DN — bind directly;
-    ///   (b) a mapped 'distinguishedName'/'dn' attribute carries the DN (the Conduit
-    ///       AD source always emits distinguishedName, so when the step maps it the
-    ///       DN survives into the sink object with NO extra connection);
+    ///   (b) a mapped DN attribute carries the DN, with NO extra connection. The key
+    ///       that actually lands on the sink object depends on the mapping's TARGET
+    ///       name: the Auto-Generate ARS template maps distinguishedName → the
+    ///       canonical 'DN', so post-mapping the sink object carries 'DN'; a
+    ///       pass-through / no-mapping run (or a raw FastAdReader object) carries
+    ///       'distinguishedName'. We probe all of those keys (case-insensitively) so
+    ///       this cheap path hits BEFORE the per-object DC bind whenever the DN is
+    ///       present — which it normally is for an AD→ARS sync;
     ///   (c) the SourceId is an AD objectGUID (the AD source's default SourceId) —
     ///       resolve it to a DN against the RAW AD DC (the AR provider can't bind by
-    ///       GUID), then bind EDMS://&lt;dn&gt;;
+    ///       GUID), MEMOIZED per run so a repeated GUID binds the DC once;
     ///   (d) a 'sAMAccountName' + 'baseDN'/'targetOU' search through EDMS:// (so the
     ///       search itself is policy/VA-aware).
     /// Returns null when none resolve.
@@ -213,9 +240,14 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
     {
         found = false;
 
-        // (a)/(b): SourceId is a DN, or a mapped distinguishedName/dn attribute is.
+        // (a)/(b): SourceId is a DN, or a mapped DN attribute is. Probe every key the
+        // DN can arrive under post-mapping — the canonical 'DN' (Auto-Generate target),
+        // and the native 'distinguishedName'/'dn' (pass-through / raw reader). The
+        // sink object's Attributes dictionary is ordinal (case-sensitive), so probe
+        // case variants explicitly rather than relying on the comparer.
         var dn = LooksLikeDn(obj.SourceId) ? obj.SourceId
-               : GetStr(obj, "distinguishedName") ?? GetStr(obj, "dn");
+               : GetStr(obj, "DN") ?? GetStr(obj, "distinguishedName")
+                 ?? GetStr(obj, "dn") ?? GetStr(obj, "Dn") ?? GetStr(obj, "distinguishedname");
         if (LooksLikeDn(dn))
         {
             found = true;
@@ -224,10 +256,12 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
 
         // (c): SourceId (or an objectGUID attribute) is an AD GUID. The AR ADSI
         // provider cannot bind/search by objectGUID, so resolve GUID → DN against
-        // the raw AD DC and let the caller bind EDMS://<dn> for the policy-aware write.
+        // the raw AD DC and let the caller bind EDMS://<dn> for the policy-aware
+        // write. Memoized per run: the first object with a given GUID binds the DC;
+        // a later re-sync of the same object reads the DN from the cache.
         if (TryGetObjectGuid(obj, out var objectGuid))
         {
-            var guidDn = AdGuidResolver.ResolveDn(settings, objectGuid, _logger);
+            var guidDn = ResolveGuidDnCached(settings, objectGuid);
             if (LooksLikeDn(guidDn))
             {
                 found = true;
@@ -277,6 +311,26 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
             _logger.LogWarning(ex, "ARS sink DN search failed for sAMAccountName under {BaseDn}", baseDn);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Resolve an objectGUID → DN through the per-run cache, binding the raw AD DC
+    /// only on a cache miss. A successful resolution is cached so a repeated GUID in
+    /// the same run does NOT re-bind the DC. Failed resolutions are intentionally NOT
+    /// cached (a transient bind failure should be retryable on the next object).
+    /// </summary>
+    private string? ResolveGuidDnCached(ArsConnectionSettings settings, Guid objectGuid)
+    {
+        if (_guidDnCache.TryGetValue(objectGuid, out var cached))
+        {
+            _logger.LogDebug("ARS sink: GUID→DN cache hit for {Guid} (no DC bind).", objectGuid);
+            return cached;
+        }
+
+        var guidDn = AdGuidResolver.ResolveDn(settings, objectGuid, _logger);
+        if (LooksLikeDn(guidDn))
+            _guidDnCache[objectGuid] = guidDn!;
+        return guidDn;
     }
 
     /// <summary>

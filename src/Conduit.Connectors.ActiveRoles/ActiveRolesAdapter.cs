@@ -36,8 +36,11 @@ public sealed class ActiveRolesAdapter : IConnectorAdapter
     /// Phase 2 added the fast direct-read source (raw AD LDAP + CVSAValues SQL
     /// join). SupportsIncremental stays false for now: the fast reader captures a
     /// whenChanged watermark but Phase 2's scope is the full read only — the
-    /// whenChanged/USN cursor is a follow-up (EnumerateAsync still falls back to a
-    /// full ReadAsync via the interface default).
+    /// whenChanged/USN cursor is a follow-up. The source now OVERRIDES EnumerateAsync
+    /// (it no longer inherits the interface default): the run stays a full read with
+    /// a null cursor, but WasCompleteRead is surfaced truthfully so the tombstone gate
+    /// sees a real complete-read signal (the ARS sink's EmitTombstones is still a
+    /// no-op, so this changes no write behavior — only honesty of the signal).
     /// </summary>
     public ConnectorCapabilities Capabilities { get; } = new()
     {

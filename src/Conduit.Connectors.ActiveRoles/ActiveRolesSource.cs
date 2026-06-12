@@ -35,9 +35,69 @@ public sealed class ActiveRolesSource : IConnectorSource
         _logger = logger;
     }
 
-    public async IAsyncEnumerable<ConnectorObject> ReadAsync(
+    public IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
+        CancellationToken cancellationToken)
+        // Public read path: callers that don't care about the complete-read sentinel
+        // (e.g. the CLI harness, a non-tombstoning run) get the stream with a
+        // throwaway completion flag. EnumerateAsync wires a real one (Fix 3).
+        => ReadInternalAsync(objectClass, scope, new ReadCompletion(), cancellationToken);
+
+    /// <summary>
+    /// Phase 2.2 incremental/tombstone seam. The ARS source has no cursor wired yet
+    /// (SupportsIncremental=false in the adapter), so this is a FULL read every time —
+    /// but it now surfaces a TRUTHFUL <see cref="SyncEnumerationResult.WasCompleteRead"/>
+    /// so the orchestrator's tombstone gate sees reality instead of the interface's
+    /// safe-but-blind default (false). WasCompleteRead is resolved AFTER the stream is
+    /// drained and reports true ONLY on a clean natural exhaustion:
+    ///   * fast path  — surfaces <see cref="FastAdReader.WasCompleteRead"/> (every
+    ///     included base drained to an empty LDAP cookie, no truncation/error);
+    ///   * policy path — a sentinel set true ONLY when the DirectorySearcher results
+    ///     are fully enumerated with no MaxObjects truncation and no throw.
+    /// IsIncremental/SupportsIncremental stay false (no cursor — correct for now);
+    /// this is the seam where a Phase-3 soft-delete / whenChanged cursor will attach.
+    ///
+    /// NOTE: enabling a real WasCompleteRead does NOT start deleting anything — the
+    /// ARS sink's EmitTombstonesAsync is a documented no-op, so even a proven complete
+    /// read produces no tombstone writes. This only makes the SIGNAL honest.
+    /// </summary>
+    public Task<SyncEnumerationResult> EnumerateAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        SyncCursor? cursor,
+        CancellationToken cancellationToken)
+    {
+        // Starts FALSE. Only a natural drain of the chosen read path flips it true;
+        // a throw, a cancellation, or a MaxObjects truncation never reaches the
+        // set-site, so the orchestrator never computes a delete-delta on a partial read.
+        var completion = new ReadCompletion();
+        var stream = ReadInternalAsync(objectClass, scope, completion, cancellationToken);
+        return Task.FromResult(new SyncEnumerationResult
+        {
+            Objects = stream,
+            // No cursor wired yet — return null so the orchestrator persists none and
+            // keeps running full reads (correct until incremental lands).
+            ResolveNewCursor = () => null,
+            IsIncremental = false,
+            WasCompleteRead = () => completion.IsComplete
+        });
+    }
+
+    /// <summary>
+    /// Mutable complete-read flag threaded through the chosen enumerator. Defaults to
+    /// FALSE; only the natural terminus of the active read path sets it true. Mirrors
+    /// the AD source's ReadCompletion so the tombstone gate behaves identically.
+    /// </summary>
+    private sealed class ReadCompletion
+    {
+        public bool IsComplete { get; set; }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> ReadInternalAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        ReadCompletion completion,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var settings = await _resolver.ResolveAsync(CredentialSide.Source, cancellationToken);
@@ -53,7 +113,7 @@ public sealed class ActiveRolesSource : IConnectorSource
         {
             if (settings.CanFastRead)
             {
-                await foreach (var obj in ReadFastAsync(settings, objectClass, scope, cancellationToken))
+                await foreach (var obj in ReadFastAsync(settings, objectClass, scope, completion, cancellationToken))
                     yield return obj;
                 yield break;
             }
@@ -76,8 +136,9 @@ public sealed class ActiveRolesSource : IConnectorSource
         var max = scope.MaxObjects ?? int.MaxValue;
 
         // DirectorySearcher enumeration is synchronous COM; we materialize one
-        // page-bounded result set and yield from it.
-        foreach (var obj in Enumerate(settings, baseDn!, filter, objectClass, scope, max, cancellationToken))
+        // page-bounded result set and yield from it. Enumerate flips completion to
+        // true ONLY on natural exhaustion (no truncation, no throw).
+        foreach (var obj in Enumerate(settings, baseDn!, filter, objectClass, scope, max, completion, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return obj;
@@ -100,6 +161,7 @@ public sealed class ActiveRolesSource : IConnectorSource
         ArsConnectionSettings settings,
         string objectClass,
         SyncProjectScope scope,
+        ReadCompletion completion,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var (host, port) = ParseHostPort(settings.AdHost is { Length: > 0 } ? settings.AdHost : settings.ArsServiceHost);
@@ -131,6 +193,11 @@ public sealed class ActiveRolesSource : IConnectorSource
             foreach (var merged in await MergeWindowAsync(cvsa, window, cancellationToken))
                 yield return merged;
         }
+
+        // Reached only when adReader.ReadAsync drained naturally (a throw or a
+        // MaxObjects truncation inside it yield-breaks before here). Surface the
+        // reader's own complete-read sentinel as the source's truth.
+        completion.IsComplete = adReader.WasCompleteRead;
     }
 
     /// <summary>
@@ -182,11 +249,17 @@ public sealed class ActiveRolesSource : IConnectorSource
         string objectClass,
         SyncProjectScope scope,
         int max,
+        ReadCompletion completion,
         CancellationToken cancellationToken)
     {
-        DirectoryEntry root;
-        DirectorySearcher searcher;
-        SearchResultCollection results;
+        // Construct each IDisposable directly into a local that try/finally guards,
+        // so a throw from ANY of new DirectoryEntry / new DirectorySearcher /
+        // FindAll() disposes whatever was already built — no leaked native COM
+        // handles on the error path. (Previously the `using`s only wrapped these
+        // AFTER assignment, so a throw during setup leaked root/searcher.)
+        DirectoryEntry? root = null;
+        DirectorySearcher? searcher = null;
+        SearchResultCollection? results = null;
         try
         {
             root = ArsBind.Bind(settings, baseDn);
@@ -211,6 +284,9 @@ public sealed class ActiveRolesSource : IConnectorSource
         }
         catch (Exception ex)
         {
+            results?.Dispose();
+            searcher?.Dispose();
+            root?.Dispose();
             _logger.LogError(ex, "ARS source enumeration failed under {BaseDn}", baseDn);
             throw;
         }
@@ -229,8 +305,8 @@ public sealed class ActiveRolesSource : IConnectorSource
             var emitted = 0;
             foreach (SearchResult result in results)
             {
-                if (cancellationToken.IsCancellationRequested) yield break;
-                if (emitted >= max) yield break;
+                if (cancellationToken.IsCancellationRequested) yield break; // partial — leave completion false
+                if (emitted >= max) yield break;                            // truncated — leave completion false
 
                 var obj = MapResult(result, objectClass);
                 if (obj is null) continue;
@@ -251,6 +327,12 @@ public sealed class ActiveRolesSource : IConnectorSource
                 emitted++;
                 yield return obj;
             }
+
+            // Reached only when the result set is fully enumerated with no MaxObjects
+            // truncation, no cancellation, and no throw above (a throw during result
+            // construction happens in the try/catch and never reaches here). This is
+            // the policy path's natural terminus — the ONLY place completion flips true.
+            completion.IsComplete = true;
         }
     }
 
