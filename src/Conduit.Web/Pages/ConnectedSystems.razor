@@ -298,12 +298,14 @@
                     <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
                         <option value="Emulator">Emulator (test/demo target)</option>
                         <option value="ActiveDirectory">Active Directory</option>
+                        <option value="ActiveRoles">Active Roles</option>
                         <option value="EntraID">Entra ID (Microsoft 365)</option>
                         <option value="Okta">Okta</option>
                         <option value="GoogleWorkspace">Google Workspace</option>
                         <option value="GenericLdap">Generic LDAP</option>
                         <option value="Scim">SCIM 2.0</option>
                         <option value="Database">Database (SQL)</option>
+                        <option value="SqlDiscovery">SQL Server Discovery</option>
                         <option value="CSV">CSV File</option>
                         <option value="AWS">AWS IAM</option>
                         <option value="SharePoint">SharePoint Online</option>
@@ -1346,11 +1348,13 @@
         "GoogleWorkspace" => "fab fa-google",
         "Scim" => "fas fa-arrows-rotate",
         "Database" => "fas fa-database",
+        "SqlDiscovery" => "fas fa-magnifying-glass-chart",
         "CSV" => "fas fa-file-csv",
         "AWS" or "AWSIdentityCenter" => "fab fa-aws",
         "SharePoint" => "fas fa-share-nodes",
         "IdentityCenter" => "fas fa-id-badge",
         "Emulator" => "fas fa-flask",
+        "ActiveRoles" => "fas fa-user-shield",
         _ => "fas fa-plug"
     };
 
