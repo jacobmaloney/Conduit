@@ -145,4 +145,15 @@ public sealed class ActiveRolesAdapter : IConnectorAdapter
 
     public IConnectorSink? CreateSink(Guid tenantId) =>
         new ActiveRolesSink(Resolver(tenantId), _loggerFactory.CreateLogger<ActiveRolesSink>());
+
+    /// <summary>
+    /// Live OU/container browse for the wizard Scope step's Base DN picker — the
+    /// AD-connector parity. Uses the fast raw-LDAP path against the DC (adHost)
+    /// through the same "ars" credential resolver, so the modal's per-run
+    /// credential-name override is honored.
+    /// </summary>
+    public IConnectorContainerBrowser? CreateContainerBrowser(Guid tenantId) =>
+        new ActiveRolesContainerBrowser(
+            Resolver(tenantId),
+            _loggerFactory.CreateLogger<ActiveRolesContainerBrowser>());
 }

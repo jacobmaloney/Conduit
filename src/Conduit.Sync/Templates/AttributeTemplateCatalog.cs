@@ -41,6 +41,7 @@ public static class AttributeTemplateCatalog
     public static class Systems
     {
         public const string ActiveDirectory = "ActiveDirectory";
+        public const string ActiveRoles = "ActiveRoles";
         public const string EntraID = "EntraID";
         public const string Okta = "Okta";
         public const string GoogleWorkspace = "GoogleWorkspace";
@@ -167,6 +168,72 @@ public static class AttributeTemplateCatalog
             E("managedBy", "ManagerSourceId"),
             E("gPLink", "GPLink"),
             E("gPOptions", "GPOptions", false, "Integer"),
+        };
+
+        // ─────────────────────────── Active Roles (ARS) ─────────────────────────
+        // Mirrors the Active Directory real-attribute set verbatim (ARS objects ARE
+        // AD objects; the fast read is raw AD LDAP) so Auto-Generate fills the same
+        // ~23 user / ~12 group mappings as AD. The differentiator is the trailing
+        // block of Active Roles VIRTUAL ATTRIBUTES — they exist only in ARS and are
+        // joined from CVSAValues by the fast read. They map to a canonical key of
+        // their OWN name so they pass straight through to any sink (and IC stores
+        // them verbatim in ObjectAttributes, keyed by the camelCase VA name). The
+        // names below are the live UNITE-2026 RBAC/SoD role VAs; other deployments'
+        // VAs still flow because the source emits whatever CVSAValues returns — these
+        // entries simply pre-seed the mapping grid with the known role VAs.
+        c[(Systems.ActiveRoles, "User")] = new[]
+        {
+            E("objectGUID", "SourceUniqueId", true),
+            E("distinguishedName", "DN", true),
+            E("cn", "CN", true),
+            E("whenCreated", "WhenCreated"),
+            E("whenChanged", "WhenChanged"),
+            E("sAMAccountName", "Username", true),
+            E("userPrincipalName", "UserPrincipalName"),
+            E("displayName", "DisplayName"),
+            E("givenName", "FirstName"),
+            E("sn", "LastName"),
+            E("mail", "Email"),
+            E("telephoneNumber", "PhoneNumber"),
+            E("mobile", "MobilePhone"),
+            E("department", "Department"),
+            E("title", "JobTitle"),
+            E("company", "Company"),
+            E("division", "Division"),
+            E("physicalDeliveryOfficeName", "Office"),
+            E("costCenter", "CostCenter"),
+            E("manager", "ManagerSourceId"),
+            E("employeeID", "EmployeeId"),
+            E("userAccountControl", "UserAccountControl", false, "Integer"),
+            E("pwdLastSet", "PasswordLastSet", false, "DateTime"),
+            // ─── Active Roles VIRTUAL ATTRIBUTES (joined from CVSAValues) ─────────
+            // Boolean role VAs. Canonical = the VA's own name so the value passes
+            // through unchanged to the sink. Not "required" — they're optional per user.
+            E("UNITE-HelpDeskAdministrator", "UNITE-HelpDeskAdministrator", false, "Boolean"),
+            E("UNITE-HelpDeskAuditor", "UNITE-HelpDeskAuditor", false, "Boolean"),
+            E("UNITE-HelpDeskOperator", "UNITE-HelpDeskOperator", false, "Boolean"),
+            E("UNITE-HRConnectAdmin", "UNITE-HRConnectAdmin", false, "Boolean"),
+            E("UNITE-HRConnectPayroll", "UNITE-HRConnectPayroll", false, "Boolean"),
+            E("UNITE-HRConnectRecruiter", "UNITE-HRConnectRecruiter", false, "Boolean"),
+            E("UNITE-VPNAdmin", "UNITE-VPNAdmin", false, "Boolean"),
+            E("UNITE-VPNPrivileged", "UNITE-VPNPrivileged", false, "Boolean"),
+            E("UNITE-VPNStandard", "UNITE-VPNStandard", false, "Boolean"),
+        };
+        c[(Systems.ActiveRoles, "Group")] = new[]
+        {
+            E("objectGUID", "SourceUniqueId", true),
+            E("distinguishedName", "DN", true),
+            E("cn", "CN", true),
+            E("whenCreated", "WhenCreated"),
+            E("whenChanged", "WhenChanged"),
+            E("sAMAccountName", "Username", true),
+            E("displayName", "DisplayName"),
+            E("description", "Description"),
+            E("mail", "Email"),
+            E("groupType", "GroupType", false, "Integer"),
+            E("managedBy", "ManagedBy"),
+            E("adminCount", "AdminCount", false, "Integer"),
+            E("isCriticalSystemObject", "IsCriticalSystemObject"),
         };
 
         // ─────────────────────────────── EntraID ────────────────────────────────

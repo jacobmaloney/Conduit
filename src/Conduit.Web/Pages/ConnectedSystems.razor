@@ -2773,6 +2773,7 @@
     private static string CredentialNameFor(string systemType) => systemType switch
     {
         "ActiveDirectory" or "Real" or "GenericLdap" => "ldap",
+        "ActiveRoles" => "ars",
         "EntraID" => "entraid",
         "Okta" => "okta",
         "GoogleWorkspace" => "google",

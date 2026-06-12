@@ -514,6 +514,7 @@ public static class ConnectorFamilies
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["ActiveDirectory"]   = ConnectorFamily.Directory,
+            ["ActiveRoles"]       = ConnectorFamily.Directory,
             ["GenericLdap"]       = ConnectorFamily.Directory,
             ["EntraID"]           = ConnectorFamily.Directory,
             ["Okta"]              = ConnectorFamily.Directory,

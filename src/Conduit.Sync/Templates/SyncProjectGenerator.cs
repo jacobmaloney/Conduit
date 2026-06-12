@@ -127,6 +127,9 @@ namespace Conduit.Sync.Templates
             switch (sourceSystemType)
             {
                 case "ActiveDirectory":
+                // Active Roles objects ARE AD objects (the fast read is raw AD LDAP),
+                // so ARS shares AD's object-class set, filters and page size.
+                case "ActiveRoles":
                     return mode switch
                     {
                         GenerationMode.Core => AdCore,
@@ -305,7 +308,8 @@ namespace Conduit.Sync.Templates
         /// </summary>
         private static string GetDefaultFilter(string sourceSystemType, string objectClass)
         {
-            if (sourceSystemType != "ActiveDirectory")
+            // Active Roles uses the same raw-AD LDAP filters as ActiveDirectory.
+            if (sourceSystemType != "ActiveDirectory" && sourceSystemType != "ActiveRoles")
                 return string.Empty;
 
             return objectClass.ToLowerInvariant() switch
@@ -342,6 +346,7 @@ namespace Conduit.Sync.Templates
         private static int GetDefaultPageSize(string sourceSystemType) => sourceSystemType switch
         {
             "ActiveDirectory" => 1000,
+            "ActiveRoles" => 1000,
             "EntraID" => 999,
             "SharePoint" => 999,
             "Scim" => 999,

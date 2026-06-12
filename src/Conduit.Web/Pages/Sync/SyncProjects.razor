@@ -2429,6 +2429,7 @@
             switch (SourceSystemType)
             {
                 case "ActiveDirectory":
+                case "ActiveRoles":
                     modes.Insert(1, Conduit.Sync.Templates.GenerationMode.AdInfrastructure);
                     break;
                 case "EntraID":
@@ -3271,7 +3272,7 @@
                 Conduit.Sync.Templates.GenerationMode.Full
             };
             var type = AutoGenSource?.SystemType;
-            if (type == "ActiveDirectory")
+            if (type == "ActiveDirectory" || type == "ActiveRoles")
             {
                 modes.Insert(1, Conduit.Sync.Templates.GenerationMode.AdInfrastructure);
             }
@@ -3900,7 +3901,11 @@
 
     private bool SourceIsLdap =>
         string.Equals(SourceSystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(SourceSystemType, "GenericLdap", StringComparison.OrdinalIgnoreCase);
+        || string.Equals(SourceSystemType, "GenericLdap", StringComparison.OrdinalIgnoreCase)
+        // Active Roles is an LDAP-shaped directory source (its fast read is raw AD
+        // LDAP): it needs the same Base DN field + container browse + LDAP filter
+        // editor as AD, and its source legitimately requires an explicit Base DN.
+        || string.Equals(SourceSystemType, "ActiveRoles", StringComparison.OrdinalIgnoreCase);
 
     private bool SourceIsEntra =>
         string.Equals(SourceSystemType, "EntraID", StringComparison.OrdinalIgnoreCase);
