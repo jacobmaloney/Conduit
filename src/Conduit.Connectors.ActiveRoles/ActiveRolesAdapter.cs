@@ -32,9 +32,12 @@ public sealed class ActiveRolesAdapter : IConnectorAdapter
     public bool SupportsSink => true;
 
     /// <summary>
-    /// Phase 1: per-object writes (the AR service serializes policy per object),
-    /// no bulk, no incremental cursor. SupportsIncremental flips true in Phase 2
-    /// when the fast direct-read + whenChanged/USN cursor lands.
+    /// Per-object writes (the AR service serializes policy per object), no bulk.
+    /// Phase 2 added the fast direct-read source (raw AD LDAP + CVSAValues SQL
+    /// join). SupportsIncremental stays false for now: the fast reader captures a
+    /// whenChanged watermark but Phase 2's scope is the full read only — the
+    /// whenChanged/USN cursor is a follow-up (EnumerateAsync still falls back to a
+    /// full ReadAsync via the interface default).
     /// </summary>
     public ConnectorCapabilities Capabilities { get; } = new()
     {
@@ -86,30 +89,35 @@ public sealed class ActiveRolesAdapter : IConnectorAdapter
                     IsRequired = true,
                     IsSecret = true
                 },
-                // ─── Phase 2 fast-read fields: declared but unused in Phase 1 ───
+                // ─── Phase 2 fast-read fields ───────────────────────────────────
                 new CredentialFieldSpec
                 {
                     Key = "adHost",
-                    Label = "AD host (Phase 2 fast read)",
+                    Label = "AD host (fast read)",
                     IsRequired = false,
-                    Help = "Phase 2: a DC for the fast direct-LDAP read path. Unused in Phase 1."
+                    Placeholder = "dc01.domain.local",
+                    Help = "A domain controller for the fast direct-LDAP read path. " +
+                           "Falls back to the AR service host when blank. Required for readMode=fast."
                 },
                 new CredentialFieldSpec
                 {
                     Key = "arsSqlConnString",
-                    Label = "ARS SQL connection (Phase 2 virtual attrs)",
+                    Label = "ARS SQL connection (virtual attrs)",
                     IsRequired = false,
                     IsSecret = true,
-                    Help = "Phase 2: read-only conn to the ARS config DB (CVSAValues). Unused in Phase 1."
+                    Help = "Read-only connection string to the ARS config DB (CVSAValues / VirtualSchema) " +
+                           "for the fast read's virtual-attribute join. Required for readMode=fast."
                 },
                 new CredentialFieldSpec
                 {
                     Key = "readMode",
-                    Label = "Read mode (Phase 2)",
+                    Label = "Read mode",
                     IsRequired = false,
-                    AllowedValues = new[] { "policy", "fast" },
-                    DefaultValue = "policy",
-                    Help = "Phase 2: 'fast' (direct LDAP+SQL) vs 'policy' (through the AR service). Phase 1 is always policy."
+                    AllowedValues = new[] { "fast", "policy" },
+                    DefaultValue = "fast",
+                    Help = "'fast' (default): direct AD LDAP + CVSAValues SQL join — ms latency, bypasses the AR " +
+                           "service (needs adHost + arsSqlConnString). 'policy': per-object read THROUGH the AR " +
+                           "service (EDMS://) so read policy/VA resolution applies. Writes always go through the service."
                 },
             }
         }

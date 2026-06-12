@@ -41,6 +41,36 @@ public sealed record ArsConnectionSettings(
     /// The same <see cref="BindUser"/>/<see cref="BindPassword"/> bind the DC.
     /// </summary>
     public string? AdHost { get; init; }
+
+    /// <summary>
+    /// Phase 2 fast-read: read-only connection string to the ARS config DB
+    /// (e.g. <c>ActiveRoles830</c>) where <c>CVSAValues</c> + <c>VirtualSchema</c>
+    /// live. When set together with <see cref="AdHost"/> and
+    /// <see cref="ReadMode"/>="fast", the source reads real attributes from raw AD
+    /// LDAP and joins virtual attributes from this DB in one SQL round-trip —
+    /// bypassing the AR service for ms latency. When blank the source falls back
+    /// to the policy-mode (EDMS://) per-object read.
+    /// </summary>
+    public string? ArsSqlConnString { get; init; }
+
+    /// <summary>
+    /// Phase 2 fast-read toggle. "fast" = direct AD LDAP + CVSAValues SQL join;
+    /// "policy" = the legacy EDMS:// per-object read through the AR service.
+    /// Defaults to "fast". When "fast" is requested but <see cref="AdHost"/> /
+    /// <see cref="ArsSqlConnString"/> are missing, the source logs a warning and
+    /// falls back to policy mode.
+    /// </summary>
+    public string? ReadMode { get; init; }
+
+    /// <summary>True when <see cref="ReadMode"/> selects the policy (EDMS://) read path.</summary>
+    public bool IsPolicyRead =>
+        string.Equals(ReadMode?.Trim(), "policy", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the fast direct-read path is BOTH requested and fully configured.</summary>
+    public bool CanFastRead =>
+        !IsPolicyRead
+        && !string.IsNullOrWhiteSpace(ArsSqlConnString)
+        && !string.IsNullOrWhiteSpace(AdHost is { Length: > 0 } ? AdHost : ArsServiceHost);
 }
 
 /// <summary>
@@ -128,7 +158,9 @@ public sealed class TenantCredentialArsConnectionResolver : IArsConnectionResolv
 
         return new ArsConnectionSettings(cred.BindUser!, cred.BindPassword!, serviceHost)
         {
-            AdHost = adHost
+            AdHost = adHost,
+            ArsSqlConnString = cred.ArsSqlConnString,
+            ReadMode = cred.ReadMode
         };
     }
 }

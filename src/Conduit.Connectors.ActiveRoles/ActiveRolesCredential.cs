@@ -33,17 +33,17 @@ public sealed class ActiveRolesCredential
     [JsonPropertyName("bindPassword")]
     public string? BindPassword { get; set; }
 
-    // ─── Phase 2: fast direct-read path (declared but UNUSED in Phase 1) ─────
+    // ─── Phase 2: fast direct-read path (raw AD LDAP + ARS SQL CVSAValues) ───
 
-    /// <summary>Phase 2: a DC to read raw LDAP from for the fast source path.</summary>
+    /// <summary>Phase 2: a DC to read raw LDAP from for the fast source path. Falls back to ArsServiceHost.</summary>
     [JsonPropertyName("adHost")]
     public string? AdHost { get; set; }
 
-    /// <summary>Phase 2: read-only conn string to the ARS config DB (CVSAValues).</summary>
+    /// <summary>Phase 2: read-only conn string to the ARS config DB (CVSAValues / VirtualSchema).</summary>
     [JsonPropertyName("arsSqlConnString")]
     public string? ArsSqlConnString { get; set; }
 
-    /// <summary>Phase 2: "fast" (direct LDAP+SQL) | "policy" (through the AR service).</summary>
+    /// <summary>Phase 2: "fast" (direct LDAP+SQL, default) | "policy" (through the AR service, EDMS://).</summary>
     [JsonPropertyName("readMode")]
     public string? ReadMode { get; set; }
 }

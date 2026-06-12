@@ -45,21 +45,126 @@ public sealed class ActiveRolesSource : IConnectorSource
             throw new InvalidOperationException(
                 "No 'ars' credential resolved. Save Active Roles bind credentials before running.");
 
+        // ─── Phase 2 FAST PATH: raw AD LDAP + CVSAValues SQL join ──────────────
+        // Default read mode is "fast". It needs both a DC (adHost / arsServiceHost)
+        // and the ARS config-DB connection string. When requested but not fully
+        // configured, fall back to the policy (EDMS://) read with a logged warning.
+        if (!settings.IsPolicyRead)
+        {
+            if (settings.CanFastRead)
+            {
+                await foreach (var obj in ReadFastAsync(settings, objectClass, scope, cancellationToken))
+                    yield return obj;
+                yield break;
+            }
+
+            _logger.LogWarning(
+                "ARS source: readMode is '{Mode}' (fast preferred) but the fast path is not fully configured " +
+                "(adHost='{AdHost}', arsSqlConnString {SqlState}). Falling back to the policy (EDMS://) read.",
+                settings.ReadMode ?? "fast",
+                settings.AdHost ?? settings.ArsServiceHost ?? "<none>",
+                string.IsNullOrWhiteSpace(settings.ArsSqlConnString) ? "missing" : "present");
+        }
+
+        // ─── POLICY PATH (legacy, Phase 1): EDMS:// DirectorySearcher + per-object VA resolve ───
         var baseDn = scope.GetIncludedBaseList() is { Count: > 0 } bases ? bases[0] : scope.BaseDN;
         if (string.IsNullOrWhiteSpace(baseDn))
             throw new InvalidOperationException(
-                "Active Roles source (Phase 1) requires an explicit Base DN on the project scope.");
+                "Active Roles source (policy read) requires an explicit Base DN on the project scope.");
 
         var filter = BuildFilter(objectClass, scope.LdapFilter);
         var max = scope.MaxObjects ?? int.MaxValue;
 
         // DirectorySearcher enumeration is synchronous COM; we materialize one
-        // page-bounded result set and yield from it. Phase 2 will stream pages.
+        // page-bounded result set and yield from it.
         foreach (var obj in Enumerate(settings, baseDn!, filter, objectClass, scope, max, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return obj;
         }
+    }
+
+    /// <summary>
+    /// Phase 2 fast read. Streams real attributes from a DC via
+    /// <see cref="FastAdReader"/> (paged S.DS.Protocols, ms latency) and merges
+    /// Active Roles virtual attributes read in bulk from the ARS config DB's
+    /// <c>CVSAValues</c> table (<see cref="CvsaValueReader"/>) — bypassing the AR
+    /// service entirely. Objects are buffered in windows so VAs for a whole window
+    /// resolve in ONE SQL round-trip, then emitted with VAs merged in.
+    ///
+    /// VA values are typed to MATCH the policy (EDMS://) path — Boolean VAs come
+    /// back as a CLR <see cref="bool"/> — so the downstream attribute mapping is
+    /// identical regardless of read mode.
+    /// </summary>
+    private async IAsyncEnumerable<ConnectorObject> ReadFastAsync(
+        ArsConnectionSettings settings,
+        string objectClass,
+        SyncProjectScope scope,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var (host, port) = ParseHostPort(settings.AdHost is { Length: > 0 } ? settings.AdHost : settings.ArsServiceHost);
+        var adReader = new FastAdReader(host, port, settings.BindUser, settings.BindPassword, _logger);
+        var cvsa = new CvsaValueReader(settings.ArsSqlConnString!, _logger);
+
+        // Pre-load the VirtualSchema map once so the per-window SQL is just the value query.
+        await cvsa.EnsureSchemaMapAsync(cancellationToken);
+
+        const int windowSize = 1000;
+        var window = new List<ConnectorObject>(windowSize);
+
+        _logger.LogInformation(
+            "ARS fast read: enumerating class '{Class}' from DC {Host}:{Port}, joining virtual attributes from CVSAValues.",
+            objectClass, host, port);
+
+        await foreach (var obj in adReader.ReadAsync(objectClass, scope, cancellationToken))
+        {
+            window.Add(obj);
+            if (window.Count >= windowSize)
+            {
+                foreach (var merged in await MergeWindowAsync(cvsa, window, cancellationToken))
+                    yield return merged;
+                window.Clear();
+            }
+        }
+        if (window.Count > 0)
+        {
+            foreach (var merged in await MergeWindowAsync(cvsa, window, cancellationToken))
+                yield return merged;
+        }
+    }
+
+    /// <summary>
+    /// Resolve the virtual attributes for a window of objects in one SQL query and
+    /// merge them onto each object by objectGUID. Objects whose SourceId is a GUID
+    /// (the AD source's normal case) participate in the join; a non-GUID SourceId
+    /// (e.g. a DN fallback) simply gets no VAs.
+    /// </summary>
+    private static async Task<IReadOnlyList<ConnectorObject>> MergeWindowAsync(
+        CvsaValueReader cvsa, List<ConnectorObject> window, CancellationToken cancellationToken)
+    {
+        var guids = new List<Guid>(window.Count);
+        var byGuid = new Dictionary<Guid, ConnectorObject>();
+        foreach (var obj in window)
+        {
+            if (Guid.TryParse(obj.SourceId, out var g))
+            {
+                guids.Add(g);
+                byGuid[g] = obj;
+            }
+        }
+
+        if (guids.Count > 0)
+        {
+            var vaMap = await cvsa.ReadVirtualAttributesAsync(guids, cancellationToken);
+            foreach (var kvp in vaMap)
+            {
+                if (!byGuid.TryGetValue(kvp.Key, out var obj)) continue;
+                foreach (var va in kvp.Value)
+                    obj.Attributes[va.Key] = va.Value;
+            }
+        }
+
+        return window;
     }
 
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
@@ -222,4 +327,20 @@ public sealed class ActiveRolesSource : IConnectorSource
         "sAMAccountName",
         "userPrincipalName",
     };
+
+    /// <summary>
+    /// Split a "host" or "host:port" hint into (host, port). Defaults to LDAP 389
+    /// (the fast read targets the raw DC, NOT the AR service port). Used by the
+    /// fast path to bind the DC.
+    /// </summary>
+    private static (string Host, int Port) ParseHostPort(string? hostHint)
+    {
+        if (string.IsNullOrWhiteSpace(hostHint))
+            throw new InvalidOperationException(
+                "Active Roles fast read requires a DC host (adHost, or arsServiceHost as a fallback).");
+        var parts = hostHint.Split(':');
+        if (parts.Length == 1) return (parts[0], 389);
+        if (int.TryParse(parts[1], out var p)) return (parts[0], p);
+        return (parts[0], 389);
+    }
 }

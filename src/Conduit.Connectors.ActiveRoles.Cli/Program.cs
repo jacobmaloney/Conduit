@@ -46,9 +46,13 @@ internal static class Program
         var host = config["Ars:ServiceHost"] ?? Environment.GetEnvironmentVariable("ARS_HOST");
         var user = config["Ars:BindUser"] ?? Environment.GetEnvironmentVariable("ARS_USER");
         var pass = config["Ars:BindPassword"] ?? Environment.GetEnvironmentVariable("ARS_PASSWORD");
-        // Optional raw-AD DC for objectGUID → DN resolution (write-guid). Falls back
-        // to the AR service host inside the connector when left unset.
+        // Optional raw-AD DC for objectGUID → DN resolution (write-guid) AND the
+        // Phase 2 fast read's direct LDAP. Falls back to the AR service host inside
+        // the connector when left unset.
         var adHost = config["Ars:AdHost"] ?? Environment.GetEnvironmentVariable("ARS_ADHOST");
+        // Phase 2 fast read: read-only connection to the ARS config DB (CVSAValues /
+        // VirtualSchema). NEVER committed — supplied via uncommitted appsettings/env.
+        var sqlConn = config["Ars:ArsSqlConnString"] ?? Environment.GetEnvironmentVariable("ARS_SQLCONN");
 
         if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(pass))
         {
@@ -69,23 +73,32 @@ internal static class Program
         if (string.Equals(args[0], "test", StringComparison.OrdinalIgnoreCase) && args.Length > 1)
             testDn = args[1];
 
-        var settings = new ArsConnectionSettings(user!, pass!, host) { TestBindDn = testDn, AdHost = adHost };
-        var resolver = new StaticArsConnectionResolver(settings);
-        var ct = CancellationToken.None;
+        // Settings factory so the read/bench commands can vary readMode per call.
+        ArsConnectionSettings MakeSettings(string? readMode) =>
+            new ArsConnectionSettings(user!, pass!, host)
+            {
+                TestBindDn = testDn,
+                AdHost = adHost,
+                ArsSqlConnString = sqlConn,
+                ReadMode = readMode
+            };
 
+        var ct = CancellationToken.None;
         var cmd = args[0].ToLowerInvariant();
         try
         {
             switch (cmd)
             {
                 case "test":
-                    return await TestAsync(resolver, loggerFactory, ct);
+                    return await TestAsync(new StaticArsConnectionResolver(MakeSettings(null)), loggerFactory, ct);
                 case "read":
-                    return await ReadAsync(args, resolver, loggerFactory, ct);
+                    return await ReadAsync(args, MakeSettings, loggerFactory, ct);
+                case "bench":
+                    return await BenchAsync(args, MakeSettings, loggerFactory, ct);
                 case "write":
-                    return await WriteAsync(args, resolver, loggerFactory, ct);
+                    return await WriteAsync(args, new StaticArsConnectionResolver(MakeSettings(null)), loggerFactory, ct);
                 case "write-guid":
-                    return await WriteGuidAsync(args, resolver, loggerFactory, ct);
+                    return await WriteGuidAsync(args, new StaticArsConnectionResolver(MakeSettings(null)), loggerFactory, ct);
                 default:
                     Console.Error.WriteLine($"Unknown command '{cmd}'.");
                     PrintUsage();
@@ -110,56 +123,145 @@ internal static class Program
     }
 
     private static async Task<int> ReadAsync(
-        string[] args, IArsConnectionResolver resolver, ILoggerFactory lf, CancellationToken ct)
+        string[] args, Func<string?, ArsConnectionSettings> makeSettings, ILoggerFactory lf, CancellationToken ct)
     {
-        // read <objectClass> <baseDN> [count] [--va <attr>]
+        // read <objectClass> <baseDN> [count] [--va <attr>] [--mode fast|policy]
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("usage: read <objectClass> <baseDN> [count] [--va <attr>]");
+            Console.Error.WriteLine("usage: read <objectClass> <baseDN> [count] [--va <attr> ...] [--mode fast|policy]");
             return 2;
         }
         var objectClass = args[1];
         var baseDn = args[2];
         var count = 5;
-        var vaAttr = "UNITE-HelpDeskAuditor";
+        var vaAttrs = new List<string>();
+        string? mode = null;
         for (var i = 3; i < args.Length; i++)
         {
             if (string.Equals(args[i], "--va", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                vaAttr = args[++i];
-            }
+                vaAttrs.Add(args[++i]);
+            else if (string.Equals(args[i], "--mode", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                mode = args[++i];
             else if (int.TryParse(args[i], out var n))
-            {
                 count = n;
-            }
         }
+        if (vaAttrs.Count == 0) vaAttrs.Add("UNITE-HelpDeskAuditor");
 
+        var resolver = new StaticArsConnectionResolver(makeSettings(mode));
         var source = new ActiveRolesSource(resolver, lf.CreateLogger<ActiveRolesSource>());
+        var requested = new List<string> { "sAMAccountName" };
+        requested.AddRange(vaAttrs);
         var scope = new SyncProjectScope
         {
             BaseDN = baseDn,
             MaxObjects = count,
             PageSize = Math.Max(count, 100),
-            // Ask for the VA explicitly so the source resolves it per-object through
-            // ARS (it is a virtual attribute the searcher projection won't return).
-            RequestedAttributes = new List<string> { "sAMAccountName", vaAttr }
+            RequestedAttributes = requested
         };
 
-        Console.WriteLine($"[read] class='{objectClass}' baseDN='{baseDn}' count={count} va='{vaAttr}'");
+        Console.WriteLine($"[read] class='{objectClass}' baseDN='{baseDn}' count={count} mode='{mode ?? "fast(default)"}' va=[{string.Join(",", vaAttrs)}]");
         var emitted = 0;
         await foreach (var obj in source.ReadAsync(objectClass, scope, ct))
         {
             emitted++;
             var sam = Str(obj, "sAMAccountName") ?? Str(obj, "name") ?? "<no sam>";
-            var va = obj.Attributes.TryGetValue(vaAttr, out var vv) && vv is not null
-                ? vv.ToString()
-                : "<not present>";
             Console.WriteLine($"  [{emitted}] DN={obj.SourceId}");
-            Console.WriteLine($"        sAMAccountName={sam}  {vaAttr}={va}");
+            Console.Write($"        sAMAccountName={sam}");
+            foreach (var va in vaAttrs)
+            {
+                var v = obj.Attributes.TryGetValue(va, out var vv) && vv is not null ? vv.ToString() : "<not present>";
+                Console.Write($"  {va}={v}");
+            }
+            Console.WriteLine();
             if (emitted >= count) break;
         }
         Console.WriteLine($"[read] emitted {emitted} object(s).");
         return emitted > 0 ? 0 : 1;
+    }
+
+    private static async Task<int> BenchAsync(
+        string[] args, Func<string?, ArsConnectionSettings> makeSettings, ILoggerFactory lf, CancellationToken ct)
+    {
+        // bench <objectClass> <baseDN> [count] [--va <attr> ...]
+        // Runs the SAME scope through fast then policy, prints VA values from BOTH
+        // (to prove correctness) and the wall-clock time of each (to show the speedup).
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("usage: bench <objectClass> <baseDN> [count] [--va <attr> ...]");
+            return 2;
+        }
+        var objectClass = args[1];
+        var baseDn = args[2];
+        var count = int.MaxValue;
+        var vaAttrs = new List<string>();
+        for (var i = 3; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--va", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                vaAttrs.Add(args[++i]);
+            else if (int.TryParse(args[i], out var n))
+                count = n;
+        }
+        if (vaAttrs.Count == 0) { vaAttrs.Add("UNITE-VPNAdmin"); vaAttrs.Add("UNITE-HelpDeskAuditor"); }
+
+        var requested = new List<string> { "sAMAccountName" };
+        requested.AddRange(vaAttrs);
+        SyncProjectScope MakeScope() => new SyncProjectScope
+        {
+            BaseDN = baseDn,
+            MaxObjects = count == int.MaxValue ? null : count,
+            PageSize = 1000,
+            RequestedAttributes = new List<string>(requested)
+        };
+
+        async Task<(long ms, int n, Dictionary<string, Dictionary<string, string>> byUser)> RunAsync(string runMode)
+        {
+            var resolver = new StaticArsConnectionResolver(makeSettings(runMode));
+            var source = new ActiveRolesSource(resolver, lf.CreateLogger<ActiveRolesSource>());
+            var byUser = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            var n = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await foreach (var obj in source.ReadAsync(objectClass, MakeScope(), ct))
+            {
+                n++;
+                var sam = Str(obj, "sAMAccountName") ?? obj.SourceId;
+                var vals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var va in vaAttrs)
+                    vals[va] = obj.Attributes.TryGetValue(va, out var vv) && vv is not null ? vv.ToString()! : "<none>";
+                byUser[sam] = vals;
+            }
+            sw.Stop();
+            return (sw.ElapsedMilliseconds, n, byUser);
+        }
+
+        Console.WriteLine($"[bench] class='{objectClass}' baseDN='{baseDn}' va=[{string.Join(",", vaAttrs)}]");
+        Console.WriteLine("[bench] === FAST (raw AD LDAP + CVSAValues SQL join) ===");
+        var fast = await RunAsync("fast");
+        Console.WriteLine($"[bench] fast:   {fast.n} objects in {fast.ms} ms");
+        Console.WriteLine("[bench] === POLICY (EDMS:// per-object through the AR service) ===");
+        var policy = await RunAsync("policy");
+        Console.WriteLine($"[bench] policy: {policy.n} objects in {policy.ms} ms");
+
+        // Correctness: compare VA values for users present in BOTH runs.
+        var mismatches = 0; var compared = 0;
+        foreach (var kvp in fast.byUser)
+        {
+            if (!policy.byUser.TryGetValue(kvp.Key, out var pvals)) continue;
+            foreach (var va in vaAttrs)
+            {
+                compared++;
+                var f = kvp.Value.TryGetValue(va, out var fv) ? fv : "<none>";
+                var p = pvals.TryGetValue(va, out var pv) ? pv : "<none>";
+                if (!string.Equals(f, p, StringComparison.OrdinalIgnoreCase))
+                {
+                    mismatches++;
+                    Console.WriteLine($"[bench] MISMATCH {kvp.Key}.{va}: fast='{f}' policy='{p}'");
+                }
+            }
+        }
+        Console.WriteLine($"[bench] compared {compared} VA value(s) across {fast.byUser.Count(u => policy.byUser.ContainsKey(u.Key))} shared user(s); {mismatches} mismatch(es).");
+        if (policy.ms > 0 && fast.ms >= 0)
+            Console.WriteLine($"[bench] speedup: policy/fast = {(fast.ms == 0 ? double.PositiveInfinity : (double)policy.ms / fast.ms):F1}x (fast {fast.ms} ms vs policy {policy.ms} ms)");
+        return mismatches == 0 ? 0 : 1;
     }
 
     private static async Task<int> WriteAsync(
@@ -243,13 +345,18 @@ internal static class Program
         Console.WriteLine("arscli — Active Roles connector proof harness");
         Console.WriteLine();
         Console.WriteLine("  arscli test");
-        Console.WriteLine("  arscli read <objectClass> <baseDN> [count] [--va <attr>]");
+        Console.WriteLine("  arscli read <objectClass> <baseDN> [count] [--va <attr> ...] [--mode fast|policy]");
+        Console.WriteLine("  arscli bench <objectClass> <baseDN> [count] [--va <attr> ...]");
         Console.WriteLine("  arscli write <userDN> <attr> <true|false>");
         Console.WriteLine("  arscli write-guid <objectGUID> <attr> <true|false>");
         Console.WriteLine();
         Console.WriteLine("Connection: appsettings.json (Ars:ServiceHost/BindUser/BindPassword,");
-        Console.WriteLine("optional Ars:AdHost for write-guid) or env ARS_HOST / ARS_USER /");
-        Console.WriteLine("ARS_PASSWORD / ARS_ADHOST. Requires the Active Roles ADSI provider");
-        Console.WriteLine("installed on this host (EDMS://).");
+        Console.WriteLine("Ars:AdHost = a DC for the fast read, Ars:ArsSqlConnString = read-only conn");
+        Console.WriteLine("to the ARS config DB for CVSAValues) or env ARS_HOST / ARS_USER /");
+        Console.WriteLine("ARS_PASSWORD / ARS_ADHOST / ARS_SQLCONN.");
+        Console.WriteLine();
+        Console.WriteLine("read/bench default to FAST mode (raw AD LDAP + CVSAValues SQL join, no AR");
+        Console.WriteLine("service). --mode policy (and write/write-guid) use EDMS:// and REQUIRE the");
+        Console.WriteLine("Active Roles ADSI provider installed on this host.");
     }
 }
