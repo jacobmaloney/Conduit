@@ -64,8 +64,10 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
             if (dn is null)
                 return SinkWriteResult.Fail(
                     $"Could not resolve a target Active Roles object for SourceId='{obj.SourceId}'. " +
-                    "Phase 1 requires either a DN as the SourceId, or a 'sAMAccountName' attribute plus a " +
-                    "'baseDN' attribute to search under.");
+                    "Phase 1 resolves a target by (a) a DN SourceId, (b) a 'distinguishedName'/'dn' " +
+                    "attribute, (c) an objectGUID SourceId resolved to a DN via the raw AD DC " +
+                    "('adHost' on the 'ars' credential, falling back to the AR service host), or " +
+                    "(d) a 'sAMAccountName' attribute plus a 'baseDN'/'targetOU' to search under.");
 
             using var entry = ArsBind.Bind(settings, dn);
             // RefreshCache makes the provider resolve the object (and virtual
@@ -195,20 +197,44 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
     }
 
     /// <summary>
-    /// Phase 1 DN resolution. An explicit DN SourceId binds directly. Otherwise we
-    /// search by sAMAccountName under a supplied baseDN (through EDMS:// so the
-    /// search itself is policy/VA-aware). Returns null when neither path resolves.
+    /// Phase 1 DN resolution, in cheapest-first order:
+    ///   (a) the SourceId is itself a DN — bind directly;
+    ///   (b) a mapped 'distinguishedName'/'dn' attribute carries the DN (the Conduit
+    ///       AD source always emits distinguishedName, so when the step maps it the
+    ///       DN survives into the sink object with NO extra connection);
+    ///   (c) the SourceId is an AD objectGUID (the AD source's default SourceId) —
+    ///       resolve it to a DN against the RAW AD DC (the AR provider can't bind by
+    ///       GUID), then bind EDMS://&lt;dn&gt;;
+    ///   (d) a 'sAMAccountName' + 'baseDN'/'targetOU' search through EDMS:// (so the
+    ///       search itself is policy/VA-aware).
+    /// Returns null when none resolve.
     /// </summary>
     private string? ResolveTargetDn(ArsConnectionSettings settings, ConnectorObject obj, out bool found)
     {
         found = false;
 
+        // (a)/(b): SourceId is a DN, or a mapped distinguishedName/dn attribute is.
         var dn = LooksLikeDn(obj.SourceId) ? obj.SourceId
                : GetStr(obj, "distinguishedName") ?? GetStr(obj, "dn");
         if (LooksLikeDn(dn))
         {
             found = true;
             return dn;
+        }
+
+        // (c): SourceId (or an objectGUID attribute) is an AD GUID. The AR ADSI
+        // provider cannot bind/search by objectGUID, so resolve GUID → DN against
+        // the raw AD DC and let the caller bind EDMS://<dn> for the policy-aware write.
+        if (TryGetObjectGuid(obj, out var objectGuid))
+        {
+            var guidDn = AdGuidResolver.ResolveDn(settings, objectGuid, _logger);
+            if (LooksLikeDn(guidDn))
+            {
+                found = true;
+                return guidDn;
+            }
+            // GUID was present but could not be resolved — fall through to the
+            // sAMAccountName path (it may still locate the object) before failing.
         }
 
         var sam = GetStr(obj, "sAMAccountName") ?? GetStr(obj, "userName") ?? GetStr(obj, "UserName");
@@ -288,6 +314,44 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
 
     private static bool LooksLikeDn(string? s) =>
         !string.IsNullOrEmpty(s) && s!.Contains('=', StringComparison.Ordinal) && s.Contains(',', StringComparison.Ordinal);
+
+    /// <summary>
+    /// Extract an AD objectGUID for the object, preferring an explicit
+    /// <c>objectGUID</c> attribute (byte[16], Guid, or string) and falling back to a
+    /// SourceId that parses as a GUID (the Conduit AD source's default key). Returns
+    /// false when no GUID is present so the caller can try other resolution paths.
+    /// </summary>
+    private static bool TryGetObjectGuid(ConnectorObject obj, out Guid guid)
+    {
+        if (obj.Attributes.TryGetValue("objectGUID", out var raw) && raw is not null)
+        {
+            switch (raw)
+            {
+                case Guid g: guid = g; return true;
+                case byte[] b when b.Length == 16: guid = new Guid(b); return true;
+                case string gs when Guid.TryParse(gs, out var pg): guid = pg; return true;
+            }
+            if (raw is IList list && list.Count > 0)
+            {
+                switch (list[0])
+                {
+                    case byte[] lb when lb.Length == 16: guid = new Guid(lb); return true;
+                    case string ls when Guid.TryParse(ls, out var pls): guid = pls; return true;
+                }
+            }
+        }
+
+        // SourceId as a bare GUID (objectGUID is the AD source's default SourceId).
+        // A DN contains '=' and ',' so it never parses as a GUID — no ambiguity.
+        if (Guid.TryParse(obj.SourceId, out var sidGuid))
+        {
+            guid = sidGuid;
+            return true;
+        }
+
+        guid = Guid.Empty;
+        return false;
+    }
 
     private static string EscapeFilter(string s)
     {

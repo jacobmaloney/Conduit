@@ -27,6 +27,20 @@ public sealed record ArsConnectionSettings(
     /// falls back to binding the provider's "rootDSE" object.
     /// </summary>
     public string? TestBindDn { get; init; }
+
+    /// <summary>
+    /// Optional raw Active Directory DC host used to resolve an <c>objectGUID</c>
+    /// to its distinguishedName when the upstream source keys objects by GUID
+    /// (the Conduit AD source emits objectGUID as SourceId). The AR ADSI provider
+    /// CANNOT bind/search by objectGUID (it returns 0x80041452), but the raw DC
+    /// answers a serverless <c>LDAP://&lt;host&gt;/&lt;GUID=Nformat&gt;</c> bind, so
+    /// the sink resolves GUID → DN here and then binds <c>EDMS://&lt;dn&gt;</c> for
+    /// the policy-aware write. When null/blank the sink falls back to
+    /// <see cref="ArsServiceHost"/> (the AR service host is normally domain-joined
+    /// and serves LDAP too); only when neither is set is the GUID path unavailable.
+    /// The same <see cref="BindUser"/>/<see cref="BindPassword"/> bind the DC.
+    /// </summary>
+    public string? AdHost { get; init; }
 }
 
 /// <summary>
@@ -107,7 +121,15 @@ public sealed class TenantCredentialArsConnectionResolver : IArsConnectionResolv
             serviceHost = tenant?.Domain;
         }
 
-        return new ArsConnectionSettings(cred.BindUser!, cred.BindPassword!, serviceHost);
+        // adHost (Phase-2 fast-read field) doubles as the raw-AD DC for objectGUID
+        // → DN resolution in the sink. Fall back to the AR service host (normally
+        // domain-joined, answers LDAP) when the operator left adHost blank.
+        var adHost = string.IsNullOrWhiteSpace(cred.AdHost) ? serviceHost : cred.AdHost;
+
+        return new ArsConnectionSettings(cred.BindUser!, cred.BindPassword!, serviceHost)
+        {
+            AdHost = adHost
+        };
     }
 }
 
@@ -152,6 +174,67 @@ internal static class ArsBind
 
     public static DirectoryEntry Bind(ArsConnectionSettings s, string dnOrEmpty)
         => new DirectoryEntry(Path(s.ArsServiceHost, dnOrEmpty), s.BindUser, s.BindPassword);
+}
+
+/// <summary>
+/// Resolves an Active Directory <c>objectGUID</c> to its distinguishedName by
+/// binding the RAW AD DC (NOT the AR ADSI provider) with a serverless GUID
+/// moniker: <c>LDAP://&lt;host&gt;/&lt;GUID=Nformat&gt;</c>. This is the bridge that
+/// lets the ARS sink accept an objectGUID SourceId (emitted by the Conduit AD
+/// source) even though the AR provider itself cannot bind/search by objectGUID
+/// (it returns 0x80041452). Once the DN is known the caller binds
+/// <c>EDMS://&lt;dn&gt;</c> for the policy-aware write.
+/// </summary>
+internal static class AdGuidResolver
+{
+    /// <summary>
+    /// Bind <c>LDAP://&lt;host&gt;/&lt;GUID=N&gt;</c> against the raw DC and read the
+    /// object's distinguishedName. Returns null when no host is available or the
+    /// bind/read fails (caller then surfaces the resolution error). The GUID is
+    /// formatted as 32 hex digits with no braces or dashes (the "N" format), which
+    /// is what AD's serverless GUID moniker expects.
+    /// </summary>
+    public static string? ResolveDn(
+        ArsConnectionSettings s, Guid objectGuid,
+        Microsoft.Extensions.Logging.ILogger logger)
+    {
+        // GUID moniker format proven live on the lab DC (2026-06-11): the bind
+        // requires the DASHED Guid form ("D": 8-4-4-4-12). The dashless "N" form and
+        // the byte-escaped form both fail with "no such object" / "invalid dn
+        // syntax". A serverless LDAP://<GUID=...> resolves via the default domain;
+        // when an adHost is supplied we target it explicitly (also proven to work),
+        // which lets the connector run off the domain it's syncing.
+        var host = string.IsNullOrWhiteSpace(s.AdHost) ? s.ArsServiceHost : s.AdHost;
+        var guidMoniker = $"<GUID={objectGuid:D}>";
+        var path = string.IsNullOrWhiteSpace(host)
+            ? $"LDAP://{guidMoniker}"
+            : $"LDAP://{host.Trim()}/{guidMoniker}";
+        try
+        {
+            using var entry = new DirectoryEntry(path, s.BindUser, s.BindPassword);
+            // RefreshCache forces the bind/read now so a failure throws here rather
+            // than lazily later. distinguishedName is an operational/base attribute.
+            entry.RefreshCache(new[] { "distinguishedName" });
+            var dn = entry.Properties["distinguishedName"].Value?.ToString();
+            if (string.IsNullOrWhiteSpace(dn))
+            {
+                // Fall back to the bound entry's own DN (entry.Properties["distinguishedName"]
+                // can be empty on some providers; the Path's CN/Name still resolves it).
+                dn = entry.Properties["dn"].Value?.ToString();
+            }
+            if (string.IsNullOrWhiteSpace(dn))
+            {
+                logger.LogWarning("ARS sink: LDAP GUID bind for {Guid} on {Host} returned no distinguishedName.", objectGuid, host);
+                return null;
+            }
+            return dn;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "ARS sink: raw-AD LDAP GUID bind failed for {Guid} on {Host}.", objectGuid, host);
+            return null;
+        }
+    }
 }
 
 /// <summary>

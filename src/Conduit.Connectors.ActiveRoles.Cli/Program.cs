@@ -46,6 +46,9 @@ internal static class Program
         var host = config["Ars:ServiceHost"] ?? Environment.GetEnvironmentVariable("ARS_HOST");
         var user = config["Ars:BindUser"] ?? Environment.GetEnvironmentVariable("ARS_USER");
         var pass = config["Ars:BindPassword"] ?? Environment.GetEnvironmentVariable("ARS_PASSWORD");
+        // Optional raw-AD DC for objectGUID → DN resolution (write-guid). Falls back
+        // to the AR service host inside the connector when left unset.
+        var adHost = config["Ars:AdHost"] ?? Environment.GetEnvironmentVariable("ARS_ADHOST");
 
         if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(pass))
         {
@@ -66,7 +69,7 @@ internal static class Program
         if (string.Equals(args[0], "test", StringComparison.OrdinalIgnoreCase) && args.Length > 1)
             testDn = args[1];
 
-        var settings = new ArsConnectionSettings(user!, pass!, host) { TestBindDn = testDn };
+        var settings = new ArsConnectionSettings(user!, pass!, host) { TestBindDn = testDn, AdHost = adHost };
         var resolver = new StaticArsConnectionResolver(settings);
         var ct = CancellationToken.None;
 
@@ -81,6 +84,8 @@ internal static class Program
                     return await ReadAsync(args, resolver, loggerFactory, ct);
                 case "write":
                     return await WriteAsync(args, resolver, loggerFactory, ct);
+                case "write-guid":
+                    return await WriteGuidAsync(args, resolver, loggerFactory, ct);
                 default:
                     Console.Error.WriteLine($"Unknown command '{cmd}'.");
                     PrintUsage();
@@ -190,6 +195,41 @@ internal static class Program
         return result.Outcome == SinkWriteOutcome.Failed ? 1 : 0;
     }
 
+    private static async Task<int> WriteGuidAsync(
+        string[] args, IArsConnectionResolver resolver, ILoggerFactory lf, CancellationToken ct)
+    {
+        // write-guid <objectGUID> <attr> <true|false|value>
+        // Proves the AD->ARS path: SourceId is an objectGUID exactly as the Conduit
+        // AD source emits it; the sink must resolve GUID -> DN -> EDMS:// write.
+        if (args.Length < 4)
+        {
+            Console.Error.WriteLine("usage: write-guid <objectGUID> <attr> <true|false>");
+            return 2;
+        }
+        var guid = args[1];
+        var attr = args[2];
+        var rawVal = args[3];
+        object val = bool.TryParse(rawVal, out var b) ? b : rawVal;
+
+        var sink = new ActiveRolesSink(resolver, lf.CreateLogger<ActiveRolesSink>());
+        var obj = new ConnectorObject
+        {
+            SourceId = guid,
+            ObjectClass = "user",
+            Attributes = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                [attr] = val
+            }
+        };
+
+        Console.WriteLine($"[write-guid] objectGUID={guid}  {attr}={val}");
+        var result = await sink.UpsertAsync(obj, ct);
+        Console.WriteLine($"[write-guid] Outcome={result.Outcome}");
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            Console.WriteLine($"[write-guid] ErrorMessage={result.ErrorMessage}");
+        return result.Outcome == SinkWriteOutcome.Failed ? 1 : 0;
+    }
+
     private static string? Str(ConnectorObject obj, string key)
     {
         if (!obj.Attributes.TryGetValue(key, out var v) || v is null) return null;
@@ -205,9 +245,11 @@ internal static class Program
         Console.WriteLine("  arscli test");
         Console.WriteLine("  arscli read <objectClass> <baseDN> [count] [--va <attr>]");
         Console.WriteLine("  arscli write <userDN> <attr> <true|false>");
+        Console.WriteLine("  arscli write-guid <objectGUID> <attr> <true|false>");
         Console.WriteLine();
-        Console.WriteLine("Connection: appsettings.json (Ars:ServiceHost/BindUser/BindPassword) or");
-        Console.WriteLine("env ARS_HOST / ARS_USER / ARS_PASSWORD. Requires the Active Roles ADSI");
-        Console.WriteLine("provider installed on this host (EDMS://).");
+        Console.WriteLine("Connection: appsettings.json (Ars:ServiceHost/BindUser/BindPassword,");
+        Console.WriteLine("optional Ars:AdHost for write-guid) or env ARS_HOST / ARS_USER /");
+        Console.WriteLine("ARS_PASSWORD / ARS_ADHOST. Requires the Active Roles ADSI provider");
+        Console.WriteLine("installed on this host (EDMS://).");
     }
 }
