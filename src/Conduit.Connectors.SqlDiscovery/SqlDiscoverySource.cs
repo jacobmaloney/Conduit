@@ -39,8 +39,12 @@ namespace Conduit.Connectors.SqlDiscovery;
 ///     _sourceConnection = the AD connection's name — the SAME (Source,
 ///     SourceUniqueId) pair the existing AD-sync-to-IC path stamps, so the scan
 ///     ENRICHES the already-synced computer object instead of duplicating it.
-///   - Manual instance-list hosts: SourceId = "sqldisc:&lt;host&gt;:&lt;port&gt;[\instance]"
-///     (stable) and _sourceConnection = the configured discovery source name
+///   - Instance-list hosts that resolve to a domain computer: re-keyed at emit
+///     time to SourceId = AD objectGUID under the AD connection — same enrich path
+///     as SPN mode (a host typed by IP still merges, via its true MachineName).
+///   - Non-domain / unmatched instance-list hosts: SourceId = "sqldisc:&lt;MACHINENAME&gt;"
+///     (UPPERCASE short name — collapses the same host found at several IPs/ports to
+///     ONE object) and _sourceConnection = the configured discovery source name
 ///     (default "SQLDiscovery"; auto-seeds a connection IC-side).
 ///
 /// IMPORTANT: SQL Discovery projects should keep their Mapping step EMPTY
@@ -84,6 +88,20 @@ public sealed class SqlDiscoverySource : IConnectorSource
         public ScanOutcome Outcome { get; init; } = null!;
     }
 
+    /// <summary>
+    /// Result of target enumeration: the hosts to scan plus the optional AD
+    /// computer map used to re-key instance-list hosts onto their AD identity.
+    /// </summary>
+    private sealed class TargetEnumeration
+    {
+        public List<ScanTarget> Targets { get; init; } = new();
+        /// <summary>Short name / cn / dNSHostName (and its short form) → AD objectGUID string. Case-insensitive. Empty when no AD connection resolved.</summary>
+        public IReadOnlyDictionary<string, string> AdComputerMap { get; init; } =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The resolved AD connection name to stamp matched hosts under (null when no AD connection).</summary>
+        public string? AdConnectionName { get; init; }
+    }
+
     public async IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
@@ -100,7 +118,15 @@ public sealed class SqlDiscoverySource : IConnectorSource
             ?? throw new InvalidOperationException(
                 $"No 'sqldiscovery' credential stored for tenant {_tenantId}. Configure the SQL Discovery connection before running.");
 
-        var targets = await BuildTargetsAsync(config, cancellationToken);
+        var enumeration = await BuildTargetsAsync(config, cancellationToken);
+        var targets = enumeration.Targets;
+        // AD computer map (short name / cn / dNSHostName → objectGUID) built from a
+        // SINGLE paged LDAP sweep at run start. Used to re-key instance-list hosts
+        // onto their AD identity at emit time so the scan ENRICHES the already-synced
+        // computer object instead of DUPLICATING it. Empty when no AD connection is
+        // configured or the sweep yielded nothing.
+        var adComputerMap = enumeration.AdComputerMap;
+        var adConnectionName = enumeration.AdConnectionName;
         await SourceRunLogContext.LogAsync("Info",
             $"SQL Discovery: {targets.Count} target host(s) enumerated (mode={config.Mode}, parallelism={config.Parallelism}, connectTimeout={config.ConnectTimeoutSeconds}s).");
         if (targets.Count == 0)
@@ -156,7 +182,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
                 ok++;
                 await SourceRunLogContext.LogAsync("Info",
                     $"SQL Discovery: {target.Label} → Success ({outcome.Message}) [{outcome.DurationMs} ms]");
-                yield return await ToConnectorObjectAsync(target, outcome, cancellationToken);
+                yield return await ToConnectorObjectAsync(target, outcome, adComputerMap, adConnectionName, cancellationToken);
             }
             else
             {
@@ -167,7 +193,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
                 // IC can surface the unreachable host instead of silently keeping
                 // last-good (or no) data. Never carries edition/version/cores and
                 // never touches sqlLastScannedAt — that keeps its last-GOOD meaning.
-                yield return ToFailureConnectorObject(target, outcome);
+                yield return ToFailureConnectorObject(target, outcome, adComputerMap, adConnectionName);
             }
         }
 
@@ -226,33 +252,53 @@ public sealed class SqlDiscoverySource : IConnectorSource
 
     // ─── Target enumeration ─────────────────────────────────────────────────
 
-    private async Task<List<ScanTarget>> BuildTargetsAsync(SqlDiscoveryConfig config, CancellationToken ct)
+    private async Task<TargetEnumeration> BuildTargetsAsync(SqlDiscoveryConfig config, CancellationToken ct)
     {
         var targets = new List<ScanTarget>();
         var seenHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (config.Mode is SqlDiscoveryMode.Spn or SqlDiscoveryMode.Both)
+        // Resolve the AD connection ONCE, up front, whenever a name is configured —
+        // SPN enumeration needs it, and so does the instance-list re-keying. The
+        // resolved tenant+creds are reused for both the SPN sweep and the computer
+        // map sweep (no second resolver, no second bind helper).
+        Core.Models.Tenant? adTenant = null;
+        AdCredentials? adCreds = null;
+        if (!string.IsNullOrWhiteSpace(config.AdConnectionName))
         {
-            var (adTenant, creds, error) = await ResolveAdConnectionAsync(config);
+            var (t, c, error) = await ResolveAdConnectionAsync(config);
             if (error is not null)
             {
-                // SPN enumeration trouble is a finding, not a run-killer — the
-                // instance list (if any) still gets scanned.
-                await SourceRunLogContext.LogAsync("Warning", $"SQL Discovery: SPN enumeration skipped — {error}");
-                _logger.LogWarning("SQL Discovery SPN enumeration skipped for tenant {TenantId}: {Error}", _tenantId, error);
+                // AD trouble is a finding, not a run-killer — the instance list (if
+                // any) still gets scanned, just without AD enrichment.
+                await SourceRunLogContext.LogAsync("Warning", $"SQL Discovery: AD resolution skipped — {error}");
+                _logger.LogWarning("SQL Discovery AD resolution skipped for tenant {TenantId}: {Error}", _tenantId, error);
+            }
+            else
+            {
+                adTenant = t;
+                adCreds = c;
+            }
+        }
+
+        if (config.Mode is SqlDiscoveryMode.Spn or SqlDiscoveryMode.Both)
+        {
+            if (adTenant is null)
+            {
+                await SourceRunLogContext.LogAsync("Warning",
+                    "SQL Discovery: SPN enumeration skipped — no usable AD connection (see prior finding).");
             }
             else
             {
                 try
                 {
-                    var spnHosts = await EnumerateSpnHostsAsync(adTenant!, creds!, ct);
+                    var spnHosts = await EnumerateSpnHostsAsync(adTenant, adCreds!, ct);
                     foreach (var host in spnHosts)
                     {
                         if (seenHosts.Add(host.Host))
                             targets.Add(host);
                     }
                     await SourceRunLogContext.LogAsync("Info",
-                        $"SQL Discovery: SPN enumeration via '{adTenant!.Name}' found {spnHosts.Count} SQL host(s).");
+                        $"SQL Discovery: SPN enumeration via '{adTenant.Name}' found {spnHosts.Count} SQL host(s).");
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
@@ -272,11 +318,12 @@ public sealed class SqlDiscoverySource : IConnectorSource
                 // the AD objectGUID identity is the one that enriches in IC.
                 if (!seenHosts.Add(entry.Host)) continue;
 
-                var port = entry.Port;
-                var idPort = port ?? 1433;
-                var sourceId = string.IsNullOrEmpty(entry.Instance)
-                    ? $"sqldisc:{entry.Host.ToLowerInvariant()}:{idPort}"
-                    : $"sqldisc:{entry.Host.ToLowerInvariant()}:{idPort}\\{entry.Instance.ToLowerInvariant()}";
+                // Pre-scan SourceId is the conservative fallback used only by the
+                // FAILURE path (no authoritative MachineName available there). On a
+                // SUCCESSFUL scan the emit path re-keys from facts.MachineName via the
+                // AD map below. Keyed on the host SHORT NAME (uppercased), not ip:port,
+                // so the same host hit at several IPs/ports collapses to ONE object.
+                var sourceId = $"sqldisc:{ShortHostName(entry.Host).ToUpperInvariant()}";
 
                 targets.Add(new ScanTarget
                 {
@@ -285,12 +332,38 @@ public sealed class SqlDiscoverySource : IConnectorSource
                     SourceId = sourceId,
                     SourceConnection = config.DiscoverySourceName,
                     FromSpn = false,
-                    Endpoints = { new SqlEndpoint { Instance = entry.Instance, Port = port } }
+                    Endpoints = { new SqlEndpoint { Instance = entry.Instance, Port = entry.Port } }
                 });
             }
         }
 
-        return targets;
+        // Build the AD computer map only when there are instance-list hosts that
+        // could match (SPN hosts already carry their objectGUID). ONE paged sweep.
+        IReadOnlyDictionary<string, string> adComputerMap =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (adTenant is not null && targets.Any(t => !t.FromSpn))
+        {
+            try
+            {
+                adComputerMap = await EnumerateAdComputersAsync(adTenant, adCreds!, ct);
+                await SourceRunLogContext.LogAsync("Info",
+                    $"SQL Discovery: AD computer map via '{adTenant.Name}' indexed {adComputerMap.Count} name key(s) for instance-list enrichment.");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                await SourceRunLogContext.LogAsync("Warning",
+                    $"SQL Discovery: AD computer map failed ({ex.Message}) — instance-list hosts emit under '{config.DiscoverySourceName}' with stable name keys.");
+                _logger.LogWarning(ex, "SQL Discovery AD computer map failed for tenant {TenantId}", _tenantId);
+            }
+        }
+
+        return new TargetEnumeration
+        {
+            Targets = targets,
+            AdComputerMap = adComputerMap,
+            AdConnectionName = adTenant?.Name
+        };
     }
 
     private async Task<(Core.Models.Tenant? Tenant, AdCredentials? Creds, string? Error)> ResolveAdConnectionAsync(SqlDiscoveryConfig config)
@@ -374,6 +447,102 @@ public sealed class SqlDiscoverySource : IConnectorSource
         }, ct);
     }
 
+    /// <summary>
+    /// One paged LDAP sweep of ALL computer objects, projecting objectGUID + the
+    /// name attributes, into a case-insensitive lookup keyed on cn, name,
+    /// dNSHostName, AND the short form of dNSHostName. Lets an instance-list host
+    /// re-key onto its AD objectGUID at emit time (enrich, not duplicate) from a
+    /// SINGLE AD read — no per-host LDAP round-trip. Reuses CreateBoundConnection,
+    /// ResolveDefaultNamingContext, and the same paged-search pattern as the SPN sweep.
+    /// </summary>
+    private Task<IReadOnlyDictionary<string, string>> EnumerateAdComputersAsync(
+        Core.Models.Tenant adTenant,
+        AdCredentials creds,
+        CancellationToken ct)
+    {
+        return Task.Run<IReadOnlyDictionary<string, string>>(() =>
+        {
+            var (host, port) = ParseHostPort(adTenant.Domain!);
+            using var connection = CreateBoundConnection(host, port, creds);
+
+            var baseDn = ResolveDefaultNamingContext(connection)
+                ?? throw new InvalidOperationException(
+                    $"AD '{adTenant.Name}' did not advertise a defaultNamingContext on RootDSE.");
+
+            const string filter = "(objectCategory=computer)";
+            var attrs = new[] { "objectGUID", "dNSHostName", "cn", "name" };
+
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var pageControl = new PageResultRequestControl(500);
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                var request = new SearchRequest(baseDn, filter, SearchScope.Subtree, attrs);
+                request.Controls.Add(pageControl);
+                var response = (SearchResponse)connection.SendRequest(request);
+
+                foreach (SearchResultEntry entry in response.Entries)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (!(entry.Attributes.Contains("objectGUID")
+                          && entry.Attributes["objectGUID"][0] is byte[] bytes && bytes.Length == 16))
+                        continue;
+                    var guid = new Guid(bytes).ToString();
+
+                    void Index(string? key)
+                    {
+                        if (string.IsNullOrWhiteSpace(key)) return;
+                        // First writer wins — don't let a later duplicate name clobber.
+                        if (!map.ContainsKey(key)) map[key] = guid;
+                    }
+
+                    var cn = entry.Attributes.Contains("cn") ? entry.Attributes["cn"][0]?.ToString() : null;
+                    var name = entry.Attributes.Contains("name") ? entry.Attributes["name"][0]?.ToString() : null;
+                    var dns = entry.Attributes.Contains("dNSHostName") ? entry.Attributes["dNSHostName"][0]?.ToString() : null;
+                    Index(cn);
+                    Index(name);
+                    Index(dns);
+                    if (!string.IsNullOrWhiteSpace(dns)) Index(ShortHostName(dns!));
+                }
+
+                var responseControl = response.Controls.OfType<PageResultResponseControl>().FirstOrDefault();
+                if (responseControl is null || responseControl.Cookie.Length == 0) break;
+                pageControl.Cookie = responseControl.Cookie;
+            }
+            return map;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Re-key an instance-list (non-SPN) host onto its AD identity when the
+    /// authoritative machine name resolves to a domain computer — emitting under the
+    /// AD connection with SourceId = objectGUID ENRICHES the already-synced computer
+    /// object (identical routing to SPN mode). No match → stable name-based fallback
+    /// key under the discovery source. Returns (SourceId, SourceConnection).
+    /// </summary>
+    private static (string SourceId, string SourceConnection) ResolveInstanceListIdentity(
+        string? authoritativeName,
+        string fallbackName,
+        IReadOnlyDictionary<string, string> adComputerMap,
+        string? adConnectionName,
+        string discoverySourceName)
+    {
+        var name = !string.IsNullOrWhiteSpace(authoritativeName) ? authoritativeName! : fallbackName;
+
+        if (!string.IsNullOrWhiteSpace(adConnectionName) && adComputerMap.Count > 0)
+        {
+            if (adComputerMap.TryGetValue(name, out var guid)
+                || adComputerMap.TryGetValue(ShortHostName(name), out guid))
+            {
+                return (guid, adConnectionName!);
+            }
+        }
+
+        // Non-domain / no-AD-match: stable key on the SHORT NAME (uppercased) so the
+        // same host discovered at multiple IPs/ports collapses to ONE object.
+        return ($"sqldisc:{ShortHostName(name).ToUpperInvariant()}", discoverySourceName);
+    }
+
     private static ScanTarget? SpnEntryToTarget(SearchResultEntry entry, string adConnectionName)
     {
         string? sourceId = null;
@@ -444,13 +613,26 @@ public sealed class SqlDiscoverySource : IConnectorSource
 
     // ─── Emission ───────────────────────────────────────────────────────────
 
-    private static async Task<ConnectorObject> ToConnectorObjectAsync(ScanTarget target, ScanOutcome outcome, CancellationToken ct)
+    private static async Task<ConnectorObject> ToConnectorObjectAsync(
+        ScanTarget target,
+        ScanOutcome outcome,
+        IReadOnlyDictionary<string, string> adComputerMap,
+        string? adConnectionName,
+        CancellationToken ct)
     {
         var facts = outcome.Facts!;
         var hostIsIp = IPAddress.TryParse(target.Host, out _);
         var shortName = !string.IsNullOrWhiteSpace(facts.MachineName)
             ? facts.MachineName!
             : target.ShortName;
+
+        // Instance-list hosts get their identity-correct key HERE, where the
+        // authoritative MachineName (SELECT SERVERPROPERTY('MachineName')) is known:
+        // an AD match emits under the AD connection (enrich), else a stable name key
+        // under the discovery source. SPN hosts already carry objectGUID + AD conn.
+        var (sourceId, sourceConnection) = target.FromSpn
+            ? (target.SourceId, target.SourceConnection)
+            : ResolveInstanceListIdentity(facts.MachineName, target.ShortName, adComputerMap, adConnectionName, target.SourceConnection);
         var fqdn = hostIsIp
             ? (facts.MachineName ?? target.Host)
             : target.Host;
@@ -481,9 +663,10 @@ public sealed class SqlDiscoverySource : IConnectorSource
             // Clears any sqlScanError a previous failed sweep stamped.
             ["sqlScanError"] = string.Empty,
             // Internal routing stamp, lifted out by the IC sink (never written as
-            // a real attribute): AD connection name for SPN hosts (enrich the
-            // existing computer object), discovery source name for manual hosts.
-            ["_sourceConnection"] = target.SourceConnection
+            // a real attribute): AD connection name for SPN hosts AND instance-list
+            // hosts that matched an AD computer (enrich the existing object),
+            // discovery source name for non-domain manual hosts.
+            ["_sourceConnection"] = sourceConnection
         };
         if (facts.CpuCount is { } cpu)
             attrs["cpuCores"] = cpu.ToString(CultureInfo.InvariantCulture);
@@ -496,7 +679,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
 
         return new ConnectorObject
         {
-            SourceId = target.SourceId,
+            SourceId = sourceId,
             ObjectClass = "computer",
             Attributes = attrs
         };
@@ -510,8 +693,23 @@ public sealed class SqlDiscoverySource : IConnectorSource
     /// Deliberately NO edition/version/cores/databases/logins and NO
     /// sqlLastScannedAt — last-good data in IC stays intact.
     /// </summary>
-    private static ConnectorObject ToFailureConnectorObject(ScanTarget target, ScanOutcome outcome)
+    private static ConnectorObject ToFailureConnectorObject(
+        ScanTarget target,
+        ScanOutcome outcome,
+        IReadOnlyDictionary<string, string> adComputerMap,
+        string? adConnectionName)
     {
+        // A failed scan has NO authoritative MachineName (we never reached the
+        // server), so this is best-effort: re-key on the user-typed short name. If
+        // they typed a real hostname that matches an AD computer the failure finding
+        // still lands ON the existing AD object (enrich); otherwise it gets the same
+        // stable sqldisc:<SHORTNAME> key the success path would use — never a NEW
+        // ip:port key. SPN failures keep their objectGUID. Limitation: an
+        // IP-only-typed host can't be AD-matched here and stays under SQLDiscovery.
+        var (sourceId, sourceConnection) = target.FromSpn
+            ? (target.SourceId, target.SourceConnection)
+            : ResolveInstanceListIdentity(target.ShortName, target.ShortName, adComputerMap, adConnectionName, target.SourceConnection);
+
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
             ["CN"] = target.ShortName,
@@ -519,7 +717,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
             ["sqlScanStatus"] = ToScanStatusToken(outcome.Status),
             ["sqlLastScanAttemptAt"] = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
             ["sqlScanError"] = SanitizeScanError(outcome.Message),
-            ["_sourceConnection"] = target.SourceConnection
+            ["_sourceConnection"] = sourceConnection
         };
 
         if (!target.FromSpn)
@@ -535,7 +733,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
 
         return new ConnectorObject
         {
-            SourceId = target.SourceId,
+            SourceId = sourceId,
             ObjectClass = "computer",
             Attributes = attrs
         };
