@@ -16,6 +16,9 @@ using Conduit.Web.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Run as a Windows Service when hosted by the SCM (no-op for console/dev runs).
+builder.Host.UseWindowsService();
+
 // Kestrel hardening — defends against slow-loris, body-bomb, and resource-exhaustion attacks.
 // These are conservative defaults appropriate for an identity service; raise the body cap
 // only if you legitimately push >256KB SCIM payloads (bulk operations will need their own).
