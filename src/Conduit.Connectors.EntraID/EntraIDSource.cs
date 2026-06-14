@@ -908,9 +908,8 @@ public sealed class EntraIDSource : IConnectorSource
         "id", "displayName", "userPrincipalName", "mail", "givenName", "surname",
         "department", "jobTitle", "companyName", "officeLocation",
         "mobilePhone", "employeeId", "accountEnabled",
-        "onPremisesSamAccountName", "mailNickname",
-        // signInActivity requires the AuditLog.Read.All app scope (consented).
-        "signInActivity"
+        "onPremisesSamAccountName", "mailNickname"
+        // signInActivity is NOT supported on /users/delta $select (Graph rejects it) — it flows on the full read only.
     };
 
     private static readonly string[] GroupSelectFields = new[]
