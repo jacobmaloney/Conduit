@@ -96,13 +96,14 @@ namespace Conduit.Sync.Templates
         {
             "user", "group", "servicePrincipal", "directoryRole",
             "application", "device",
-            "administrativeUnit", "conditionalAccessPolicy", "oAuth2PermissionGrant", "domain"
+            "administrativeUnit", "conditionalAccessPolicy", "oAuth2PermissionGrant", "domain",
+            "m365usage"
         };
 
-        // ── SharePoint / M365: Core(2) / Collaboration(5) / Full(6) ──
+        // ── SharePoint / M365: Core(2) / Collaboration(6) / Full(7) ──
         private static readonly string[] SharePointCore = { "site", "team" };
-        private static readonly string[] SharePointCollaboration = { "site", "team", "drive", "channel", "list" };
-        private static readonly string[] SharePointFull = { "site", "team", "drive", "channel", "list", "subscribedSku" };
+        private static readonly string[] SharePointCollaboration = { "site", "team", "drive", "channel", "list", "sharepointgroup" };
+        private static readonly string[] SharePointFull = { "site", "team", "drive", "channel", "list", "subscribedSku", "sharepointgroup" };
 
         // ── SCIM(2), Okta(2/3), Google(2/3), AWS(2/3), Generic LDAP(2/3), Database(1/2) ──
         private static readonly string[] ScimCore = { "user", "group" };

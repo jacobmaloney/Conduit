@@ -356,6 +356,35 @@ public static class AttributeTemplateCatalog
             E("isInitial", "IsInitial", false, "Boolean"),
             E("supportedServices", "SupportedServices"),
         };
+        // Per-user Microsoft 365 usage — five Graph usage reports merged by UPN
+        // (Office365ActiveUserDetail spine + OneDrive/Mailbox storage + M365 apps +
+        // Teams activity). SourceUniqueId = UPN (joins to the IC user object).
+        c[(Systems.EntraID, "m365usage")] = new[]
+        {
+            E("UserPrincipalName", "SourceUniqueId", true),
+            E("DisplayName", "DisplayName"),
+            E("HasExchangeLicense", "HasExchangeLicense", false, "Boolean"),
+            E("HasOneDriveLicense", "HasOneDriveLicense", false, "Boolean"),
+            E("HasSharePointLicense", "HasSharePointLicense", false, "Boolean"),
+            E("HasTeamsLicense", "HasTeamsLicense", false, "Boolean"),
+            E("HasYammerLicense", "HasYammerLicense", false, "Boolean"),
+            E("ExchangeLastActivityDate", "ExchangeLastActivityDate", false, "DateTime"),
+            E("OneDriveLastActivityDate", "OneDriveLastActivityDate", false, "DateTime"),
+            E("SharePointLastActivityDate", "SharePointLastActivityDate", false, "DateTime"),
+            E("TeamsLastActivityDate", "TeamsLastActivityDate", false, "DateTime"),
+            E("YammerLastActivityDate", "YammerLastActivityDate", false, "DateTime"),
+            E("M365AppLastActivityDate", "M365AppLastActivityDate", false, "DateTime"),
+            E("OneDriveStorageUsedBytes", "OneDriveStorageUsedBytes", false, "Integer"),
+            E("OneDriveStorageAllocatedBytes", "OneDriveStorageAllocatedBytes", false, "Integer"),
+            E("MailboxStorageUsedBytes", "MailboxStorageUsedBytes", false, "Integer"),
+            E("MailboxQuotaBytes", "MailboxQuotaBytes", false, "Integer"),
+            E("TeamsChatMessages", "TeamsChatMessages", false, "Integer"),
+            E("TeamsPrivateChatMessages", "TeamsPrivateChatMessages", false, "Integer"),
+            E("TeamsCallCount", "TeamsCallCount", false, "Integer"),
+            E("TeamsMeetingCount", "TeamsMeetingCount", false, "Integer"),
+            E("AssignedProducts", "AssignedProducts"),
+            E("ReportRefreshDate", "ReportRefreshDate", false, "DateTime"),
+        };
 
         // ───────────────────────────── SharePoint ──────────────────────────────
         c[(Systems.SharePoint, "Site")] = new[]
@@ -367,6 +396,23 @@ public static class AttributeTemplateCatalog
             E("description", "Description"),
             E("createdDateTime", "WhenCreated"),
             E("lastModifiedDateTime", "WhenChanged"),
+            // Storage joined from getSharePointSiteUsageDetail (Reports.Read.All).
+            E("StorageUsedBytes", "StorageUsedBytes", false, "Integer"),
+            E("StorageAllocatedBytes", "StorageAllocatedBytes", false, "Integer"),
+            E("FileCount", "FileCount", false, "Integer"),
+        };
+        // Per-site SharePoint groups. NOTE: enumeration is deferred in the Graph-
+        // only connector (requires the SharePoint REST API); the template is
+        // pre-seeded so the mapping grid is ready when REST enumeration lands.
+        c[(Systems.SharePoint, "sharepointgroup")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("loginName", "CN"),
+            E("description", "Description"),
+            E("siteId", "SiteId"),
+            E("siteName", "SiteName"),
+            E("ownerTitle", "OwnerTitle"),
         };
         c[(Systems.SharePoint, "Team")] = new[]
         {

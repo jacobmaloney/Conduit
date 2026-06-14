@@ -2816,6 +2816,7 @@
             options.Add(new("servicePrincipal", "Service Principal"));
             options.Add(new("application", "Application"));
             options.Add(new("device", "Device"));
+            options.Add(new("m365usage", "M365 Usage (per-user)"));
         }
         if (!string.IsNullOrWhiteSpace(currentClass)
             && !options.Any(o => string.Equals(o.Value, currentClass, StringComparison.OrdinalIgnoreCase)))

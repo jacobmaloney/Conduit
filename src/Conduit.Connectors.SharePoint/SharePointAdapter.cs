@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -108,6 +109,15 @@ public sealed class SharePointSource : IConnectorSource
         _logger = logger;
     }
 
+    // ── Least-privilege app-registration scopes (application permissions) ────────
+    //   Sites.Read.All   — /sites enumeration + the getSharePointSiteUsageDetail
+    //                       storage report used to enrich "site" objects.
+    //   Group.Read.All   — Microsoft 365 / Teams group reads.
+    //   Reports.Read.All — usage reports (site storage). Optional; a 403 only
+    //                      drops storage enrichment, the site still emits.
+    // Per-class 403 handling: a missing scope warns + skips that class/report,
+    // it never aborts the whole run.
+
     public async IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
@@ -117,6 +127,22 @@ public sealed class SharePointSource : IConnectorSource
             ?? throw new InvalidOperationException($"No 'sharepoint' credential for tenant {_tenantId}.");
         var client = SharePointCredentialReader.CreateClient(creds);
         var emitted = 0;
+
+        // SharePoint group enumeration is an HONEST DEFERRAL. There is no clean
+        // Graph v1.0 path for per-site SharePoint groups (Owners/Members/Visitors
+        // and custom site groups): /sites/{id}/permissions returns role
+        // assignments by appId/principal, not the SharePoint group objects, and the
+        // SP-group beta surface is unreliable. SharePoint groups live in the
+        // classic SharePoint REST API (_api/web/sitegroups), which this Graph-only
+        // connector deliberately does not call. Rather than fabricate a broken
+        // Graph request, we yield nothing and say so plainly.
+        if (string.Equals(objectClass, "sharepointgroup", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation(
+                "SharePoint: 'sharepointgroup' enumeration is deferred — per-site SharePoint groups require the " +
+                "SharePoint REST API (_api/web/sitegroups), not Graph v1.0. This Graph-only connector emits nothing for this class.");
+            yield break;
+        }
 
         if (string.Equals(objectClass, "Team", StringComparison.OrdinalIgnoreCase))
         {
@@ -150,7 +176,12 @@ public sealed class SharePointSource : IConnectorSource
             yield break;
         }
 
-        // Default: Site
+        // Default: Site. The /sites list carries NO storage figures — those come
+        // from the getSharePointSiteUsageDetail usage report, which we fetch once
+        // and join by site URL. A 403 on the report (missing Reports.Read.All)
+        // skips enrichment with a warning but every site still emits.
+        var storageByUrl = await TryGetSiteStorageAsync(creds, cancellationToken);
+
         var sites = await client.Sites.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
         while (sites?.Value != null)
         {
@@ -169,6 +200,13 @@ public sealed class SharePointSource : IConnectorSource
                     ["name"] = s.Name,
                     ["whenCreated"] = s.CreatedDateTime?.ToString("o")
                 };
+                if (storageByUrl is not null && !string.IsNullOrEmpty(s.WebUrl) &&
+                    storageByUrl.TryGetValue(s.WebUrl!, out var storage))
+                {
+                    if (storage.UsedBytes.HasValue) attrs["StorageUsedBytes"] = storage.UsedBytes.Value;
+                    if (storage.AllocatedBytes.HasValue) attrs["StorageAllocatedBytes"] = storage.AllocatedBytes.Value;
+                    if (storage.FileCount.HasValue) attrs["FileCount"] = storage.FileCount.Value;
+                }
                 emitted++;
                 yield return new ConnectorObject
                 {
@@ -180,6 +218,98 @@ public sealed class SharePointSource : IConnectorSource
             if (string.IsNullOrEmpty(sites.OdataNextLink)) break;
             sites = await client.Sites.WithUrl(sites.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
         }
+    }
+
+    private readonly record struct SiteStorage(long? UsedBytes, long? AllocatedBytes, long? FileCount);
+
+    /// <summary>
+    /// Fetches getSharePointSiteUsageDetail(period='D30') as JSON and indexes
+    /// storage figures by site URL. Returns null when the report 403s (missing
+    /// Reports.Read.All) so the caller can warn + skip enrichment without aborting.
+    /// Uses a raw bearer token because the Graph SDK report endpoints are awkward.
+    /// </summary>
+    private async Task<Dictionary<string, SiteStorage>?> TryGetSiteStorageAsync(
+        SharePointCredentials creds, CancellationToken cancellationToken)
+    {
+        var credential = new ClientSecretCredential(creds.TenantId, creds.ClientId, creds.ClientSecret);
+        var ctx = new Azure.Core.TokenRequestContext(new[] { "https://graph.microsoft.com/.default" });
+        var token = (await credential.GetTokenAsync(ctx, cancellationToken)).Token;
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        var byUrl = new Dictionary<string, SiteStorage>(StringComparer.OrdinalIgnoreCase);
+        var url = "https://graph.microsoft.com/v1.0/reports/getSharePointSiteUsageDetail(period='D30')?$format=application/json";
+
+        while (!string.IsNullOrEmpty(url))
+        {
+            using var resp = await http.GetAsync(url, cancellationToken);
+            if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                _logger.LogWarning(
+                    "SharePoint: skipping site-storage enrichment — app registration lacks scope Reports.Read.All (403). Sites still emit without storage.");
+                return null;
+            }
+            resp.EnsureSuccessStatusCode();
+
+            var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("value", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in arr.EnumerateArray())
+                {
+                    var siteUrl = el.TryGetProperty("siteUrl", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
+                    if (string.IsNullOrEmpty(siteUrl)) continue;
+                    byUrl[siteUrl!] = new SiteStorage(
+                        ReadLong(el, "storageUsedInBytes"),
+                        ReadLong(el, "storageAllocatedInBytes"),
+                        ReadLong(el, "fileCount"));
+                }
+            }
+
+            var nextLink = root.TryGetProperty("@odata.nextLink", out var next) && next.ValueKind == JsonValueKind.String
+                ? next.GetString()
+                : null;
+            if (!string.IsNullOrEmpty(nextLink) && !IsGraphHost(nextLink!))
+            {
+                _logger.LogWarning(
+                    "SharePoint: refusing to follow non-Graph nextLink host {Host} on site-storage report; stopping paging.",
+                    SafeHost(nextLink!));
+                break;
+            }
+            url = nextLink;
+        }
+
+        return byUrl;
+    }
+
+    /// <summary>
+    /// True only when <paramref name="url"/> is an absolute HTTPS URL whose host is
+    /// graph.microsoft.com (or a subdomain ending in ".graph.microsoft.com"). Guards
+    /// the @odata.nextLink follow so a tampered/off-host nextLink can never receive
+    /// the bearer token carried on HttpClient.DefaultRequestHeaders.
+    /// </summary>
+    private static bool IsGraphHost(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        if (!string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase)) return false;
+        var host = uri.Host;
+        return string.Equals(host, "graph.microsoft.com", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".graph.microsoft.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Host for log output only — never the full URL (it can carry tokens).</summary>
+    private static string SafeHost(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : "(unparseable)";
+
+    private static long? ReadLong(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var el) || el.ValueKind == JsonValueKind.Null) return null;
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt64(out var n)) return n;
+        if (el.ValueKind == JsonValueKind.String && long.TryParse(el.GetString(), out var s)) return s;
+        return null;
     }
 
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)

@@ -99,6 +99,22 @@ public sealed class EntraIDSource : IConnectorSource
             yield break;
         }
 
+        // M365 per-user usage stream. Joins five Graph usage reports by UPN into
+        // one ConnectorObject per user. Uses raw HTTP with a bearer token (the
+        // Graph SDK report endpoints are awkward) and enforces the anonymization
+        // gate. Least-priv scope: Reports.Read.All.
+        if (string.Equals(objectClass, M365UsageReportSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            var usageSource = new M365UsageReportSource(await CreateCredentialAsync(), _logger);
+            await foreach (var obj in usageSource.ReadAsync(scope, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
         // Directory object types beyond User/Group. These already have attribute
         // templates (AttributeTemplateCatalog) and are advertised by
         // SyncProjectGenerator (EntraFull/EntraSecurity) but were previously
@@ -271,6 +287,11 @@ public sealed class EntraIDSource : IConnectorSource
         if (string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase))
         {
             stream = EnumerateGroupsDeltaAsync(cursor?.Token, holder, cancellationToken);
+        }
+        else if (string.Equals(objectClass, M365UsageReportSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            // Usage reports have no delta endpoint — always full-read, never advertise a cursor.
+            return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
         }
         else if (IsExtendedDirectoryClass(objectClass))
         {
@@ -1155,10 +1176,15 @@ public sealed class EntraIDSource : IConnectorSource
 
     private async Task<GraphServiceClient> CreateClientAsync()
     {
+        var credential = await CreateCredentialAsync();
+        return new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
+    }
+
+    private async Task<ClientSecretCredential> CreateCredentialAsync()
+    {
         var creds = await EntraIDCredentialReader.ReadAsync(_protector, _tenantId)
             ?? throw new InvalidOperationException($"No 'entraid' credential stored for tenant {_tenantId}.");
-        var credential = new ClientSecretCredential(creds.TenantId, creds.ClientId, creds.ClientSecret);
-        return new GraphServiceClient(credential, new[] { "https://graph.microsoft.com/.default" });
+        return new ClientSecretCredential(creds.TenantId, creds.ClientId, creds.ClientSecret);
     }
 
     private sealed class DeltaLinkHolder
