@@ -120,6 +120,8 @@ namespace Conduit.Sync.Templates
         private static readonly string[] DatabaseFull = { "user", "group" };
         // SQL Discovery emits exactly one class: scanned SQL hosts as computers.
         private static readonly string[] SqlDiscoveryClasses = { "computer" };
+        // Azure Resource Graph: subscriptions + resources (same set Core/Full).
+        private static readonly string[] AzureResourceGraphClasses = { "azuresubscription", "azureresource" };
 
         // ── Fallback for connectors with no dedicated set (Emulator, Csv, IdentityCenter) ──
         private static readonly string[] GenericCore = { "user", "group" };
@@ -167,6 +169,8 @@ namespace Conduit.Sync.Templates
                     return mode == GenerationMode.Core ? DatabaseCore : DatabaseFull;
                 case "SqlDiscovery":
                     return SqlDiscoveryClasses;
+                case "AzureResourceGraph":
+                    return AzureResourceGraphClasses;
                 default:
                     return mode == GenerationMode.Core ? GenericCore : GenericFull;
             }

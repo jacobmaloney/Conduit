@@ -421,6 +421,9 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 // policies/workflows/virtual-attributes fire (e.g. SoD denies a toxic role pairing
 // mid-sync). Requires the AR ADSI provider on the host that runs the connector.
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.ActiveRoles.ActiveRolesAdapter>();
+// Azure Resource Graph — source-only cloud-inventory reader (subscriptions + resources
+// via the ARG KQL endpoint over raw HTTP; surfaces Azure Hybrid Benefit markers).
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.AzureResourceGraph.AzureResourceGraphAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
 // Singleton: shared across the controller's fire-and-forget Run-Now task, the
 // scheduler, and every Blazor circuit so "Stop Sync" can trip the in-flight run.

@@ -19,6 +19,7 @@
     <ProjectReference Include="..\Conduit.Connectors.IdentityCenter\Conduit.Connectors.IdentityCenter.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.SqlDiscovery\Conduit.Connectors.SqlDiscovery.csproj" />
     <ProjectReference Include="..\Conduit.Connectors.ActiveRoles\Conduit.Connectors.ActiveRoles.csproj" />
+    <ProjectReference Include="..\Conduit.Connectors.AzureResourceGraph\Conduit.Connectors.AzureResourceGraph.csproj" />
     <ProjectReference Include="..\Conduit.Shared.SyncUI\Conduit.Shared.SyncUI.csproj" />
   </ItemGroup>
 

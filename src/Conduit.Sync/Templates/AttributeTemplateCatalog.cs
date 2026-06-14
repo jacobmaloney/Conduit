@@ -43,6 +43,7 @@ public static class AttributeTemplateCatalog
         public const string ActiveDirectory = "ActiveDirectory";
         public const string ActiveRoles = "ActiveRoles";
         public const string EntraID = "EntraID";
+        public const string AzureResourceGraph = "AzureResourceGraph";
         public const string Okta = "Okta";
         public const string GoogleWorkspace = "GoogleWorkspace";
         public const string Scim = "Scim";
@@ -384,6 +385,34 @@ public static class AttributeTemplateCatalog
             E("TeamsMeetingCount", "TeamsMeetingCount", false, "Integer"),
             E("AssignedProducts", "AssignedProducts"),
             E("ReportRefreshDate", "ReportRefreshDate", false, "DateTime"),
+        };
+
+        // ────────────────────────── Azure Resource Graph ───────────────────────
+        // Source-only cloud inventory. Non-person classes: id is the ARM resource id
+        // (stable join key → SourceUniqueId). Attributes pass through to same-named
+        // canonical keys where there is no person-shaped column.
+        c[(Systems.AzureResourceGraph, "azuresubscription")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("subscriptionId", "subscriptionId"),
+            E("tenantId", "tenantId"),
+            E("state", "state"),
+        };
+        c[(Systems.AzureResourceGraph, "azureresource")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("name", "DisplayName", true),
+            E("resourceType", "resourceType"),
+            E("location", "location"),
+            E("subscriptionId", "subscriptionId"),
+            E("resourceGroup", "resourceGroup"),
+            E("sku", "sku"),
+            E("tags", "tags"),
+            E("licenseType", "licenseType"),
+            E("azureHybridBenefit", "azureHybridBenefit", false, "Boolean"),
+            E("size", "size"),
+            E("vCores", "vCores"),
         };
 
         // ───────────────────────────── SharePoint ──────────────────────────────
