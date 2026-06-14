@@ -238,9 +238,11 @@ public sealed class SharePointSource : IConnectorSource
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        http.DefaultRequestHeaders.Accept.Add(
+            new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
         var byUrl = new Dictionary<string, SiteStorage>(StringComparer.OrdinalIgnoreCase);
-        var url = "https://graph.microsoft.com/v1.0/reports/getSharePointSiteUsageDetail(period='D30')?$format=application/json";
+        var url = "https://graph.microsoft.com/beta/reports/getSharePointSiteUsageDetail(period='D30')?$format=application/json";
 
         while (!string.IsNullOrEmpty(url))
         {

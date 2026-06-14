@@ -48,7 +48,7 @@ internal sealed class M365UsageReportSource
 {
     public const string ObjectClassName = "m365usage";
     private const string Period = "D30";
-    private const string GraphBase = "https://graph.microsoft.com/v1.0";
+    private const string GraphBase = "https://graph.microsoft.com/beta";
 
     private readonly ClientSecretCredential _credential;
     private readonly ILogger _logger;
@@ -67,6 +67,8 @@ internal sealed class M365UsageReportSource
         var token = await AcquireTokenAsync(cancellationToken);
         http.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        http.DefaultRequestHeaders.Accept.Add(
+            new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
         // SPINE — without it there is nothing to join onto. A 403 here aborts the
         // whole m365usage stream (loudly); a 403 on any later report only drops
