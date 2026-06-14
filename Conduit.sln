@@ -51,6 +51,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.ActiveRo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.ActiveRoles.Cli", "src\Conduit.Connectors.ActiveRoles.Cli\Conduit.Connectors.ActiveRoles.Cli.csproj", "{FC582C54-B092-4E7A-98D2-DB3234D02364}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.EntraID.Tests", "tests\Conduit.Connectors.EntraID.Tests\Conduit.Connectors.EntraID.Tests.csproj", "{FE84E26A-A840-438B-96D4-C4CE300C1311}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -337,6 +341,18 @@ Global
 		{FC582C54-B092-4E7A-98D2-DB3234D02364}.Release|x64.Build.0 = Release|Any CPU
 		{FC582C54-B092-4E7A-98D2-DB3234D02364}.Release|x86.ActiveCfg = Release|Any CPU
 		{FC582C54-B092-4E7A-98D2-DB3234D02364}.Release|x86.Build.0 = Release|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Debug|x64.Build.0 = Debug|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Debug|x86.Build.0 = Debug|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Release|x64.ActiveCfg = Release|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Release|x64.Build.0 = Release|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Release|x86.ActiveCfg = Release|Any CPU
+		{FE84E26A-A840-438B-96D4-C4CE300C1311}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -365,5 +381,6 @@ Global
 		{59B5492F-F2FD-4261-BFBA-519FC057FF24} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
 		{2F0561C8-B4C6-40DB-AFBE-91543B34D786} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
 		{FC582C54-B092-4E7A-98D2-DB3234D02364} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
+		{FE84E26A-A840-438B-96D4-C4CE300C1311} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

@@ -99,6 +99,24 @@ public sealed class EntraIDSource : IConnectorSource
             yield break;
         }
 
+        // Directory object types beyond User/Group. These already have attribute
+        // templates (AttributeTemplateCatalog) and are advertised by
+        // SyncProjectGenerator (EntraFull/EntraSecurity) but were previously
+        // falling through to the User enumeration. Each routes to a dedicated
+        // enumerator that pages the matching Graph collection and emits
+        // ObjectClass = the generator's exact native string.
+        var directoryStream = DispatchDirectoryClass(objectClass, client, filter, pageSize, cancellationToken);
+        if (directoryStream is not null)
+        {
+            await foreach (var obj in directoryStream)
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
         // Default: User
         await foreach (var obj in EnumerateUsersAsync(client, filter, pageSize, cancellationToken))
         {
@@ -106,6 +124,37 @@ public sealed class EntraIDSource : IConnectorSource
             emitted++;
             yield return obj;
         }
+    }
+
+    /// <summary>
+    /// Routes the 8 extended Entra directory object classes to their dedicated
+    /// enumerator. Returns null when objectClass is none of them (caller falls
+    /// through to the User default). Matching is OrdinalIgnoreCase against the
+    /// generator's native strings; the emitted ObjectClass preserves the
+    /// generator's exact camelCase (e.g. "servicePrincipal", "oAuth2PermissionGrant")
+    /// so the wizard &lt;select&gt; binds without crashing.
+    /// </summary>
+    private IAsyncEnumerable<ConnectorObject>? DispatchDirectoryClass(
+        string objectClass, GraphServiceClient client, string? filter, int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(objectClass, "application", StringComparison.OrdinalIgnoreCase))
+            return EnumerateApplicationsAsync(client, filter, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "servicePrincipal", StringComparison.OrdinalIgnoreCase))
+            return EnumerateServicePrincipalsAsync(client, filter, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "directoryRole", StringComparison.OrdinalIgnoreCase))
+            return EnumerateDirectoryRolesAsync(client, filter, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "device", StringComparison.OrdinalIgnoreCase))
+            return EnumerateDevicesAsync(client, filter, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "administrativeUnit", StringComparison.OrdinalIgnoreCase))
+            return EnumerateAdministrativeUnitsAsync(client, filter, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "conditionalAccessPolicy", StringComparison.OrdinalIgnoreCase))
+            return EnumerateConditionalAccessPoliciesAsync(client, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "oAuth2PermissionGrant", StringComparison.OrdinalIgnoreCase))
+            return EnumerateOAuth2PermissionGrantsAsync(client, filter, pageSize, cancellationToken);
+        if (string.Equals(objectClass, "domain", StringComparison.OrdinalIgnoreCase))
+            return EnumerateDomainsAsync(client, cancellationToken);
+        return null;
     }
 
     /// <summary>
@@ -220,9 +269,24 @@ public sealed class EntraIDSource : IConnectorSource
         IAsyncEnumerable<ConnectorObject> stream;
 
         if (string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase))
+        {
             stream = EnumerateGroupsDeltaAsync(cursor?.Token, holder, cancellationToken);
+        }
+        else if (IsExtendedDirectoryClass(objectClass))
+        {
+            // The 8 extended directory classes do not implement delta cursors in
+            // this connector. directoryRole / conditionalAccessPolicy /
+            // oAuth2PermissionGrant / domain have NO Graph delta endpoint at all;
+            // application / servicePrincipal / device / administrativeUnit do but
+            // we deliberately full-read each run rather than persist 8 separate
+            // cursors now. Route the delta path to the same full enumerator and
+            // never advertise a new cursor (IsIncremental stays false).
+            return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
+        }
         else
+        {
             stream = EnumerateUsersDeltaAsync(cursor?.Token, holder, cancellationToken);
+        }
 
         return Task.FromResult(new SyncEnumerationResult
         {
@@ -231,6 +295,35 @@ public sealed class EntraIDSource : IConnectorSource
                 ? null
                 : new SyncCursor { Token = holder.DeltaLink! },
             IsIncremental = isIncremental
+        });
+    }
+
+    /// <summary>
+    /// True for the 8 directory classes that have no delta implementation here
+    /// and must be full-read on every run.
+    /// </summary>
+    internal static bool IsExtendedDirectoryClass(string objectClass) =>
+        string.Equals(objectClass, "application", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "servicePrincipal", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "directoryRole", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "device", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "administrativeUnit", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "conditionalAccessPolicy", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "oAuth2PermissionGrant", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(objectClass, "domain", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Delta-path entry for the extended directory classes: defers to the full
+    /// ReadAsync enumeration and reports IsIncremental=false with no new cursor.
+    /// </summary>
+    private Task<SyncEnumerationResult> EnumerateFullForExtendedClassAsync(
+        string objectClass, SyncProjectScope scope, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(new SyncEnumerationResult
+        {
+            Objects = ReadAsync(objectClass, scope, cancellationToken),
+            ResolveNewCursor = () => null,
+            IsIncremental = false
         });
     }
 
@@ -311,6 +404,269 @@ public sealed class EntraIDSource : IConnectorSource
             if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
             page = await client.Groups.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
         }
+    }
+
+    // ─── extended directory object enumerators ────────────────────────────
+    // Each pages the matching Graph collection, projects ONLY the template
+    // attributes ($select), and emits ObjectClass = the generator's native
+    // camelCase string. A per-class 403 (missing app-registration scope) is
+    // swallowed with a clear WARNING and yields nothing rather than failing the
+    // whole run; any non-403 Graph error propagates.
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateApplicationsAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ApplicationCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.Applications.GetAsync(req =>
+            {
+                req.QueryParameters.Top = pageSize;
+                req.QueryParameters.Select = ApplicationSelectFields;
+                if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+            }, cancellationToken),
+            r => page = r, "application", "Application.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var a in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(a.Id)) continue;
+                yield return ConvertApplication(a);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Applications.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateServicePrincipalsAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ServicePrincipalCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.ServicePrincipals.GetAsync(req =>
+            {
+                req.QueryParameters.Top = pageSize;
+                req.QueryParameters.Select = ServicePrincipalSelectFields;
+                if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+            }, cancellationToken),
+            r => page = r, "servicePrincipal", "Application.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var sp in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(sp.Id)) continue;
+                yield return ConvertServicePrincipal(sp);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.ServicePrincipals.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    // Only ACTIVATED directory roles return rows from /directoryRoles.
+    private async IAsyncEnumerable<ConnectorObject> EnumerateDirectoryRolesAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        DirectoryRoleCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.DirectoryRoles.GetAsync(req =>
+            {
+                req.QueryParameters.Select = DirectoryRoleSelectFields;
+            }, cancellationToken),
+            r => page = r, "directoryRole", "RoleManagement.Read.Directory"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var r in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(r.Id)) continue;
+                yield return ConvertDirectoryRole(r);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.DirectoryRoles.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateDevicesAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        DeviceCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.Devices.GetAsync(req =>
+            {
+                req.QueryParameters.Top = pageSize;
+                req.QueryParameters.Select = DeviceSelectFields;
+                if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+            }, cancellationToken),
+            r => page = r, "device", "Device.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var d in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(d.Id)) continue;
+                yield return ConvertDevice(d);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Devices.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    // AdministrativeUnits hang off /directory, not the top-level client.
+    private async IAsyncEnumerable<ConnectorObject> EnumerateAdministrativeUnitsAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        AdministrativeUnitCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.Directory.AdministrativeUnits.GetAsync(req =>
+            {
+                req.QueryParameters.Top = pageSize;
+                req.QueryParameters.Select = AdministrativeUnitSelectFields;
+                if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+            }, cancellationToken),
+            r => page = r, "administrativeUnit", "AdministrativeUnit.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var au in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(au.Id)) continue;
+                yield return ConvertAdministrativeUnit(au);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Directory.AdministrativeUnits.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateConditionalAccessPoliciesAsync(
+        GraphServiceClient client, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ConditionalAccessPolicyCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.Identity.ConditionalAccess.Policies.GetAsync(req =>
+            {
+                req.QueryParameters.Top = pageSize;
+                req.QueryParameters.Select = ConditionalAccessPolicySelectFields;
+            }, cancellationToken),
+            r => page = r, "conditionalAccessPolicy", "Policy.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var p in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(p.Id)) continue;
+                yield return ConvertConditionalAccessPolicy(p);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Identity.ConditionalAccess.Policies.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> EnumerateOAuth2PermissionGrantsAsync(
+        GraphServiceClient client, string? filter, int pageSize,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        OAuth2PermissionGrantCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.Oauth2PermissionGrants.GetAsync(req =>
+            {
+                req.QueryParameters.Top = pageSize;
+                req.QueryParameters.Select = OAuth2PermissionGrantSelectFields;
+                if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
+            }, cancellationToken),
+            r => page = r, "oAuth2PermissionGrant", "Directory.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var g in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(g.Id)) continue;
+                yield return ConvertOAuth2PermissionGrant(g);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Oauth2PermissionGrants.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    // Domain's id IS the domain name (Graph keys domains by name). No $top/$filter
+    // — the domains collection is small and unpaged in practice.
+    private async IAsyncEnumerable<ConnectorObject> EnumerateDomainsAsync(
+        GraphServiceClient client,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        DomainCollectionResponse? page = null;
+        if (!await TryFirstPageAsync(
+            () => client.Domains.GetAsync(req =>
+            {
+                req.QueryParameters.Select = DomainSelectFields;
+            }, cancellationToken),
+            r => page = r, "domain", "Domain.Read.All"))
+            yield break;
+
+        while (page?.Value != null)
+        {
+            foreach (var d in page.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(d.Id)) continue;
+                yield return ConvertDomain(d);
+            }
+            if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
+            page = await client.Domains.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Runs the first-page Graph fetch and assigns the result via <paramref name="assign"/>.
+    /// Returns true if the caller should continue paging. A 403 / Forbidden /
+    /// Authorization_RequestDenied ODataError (app registration lacks the scope)
+    /// is logged at Warning with the scope hint and returns false (yield nothing);
+    /// any other error propagates. Never logs token/secret material.
+    /// </summary>
+    private async Task<bool> TryFirstPageAsync<TResponse>(
+        Func<Task<TResponse?>> fetch, Action<TResponse?> assign,
+        string objectClass, string scopeHint)
+    {
+        try
+        {
+            assign(await fetch());
+            return true;
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+        {
+            _logger.LogWarning(
+                "EntraID: skipping class {ObjectClass} — app registration lacks scope {Scope} (403)",
+                objectClass, scopeHint);
+            return false;
+        }
+    }
+
+    private static bool IsForbidden(Microsoft.Graph.Models.ODataErrors.ODataError ex)
+    {
+        if (ex.ResponseStatusCode == 403) return true;
+        var code = ex.Error?.Code;
+        return string.Equals(code, "Authorization_RequestDenied", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(code, "Forbidden", StringComparison.OrdinalIgnoreCase);
     }
 
     private async IAsyncEnumerable<ConnectorObject> EnumerateUsersDeltaAsync(
@@ -453,6 +809,60 @@ public sealed class EntraIDSource : IConnectorSource
     {
         "id", "displayName", "description", "mail", "mailEnabled",
         "securityEnabled", "onPremisesSamAccountName", "mailNickname"
+    };
+
+    // ─── extended directory $select sets (template attributes only) ────────
+    // Deliberately NO keyCredentials / passwordCredentials on application or
+    // servicePrincipal — secrets are never selected, emitted, or logged.
+    private static readonly string[] ApplicationSelectFields = new[]
+    {
+        "id", "displayName", "appId", "signInAudience", "publisherDomain",
+        "description", "identifierUris", "tags", "createdDateTime"
+    };
+
+    private static readonly string[] ServicePrincipalSelectFields = new[]
+    {
+        "id", "displayName", "appId", "servicePrincipalType", "appDisplayName",
+        "servicePrincipalNames", "accountEnabled"
+        // NOTE: createdDateTime (template WhenCreated) is not a property on the
+        // Graph 5.61 ServicePrincipal model — omitted; template field stays unset.
+    };
+
+    private static readonly string[] DirectoryRoleSelectFields = new[]
+    {
+        "id", "displayName", "description", "roleTemplateId"
+    };
+
+    private static readonly string[] DeviceSelectFields = new[]
+    {
+        "id", "displayName", "deviceId", "operatingSystem", "operatingSystemVersion",
+        "trustType", "managementType", "manufacturer", "model",
+        "isManaged", "isCompliant", "accountEnabled"
+        // NOTE: lastSignInDateTime / createdDateTime (template LastLogonTimestamp /
+        // WhenCreated) are not directly selectable top-level Device properties on
+        // the Graph 5.61 model (the entity exposes approximateLastSignInDateTime /
+        // registrationDateTime instead) — omitted; those template fields stay unset.
+    };
+
+    private static readonly string[] AdministrativeUnitSelectFields = new[]
+    {
+        "id", "displayName", "description", "visibility"
+    };
+
+    private static readonly string[] ConditionalAccessPolicySelectFields = new[]
+    {
+        "id", "displayName", "state", "createdDateTime", "modifiedDateTime"
+    };
+
+    private static readonly string[] OAuth2PermissionGrantSelectFields = new[]
+    {
+        "id", "clientId", "consentType", "principalId", "resourceId", "scope"
+    };
+
+    private static readonly string[] DomainSelectFields = new[]
+    {
+        "id", "authenticationType", "isDefault", "isVerified",
+        "isInitial", "supportedServices"
     };
 
     private static ConnectorObject ConvertUser(GraphUser u)
@@ -601,6 +1011,134 @@ public sealed class EntraIDSource : IConnectorSource
         }
         return obj;
     }
+
+    // ─── extended directory converters ────────────────────────────────────
+    // SourceId is the directory object id for every type (stable across runs so
+    // re-runs UPDATE, not duplicate). For application/servicePrincipal that is
+    // `id`, NOT appId. For domain `id` is the domain name (Graph's natural key).
+    // Attributes["objectClass"] mirrors the generator's native camelCase string.
+
+    private static ConnectorObject ConvertApplication(Application a)
+    {
+        var attrs = NewDirectoryAttrs("application", a.Id);
+        Set(attrs, "displayName", a.DisplayName);
+        Set(attrs, "appId", a.AppId);
+        Set(attrs, "signInAudience", a.SignInAudience);
+        Set(attrs, "publisherDomain", a.PublisherDomain);
+        Set(attrs, "description", a.Description);
+        if (a.IdentifierUris is { Count: > 0 })
+            attrs["identifierUris"] = string.Join(";", a.IdentifierUris);
+        if (a.Tags is { Count: > 0 })
+            attrs["tags"] = string.Join(";", a.Tags);
+        if (a.CreatedDateTime.HasValue)
+            attrs["createdDateTime"] = a.CreatedDateTime.Value.ToString("o");
+        return DirectoryObject("application", a.Id, attrs);
+    }
+
+    private static ConnectorObject ConvertServicePrincipal(ServicePrincipal sp)
+    {
+        var attrs = NewDirectoryAttrs("servicePrincipal", sp.Id);
+        Set(attrs, "displayName", sp.DisplayName);
+        Set(attrs, "appId", sp.AppId);
+        Set(attrs, "servicePrincipalType", sp.ServicePrincipalType);
+        Set(attrs, "appDisplayName", sp.AppDisplayName);
+        if (sp.ServicePrincipalNames is { Count: > 0 })
+            attrs["servicePrincipalNames"] = string.Join(";", sp.ServicePrincipalNames);
+        if (sp.AccountEnabled.HasValue)
+            attrs["accountEnabled"] = sp.AccountEnabled.Value;
+        return DirectoryObject("servicePrincipal", sp.Id, attrs);
+    }
+
+    private static ConnectorObject ConvertDirectoryRole(DirectoryRole r)
+    {
+        var attrs = NewDirectoryAttrs("directoryRole", r.Id);
+        Set(attrs, "displayName", r.DisplayName);
+        Set(attrs, "description", r.Description);
+        Set(attrs, "roleTemplateId", r.RoleTemplateId);
+        return DirectoryObject("directoryRole", r.Id, attrs);
+    }
+
+    private static ConnectorObject ConvertDevice(Device d)
+    {
+        var attrs = NewDirectoryAttrs("device", d.Id);
+        Set(attrs, "displayName", d.DisplayName);
+        Set(attrs, "deviceId", d.DeviceId);
+        Set(attrs, "operatingSystem", d.OperatingSystem);
+        Set(attrs, "operatingSystemVersion", d.OperatingSystemVersion);
+        Set(attrs, "trustType", d.TrustType);
+        Set(attrs, "manufacturer", d.Manufacturer);
+        Set(attrs, "model", d.Model);
+        if (d.IsManaged.HasValue) attrs["isManaged"] = d.IsManaged.Value;
+        if (d.IsCompliant.HasValue) attrs["isCompliant"] = d.IsCompliant.Value;
+        if (d.AccountEnabled.HasValue) attrs["accountEnabled"] = d.AccountEnabled.Value;
+        return DirectoryObject("device", d.Id, attrs);
+    }
+
+    private static ConnectorObject ConvertAdministrativeUnit(AdministrativeUnit au)
+    {
+        var attrs = NewDirectoryAttrs("administrativeUnit", au.Id);
+        Set(attrs, "displayName", au.DisplayName);
+        Set(attrs, "description", au.Description);
+        Set(attrs, "visibility", au.Visibility);
+        return DirectoryObject("administrativeUnit", au.Id, attrs);
+    }
+
+    private static ConnectorObject ConvertConditionalAccessPolicy(ConditionalAccessPolicy p)
+    {
+        var attrs = NewDirectoryAttrs("conditionalAccessPolicy", p.Id);
+        Set(attrs, "displayName", p.DisplayName);
+        if (p.State.HasValue) attrs["state"] = p.State.Value.ToString();
+        if (p.CreatedDateTime.HasValue)
+            attrs["createdDateTime"] = p.CreatedDateTime.Value.ToString("o");
+        if (p.ModifiedDateTime.HasValue)
+            attrs["modifiedDateTime"] = p.ModifiedDateTime.Value.ToString("o");
+        return DirectoryObject("conditionalAccessPolicy", p.Id, attrs);
+    }
+
+    // No displayName on this Graph type — template's DisplayName stays unset.
+    private static ConnectorObject ConvertOAuth2PermissionGrant(OAuth2PermissionGrant g)
+    {
+        var attrs = NewDirectoryAttrs("oAuth2PermissionGrant", g.Id);
+        Set(attrs, "clientId", g.ClientId);
+        Set(attrs, "consentType", g.ConsentType);
+        Set(attrs, "principalId", g.PrincipalId);
+        Set(attrs, "resourceId", g.ResourceId);
+        Set(attrs, "scope", g.Scope);
+        return DirectoryObject("oAuth2PermissionGrant", g.Id, attrs);
+    }
+
+    // Domain's id IS the domain name; mirror it to displayName so the template's
+    // DisplayName mapping has a value (the Graph type has no displayName).
+    private static ConnectorObject ConvertDomain(Domain d)
+    {
+        var attrs = NewDirectoryAttrs("domain", d.Id);
+        Set(attrs, "displayName", d.Id);
+        Set(attrs, "authenticationType", d.AuthenticationType);
+        if (d.IsDefault.HasValue) attrs["isDefault"] = d.IsDefault.Value;
+        if (d.IsVerified.HasValue) attrs["isVerified"] = d.IsVerified.Value;
+        if (d.IsInitial.HasValue) attrs["isInitial"] = d.IsInitial.Value;
+        if (d.SupportedServices is { Count: > 0 })
+            attrs["supportedServices"] = string.Join(";", d.SupportedServices);
+        return DirectoryObject("domain", d.Id, attrs);
+    }
+
+    private static Dictionary<string, object?> NewDirectoryAttrs(string nativeClass, string? id)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = nativeClass
+        };
+        if (!string.IsNullOrEmpty(id)) attrs["id"] = id;
+        return attrs;
+    }
+
+    private static ConnectorObject DirectoryObject(string nativeClass, string? id, Dictionary<string, object?> attrs) =>
+        new ConnectorObject
+        {
+            SourceId = id ?? string.Empty,
+            ObjectClass = nativeClass,
+            Attributes = attrs
+        };
 
     private static bool IsRemoved(IDictionary<string, object>? additional)
     {
