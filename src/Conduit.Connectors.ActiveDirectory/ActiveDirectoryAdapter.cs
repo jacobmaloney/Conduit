@@ -70,6 +70,20 @@ public sealed class ActiveDirectoryAdapter : IConnectorAdapter
             {
                 new CredentialFieldSpec { Key = "Username", Label = "Username (UPN or DOMAIN\\user)", IsRequired = true },
                 new CredentialFieldSpec { Key = "Password", Label = "Password", IsRequired = true, IsSecret = true },
+                new CredentialFieldSpec
+                {
+                    Key = "ExpectedServerCertificateThumbprint",
+                    Label = "Pinned server certificate SHA-256 thumbprint",
+                    Placeholder = "hex, e.g. A1B2C3… (preferred over AllowUntrustedCertificate)",
+                    Help = "When set, accepts an untrusted-root chain only if the DC certificate's SHA-256 thumbprint matches exactly. Hostname is still enforced."
+                },
+                new CredentialFieldSpec
+                {
+                    Key = "AllowUntrustedCertificate",
+                    Label = "Allow untrusted server certificate (LAB ONLY)",
+                    IsBoolean = true,
+                    Help = "Last-resort blanket bypass of certificate validation. Defaults to off. Prefer thumbprint pinning."
+                },
             }
         }
     };

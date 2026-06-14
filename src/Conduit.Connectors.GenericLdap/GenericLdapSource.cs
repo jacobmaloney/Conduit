@@ -46,10 +46,11 @@ public sealed class GenericLdapSource : IConnectorSource
             ? scope.LdapFilter!
             : $"(objectClass={objectClass})";
 
-        var (host, port, _) = GenericLdapCredentialReader.ParseServerUrl(creds.ServerUrl);
+        var (host, port, secure) = GenericLdapCredentialReader.ParseServerUrl(creds.ServerUrl);
         using var conn = new LdapConnection(new LdapDirectoryIdentifier(host, port)) { AuthType = AuthType.Basic };
         conn.SessionOptions.ProtocolVersion = 3;
-        if (creds.UseTls) conn.SessionOptions.StartTransportLayerSecurity(null);
+        GenericLdapCredentialReader.ApplyTls(_logger, _tenantId, conn, host, secure, creds.UseTls,
+            creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint);
         conn.Credential = new NetworkCredential(creds.BindDN, creds.BindPassword);
         conn.Bind();
 
@@ -86,10 +87,11 @@ public sealed class GenericLdapSource : IConnectorSource
         {
             var creds = await GenericLdapCredentialReader.ReadAsync(_protector, _tenantId);
             if (creds is null) return new ConnectorTestResult { IsSuccessful = false, Message = "No 'ldap' credential stored." };
-            var (host, port, _) = GenericLdapCredentialReader.ParseServerUrl(creds.ServerUrl);
+            var (host, port, secure) = GenericLdapCredentialReader.ParseServerUrl(creds.ServerUrl);
             using var conn = new LdapConnection(new LdapDirectoryIdentifier(host, port)) { AuthType = AuthType.Basic };
             conn.SessionOptions.ProtocolVersion = 3;
-            if (creds.UseTls) conn.SessionOptions.StartTransportLayerSecurity(null);
+            GenericLdapCredentialReader.ApplyTls(_logger, _tenantId, conn, host, secure, creds.UseTls,
+            creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint);
             conn.Credential = new NetworkCredential(creds.BindDN, creds.BindPassword);
             conn.Bind();
             // RootDSE probe (vendor-agnostic — every RFC 4511 server returns

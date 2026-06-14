@@ -15,6 +15,40 @@ using Microsoft.Extensions.Logging;
 namespace Conduit.Connectors.ActiveDirectory;
 
 /// <summary>
+/// A live AD object re-resolved by objectGUID. The agent-write executor uses
+/// the AD-read class set + identity here to validate operations — never the
+/// client-supplied payload class or dnHint.
+/// </summary>
+public sealed record AdResolvedObject(
+    string DistinguishedName,
+    IReadOnlyList<string> ObjectClasses,
+    string? SamAccountName,
+    string? Name,
+    byte[]? ObjectSid)
+{
+    private static readonly string[] PrincipalClasses = { "user", "group", "computer", "inetOrgPerson" };
+
+    /// <summary>True if the object's class set contains the (case-insensitive) class.</summary>
+    public bool IsClass(string cls) =>
+        ObjectClasses.Any(c => string.Equals(c, cls, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The RID (last sub-authority) of objectSid, or null if unparseable.</summary>
+    public uint? Rid
+    {
+        get
+        {
+            var sid = ObjectSid;
+            if (sid is null || sid.Length < 8) return null;
+            int subAuthCount = sid[1];
+            if (subAuthCount == 0) return null;
+            int offset = 8 + (subAuthCount - 1) * 4;
+            if (offset + 4 > sid.Length) return null;
+            return BitConverter.ToUInt32(sid, offset); // little-endian on disk
+        }
+    }
+}
+
+/// <summary>
 /// AD sink via System.DirectoryServices.Protocols. Pumps ConnectorObjects into
 /// AD as create-or-update. Idempotent: looks up by sAMAccountName / userPrincipalName
 /// / distinguishedName / objectGUID and either ADDs or MODIFYs.
@@ -380,6 +414,198 @@ public sealed class ActiveDirectorySink : IConnectorSink
         }
     }
 
+    // ─── Agent-write step methods (IC "ApplyObjectWrite" routed through Conduit) ──
+    //
+    // IdentityCenter enqueues a single, GUID-addressed AD write; the poller hands
+    // it to AdAgentWriteExecutor which does ALL allow-listing/validation, then
+    // calls exactly one of these. The objectGuid is ALWAYS re-resolved here, on
+    // THIS connection — the client-supplied dnHint is never trusted as a write
+    // target. Each method binds, re-resolves, and operates; the connection lives
+    // only for the duration of the call.
+
+    /// <summary>
+    /// Re-resolve a target by objectGUID on this connection and report its actual
+    /// AD object class set, distinguishedName, sAMAccountName, name, and objectSid.
+    /// The executor validates class + privileged-group identity against THIS read,
+    /// never against the payload. Returns null if the GUID resolves to nothing.
+    /// </summary>
+    public async Task<AdResolvedObject?> ResolveByGuidAsync(string objectGuid, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(objectGuid, out _)) return null;
+        var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+            ?? throw new InvalidOperationException("Tenant not found.");
+        var creds = await ReadCredsAsync()
+            ?? throw new InvalidOperationException("No 'ldap' credential.");
+        using var conn = Bind(tenant.Domain, creds, out _);
+        return ResolveByGuid(conn, objectGuid);
+    }
+
+    /// <summary>
+    /// Replace a single, caller-validated attribute on the GUID-resolved object.
+    /// A null/empty value clears the attribute (Replace with no values = remove).
+    /// The attribute name MUST already be allow-listed by the executor — this
+    /// method does NOT re-check the name (it has no policy context), it only
+    /// re-resolves the write target by GUID.
+    /// </summary>
+    public async Task<SinkWriteResult> SetAttributeByGuidAsync(string objectGuid, string attributeName, string? value, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(attributeName))
+                return SinkWriteResult.Fail("Attribute name is required.");
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException("Tenant not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException("No 'ldap' credential.");
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var target = ResolveByGuid(conn, objectGuid);
+            if (target is null) return SinkWriteResult.Fail($"objectGUID '{objectGuid}' resolved to no AD object.");
+
+            var mod = new DirectoryAttributeModification
+            {
+                Name = attributeName,
+                Operation = DirectoryAttributeOperation.Replace
+            };
+            // Replace with no values = clear/remove the attribute.
+            if (!string.IsNullOrEmpty(value)) mod.Add(value);
+            conn.SendRequest(new ModifyRequest(target.DistinguishedName, mod));
+            return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD SetAttributeByGuid failed (tenant={TenantId}, attr={Attr})", _tenantId, attributeName);
+            return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>Enable or disable the GUID-resolved account (userAccountControl bit).</summary>
+    public async Task<SinkWriteResult> SetEnabledByGuidAsync(string objectGuid, bool enabled, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException("Tenant not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException("No 'ldap' credential.");
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var target = ResolveByGuid(conn, objectGuid);
+            if (target is null) return SinkWriteResult.Fail($"objectGUID '{objectGuid}' resolved to no AD object.");
+
+            // set:true => raise the ACCOUNTDISABLE bit (disable). enabled => clear it.
+            SetUacFlag(conn, target.DistinguishedName, ADS_UF_ACCOUNTDISABLE, set: !enabled);
+            return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD SetEnabledByGuid failed (tenant={TenantId})", _tenantId);
+            return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// DELTA add of one member to one group, both re-resolved by GUID on this
+    /// connection. Uses ModifyRequest with DirectoryAttributeOperation.Add on
+    /// 'member' — never the full-replace ReplaceMembers path (which would wipe
+    /// the group). Idempotent: an already-present member returns Skipped.
+    /// </summary>
+    public async Task<SinkWriteResult> AddGroupMemberAsync(string groupObjectGuid, string memberObjectGuid, CancellationToken cancellationToken)
+        => await ModifyMembershipByGuidAsync(groupObjectGuid, memberObjectGuid, DirectoryAttributeOperation.Add, cancellationToken);
+
+    /// <summary>
+    /// DELTA remove of one member from one group, both re-resolved by GUID on this
+    /// connection. Uses ModifyRequest with DirectoryAttributeOperation.Delete on
+    /// 'member'. Idempotent: a member that is not present returns Skipped.
+    /// </summary>
+    public async Task<SinkWriteResult> RemoveGroupMemberAsync(string groupObjectGuid, string memberObjectGuid, CancellationToken cancellationToken)
+        => await ModifyMembershipByGuidAsync(groupObjectGuid, memberObjectGuid, DirectoryAttributeOperation.Delete, cancellationToken);
+
+    private async Task<SinkWriteResult> ModifyMembershipByGuidAsync(
+        string groupObjectGuid, string memberObjectGuid, DirectoryAttributeOperation op, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException("Tenant not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException("No 'ldap' credential.");
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var group = ResolveByGuid(conn, groupObjectGuid);
+            if (group is null) return SinkWriteResult.Fail($"Group objectGUID '{groupObjectGuid}' resolved to no AD object.");
+            var member = ResolveByGuid(conn, memberObjectGuid);
+            if (member is null) return SinkWriteResult.Fail($"Member objectGUID '{memberObjectGuid}' resolved to no AD object.");
+
+            var mod = new DirectoryAttributeModification { Name = "member", Operation = op };
+            mod.Add(member.DistinguishedName);
+            try
+            {
+                conn.SendRequest(new ModifyRequest(group.DistinguishedName, mod));
+                return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
+            }
+            // Idempotency: Add of an existing member / Delete of an absent member.
+            catch (DirectoryOperationException dex) when (
+                dex.Response is { ResultCode: ResultCode.EntryAlreadyExists or ResultCode.AttributeOrValueExists }
+                && op == DirectoryAttributeOperation.Add)
+            {
+                return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
+            }
+            catch (DirectoryOperationException dex) when (
+                dex.Response is { ResultCode: ResultCode.NoSuchAttribute }
+                && op == DirectoryAttributeOperation.Delete)
+            {
+                return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD ModifyMembership ({Op}) failed (tenant={TenantId})", op, _tenantId);
+            return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Single subtree search by objectGUID returning the attributes the executor
+    /// needs to validate class + privileged-group identity. Filter is built from
+    /// the GUID's binary form only — no client string is interpolated.
+    /// </summary>
+    private static AdResolvedObject? ResolveByGuid(LdapConnection conn, string objectGuid)
+    {
+        if (!Guid.TryParse(objectGuid, out var g)) return null;
+        // Bind directly on AD's extended GUID DN with Base scope. An empty-base
+        // Subtree search throws NO_OBJECT against AD (the RootDSE is not a search
+        // root), so the GUID-DN form is both correct and a single round trip.
+        // The DN is built from the parsed GUID only — no client string interpolated.
+        var req = new SearchRequest(
+            distinguishedName: $"<GUID={g}>",
+            ldapFilter: "(objectClass=*)",
+            searchScope: SearchScope.Base,
+            attributeList: new[] { "distinguishedName", "objectClass", "sAMAccountName", "name", "objectSid" });
+        SearchResponse resp;
+        try { resp = (SearchResponse)conn.SendRequest(req); }
+        catch { return null; }
+        if (resp.Entries.Count == 0) return null;
+        var e = resp.Entries[0];
+
+        var classes = new List<string>();
+        if (e.Attributes.Contains("objectClass"))
+            foreach (var v in e.Attributes["objectClass"].GetValues(typeof(string)))
+                if (v is string s) classes.Add(s);
+
+        string? sam = e.Attributes.Contains("sAMAccountName") ? e.Attributes["sAMAccountName"][0]?.ToString() : null;
+        string? name = e.Attributes.Contains("name") ? e.Attributes["name"][0]?.ToString() : null;
+
+        byte[]? sid = null;
+        if (e.Attributes.Contains("objectSid"))
+        {
+            var raw = e.Attributes["objectSid"].GetValues(typeof(byte[]));
+            if (raw.Length > 0 && raw[0] is byte[] b) sid = b;
+        }
+
+        return new AdResolvedObject(e.DistinguishedName, classes, sam, name, sid);
+    }
+
     // ─── Phase 5 provisioning step methods ──────────────────────────────────
     //
     // CreateAsync — explicit create path (vs. UpsertAsync's create-or-update).
@@ -620,6 +846,11 @@ public sealed class ActiveDirectorySink : IConnectorSink
             AuthType = AuthType.Basic
         };
         connection.SessionOptions.ProtocolVersion = 3;
+        // Shared fail-closed server-certificate policy, wired identically to both
+        // the :636 SSL path and the :389 StartTLS upgrade path.
+        connection.SessionOptions.VerifyServerCertificate = Conduit.Sync.Security.LdapServerCertificateValidator.Build(
+            _logger, _tenantId.ToString(), host,
+            creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint);
         isSecure = false;
 
         if (port == 636)
@@ -631,11 +862,20 @@ public sealed class ActiveDirectorySink : IConnectorSink
         {
             // Best-effort StartTLS upgrade on :389. If the server doesn't support
             // it we stay plaintext — and any password-write attempt will throw
-            // when it gets to RequireSecureForPasswordWrite.
+            // when it gets to RequireSecureForPasswordWrite. A cert that FAILS
+            // validation on this path is a hard reject (the callback returns
+            // false → StartTransportLayerSecurity throws), never a silent
+            // downgrade to plaintext.
             try
             {
                 connection.SessionOptions.StartTransportLayerSecurity(null);
                 isSecure = true;
+            }
+            catch (TlsOperationException)
+            {
+                // Cert rejected by the shared validator during the TLS handshake —
+                // do NOT fall back to plaintext.
+                throw;
             }
             catch (Exception ex)
             {
@@ -911,7 +1151,11 @@ public sealed class ActiveDirectorySink : IConnectorSink
 
     // ─── credentials + parse helpers ───────────────────────────────────────
 
-    private sealed record AdCredentials(string Username, string Password);
+    private sealed record AdCredentials(
+        string Username,
+        string Password,
+        bool AllowUntrustedCertificate,
+        string? ExpectedServerCertificateThumbprint);
 
     private async Task<AdCredentials?> ReadCredsAsync()
     {
@@ -930,7 +1174,12 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var u = doc.RootElement.TryGetProperty("Username", out var uEl) ? uEl.GetString() : null;
             var p = doc.RootElement.TryGetProperty("Password", out var pEl) ? pEl.GetString() : null;
             if (string.IsNullOrEmpty(u) || p is null) return null;
-            return new AdCredentials(u, p);
+            // Per-connection TLS trust policy (defaults to secure/fail-closed when absent).
+            var allowUntrusted = doc.RootElement.TryGetProperty("AllowUntrustedCertificate", out var aEl)
+                && aEl.ValueKind == JsonValueKind.True;
+            var pin = doc.RootElement.TryGetProperty("ExpectedServerCertificateThumbprint", out var tEl)
+                ? tEl.GetString() : null;
+            return new AdCredentials(u, p, allowUntrusted, pin);
         }
         catch
         {

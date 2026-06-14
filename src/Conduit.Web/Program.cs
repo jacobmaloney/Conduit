@@ -479,6 +479,10 @@ builder.Services.AddHostedService<Conduit.Scheduling.SchedulerService>();
 builder.Services.AddHttpClient("IcAgentCommandPoller")
     .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 1024 * 1024)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+// ApplyObjectWrite executor — validates + allow-lists an IC-routed AD write and
+// drives the AD sink. Scoped: it resolves the scoped connector adapters + tenant
+// repo + credential protector. The poller resolves it per-command from its scope.
+builder.Services.AddScoped<Conduit.Web.Services.AdAgentWriteExecutor>();
 // Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
 builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
 builder.Services.AddHostedService<Conduit.Web.Services.IcAgentCommandPollerService>();

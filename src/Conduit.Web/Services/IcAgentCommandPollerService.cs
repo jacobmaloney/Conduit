@@ -41,6 +41,7 @@ namespace Conduit.Web.Services;
 public sealed class IcAgentCommandPollerService : BackgroundService
 {
     private const string CommandRunSqlDiscovery = "RunSqlDiscovery";
+    private const string CommandApplyObjectWrite = "ApplyObjectWrite";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
     private const string IcCredentialName = "identitycenter";
 
@@ -429,6 +430,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message) = await RunSqlDiscoveryAsync(command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandApplyObjectWrite, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message) = await ApplyObjectWriteAsync(command.Id, command.PayloadJson, ct);
+        }
         else
         {
             success = false;
@@ -513,6 +518,19 @@ public sealed class IcAgentCommandPollerService : BackgroundService
             catch { /* orchestrator releases on its own failure paths; this is defense in depth */ }
             return (false, $"Project '{project.Name}' run threw: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// ApplyObjectWrite: route a single GUID-addressed AD write through this agent.
+    /// Thin shim — all allow-listing/validation/LDAP lives in AdAgentWriteExecutor,
+    /// resolved from a per-command DI scope (TenantRepository + CredentialProtector
+    /// + connector adapters are scoped). The raw payload is NEVER logged here.
+    /// </summary>
+    private async Task<(bool Success, string Message)> ApplyObjectWriteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentWriteExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 
     private async Task<bool> PostAsync(HttpClient client, string url, string? jsonBody, CancellationToken ct)
