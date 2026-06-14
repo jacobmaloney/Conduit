@@ -348,6 +348,43 @@ public interface ITombstoneEmittingSink
 }
 
 /// <summary>
+/// One group→members edge to push to the sink. <see cref="GroupSourceId"/> is the
+/// group's source-side stable id (the SAME value used as the group object's
+/// SourceUniqueId on the upsert path); <see cref="MemberSourceIds"/> are the
+/// members' source-side ids (cloud: member GUIDs/ids; AD: member DNs pending
+/// objectGUID reconciliation). The sink resolves both to its own object ids under
+/// the same connection the upserts landed under.
+/// </summary>
+public sealed record GroupMembership(string GroupSourceId, IReadOnlyList<string> MemberSourceIds);
+
+/// <summary>
+/// Phase-membership capability. A sink that can absorb group→member edges as a
+/// SECOND PASS (after the object upserts, so groups and members already exist on
+/// the sink side) implements this IN ADDITION to <see cref="IConnectorSink"/>. The
+/// orchestrator probes <c>sink is IGroupMembershipEmittingSink</c> and only then —
+/// and only on a proven complete read — pushes the captured membership buffer.
+/// Mirrors <see cref="ITombstoneEmittingSink"/>: a separate opt-in interface so
+/// sinks that have no membership endpoint stay inert by construction.
+///
+/// Lives in Conduit.Sync so the orchestrator can reference it without inverting the
+/// connector→Sync dependency direction; the IdentityCenter connector implements it.
+/// </summary>
+public interface IGroupMembershipEmittingSink
+{
+    /// <summary>
+    /// Push the captured <paramref name="memberships"/> to the sink. <paramref name="source"/>
+    /// MUST be the same connection identifier the sink stamps on its upserts so the
+    /// sink resolves the SAME target connection (per-connection scoping). Best-effort:
+    /// implementations log and continue on failure rather than throwing. Returns the
+    /// count of edges (group+member pairs) the sink accepted.
+    /// </summary>
+    Task<int> EmitGroupMembershipsAsync(
+        string source,
+        IReadOnlyList<GroupMembership> memberships,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Outcome of <see cref="ITombstoneEmittingSink.EmitTombstonesAsync"/>. Carries the
 /// sink-reported counts plus the ids the orchestrator may safely prune from its
 /// SinkRecordHashes cache (durably-actioned ids only — capped/aborted ids were NOT

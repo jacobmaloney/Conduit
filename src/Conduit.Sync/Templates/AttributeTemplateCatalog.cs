@@ -117,6 +117,13 @@ public static class AttributeTemplateCatalog
             E("managedBy", "ManagedBy"),
             E("adminCount", "AdminCount", false, "Integer"),
             E("isCriticalSystemObject", "IsCriticalSystemObject"),
+            // Mapped so the AD source REQUESTS it (the read honors RequestedAttributes,
+            // which is derived from the mapped attributes); the orchestrator's
+            // group-membership second pass reads Attributes["member"] to push edges.
+            // Sink key stays the camelCase AD name "member" (NOT in StructuralAttributes,
+            // so without this entry AD groups carry no members). AD member values are
+            // DNs — IC leaves them unresolved pending DN->objectGUID reconciliation.
+            E("member", "member"),
         };
         c[(Systems.ActiveDirectory, "Computer")] = new[]
         {
@@ -240,6 +247,10 @@ public static class AttributeTemplateCatalog
             E("managedBy", "ManagedBy"),
             E("adminCount", "AdminCount", false, "Integer"),
             E("isCriticalSystemObject", "IsCriticalSystemObject"),
+            // See the ActiveDirectory Group note: mapped so the raw AD read requests
+            // it; the orchestrator's second pass reads Attributes["member"]. DNs land
+            // unresolved on IC until DN->objectGUID reconciliation.
+            E("member", "member"),
         };
 
         // ─────────────────────────────── EntraID ────────────────────────────────

@@ -19,7 +19,7 @@ namespace Conduit.Connectors.IdentityCenter;
 /// canonical source, and IC absorbs the projection straight into its Objects
 /// table. See <c>ObjectsController.BulkUpsert</c> for the reasoning.
 /// </summary>
-public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
+public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink, IGroupMembershipEmittingSink
 {
     private readonly Guid _tenantId;
     private readonly IHttpClientFactory _httpFactory;
@@ -213,6 +213,141 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
             _logger.LogError(ex, "IC tombstone emission failed (tenant={TenantId}, count={Count})", _tenantId, distinct.Count);
             return TombstoneEmitResult.Failed(ex.Message, Array.Empty<string>());
         }
+    }
+
+    /// <summary>
+    /// Group-membership second pass. POSTs group→member edges to IC's
+    /// <c>POST /api/objects/group-memberships/bulk</c> AFTER the object upserts, so
+    /// the groups and their members already exist on IC's side (IC silently skips
+    /// any SourceUniqueId it cannot resolve under the connection). IC resolves
+    /// <paramref name="source"/> → connectionId, then resolves the group + member
+    /// SourceUniqueIds to Objects.Id under THAT connection — so <paramref name="source"/>
+    /// MUST be the SAME value the upsert path stamps (the source-connection name).
+    ///
+    /// IC caps a single request at ~1000 member ids total (summed across the
+    /// Memberships entries in one call). We chunk a group's members across multiple
+    /// entries / calls so no single POST exceeds the cap. Best-effort: on a failed
+    /// POST we log and continue with the next chunk rather than throwing.
+    /// </summary>
+    public async Task<int> EmitGroupMembershipsAsync(
+        string source,
+        IReadOnlyList<GroupMembership> memberships,
+        CancellationToken cancellationToken)
+    {
+        if (memberships.Count == 0) return 0;
+
+        IdentityCenterCredentials creds;
+        HttpClient client;
+        try
+        {
+            creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink)
+                ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
+
+            // Group membership only exists on the Objects table. When this sink
+            // targets the Identities (people) table there is no membership endpoint,
+            // so emit nothing rather than mis-route edges.
+            if (creds.Table == IcTable.Identities)
+            {
+                _logger.LogInformation(
+                    "IC group-membership emission skipped: sink table=Identities has no membership endpoint (tenant={TenantId}, groups={Count}).",
+                    _tenantId, memberships.Count);
+                return 0;
+            }
+
+            client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "IC group-membership emission setup failed (tenant={TenantId})", _tenantId);
+            return 0;
+        }
+
+        var sanitizedSource = SanitizeSource(source);
+        // An edge = one member id under a group. IC caps a single POST at ~1000
+        // member ids total; chunk so each call's summed member count stays under it.
+        const int maxMemberIdsPerCall = 1000;
+
+        int pushedGroups = 0, edgesPersistedTotal = 0, membersUnresolvedTotal = 0, groupsUnresolvedTotal = 0;
+        var pending = new List<object>();
+        var pendingMemberCount = 0;
+
+        async Task FlushAsync()
+        {
+            if (pending.Count == 0) return;
+            var body = new { BatchId = Guid.NewGuid(), Source = sanitizedSource, Memberships = pending };
+            try
+            {
+                using var resp = await client.PostAsJsonAsync(
+                    $"{creds.BaseUrl}/api/objects/group-memberships/bulk", body, cancellationToken);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    _logger.LogError(
+                        "IC group-membership POST failed (tenant={TenantId}, entries={Entries}): HTTP {Status} {Detail}",
+                        _tenantId, pending.Count, (int)resp.StatusCode, detail);
+                }
+                else
+                {
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
+                    var root = doc.RootElement;
+                    int edgesPersisted = root.TryGetProperty("edgesPersisted", out var eEl) && eEl.ValueKind == JsonValueKind.Number ? eEl.GetInt32() : pendingMemberCount;
+                    int membersResolved = root.TryGetProperty("membersResolved", out var mrEl) && mrEl.ValueKind == JsonValueKind.Number ? mrEl.GetInt32() : pendingMemberCount;
+                    int membersUnresolved = root.TryGetProperty("membersUnresolved", out var muEl) && muEl.ValueKind == JsonValueKind.Number ? muEl.GetInt32() : 0;
+                    int groupsResolved = root.TryGetProperty("groupsResolved", out var grEl) && grEl.ValueKind == JsonValueKind.Number ? grEl.GetInt32() : pending.Count;
+                    int groupsUnresolved = root.TryGetProperty("groupsUnresolved", out var guEl) && guEl.ValueKind == JsonValueKind.Number ? guEl.GetInt32() : 0;
+                    edgesPersistedTotal += edgesPersisted;
+                    membersUnresolvedTotal += membersUnresolved;
+                    groupsUnresolvedTotal += groupsUnresolved;
+                    _logger.LogInformation(
+                        "IC group-membership chunk pushed (tenant={TenantId}, entries={Entries}, members={Members}, edgesPersisted={EdgesPersisted}, membersResolved={MembersResolved}, membersUnresolved={MembersUnresolved}, groupsResolved={GroupsResolved}, groupsUnresolved={GroupsUnresolved}).",
+                        _tenantId, pending.Count, pendingMemberCount, edgesPersisted, membersResolved, membersUnresolved, groupsResolved, groupsUnresolved);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "IC group-membership chunk threw (tenant={TenantId}, entries={Entries})", _tenantId, pending.Count);
+            }
+            pending.Clear();
+            pendingMemberCount = 0;
+        }
+
+        foreach (var gm in memberships)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(gm.GroupSourceId) || gm.MemberSourceIds.Count == 0)
+                continue;
+
+            pushedGroups++;
+
+            // Chunk a single group's members across entries so one group with >cap
+            // members spans multiple Memberships entries / POSTs.
+            for (var offset = 0; offset < gm.MemberSourceIds.Count; offset += maxMemberIdsPerCall)
+            {
+                var count = Math.Min(maxMemberIdsPerCall, gm.MemberSourceIds.Count - offset);
+                // If adding this slice would overflow the current call, flush first.
+                if (pendingMemberCount > 0 && pendingMemberCount + count > maxMemberIdsPerCall)
+                    await FlushAsync();
+
+                var slice = new string[count];
+                for (var i = 0; i < count; i++) slice[i] = gm.MemberSourceIds[offset + i];
+
+                pending.Add(new { GroupSourceUniqueId = gm.GroupSourceId, MemberSourceUniqueIds = slice });
+                pendingMemberCount += count;
+
+                if (pendingMemberCount >= maxMemberIdsPerCall)
+                    await FlushAsync();
+            }
+        }
+
+        await FlushAsync();
+
+        _logger.LogInformation(
+            "IC group-membership emission complete (tenant={TenantId}, groups={Groups}, edgesPersisted={EdgesPersisted}, membersUnresolved={MembersUnresolved}, groupsUnresolved={GroupsUnresolved}).",
+            _tenantId, pushedGroups, edgesPersistedTotal, membersUnresolvedTotal, groupsUnresolvedTotal);
+
+        return edgesPersistedTotal;
     }
 
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)

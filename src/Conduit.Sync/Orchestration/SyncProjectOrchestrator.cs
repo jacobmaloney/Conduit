@@ -1013,6 +1013,17 @@ public sealed class SyncProjectOrchestrator
         // actually accepted, so failures don't poison the cache.
         var bufferHashes = new List<string?>(Math.Min(batchSize, 256));
         var emitted = new List<ConnectorObject>(256);
+        // Group-membership second pass: when this step is a group class, capture each
+        // group's source id + its member ids here and push them to the sink AFTER the
+        // object upserts drain (groups + members must already exist sink-side). Only
+        // populated for the "group" class + a sink that absorbs membership; otherwise
+        // it stays empty and the second pass is a no-op.
+        var groupMembershipBuffer = new List<GroupMembership>();
+        // Capture membership only on a group-class step into a sink that absorbs it.
+        // Conduit native class names are lowercase; compare case-insensitively.
+        var captureGroupMembership =
+            string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase)
+            && sink is IGroupMembershipEmittingSink;
         int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, ttlRefreshed = 0;
 
         var progress = Stopwatch.StartNew();
@@ -1041,6 +1052,23 @@ public sealed class SyncProjectOrchestrator
 
             if (!sinkObj.Attributes.ContainsKey("_source"))
                 sinkObj.Attributes["_source"] = sourceAdapter.SystemType;
+
+            // Capture group membership BEFORE skip-unchanged: members can change
+            // without the group's mapped attributes changing, so unchanged groups must
+            // still emit their current member set. Read from the RAW sourceObj bag, not
+            // sinkObj: ApplyMappings only keeps mapped attributes, and the member
+            // attribute is intentionally NOT in most templates — the cloud sources
+            // (Entra/GWS/AWS) emit "members" (member GUIDs/ids) unconditionally; AD
+            // emits "member" (DNs) only when the group step maps it. Key the edge on
+            // sinkObj.SourceId (== sourceObj.SourceId, the SourceUniqueId the upsert used).
+            if (captureGroupMembership && !string.IsNullOrEmpty(sinkObj.SourceId))
+            {
+                if (!sourceObj.Attributes.TryGetValue("members", out var memberVal))
+                    sourceObj.Attributes.TryGetValue("member", out memberVal);
+                var memberIds = CoerceToStringList(memberVal);
+                if (memberIds.Count > 0)
+                    groupMembershipBuffer.Add(new GroupMembership(sinkObj.SourceId, memberIds));
+            }
 
             // Stamp the source CONNECTION name (the domain, e.g. "domain.local2")
             // onto every record so the IC sink can use it as the upsert Source.
@@ -1324,6 +1352,51 @@ public sealed class SyncProjectOrchestrator
             }
         }
 
+        // ── Group-membership second pass ────────────────────────────────────────
+        // After the object upserts have drained (groups + their members now exist on
+        // the sink side), push the captured group→member edges. NOT gated on
+        // readWasComplete (unlike tombstones): IC's /api/objects/group-memberships/bulk
+        // UPSERTS edges and never prunes absent ones, so a partial read only adds FEWER
+        // edges — it can never look like a delete or a membership shrink. Membership is
+        // additive; tombstones are destructive, so tombstones keep the complete-read
+        // gate and this does not. Best-effort — failures are logged and the run proceeds.
+        if (groupMembershipBuffer.Count > 0
+            && sink is IGroupMembershipEmittingSink memSink
+            && !ct.IsCancellationRequested)
+        {
+            // Same expression the upsert + tombstone paths use so IC resolves the
+            // SAME connection the group/member objects landed under.
+            var icUpsertSource = !string.IsNullOrWhiteSpace(ctx.SourceTenant.Name)
+                ? ctx.SourceTenant.Name
+                : "Conduit";
+
+            // AD member values are DNs, not objectGUIDs; IC keys members by
+            // objectGUID (Objects.SourceUniqueId). DNs will come back unresolved on
+            // IC (silently skipped, no error) until reconciliation lands. Warn so the
+            // gap is visible. Cloud sources (Entra/GWS/AWS) emit GUID-keyed member ids
+            // and resolve fully.
+            // TODO(membership): AD member DN->objectGUID reconciliation — project each
+            // member's objectGUID in the AD group read (or a DN->GUID lookup pass) so
+            // AD group membership resolves on IC the same way cloud membership does.
+            if (string.Equals(sourceAdapter.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase))
+            {
+                await Log(run, "Warning",
+                    $"    Group memberships (class '{objectClass}'): source is ActiveDirectory — member values are DNs, not objectGUIDs. Pushing as-is; IC will leave them UNRESOLVED until DN->objectGUID reconciliation is implemented (cloud sources resolve fully).");
+            }
+
+            try
+            {
+                var edges = await memSink.EmitGroupMembershipsAsync(icUpsertSource, groupMembershipBuffer, ct);
+                await Log(run, "Info",
+                    $"    Group memberships: pushed {edges} edge(s) across {groupMembershipBuffer.Count} group(s).");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                await Log(run, "Error", $"    Group-membership emission threw: {ex.Message}. Upsert results stand.");
+            }
+        }
+
         // Maintain the per-connection, per-class prior-synced id REGISTRY.
         // Delete-detection diffs against SinkRecordHashes keys, so those keys must
         // reflect "what we last successfully synced to this sink" — INDEPENDENT of
@@ -1505,6 +1578,39 @@ public sealed class SyncProjectOrchestrator
     /// <see cref="AttributeTransformer"/>. If no mappings are defined, the
     /// sourceObj is passed through unchanged.
     /// </summary>
+    /// <summary>
+    /// Coerce a member-attribute value into a clean string list. Sources hand back
+    /// different shapes: a single string, a List&lt;string&gt;, a List&lt;object?&gt;,
+    /// or an object[] (AD multi-valued attributes arrive as object[]). Empties are
+    /// dropped. Anything unparseable yields an empty list.
+    /// </summary>
+    private static List<string> CoerceToStringList(object? value)
+    {
+        var result = new List<string>();
+        if (value is null) return result;
+
+        if (value is string single)
+        {
+            if (!string.IsNullOrWhiteSpace(single)) result.Add(single);
+            return result;
+        }
+
+        if (value is System.Collections.IEnumerable e && value is not byte[])
+        {
+            foreach (var item in e)
+            {
+                if (item is null) continue;
+                var s = item as string ?? item.ToString();
+                if (!string.IsNullOrWhiteSpace(s)) result.Add(s!);
+            }
+            return result;
+        }
+
+        var scalar = value.ToString();
+        if (!string.IsNullOrWhiteSpace(scalar)) result.Add(scalar!);
+        return result;
+    }
+
     private static ConnectorObject ApplyMappings(ConnectorObject src, IReadOnlyList<AttributeMapping> mappings)
     {
         if (mappings.Count == 0) return src;

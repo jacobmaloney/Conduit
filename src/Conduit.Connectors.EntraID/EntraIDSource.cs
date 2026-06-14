@@ -282,6 +282,12 @@ public sealed class EntraIDSource : IConnectorSource
     {
         var holder = new DeltaLinkHolder();
         var isIncremental = cursor is not null && !string.IsNullOrWhiteSpace(cursor.Token);
+        // Complete-read sentinel. Starts FALSE. The drain-wrapper below flips it true
+        // ONLY after the inner stream falls off its natural terminus with no exception
+        // and no cancellation. A throw or a cancellation never reaches the set-site, so
+        // the orchestrator never tombstones (and the membership second pass never
+        // mis-reports) against a partial read. Mirrors ActiveDirectorySource.ReadCompletion.
+        var completion = new ReadCompletion();
         IAsyncEnumerable<ConnectorObject> stream;
 
         if (string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase))
@@ -311,12 +317,69 @@ public sealed class EntraIDSource : IConnectorSource
 
         return Task.FromResult(new SyncEnumerationResult
         {
-            Objects = stream,
+            // The delta enumerators yield-break only at their natural terminus (delta
+            // link reached or empty next link) or propagate a throw; they have no
+            // MaxObjects truncation, so a clean full drain is a complete read.
+            Objects = DrainWithCompletionAsync(stream, completion, cancellationToken),
             ResolveNewCursor = () => string.IsNullOrEmpty(holder.DeltaLink)
                 ? null
                 : new SyncCursor { Token = holder.DeltaLink! },
-            IsIncremental = isIncremental
+            IsIncremental = isIncremental,
+            WasCompleteRead = () => completion.IsComplete
         });
+    }
+
+    /// <summary>
+    /// Mutable complete-read flag threaded through the chosen enumerator. Defaults to
+    /// FALSE; only the natural terminus of the active read path sets it true. A throw
+    /// or a cancellation propagates out of the drain-wrapper before the set-site, so
+    /// the flag faithfully reports a clean, full drain — the precondition the
+    /// orchestrator requires before any delete-delta. Mirrors AD's ReadCompletion.
+    /// </summary>
+    private sealed class ReadCompletion
+    {
+        public bool IsComplete { get; set; }
+    }
+
+    /// <summary>
+    /// Wraps an inner object stream that has NO MaxObjects truncation (the delta
+    /// enumerators) and flips <paramref name="completion"/> true ONLY after it drains
+    /// to its natural end. If the inner stream throws or the consumer cancels, the
+    /// set-site is never reached and the flag stays false.
+    /// </summary>
+    private static async IAsyncEnumerable<ConnectorObject> DrainWithCompletionAsync(
+        IAsyncEnumerable<ConnectorObject> inner,
+        ReadCompletion completion,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var obj in inner.WithCancellation(cancellationToken))
+            yield return obj;
+        completion.IsComplete = true;
+    }
+
+    /// <summary>
+    /// Wraps the full-read stream (which routes through <see cref="ReadAsync"/> and so
+    /// CAN truncate on scope.MaxObjects) and flips <paramref name="completion"/> true
+    /// only when the read drained naturally AND was not truncated by the cap. A
+    /// MaxObjects truncation inside ReadAsync is a clean yield-break that would
+    /// otherwise look like a natural end, so count emitted objects and treat hitting
+    /// the cap as a truncated (incomplete) read — mirroring AD's MaxObjects handling.
+    /// </summary>
+    private static async IAsyncEnumerable<ConnectorObject> DrainFullWithCompletionAsync(
+        IAsyncEnumerable<ConnectorObject> inner,
+        SyncProjectScope scope,
+        ReadCompletion completion,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        long emitted = 0;
+        await foreach (var obj in inner.WithCancellation(cancellationToken))
+        {
+            emitted++;
+            yield return obj;
+        }
+        var truncated = scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value;
+        if (!truncated)
+            completion.IsComplete = true;
     }
 
     /// <summary>
@@ -340,11 +403,14 @@ public sealed class EntraIDSource : IConnectorSource
     private Task<SyncEnumerationResult> EnumerateFullForExtendedClassAsync(
         string objectClass, SyncProjectScope scope, CancellationToken cancellationToken)
     {
+        var completion = new ReadCompletion();
         return Task.FromResult(new SyncEnumerationResult
         {
-            Objects = ReadAsync(objectClass, scope, cancellationToken),
+            Objects = DrainFullWithCompletionAsync(
+                ReadAsync(objectClass, scope, cancellationToken), scope, completion, cancellationToken),
             ResolveNewCursor = () => null,
-            IsIncremental = false
+            IsIncremental = false,
+            WasCompleteRead = () => completion.IsComplete
         });
     }
 
@@ -755,10 +821,13 @@ public sealed class EntraIDSource : IConnectorSource
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 // Delta surfaces members as a changing list (member@delta) but the SDK
-                // collapses it. Members come back through standard Members nav; we
-                // only emit identity-level changes here. Group-membership delta would
-                // require a separate pass on group[*]/members/delta — defer.
-                yield return ConvertGroupDelta(g);
+                // collapses it, so fetch the live roster per group (N+1, mirrors the
+                // legacy full path) to stamp attrs["members"] for membership capture.
+                // Removed/tombstoned groups are being deleted — skip the member fetch.
+                var members = IsRemoved(g.AdditionalData)
+                    ? new List<string>()
+                    : await TryGetGroupMembersAsync(client, g.Id, cancellationToken);
+                yield return ConvertGroupDelta(g, members);
             }
 
             if (!string.IsNullOrEmpty(page.OdataDeltaLink))
@@ -1023,9 +1092,9 @@ public sealed class EntraIDSource : IConnectorSource
         };
     }
 
-    private static ConnectorObject ConvertGroupDelta(GraphGroup g)
+    private static ConnectorObject ConvertGroupDelta(GraphGroup g, List<string> memberIds)
     {
-        var obj = ConvertGroup(g, new List<string>());
+        var obj = ConvertGroup(g, memberIds);
         if (IsRemoved(g.AdditionalData))
         {
             obj.Attributes["_deleted"] = true;
