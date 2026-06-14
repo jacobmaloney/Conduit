@@ -18,6 +18,21 @@ namespace Conduit.Connectors.IdentityCenter;
 /// does NOT echo to AD / Entra — Conduit owns the directory write for the
 /// canonical source, and IC absorbs the projection straight into its Objects
 /// table. See <c>ObjectsController.BulkUpsert</c> for the reasoning.
+///
+/// JOB-SERVER PROVENANCE (Phase C): every bulk/membership/tombstone request carries
+/// <c>SourceJobServerId</c> (this installation's durable <see cref="ConduitInstanceIdentity"/>
+/// GUID) + <c>SourceJobServerName</c>. IC resolves the GUID to an Agents row
+/// (auto-registering one if absent) and stamps <c>Objects.SourceJobServerId</c> with it.
+///
+/// PHASE D HOOK (rich write-back, NOT consumed yet): a write-back to a Conduit-synced
+/// object will route via this provenance --
+///   Objects.SourceJobServerId  -> Agents.Id
+///   -> ApiKeys.AgentId (KeyType = 'Agent')   (the per-agent command-channel key)
+///   -> AgentCommands.TargetAgentId           (dispatch the write to THAT job server)
+/// and Objects.SourceConnectionId tells the agent which connection (domain) to write
+/// through. The agent that synced the object is therefore the agent that owns the
+/// write-back path back to the source directory. Stamping it here in Phase C is what
+/// makes that Phase D dispatch possible.
 /// </summary>
 public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink, IGroupMembershipEmittingSink
 {
@@ -149,6 +164,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 {
                     BatchId = Guid.NewGuid(),
                     Source = SanitizeSource(source),
+                    SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                    SourceJobServerName = ConduitInstanceIdentity.Name,
                     SourceUniqueIds = slice,
                     Override = false   // never override the IC 50% cap from Conduit
                 };
@@ -275,7 +292,14 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         async Task FlushAsync()
         {
             if (pending.Count == 0) return;
-            var body = new { BatchId = Guid.NewGuid(), Source = sanitizedSource, Memberships = pending };
+            var body = new
+            {
+                BatchId = Guid.NewGuid(),
+                Source = sanitizedSource,
+                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerName = ConduitInstanceIdentity.Name,
+                Memberships = pending
+            };
             try
             {
                 using var resp = await client.PostAsJsonAsync(
@@ -439,7 +463,17 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             });
         }
 
-        var body = new { BatchId = batchId, Items = items };
+        var body = new
+        {
+            BatchId = batchId,
+            // This installation's durable job-server identity. IC resolves it to an
+            // Agents row (auto-registering on first sight) and stamps
+            // Objects.SourceJobServerId so every synced object carries the provenance
+            // of the box that pushed it. One job server per push, so batch-level.
+            SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+            SourceJobServerName = ConduitInstanceIdentity.Name,
+            Items = items
+        };
 
         using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/objects/bulk", body, cancellationToken);
         if (!resp.IsSuccessStatusCode)
