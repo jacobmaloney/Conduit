@@ -54,6 +54,10 @@
                 <i class="fas fa-magic me-1"></i>
                 Auto-Generate
             </button>
+            <button class="btn btn-outline-success me-2" @onclick="ShowBlueprintModal">
+                <i class="fas fa-layer-group me-1"></i>
+                Create from blueprint
+            </button>
             <button class="btn btn-primary" @onclick="ShowCreateModal">
                 <i class="fas fa-plus me-1"></i>
                 New Sync Project
@@ -598,6 +602,166 @@
                         }
                         Auto-Generate
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ───────── Create-from-Blueprint Modal — curated, fully-configured multi-class projects ───────── *@
+@if (showBlueprintModal)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-success">
+                    <h5 class="modal-title">
+                        <i class="fas fa-layer-group me-2"></i>Create from Blueprint
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseBlueprintModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(blueprintError))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle me-2"></i>@blueprintError
+                        </div>
+                    }
+
+                    @if (selectedBlueprint is null)
+                    {
+                        <p class="text-muted">
+                            Pick a blueprint. Each one creates a fully-configured sync project —
+                            one Mapping step per object class, with default scope and attribute
+                            mappings already filled in. You only choose the source connection,
+                            the IdentityCenter target, and a schedule.
+                        </p>
+
+                        @if (OfferableBlueprints.Count == 0)
+                        {
+                            <div class="alert alert-warning py-2">
+                                <i class="fas fa-circle-info me-1"></i>
+                                No blueprint matches your existing connections yet. Add an
+                                Entra ID or Azure Resource Graph connection first.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="autogen-tpl-grid">
+                                @foreach (var bp in OfferableBlueprints)
+                                {
+                                    var bpRef = bp;
+                                    var classes = BlueprintClasses(bpRef);
+                                    <div class="autogen-tpl-card" @onclick="() => SelectBlueprint(bpRef)">
+                                        <div class="autogen-tpl-card-head">
+                                            <span class="autogen-tpl-card-name">@bpRef.Name</span>
+                                        </div>
+                                        <div class="autogen-tpl-card-count">@classes.Count class@(classes.Count == 1 ? "" : "es")</div>
+                                        <div class="autogen-tpl-card-classes">@AutoGenClassListLabel(classes)</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        var bp = selectedBlueprint;
+                        var classes = BlueprintClasses(bp);
+                        var deferred = classes.Where(c => Conduit.Sync.Templates.SyncProjectBlueprintCatalog.IsDeferredClass(c)).ToList();
+                        <div class="mb-2">
+                            <button type="button" class="btn btn-sm btn-link ps-0" @onclick="ClearBlueprintSelection">
+                                <i class="fas fa-arrow-left me-1"></i>Pick a different blueprint
+                            </button>
+                        </div>
+                        <h6 class="fw-bold mb-1">@bp.Name</h6>
+                        <p class="text-muted mb-2">@bp.Description</p>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Will create @classes.Count step(s)</label>
+                            <div class="autogen-tpl-card-classes">@AutoGenClassListLabel(classes)</div>
+                        </div>
+
+                        @if (bp.Notes.Count > 0)
+                        {
+                            <div class="alert alert-info py-2">
+                                <div class="fw-bold mb-1"><i class="fas fa-circle-info me-1"></i>Before you run this</div>
+                                <ul class="mb-0 ps-3"><small>
+                                    @foreach (var note in bp.Notes)
+                                    {
+                                        <li>@note</li>
+                                    }
+                                </small></ul>
+                            </div>
+                        }
+
+                        @if (deferred.Count > 0)
+                        {
+                            <div class="alert alert-warning py-2">
+                                <i class="fas fa-triangle-exclamation me-1"></i>
+                                <small>These classes are discovered but not yet populated by a live connector: <strong>@string.Join(", ", deferred)</strong>.</small>
+                            </div>
+                        }
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(@bp.SourceSystemType)</span></label>
+                            <select class="form-select" @bind="blueprintSourceId">
+                                <option value="@Guid.Empty">-- Pick a source --</option>
+                                @foreach (var t in BlueprintSourceTenants)
+                                {
+                                    <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                }
+                            </select>
+                            <small class="form-text text-muted">Only @bp.SourceSystemType connections are listed.</small>
+                        </div>
+
+                        <div class="mb-3 text-center text-muted">
+                            <i class="fas fa-arrow-down-long"></i> <span class="small">data flows to</span>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(IdentityCenter)</span></label>
+                            <select class="form-select" @bind="blueprintSinkId">
+                                <option value="@Guid.Empty">-- Pick an IdentityCenter target --</option>
+                                @foreach (var t in BlueprintSinkTenants)
+                                {
+                                    <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                }
+                            </select>
+                            <small class="form-text text-muted">Blueprints write into IdentityCenter.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Schedule</label>
+                            <select class="form-select" @bind="blueprintCronSchedule">
+                                <option value="">No schedule (manual only)</option>
+                                <option value="0 * * * *">Every hour</option>
+                                <option value="0 */6 * * *">Every 6 hours</option>
+                                <option value="0 2 * * *">Daily at 02:00</option>
+                                <option value="0 2 * * 0">Weekly Sunday 02:00</option>
+                            </select>
+                            <small class="form-text text-muted">Defaulted from the blueprint. Change it if you like.</small>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseBlueprintModal">Cancel</button>
+                    @if (selectedBlueprint is not null)
+                    {
+                        <button type="button" class="btn btn-success"
+                                @onclick="CreateFromBlueprint"
+                                disabled="@(blueprintSourceId == Guid.Empty || blueprintSinkId == Guid.Empty || blueprintInProgress)">
+                            @if (blueprintInProgress)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-layer-group me-1"></i>
+                            }
+                            Create
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -3257,6 +3421,40 @@
     private string autoGenProjectName = string.Empty;
     private bool autoGenNameEdited;
 
+    // ── Create-from-blueprint modal state ──
+    private bool showBlueprintModal;
+    private Conduit.Sync.Templates.SyncProjectBlueprint? selectedBlueprint;
+    private Guid blueprintSourceId = Guid.Empty;
+    private Guid blueprintSinkId = Guid.Empty;
+    private string blueprintCronSchedule = string.Empty;
+    private bool blueprintInProgress;
+    private string blueprintError = string.Empty;
+
+    /// <summary>Blueprints whose required SystemType matches at least one existing connection.</summary>
+    private IReadOnlyList<Conduit.Sync.Templates.SyncProjectBlueprint> OfferableBlueprints =>
+        Conduit.Sync.Templates.SyncProjectBlueprintCatalog.All
+            .Where(bp => allTenants.Any(t =>
+                string.Equals(t.SystemType, bp.SourceSystemType, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+    /// <summary>The classes a blueprint will create, resolved through the live generator.</summary>
+    private IReadOnlyList<string> BlueprintClasses(Conduit.Sync.Templates.SyncProjectBlueprint bp) =>
+        bp.ResolveClasses(ProjectGenerator);
+
+    /// <summary>Source connections matching the selected blueprint's required SystemType.</summary>
+    private IReadOnlyList<Tenant> BlueprintSourceTenants =>
+        selectedBlueprint is null
+            ? Array.Empty<Tenant>()
+            : allTenants
+                .Where(t => string.Equals(t.SystemType, selectedBlueprint.SourceSystemType, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+    /// <summary>Blueprints write into IdentityCenter; offer only IC connections as sink.</summary>
+    private IReadOnlyList<Tenant> BlueprintSinkTenants =>
+        allTenants
+            .Where(t => string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
     private Tenant? AutoGenSource =>
         autoGenSourceId == Guid.Empty ? null : allTenants.FirstOrDefault(t => t.Id == autoGenSourceId);
 
@@ -4861,6 +5059,137 @@
         finally
         {
             autoGenInProgress = false;
+        }
+    }
+
+    // ───────── Create-from-blueprint ─────────
+
+    private void ShowBlueprintModal()
+    {
+        selectedBlueprint = null;
+        blueprintSourceId = Guid.Empty;
+        blueprintSinkId = Guid.Empty;
+        blueprintCronSchedule = string.Empty;
+        blueprintError = string.Empty;
+        showBlueprintModal = true;
+    }
+
+    private void CloseBlueprintModal()
+    {
+        if (blueprintInProgress) return;
+        showBlueprintModal = false;
+    }
+
+    private void SelectBlueprint(Conduit.Sync.Templates.SyncProjectBlueprint bp)
+    {
+        selectedBlueprint = bp;
+        blueprintError = string.Empty;
+        blueprintCronSchedule = bp.DefaultCronSchedule ?? string.Empty;
+
+        // Pre-pick the obvious choices when there's exactly one candidate per side.
+        var sources = BlueprintSourceTenants;
+        blueprintSourceId = sources.Count == 1 ? sources[0].Id : Guid.Empty;
+        var sinks = BlueprintSinkTenants;
+        blueprintSinkId = sinks.Count == 1 ? sinks[0].Id : Guid.Empty;
+    }
+
+    private void ClearBlueprintSelection()
+    {
+        if (blueprintInProgress) return;
+        selectedBlueprint = null;
+        blueprintError = string.Empty;
+    }
+
+    private async Task CreateFromBlueprint()
+    {
+        // Re-entrancy guard FIRST — same discipline as GenerateAutoSyncProject.
+        if (blueprintInProgress) return;
+        blueprintInProgress = true;
+        StateHasChanged();
+
+        try
+        {
+            blueprintError = string.Empty;
+            var bp = selectedBlueprint;
+            if (bp is null)
+            {
+                blueprintError = "Pick a blueprint first.";
+                return;
+            }
+            if (blueprintSourceId == Guid.Empty || blueprintSinkId == Guid.Empty)
+            {
+                blueprintError = "Both a source and an IdentityCenter target are required.";
+                return;
+            }
+            if (blueprintSourceId == blueprintSinkId)
+            {
+                blueprintError = "Source and target must be different connections.";
+                return;
+            }
+
+            var src = allTenants.FirstOrDefault(t => t.Id == blueprintSourceId);
+            var sink = allTenants.FirstOrDefault(t => t.Id == blueprintSinkId);
+            if (src is null || sink is null)
+            {
+                blueprintError = "Selected systems no longer exist.";
+                return;
+            }
+
+            // Expand the blueprint to the SAME GeneratedSyncProject shape Auto-Generate
+            // produces, reusing the matching ISyncProjectGenerator.Generate overload.
+            var existingNames = allProjects.Select(p => p.Name).ToList();
+            var generated = bp.Expand(ProjectGenerator, src, sink, blueprintCronSchedule, existingNames);
+            if (generated.Count == 0)
+            {
+                blueprintError = "This blueprint produced no object classes for the chosen source.";
+                return;
+            }
+
+            // V22: stamp the per-endpoint IC table. Sink is always IdentityCenter here.
+            var sinkTable = string.Equals(sink.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
+                ? "Objects"
+                : null;
+
+            // IDENTITIES RULE: same single source of truth — if the IC target lands in the
+            // people-only Identities table, drop every non-user step. Sink table is Objects
+            // here, so this is a no-op today, but routed through the same guard for safety.
+            var identitiesOnly = IsIcIdentitiesTable(true, sinkTable);
+            var totalSteps = 0;
+            foreach (var g in generated)
+            {
+                g.Project.SinkTable = sinkTable;
+                if (identitiesOnly)
+                {
+                    g.Steps = g.Steps
+                        .Where(s => string.IsNullOrWhiteSpace(s.Step.ObjectClass)
+                                    || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
+                await ProjectRepo.CreateAsync(g.Project);
+                await WorkflowRepo.CreateAsync(g.Workflow);
+                foreach (var st in g.Steps)
+                {
+                    await WorkflowRepo.CreateStepAsync(st.Step);
+                    await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
+                    if (st.Mappings.Count > 0)
+                    {
+                        await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                    }
+                    totalSteps++;
+                }
+            }
+
+            showBlueprintModal = false;
+            toastSuccess = $"Created '{bp.Name}' with {totalSteps} per-class step(s) from {src.Name} to {sink.Name}.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            blueprintError = $"Create from blueprint failed: {ex.Message}";
+        }
+        finally
+        {
+            blueprintInProgress = false;
         }
     }
 }

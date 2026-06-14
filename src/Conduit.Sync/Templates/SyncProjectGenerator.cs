@@ -64,6 +64,21 @@ namespace Conduit.Sync.Templates
             GenerationMode mode,
             string? cronSchedule,
             IReadOnlyCollection<string> existingNames);
+
+        /// <summary>
+        /// Blueprint path: builds the SAME in-memory sync-project graph as the
+        /// mode-based overload, but over an EXPLICIT lowercase native class list
+        /// instead of <see cref="GetObjectClasses"/>. Used by the blueprint catalog
+        /// for curated class selections (e.g. {user, m365usage, site}). Behaviour is
+        /// identical per class (Mapping step + default scope/page size + auto-filled
+        /// attribute mappings); IsEnabled=false, SkipUnchanged=true, ObjectClass=classes[0].
+        /// </summary>
+        IReadOnlyList<GeneratedSyncProject> Generate(
+            Tenant sourceTenant,
+            Tenant sinkTenant,
+            IReadOnlyCollection<string> explicitClasses,
+            string? cronSchedule,
+            IReadOnlyCollection<string> existingNames);
     }
 
     public class SyncProjectGenerator : ISyncProjectGenerator
@@ -183,13 +198,45 @@ namespace Conduit.Sync.Templates
             string? cronSchedule,
             IReadOnlyCollection<string> existingNames)
         {
+            var objectClasses = GetObjectClasses(sourceTenant.SystemType, mode);
+            return Build(sourceTenant, sinkTenant, objectClasses, ModeLabel(mode), cronSchedule, existingNames);
+        }
+
+        public IReadOnlyList<GeneratedSyncProject> Generate(
+            Tenant sourceTenant,
+            Tenant sinkTenant,
+            IReadOnlyCollection<string> explicitClasses,
+            string? cronSchedule,
+            IReadOnlyCollection<string> existingNames)
+        {
+            // Preserve caller order, drop blanks/dupes, normalise to lowercase native names.
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var classes = (explicitClasses ?? Array.Empty<string>())
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim())
+                .Where(c => seen.Add(c))
+                .ToArray();
+            return Build(sourceTenant, sinkTenant, classes, "Full", cronSchedule, existingNames);
+        }
+
+        /// <summary>
+        /// The ONE per-class build loop shared by both Generate overloads. Produces a
+        /// single project + single workflow + one Mapping step per class, each with its
+        /// own scope, page size and auto-filled mappings. Persists nothing.
+        /// </summary>
+        private IReadOnlyList<GeneratedSyncProject> Build(
+            Tenant sourceTenant,
+            Tenant sinkTenant,
+            IReadOnlyList<string> objectClasses,
+            string modeLabel,
+            string? cronSchedule,
+            IReadOnlyCollection<string> existingNames)
+        {
             var sourceType = sourceTenant.SystemType;
             var sinkType = sinkTenant.SystemType;
-            var objectClasses = GetObjectClasses(sourceType, mode);
             var cron = string.IsNullOrWhiteSpace(cronSchedule) ? null : cronSchedule;
 
             var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
-            var modeLabel = ModeLabel(mode);
 
             if (objectClasses.Count == 0)
                 return new List<GeneratedSyncProject>();

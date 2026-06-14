@@ -930,6 +930,52 @@
                             Override to store a second credential under a different name.
                         </small>
                     </div>
+                    @* Per-connector "what you need before you start" guidance. Renders for the
+                       cloud connectors whose setup has prerequisites that aren't obvious from the
+                       fields alone. Placeholders only — never echo real/secret values here. *@
+                    @if (credentialsFor.SystemType == "EntraID" || credentialsFor.SystemType == "SharePoint")
+                    {
+                        var entraScopes = "Application.Read.All RoleManagement.Read.Directory Device.Read.All AdministrativeUnit.Read.All Policy.Read.All Directory.Read.All Domain.Read.All";
+                        var m365Scopes = "Reports.Read.All Sites.Read.All Group.Read.All";
+                        <div class="alert alert-info py-2">
+                            <div class="fw-bold mb-1"><i class="oi oi-info"></i> What you need before you start</div>
+                            <div class="mb-2">An <strong>App Registration</strong> in Entra ID with a client secret, and the Microsoft Graph <strong>application</strong> scopes below granted with admin consent.</div>
+                            <div class="mb-1"><small class="text-muted">Directory governance scopes</small></div>
+                            <span class="url-cell mb-2">
+                                <code>@entraScopes</code>
+                                <button class="url-copy" type="button" title="Copy scopes" @onclick="@(() => CopyAsync(entraScopes, "entra-scopes"))">
+                                    <i class="oi oi-clipboard"></i> @(copiedKey == "entra-scopes" ? "Copied" : "")
+                                </button>
+                            </span>
+                            <div class="mb-2"><small><code>oAuth2PermissionGrant</code> requires <code>Directory.Read.All</code> — this is unavoidably broad.</small></div>
+                            <div class="mb-1"><small class="text-muted">Add these for Microsoft 365 license &amp; usage on this same connection</small></div>
+                            <span class="url-cell mb-2">
+                                <code>@m365Scopes</code>
+                                <button class="url-copy" type="button" title="Copy scopes" @onclick="@(() => CopyAsync(m365Scopes, "m365-scopes"))">
+                                    <i class="oi oi-clipboard"></i> @(copiedKey == "m365-scopes" ? "Copied" : "")
+                                </button>
+                            </span>
+                            <div class="alert alert-warning py-1 px-2 mb-2 mt-1">
+                                <small><strong>M365 usage prerequisite:</strong> an admin must PATCH <code>https://graph.microsoft.com/v1.0/admin/reportSettings</code> with <code>@M365ReportSettingsBody</code> or usage data comes back silently empty.</small>
+                            </div>
+                            <ul class="mb-0 ps-3"><small>
+                                <li><strong>Tenant ID</strong> = your Azure tenant GUID (Entra &gt; Overview).</li>
+                                <li><strong>Client ID</strong> = the App Registration application (client) ID.</li>
+                                <li><strong>Client Secret</strong> = a secret you created on that app-reg (copy it at creation — it is shown once).</li>
+                            </small></ul>
+                        </div>
+                    }
+                    else if (credentialsFor.SystemType == "AzureResourceGraph")
+                    {
+                        <div class="alert alert-info py-2">
+                            <div class="fw-bold mb-1"><i class="oi oi-info"></i> What you need before you start</div>
+                            <div class="mb-2">An <strong>App Registration</strong> (Tenant ID / Client ID / Client Secret) <strong>plus</strong> the Azure <strong>RBAC Reader</strong> role assigned to that service principal at the subscription or management-group scope you want to inventory.</div>
+                            <ul class="mb-0 ps-3"><small>
+                                <li><strong>Tenant ID / Client ID / Client Secret</strong> = same App Registration values as any Entra app-reg.</li>
+                                <li><strong>Scope Filter</strong> = comma-separated subscription GUIDs or a management-group id; leave blank for all subscriptions the service principal can read.</li>
+                            </small></ul>
+                        </div>
+                    }
                     @* Phase 3: prefer the generic renderer when the adapter declares CredentialTypes.
                        Falls through to the legacy per-type @@switch when not. Eventually every connector
                        declares its types and the switch can be deleted. *@
@@ -1718,6 +1764,9 @@
 
     // Last-copied key, shown briefly as "Copied" feedback next to that button.
     private string? copiedKey;
+
+    // The reportSettings body an admin must PATCH before M365 usage data is returned.
+    private const string M365ReportSettingsBody = "{\"displayConcealedNames\": false}";
 
     private async Task CopyAsync(string value, string key)
     {
