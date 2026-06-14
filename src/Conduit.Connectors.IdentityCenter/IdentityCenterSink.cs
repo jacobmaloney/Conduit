@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Conduit.Sync.Connectors;
@@ -147,7 +148,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
                 var body = new
                 {
                     BatchId = Guid.NewGuid(),
-                    Source = source,
+                    Source = SanitizeSource(source),
                     SourceUniqueIds = slice,
                     Override = false   // never override the IC 50% cap from Conduit
                 };
@@ -297,7 +298,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
                 // NOTE: this MUST match the value the orchestrator passes to
                 // EmitTombstonesAsync (ctx.SourceTenant.Name) so IC resolves the SAME
                 // auto-seeded SourceConnectionId for upserts and tombstones.
-                Source = string.IsNullOrWhiteSpace(sourceConnection) ? "Conduit" : sourceConnection,
+                Source = SanitizeSource(sourceConnection),
                 OriginalSource = originalSource ?? string.Empty,
                 Attributes = attrs
             });
@@ -671,6 +672,23 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink
             return string.Join(";", parts);
         }
         return v.ToString();
+    }
+
+    /// <summary>
+    /// IC's /api/objects/bulk and /api/objects/tombstones validate the Source field
+    /// against ^[A-Za-z0-9_.\-]{1,100}$ and 400 the WHOLE batch on any violation.
+    /// Real connection names contain spaces/parens ("EntraID (placeholder)"), so
+    /// sanitise to the allowed charset: collapse runs of disallowed chars to a single
+    /// '-', trim leading/trailing '-', cap at 100. Empty result falls back to "Conduit".
+    /// MUST be applied identically on the upsert and tombstone paths so IC resolves the
+    /// SAME auto-seeded SourceConnectionId for both.
+    /// </summary>
+    private static string SanitizeSource(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "Conduit";
+        var cleaned = Regex.Replace(raw, "[^A-Za-z0-9_.\\-]+", "-").Trim('-');
+        if (cleaned.Length > 100) cleaned = cleaned.Substring(0, 100).TrimEnd('-');
+        return string.IsNullOrEmpty(cleaned) ? "Conduit" : cleaned;
     }
 
     private static string? LookupAttr(ConnectorObject obj, string key)
