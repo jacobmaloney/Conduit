@@ -104,7 +104,9 @@ internal static class GoogleCredentialReader
                 DirectoryService.Scope.AdminDirectoryUserReadonly,
                 DirectoryService.Scope.AdminDirectoryGroupReadonly,
                 DirectoryService.Scope.AdminDirectoryGroupMemberReadonly,
-                DirectoryService.Scope.AdminDirectoryOrgunitReadonly
+                DirectoryService.Scope.AdminDirectoryOrgunitReadonly,
+                DirectoryService.Scope.AdminDirectoryRolemanagementReadonly,
+                DirectoryService.Scope.AdminDirectoryDomainReadonly
             }
             : new[]
             {
