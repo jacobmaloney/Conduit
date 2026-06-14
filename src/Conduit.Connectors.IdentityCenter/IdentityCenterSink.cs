@@ -67,6 +67,14 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
 
+            // Sign-in EVENT batches go to a different endpoint entirely
+            // (/api/objects/signin-logs/bulk) — they are append-only event records,
+            // not directory objects, so they never hit the /api/objects/bulk upsert
+            // path nor IC's Objects table. A signinlog Mapping step pumps these here
+            // like any other class; we route by ObjectClass before the upsert chunker.
+            if (IsSignInLogBatch(batch))
+                return await PostSignInLogBatchAsync(client, creds, batch, cancellationToken);
+
             // IC accepts up to 1000 per call; adapter advertises 500 so the
             // orchestrator already pre-chunks. This is a defensive fallback.
             const int hardCap = 1000;
@@ -610,6 +618,145 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         }
         return ordered;
     }
+
+    private static bool IsSignInLogBatch(IReadOnlyList<ConnectorObject> batch)
+    {
+        // A Mapping step pumps a single object class, so the batch is homogeneous;
+        // probe the first record's class.
+        return batch.Count > 0
+            && string.Equals(batch[0].ObjectClass, "signinlog", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Sign-in EVENT emit. POSTs each ConnectorObject (built by the signinlog
+    /// Mapping step from the camelCase Graph attribute set) to IC's
+    /// <c>POST /api/objects/signin-logs/bulk</c>. Mirrors the upsert + membership
+    /// paths: Source is the sanitized source-connection name (so IC resolves the
+    /// SAME DirectoryConnection the user/group upserts landed under) and
+    /// SourceJobServerId/Name carry this installation's provenance. Chunked to
+    /// &lt;=1000 events per POST. Best-effort: a failed chunk is logged and the run
+    /// proceeds (these are observability records, not the canonical directory).
+    /// Returns one SinkWriteResult per input object in order so the orchestrator
+    /// counts correctly.
+    /// </summary>
+    private async Task<List<SinkWriteResult>> PostSignInLogBatchAsync(
+        HttpClient client,
+        IdentityCenterCredentials creds,
+        IReadOnlyList<ConnectorObject> batch,
+        CancellationToken cancellationToken)
+    {
+        // Source connection name is carried per-record on "_sourceConnection" (the
+        // orchestrator stamps ctx.SourceTenant.Name); fall back to "Conduit".
+        var source = SanitizeSource(LookupAttr(batch[0], "_sourceConnection"));
+        const int maxEventsPerPost = 1000;
+        var results = new List<SinkWriteResult>(batch.Count);
+
+        for (var offset = 0; offset < batch.Count; offset += maxEventsPerPost)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(maxEventsPerPost, batch.Count - offset);
+
+            var events = new List<object>(count);
+            for (var i = 0; i < count; i++)
+                events.Add(BuildSignInLogEvent(batch[offset + i]));
+
+            var body = new
+            {
+                BatchId = Guid.NewGuid(),
+                Source = source,
+                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerName = ConduitInstanceIdentity.Name,
+                Events = events
+            };
+
+            SinkWriteOutcome outcome;
+            string? error = null;
+            try
+            {
+                using var resp = await client.PostAsJsonAsync(
+                    $"{creds.BaseUrl}/api/objects/signin-logs/bulk", body, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    outcome = SinkWriteOutcome.Updated;
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
+                    var root = doc.RootElement;
+                    int persisted = root.TryGetProperty("eventsPersisted", out var pEl) && pEl.ValueKind == JsonValueKind.Number ? pEl.GetInt32() : count;
+                    int resolved = root.TryGetProperty("usersResolved", out var rEl) && rEl.ValueKind == JsonValueKind.Number ? rEl.GetInt32() : 0;
+                    int unresolved = root.TryGetProperty("usersUnresolved", out var uEl) && uEl.ValueKind == JsonValueKind.Number ? uEl.GetInt32() : 0;
+                    _logger.LogInformation(
+                        "IC sign-in log chunk pushed (tenant={TenantId}, events={Events}, eventsPersisted={Persisted}, usersResolved={Resolved}, usersUnresolved={Unresolved}).",
+                        _tenantId, count, persisted, resolved, unresolved);
+                }
+                else
+                {
+                    outcome = SinkWriteOutcome.Failed;
+                    var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    error = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
+                    _logger.LogError(
+                        "IC sign-in log POST failed (tenant={TenantId}, events={Events}): HTTP {Status} {Detail}",
+                        _tenantId, count, (int)resp.StatusCode, detail);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                outcome = SinkWriteOutcome.Failed;
+                error = ex.Message;
+                _logger.LogError(ex, "IC sign-in log chunk threw (tenant={TenantId}, events={Events})", _tenantId, count);
+            }
+
+            for (var i = 0; i < count; i++)
+                results.Add(outcome == SinkWriteOutcome.Failed
+                    ? SinkWriteResult.Fail(error ?? "Failed")
+                    : SinkWriteResult.Ok(outcome));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Map one signinlog ConnectorObject's camelCase attribute bag (set by
+    /// <c>EntraSignInLogSource</c>) to an IC SignInLogEvent payload. Types are parsed
+    /// back from their attribute-bag string form: signInDateTime → DateTime,
+    /// errorCode → int?, isInteractive → bool.
+    /// </summary>
+    private static object BuildSignInLogEvent(ConnectorObject o)
+    {
+        return new
+        {
+            SignInId = LookupAttr(o, "signInId") ?? o.SourceId,
+            UserSourceUniqueId = LookupAttr(o, "userSourceUniqueId") ?? string.Empty,
+            UserPrincipalName = LookupAttr(o, "userPrincipalName"),
+            SignInDateTime = ParseDateTime(LookupAttr(o, "signInDateTime")),
+            AppDisplayName = LookupAttr(o, "appDisplayName"),
+            AppId = LookupAttr(o, "appId"),
+            ClientAppUsed = LookupAttr(o, "clientAppUsed"),
+            DeviceDetail = LookupAttr(o, "deviceDetail"),
+            IpAddress = LookupAttr(o, "ipAddress"),
+            Location = LookupAttr(o, "location"),
+            Status = LookupAttr(o, "status"),
+            ErrorCode = ParseInt(LookupAttr(o, "errorCode")),
+            RiskLevel = LookupAttr(o, "riskLevel"),
+            RiskState = LookupAttr(o, "riskState"),
+            ConditionalAccessStatus = LookupAttr(o, "conditionalAccessStatus"),
+            IsInteractive = ParseBool(LookupAttr(o, "isInteractive")),
+            ResourceDisplayName = LookupAttr(o, "resourceDisplayName"),
+            ResourceId = LookupAttr(o, "resourceId")
+        };
+    }
+
+    private static DateTime ParseDateTime(string? v) =>
+        DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
+            ? dt
+            : default;
+
+    private static int? ParseInt(string? v) =>
+        int.TryParse(v, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : (int?)null;
+
+    private static bool ParseBool(string? v) =>
+        bool.TryParse(v, out var b) && b;
 
     private static List<SinkWriteResult> MapResults(
         IReadOnlyList<ConnectorObject> slice,

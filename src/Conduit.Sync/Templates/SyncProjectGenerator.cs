@@ -112,7 +112,7 @@ namespace Conduit.Sync.Templates
             "user", "group", "servicePrincipal", "directoryRole",
             "application", "device",
             "administrativeUnit", "conditionalAccessPolicy", "oAuth2PermissionGrant", "domain",
-            "m365usage"
+            "m365usage", "signinlog"
         };
 
         // ── SharePoint / M365: Core(2) / Collaboration(6) / Full(7) ──
@@ -290,8 +290,11 @@ namespace Conduit.Sync.Templates
                 var stepId = Guid.NewGuid();
 
                 // Only Mapping steps. The orchestrator skips every non-Mapping (governance)
-                // step type, so we never emit Lookup / GroupMembership / License / SignInLog /
+                // step type, so we never emit Lookup / GroupMembership / License /
                 // UsageReport / AppRole steps — those are IC governance, not the free pump.
+                // NOTE: "signinlog" (and "m365usage") are pumped AS Mapping steps — they
+                // ride the normal source→sink loop and the IC sink routes them to their
+                // dedicated ingest endpoints, so they are NOT filtered out here.
                 var step = new WorkflowStep
                 {
                     Id = stepId,

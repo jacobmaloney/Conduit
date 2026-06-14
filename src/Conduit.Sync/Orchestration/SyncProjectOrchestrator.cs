@@ -952,6 +952,16 @@ public sealed class SyncProjectOrchestrator
                 $"    Delete-detection DISABLED: source connector {sourceAdapter.SystemType} declares SuppressDeleteDetection (a missing record is not evidence of deletion). Upsert-only.");
             tombstoneSink = null;
         }
+        // Sign-in EVENT records are append-only and aged out at the source (Entra P1
+        // ~30-day retention), so an event "disappearing" from a windowed read is
+        // expiry, NOT a deletion. Never tombstone them. Conduit native class names
+        // are lowercase; compare case-insensitively.
+        if (tombstoneSink is not null && string.Equals(objectClass, "signinlog", StringComparison.OrdinalIgnoreCase))
+        {
+            await Log(run, "Info",
+                "    Delete-detection DISABLED for class 'signinlog': sign-in events are append-only and age out at the source — a missing event is expiry, not deletion. Upsert-only.");
+            tombstoneSink = null;
+        }
         var deleteDetectionOn = tombstoneSink is not null;
         HashSet<string> priorIdsForDelete;
         if (deleteDetectionOn && !skipUnchanged)

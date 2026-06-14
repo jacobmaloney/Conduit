@@ -115,6 +115,21 @@ public sealed class EntraIDSource : IConnectorSource
             yield break;
         }
 
+        // Sign-in EVENT stream. Pages /auditLogs/signIns over a recent window and
+        // emits one ConnectorObject per sign-in. High-volume + append-only; least-
+        // priv scope: AuditLog.Read.All. A missing scope warns and yields nothing.
+        if (string.Equals(objectClass, EntraSignInLogSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            var signInSource = new EntraSignInLogSource(client, _logger);
+            await foreach (var obj in signInSource.ReadAsync(scope, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
         // Directory object types beyond User/Group. These already have attribute
         // templates (AttributeTemplateCatalog) and are advertised by
         // SyncProjectGenerator (EntraFull/EntraSecurity) but were previously
@@ -297,6 +312,12 @@ public sealed class EntraIDSource : IConnectorSource
         else if (string.Equals(objectClass, M365UsageReportSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
         {
             // Usage reports have no delta endpoint — always full-read, never advertise a cursor.
+            return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
+        }
+        else if (string.Equals(objectClass, EntraSignInLogSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            // Sign-in events have no delta endpoint — windowed full-read each run,
+            // never advertise a cursor (the windowed read is the incremental story).
             return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
         }
         else if (IsExtendedDirectoryClass(objectClass))
@@ -873,7 +894,10 @@ public sealed class EntraIDSource : IConnectorSource
         "mobilePhone", "businessPhones", "streetAddress", "city", "state",
         "postalCode", "country", "employeeId", "employeeType",
         "accountEnabled", "onPremisesSamAccountName", "onPremisesDistinguishedName",
-        "createdDateTime", "mailNickname", "proxyAddresses", "faxNumber"
+        "createdDateTime", "mailNickname", "proxyAddresses", "faxNumber",
+        // signInActivity requires the AuditLog.Read.All app scope (consented) and
+        // Entra ID P1+ — if the scope were missing Graph 403s the whole user read.
+        "signInActivity"
     };
 
     // Delta supports a narrower select set. Graph rejects some fields (e.g.
@@ -884,7 +908,9 @@ public sealed class EntraIDSource : IConnectorSource
         "id", "displayName", "userPrincipalName", "mail", "givenName", "surname",
         "department", "jobTitle", "companyName", "officeLocation",
         "mobilePhone", "employeeId", "accountEnabled",
-        "onPremisesSamAccountName", "mailNickname"
+        "onPremisesSamAccountName", "mailNickname",
+        // signInActivity requires the AuditLog.Read.All app scope (consented).
+        "signInActivity"
     };
 
     private static readonly string[] GroupSelectFields = new[]
@@ -1024,6 +1050,8 @@ public sealed class EntraIDSource : IConnectorSource
             attrs["proxyAddresses"] = string.Join(";", u.ProxyAddresses);
         if (u.CreatedDateTime.HasValue)
             attrs["whenCreated"] = u.CreatedDateTime.Value.ToString("o");
+        Set(attrs, "lastSignInDateTime", u.SignInActivity?.LastSignInDateTime?.ToString("o"));
+        Set(attrs, "lastNonInteractiveSignInDateTime", u.SignInActivity?.LastNonInteractiveSignInDateTime?.ToString("o"));
 
         return new ConnectorObject
         {

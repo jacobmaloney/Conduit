@@ -101,6 +101,10 @@ public static class SyncProjectBlueprintCatalog
         + "https://graph.microsoft.com/v1.0/admin/reportSettings with "
         + "{\"displayConcealedNames\": false} — otherwise usage rows come back empty.";
 
+    private const string SignInLogPrereq =
+        "Sign-in event logs require the AuditLog.Read.All Graph scope and Entra ID P1+ "
+        + "(~30-day retention). High volume — pulls roughly the last 30 days of sign-ins.";
+
     private static readonly IReadOnlyList<SyncProjectBlueprint> _all = new List<SyncProjectBlueprint>
     {
         new SyncProjectBlueprint
@@ -121,12 +125,14 @@ public static class SyncProjectBlueprintCatalog
                     + "Device.Read.All, AdministrativeUnit.Read.All, Policy.Read.All, Directory.Read.All, "
                     + "Domain.Read.All.",
                 "oAuth2PermissionGrant requires Directory.Read.All (unavoidably broad).",
-                DisplayConcealedNamesPrereq
+                DisplayConcealedNamesPrereq,
+                SignInLogPrereq
             },
             ClassAdvisories = new Dictionary<string, string>
             {
                 ["m365usage"] = DisplayConcealedNamesPrereq,
-                ["oAuth2PermissionGrant"] = "Requires the broad Directory.Read.All scope."
+                ["oAuth2PermissionGrant"] = "Requires the broad Directory.Read.All scope.",
+                ["signinlog"] = SignInLogPrereq
             }
         },
         new SyncProjectBlueprint

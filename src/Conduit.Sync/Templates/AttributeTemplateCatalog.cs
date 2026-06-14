@@ -274,6 +274,10 @@ public static class AttributeTemplateCatalog
             E("employeeType", "EmployeeType"),
             E("accountEnabled", "IsActive", false, "Boolean"),
             E("createdDateTime", "WhenCreated"),
+            // Tier 1: per-user last-sign-in summary. IC has no typed Objects column;
+            // its canonical last-logon attribute key is "LastLogonTimestamp" (the same
+            // key IC's own AD + Entra-device syncs use), landing in ObjectAttributes.
+            E("lastSignInDateTime", "LastLogonTimestamp"),
         };
         c[(Systems.EntraID, "Group")] = new[]
         {
