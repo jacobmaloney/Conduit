@@ -39,12 +39,103 @@ public class SyncProjectBlueprintTests
         p.Steps.Select(s => s.Step.ObjectClass!).ToArray();
 
     [Fact]
-    public void Catalog_ShipsExactlyThreeBlueprints()
+    public void Catalog_ShipsExactlySixBlueprints()
     {
-        Assert.Equal(3, SyncProjectBlueprintCatalog.All.Count);
+        Assert.Equal(6, SyncProjectBlueprintCatalog.All.Count);
         Assert.NotNull(SyncProjectBlueprintCatalog.GetById("entra-directory-governance"));
         Assert.NotNull(SyncProjectBlueprintCatalog.GetById("m365-license-usage"));
         Assert.NotNull(SyncProjectBlueprintCatalog.GetById("azure-resource-inventory"));
+        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("aws-iam-governance"));
+        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("aws-identity-center-governance"));
+        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("gws-directory-governance"));
+    }
+
+    [Fact]
+    public void AwsIamGovernance_Expands_To_FiveClasses_WithMappings()
+    {
+        var bp = SyncProjectBlueprintCatalog.GetById("aws-iam-governance")!;
+        Assert.Equal("AWS", bp.SourceSystemType);
+        var project = ExpandOne(bp);
+
+        Assert.Equal(new[] { "user", "group", "role", "policy", "account" }, StepClasses(project));
+        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+            $"class {s.Step.ObjectClass} should have > 0 mappings"));
+    }
+
+    [Fact]
+    public void AwsIdentityCenterGovernance_Expands_To_ThreeClasses_WithMappings()
+    {
+        var bp = SyncProjectBlueprintCatalog.GetById("aws-identity-center-governance")!;
+        Assert.Equal("AWSIdentityCenter", bp.SourceSystemType);
+        var project = ExpandOne(bp);
+
+        Assert.Equal(new[] { "user", "group", "permissionSet" }, StepClasses(project));
+        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+            $"class {s.Step.ObjectClass} should have > 0 mappings"));
+    }
+
+    [Fact]
+    public void GwsDirectoryGovernance_Expands_To_FiveClasses_WithMappings()
+    {
+        var bp = SyncProjectBlueprintCatalog.GetById("gws-directory-governance")!;
+        Assert.Equal("GoogleWorkspace", bp.SourceSystemType);
+        var project = ExpandOne(bp);
+
+        Assert.Equal(new[] { "user", "group", "organizationalUnit", "role", "domain" }, StepClasses(project));
+        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+            $"class {s.Step.ObjectClass} should have > 0 mappings"));
+    }
+
+    [Fact]
+    public void Generator_AwsFull_advertises_role_policy_account_after_casing_fix()
+    {
+        var gen = NewGenerator();
+        // The bug: case "Aws" never matched the live adapter SystemType "AWS",
+        // so a real AWS source silently got the default {user, group}.
+        var full = gen.GetObjectClasses("AWS", GenerationMode.Full);
+        Assert.Contains("role", full);
+        Assert.Contains("policy", full);
+        Assert.Contains("account", full);
+
+        var core = gen.GetObjectClasses("AWS", GenerationMode.Core);
+        Assert.Equal(new[] { "user", "group" }, core.ToArray());
+    }
+
+    [Fact]
+    public void Generator_AwsIdentityCenterFull_advertises_permissionSet()
+    {
+        var gen = NewGenerator();
+        var full = gen.GetObjectClasses("AWSIdentityCenter", GenerationMode.Full);
+        Assert.Contains("permissionSet", full);
+        Assert.Contains("user", full);
+        Assert.Contains("group", full);
+    }
+
+    [Fact]
+    public void Generator_GoogleFull_advertises_orgUnit_role_domain()
+    {
+        var gen = NewGenerator();
+        var full = gen.GetObjectClasses("GoogleWorkspace", GenerationMode.Full);
+        Assert.Contains("organizationalUnit", full);
+        Assert.Contains("role", full);
+        Assert.Contains("domain", full);
+    }
+
+    [Theory]
+    [InlineData("AWS", "Role")]
+    [InlineData("AWS", "Policy")]
+    [InlineData("AWS", "Account")]
+    [InlineData("AWSIdentityCenter", "User")]
+    [InlineData("AWSIdentityCenter", "Group")]
+    [InlineData("AWSIdentityCenter", "PermissionSet")]
+    [InlineData("GoogleWorkspace", "Role")]
+    [InlineData("GoogleWorkspace", "Domain")]
+    public void AttributeCatalog_HasRequiredSourceUniqueId_For_NewClasses(string systemType, string objectClass)
+    {
+        var entries = AttributeTemplateCatalog.Get(systemType, objectClass);
+        Assert.NotNull(entries);
+        Assert.NotEmpty(entries!);
+        Assert.Contains(entries!, e => e.Canonical == "SourceUniqueId" && e.IsRequired);
     }
 
     [Fact]

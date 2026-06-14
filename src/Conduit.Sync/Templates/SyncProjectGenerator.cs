@@ -126,9 +126,11 @@ namespace Conduit.Sync.Templates
         private static readonly string[] OktaCore = { "user", "group" };
         private static readonly string[] OktaFull = { "user", "group", "application" };
         private static readonly string[] GoogleCore = { "user", "group" };
-        private static readonly string[] GoogleFull = { "user", "group", "organizationalUnit" };
+        private static readonly string[] GoogleFull = { "user", "group", "organizationalUnit", "role", "domain" };
         private static readonly string[] AwsCore = { "user", "group" };
-        private static readonly string[] AwsFull = { "user", "group", "role" };
+        private static readonly string[] AwsFull = { "user", "group", "role", "policy", "account" };
+        private static readonly string[] AwsIdentityCenterCore = { "user", "group" };
+        private static readonly string[] AwsIdentityCenterFull = { "user", "group", "permissionSet" };
         private static readonly string[] LdapCore = { "user", "group" };
         private static readonly string[] LdapFull = { "user", "group", "organizationalUnit" };
         private static readonly string[] DatabaseCore = { "user" };
@@ -176,8 +178,10 @@ namespace Conduit.Sync.Templates
                     return mode == GenerationMode.Core ? OktaCore : OktaFull;
                 case "GoogleWorkspace":
                     return mode == GenerationMode.Core ? GoogleCore : GoogleFull;
-                case "Aws":
+                case "AWS":
                     return mode == GenerationMode.Core ? AwsCore : AwsFull;
+                case "AWSIdentityCenter":
+                    return mode == GenerationMode.Core ? AwsIdentityCenterCore : AwsIdentityCenterFull;
                 case "GenericLdap":
                     return mode == GenerationMode.Core ? LdapCore : LdapFull;
                 case "Database":

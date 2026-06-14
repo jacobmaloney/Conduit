@@ -167,6 +167,65 @@ public static class SyncProjectBlueprintCatalog
                     + "management-group scope you want to inventory.",
                 "Source-only: Azure Resource Graph never emits deletions."
             }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "aws-iam-governance",
+            Name = "AWS IAM Governance",
+            Description =
+                "Inventories AWS IAM for governance — users, groups, roles, customer-managed "
+                + "policies, and the account alias — into IdentityCenter.",
+            SourceSystemType = "AWS",
+            ExplicitClasses = new[] { "user", "group", "role", "policy", "account" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires an IAM access key with these read-only actions: iam:ListUsers, "
+                    + "iam:ListGroups, iam:GetGroup, iam:ListRoles, iam:ListPolicies, "
+                    + "iam:ListAccountAliases.",
+                "Source-only inventory: classes the credential cannot read are skipped with a "
+                    + "warning rather than failing the whole run."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "aws-identity-center-governance",
+            Name = "AWS Identity Center Governance",
+            Description =
+                "Inventories AWS IAM Identity Center (formerly AWS SSO) — users, groups, and "
+                + "permission sets — into IdentityCenter.",
+            SourceSystemType = "AWSIdentityCenter",
+            ExplicitClasses = new[] { "user", "group", "permissionSet" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires an access key with read-only Identity Center actions: "
+                    + "identitystore:ListUsers, identitystore:ListGroups, sso:ListInstances, "
+                    + "sso:ListPermissionSets, sso:DescribePermissionSet.",
+                "The Identity Store ID and SSO Instance ARN auto-discover via "
+                    + "sso:ListInstances when left blank on the connection."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "gws-directory-governance",
+            Name = "Google Workspace Directory",
+            Description =
+                "Inventories the Google Workspace directory — users, groups, organizational "
+                + "units, admin roles, and domains — into IdentityCenter for governance.",
+            SourceSystemType = "GoogleWorkspace",
+            ExplicitClasses = new[] { "user", "group", "organizationalUnit", "role", "domain" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires a GCP service account with domain-wide delegation, an impersonated "
+                    + "admin email, and these read-only Admin SDK Directory scopes: "
+                    + "admin.directory.user.readonly, admin.directory.group.readonly, "
+                    + "admin.directory.group.member.readonly, admin.directory.orgunit.readonly, "
+                    + "admin.directory.rolemanagement.readonly, admin.directory.domain.readonly.",
+                "Source-only inventory: classes whose scope was not granted are skipped with a "
+                    + "warning rather than failing the whole run."
+            }
         }
     };
 

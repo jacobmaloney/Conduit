@@ -402,6 +402,49 @@
                         </small></ul>
                     </div>
                 }
+                else if (form.SystemType == "AWS" || form.SystemType == "AWSIdentityCenter")
+                {
+                    var awsIamActions = "iam:ListUsers iam:ListGroups iam:GetGroup iam:ListRoles iam:ListPolicies iam:ListAccountAliases";
+                    var awsSsoActions = "identitystore:ListUsers identitystore:ListGroups sso:ListInstances sso:ListPermissionSets sso:DescribePermissionSet";
+                    var isSso = form.SystemType == "AWSIdentityCenter";
+                    <div class="alert alert-info py-2">
+                        <div class="fw-bold mb-1"><i class="oi oi-info"></i> What you need before you start</div>
+                        <div class="mb-2">An <strong>IAM user with programmatic access</strong> (Access Key ID + Secret Access Key) and a <strong>Region</strong>@(isSso ? " — the Identity Store ID and SSO Instance ARN auto-resolve when left blank." : ".")</div>
+                        <div class="mb-1"><small class="text-muted">@(isSso ? "Read-only Identity Center actions" : "Read-only IAM actions")</small></div>
+                        <span class="url-cell mb-2">
+                            <code>@(isSso ? awsSsoActions : awsIamActions)</code>
+                            <button class="url-copy" type="button" title="Copy permissions" @onclick="@(() => CopyAsync(isSso ? awsSsoActions : awsIamActions, "aws-actions"))">
+                                <i class="oi oi-clipboard"></i> @(copiedKey == "aws-actions" ? "Copied" : "")
+                            </button>
+                        </span>
+                        <ol class="mb-0 ps-3"><small>
+                            <li>Create an <strong>IAM user</strong> (or role) with <strong>programmatic access</strong> — no console login needed.</li>
+                            <li>Attach a <strong>read-only policy</strong> granting the actions above (resource <code>*</code> is fine — they are all list/describe).</li>
+                            <li>Generate an access key for that user and paste the <strong>Access Key ID</strong> + <strong>Secret Access Key</strong> below, with your <strong>Region</strong>.</li>
+                        </small></ol>
+                    </div>
+                }
+                else if (form.SystemType == "GoogleWorkspace")
+                {
+                    var gwsScopes = "https://www.googleapis.com/auth/admin.directory.user.readonly https://www.googleapis.com/auth/admin.directory.group.readonly https://www.googleapis.com/auth/admin.directory.group.member.readonly https://www.googleapis.com/auth/admin.directory.orgunit.readonly https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly https://www.googleapis.com/auth/admin.directory.domain.readonly";
+                    <div class="alert alert-info py-2">
+                        <div class="fw-bold mb-1"><i class="oi oi-info"></i> What you need before you start</div>
+                        <div class="mb-2">A <strong>GCP service account</strong> with a <strong>JSON key</strong>, <strong>domain-wide delegation</strong> enabled, and a Workspace <strong>admin email to impersonate</strong>.</div>
+                        <div class="mb-1"><small class="text-muted">Read-only Admin SDK Directory scopes (paste these into the domain-wide delegation entry in the Admin console)</small></div>
+                        <span class="url-cell mb-2">
+                            <code>@gwsScopes</code>
+                            <button class="url-copy" type="button" title="Copy scopes" @onclick="@(() => CopyAsync(gwsScopes, "gws-scopes"))">
+                                <i class="oi oi-clipboard"></i> @(copiedKey == "gws-scopes" ? "Copied" : "")
+                            </button>
+                        </span>
+                        <ol class="mb-0 ps-3"><small>
+                            <li>Create a <strong>service account</strong> in a GCP project and download its <strong>JSON key</strong>.</li>
+                            <li>Enable the <strong>Admin SDK API</strong> for that project.</li>
+                            <li>In the Workspace <strong>Admin console &gt; Security &gt; API controls &gt; Domain-wide delegation</strong>, add the service account's client ID with the read-only scopes above.</li>
+                            <li>Supply the service-account JSON, the <strong>admin email to impersonate</strong>, and your primary <strong>domain</strong> below.</li>
+                        </small></ol>
+                    </div>
+                }
                 @if (createCredTypes is { Count: > 0 })
                 {
                     @foreach (var ctype in createCredTypes)

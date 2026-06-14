@@ -51,6 +51,7 @@ public static class AttributeTemplateCatalog
         public const string Database = "Database";
         public const string SharePoint = "SharePoint";
         public const string Aws = "Aws";
+        public const string AwsIdentityCenter = "AWSIdentityCenter";
     }
 
     /// <summary>Look up a template by connector + object class. Null when none exists.</summary>
@@ -613,6 +614,27 @@ public static class AttributeTemplateCatalog
             E("cn", "CN"),
             E("dn", "DN"),
             E("description", "Description"),
+            E("orgUnitPath", "OrgUnitPath"),
+            E("parentOrgUnitPath", "ParentOrgUnitPath"),
+        };
+        c[(Systems.GoogleWorkspace, "Role")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("roleName", "RoleName"),
+            E("description", "Description"),
+            E("isSystemRole", "IsSystemRole", false, "Boolean"),
+            E("isSuperAdminRole", "IsSuperAdminRole", false, "Boolean"),
+        };
+        c[(Systems.GoogleWorkspace, "Domain")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("domainName", "DomainName"),
+            E("isPrimary", "IsPrimary", false, "Boolean"),
+            E("verified", "Verified", false, "Boolean"),
         };
 
         // ──────────────────────────────── AWS ──────────────────────────────────
@@ -642,6 +664,62 @@ public static class AttributeTemplateCatalog
             E("cn", "CN"),
             E("description", "Description"),
             E("arn", "ARN"),
+            E("maxSessionDuration", "MaxSessionDuration", false, "Integer"),
+            E("whenCreated", "WhenCreated"),
+        };
+        c[(Systems.Aws, "Policy")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("description", "Description"),
+            E("arn", "ARN"),
+            E("attachmentCount", "AttachmentCount", false, "Integer"),
+            E("whenCreated", "WhenCreated"),
+            E("whenChanged", "WhenChanged"),
+        };
+        c[(Systems.Aws, "Account")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("accountAlias", "AccountAlias"),
+        };
+
+        // ───────────────────────── AWS Identity Center ─────────────────────────
+        // The SSO-flavored IdentityStore + SSO Admin source. SourceUniqueId is the
+        // IdentityStore UserId / GroupId for user/group, and the permission-set ARN
+        // for permissionSet.
+        c[(Systems.AwsIdentityCenter, "User")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("userName", "Username", true),
+            E("displayName", "DisplayName"),
+            E("givenName", "FirstName"),
+            E("sn", "LastName"),
+            E("mail", "Email"),
+            E("title", "JobTitle"),
+            E("telephoneNumber", "PhoneNumber"),
+            E("mobilePhone", "MobilePhone"),
+            E("externalId", "ExternalId"),
+        };
+        c[(Systems.AwsIdentityCenter, "Group")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("description", "Description"),
+            E("externalId", "ExternalId"),
+        };
+        c[(Systems.AwsIdentityCenter, "PermissionSet")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("name", "Name"),
+            E("description", "Description"),
+            E("arn", "ARN"),
+            E("sessionDuration", "SessionDuration"),
+            E("whenCreated", "WhenCreated"),
         };
 
         // ───────────────────────────── Generic LDAP ────────────────────────────

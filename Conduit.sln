@@ -59,6 +59,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.AzureRes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.AzureResourceGraph.Tests", "tests\Conduit.Connectors.AzureResourceGraph.Tests\Conduit.Connectors.AzureResourceGraph.Tests.csproj", "{91930EB5-C12A-43A6-8112-132843E6AFE5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Conduit.Connectors.Cloud.Tests", "tests\Conduit.Connectors.Cloud.Tests\Conduit.Connectors.Cloud.Tests.csproj", "{E74BAB33-5594-4830-BD04-60E78ED9467D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -381,6 +383,18 @@ Global
 		{91930EB5-C12A-43A6-8112-132843E6AFE5}.Release|x64.Build.0 = Release|Any CPU
 		{91930EB5-C12A-43A6-8112-132843E6AFE5}.Release|x86.ActiveCfg = Release|Any CPU
 		{91930EB5-C12A-43A6-8112-132843E6AFE5}.Release|x86.Build.0 = Release|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Debug|x64.Build.0 = Debug|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Debug|x86.Build.0 = Debug|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Release|x64.ActiveCfg = Release|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Release|x64.Build.0 = Release|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Release|x86.ActiveCfg = Release|Any CPU
+		{E74BAB33-5594-4830-BD04-60E78ED9467D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -412,5 +426,6 @@ Global
 		{FE84E26A-A840-438B-96D4-C4CE300C1311} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{4D5A9B9D-95AD-41C9-AB41-3BB162CC0851} = {5F16E770-EEBA-482A-B15A-B7BD5A7CF5C2}
 		{91930EB5-C12A-43A6-8112-132843E6AFE5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{E74BAB33-5594-4830-BD04-60E78ED9467D} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
