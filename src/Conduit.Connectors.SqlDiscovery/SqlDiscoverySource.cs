@@ -674,6 +674,8 @@ public sealed class SqlDiscoverySource : IConnectorSource
             attrs["memoryGB"] = mem.ToString(CultureInfo.InvariantCulture);
         if (facts.LoginsJson is not null)
             attrs["sqlLoginsJson"] = facts.LoginsJson;
+        if (facts.PrincipalsJson is not null)
+            attrs["sqlPrincipalsJson"] = facts.PrincipalsJson;
         if (!string.IsNullOrEmpty(ip))
             attrs["ipHostNumber"] = ip;
 

@@ -42,6 +42,12 @@ internal sealed class SqlServerFacts
     /// <summary>Null when login collection is disabled or the query failed.</summary>
     public string? LoginsJson { get; init; }
     public int LoginCount { get; init; }
+    /// <summary>
+    /// Deeper governance signal (bounded): server role memberships, per-DB role
+    /// memberships, orphaned users, guest-enabled DBs, and the sysadmin/db_owner
+    /// roster. Null when collection is disabled or every query failed.
+    /// </summary>
+    public string? PrincipalsJson { get; init; }
 }
 
 internal sealed class ScanOutcome
@@ -375,6 +381,11 @@ ORDER BY name;";
             catch (SqlException) { /* login inventory is best-effort */ }
         }
 
+        // Deeper governance signal — gated on the same CollectLogins toggle (the
+        // "read principals" opt-in). Best-effort and bounded; a failure here never
+        // fails the scan, it just leaves PrincipalsJson null.
+        string? principalsJson = collectLogins ? await ReadPrincipalsAsync(conn, ct) : null;
+
         return new SqlServerFacts
         {
             MachineName = machineName,
@@ -389,8 +400,163 @@ ORDER BY name;";
             DatabasesJson = System.Text.Json.JsonSerializer.Serialize(databases),
             DatabaseCount = dbCount,
             LoginsJson = loginsJson,
-            LoginCount = loginCount
+            LoginCount = loginCount,
+            PrincipalsJson = principalsJson
         };
+    }
+
+    /// <summary>
+    /// Reads the deeper governance signal IC's SQL management form renders:
+    /// server-role memberships, per-database role memberships, orphaned users (DB
+    /// user whose SID has no matching server login), guest-enabled databases, and
+    /// the sysadmin/db_owner roster. Queries are lifted from IC's
+    /// SqlDirectScanService.GetPermissionsAsync. Read-only; every block is
+    /// best-effort and individually bounded so one inaccessible DB never aborts the
+    /// rest. Database scope is set with USE [name] using a server-side QUOTENAME-
+    /// equivalent (']' doubled) — never raw concatenation of untrusted text.
+    /// </summary>
+    private static async Task<string?> ReadPrincipalsAsync(SqlConnection conn, CancellationToken ct)
+    {
+        // Bounds so a sprawling estate can't produce an unbounded attribute blob.
+        const int MaxServerRows = 500;
+        const int MaxDatabases = 100;
+        const int MaxRowsPerDb = 500;
+
+        var serverRoleMembers = new List<object>();
+        var dbRoleMembers = new List<object>();
+        var orphanedUsers = new List<object>();
+        var guestEnabledDbs = new List<string>();
+        var sysadmins = new List<string>();
+
+        try
+        {
+            const string serverRoleSql = @"
+SELECT TOP (@max) sp.name AS PrincipalName, sp.type_desc AS PrincipalType, sr.name AS RoleName
+FROM sys.server_role_members srm
+JOIN sys.server_principals sp ON srm.member_principal_id = sp.principal_id
+JOIN sys.server_principals sr ON srm.role_principal_id = sr.principal_id
+WHERE sp.name NOT LIKE '##%' AND sp.name <> 'sa'
+ORDER BY sr.name, sp.name;";
+            await using var cmd = new SqlCommand(serverRoleSql, conn);
+            cmd.Parameters.AddWithValue("@max", MaxServerRows);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var roleName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+                serverRoleMembers.Add(new
+                {
+                    principalName = reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
+                    principalType = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                    roleName,
+                    isPrivileged = string.Equals(roleName, "sysadmin", StringComparison.OrdinalIgnoreCase)
+                                   || string.Equals(roleName, "securityadmin", StringComparison.OrdinalIgnoreCase)
+                                   || string.Equals(roleName, "serveradmin", StringComparison.OrdinalIgnoreCase)
+                });
+                if (string.Equals(roleName, "sysadmin", StringComparison.OrdinalIgnoreCase)
+                    && !reader.IsDBNull(0))
+                    sysadmins.Add(reader.GetString(0));
+            }
+        }
+        catch (SqlException) { /* server-role read is best-effort */ }
+
+        // User databases only (id > 4), online (state = 0).
+        var dbNames = new List<string>();
+        try
+        {
+            const string dbListSql =
+                "SELECT TOP (@max) name FROM sys.databases WHERE state = 0 AND database_id > 4 ORDER BY name;";
+            await using var cmd = new SqlCommand(dbListSql, conn);
+            cmd.Parameters.AddWithValue("@max", MaxDatabases);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                if (!reader.IsDBNull(0)) dbNames.Add(reader.GetString(0));
+        }
+        catch (SqlException) { /* keep whatever we have */ }
+
+        foreach (var db in dbNames)
+        {
+            ct.ThrowIfCancellationRequested();
+            // ']' doubling = the QUOTENAME escape; the name itself came from
+            // sys.databases (server-side), not from any payload. USE cannot be
+            // parameterized, so this is the only safe form.
+            var safeDb = db.Replace("]", "]]");
+            var usePrefix = string.Concat("USE [", safeDb, "]; ");
+
+            try
+            {
+                var roleSql = string.Concat(usePrefix, @"
+SELECT TOP (", MaxRowsPerDb.ToString(CultureInfo.InvariantCulture), @") dp.name AS PrincipalName, dp.type_desc AS PrincipalType, r.name AS RoleName
+FROM sys.database_role_members drm
+JOIN sys.database_principals dp ON drm.member_principal_id = dp.principal_id
+JOIN sys.database_principals r ON drm.role_principal_id = r.principal_id
+WHERE dp.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys') AND r.name <> 'public'
+ORDER BY r.name, dp.name;");
+                await using var cmd = new SqlCommand(roleSql, conn);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var roleName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+                    var principalName = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    dbRoleMembers.Add(new
+                    {
+                        databaseName = db,
+                        principalName,
+                        principalType = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                        roleName,
+                        isPrivileged = string.Equals(roleName, "db_owner", StringComparison.OrdinalIgnoreCase)
+                                       || string.Equals(roleName, "db_securityadmin", StringComparison.OrdinalIgnoreCase)
+                    });
+                }
+            }
+            catch (SqlException) { /* skip inaccessible database */ }
+
+            try
+            {
+                // Orphaned users: a SQL/Windows DB principal whose SID has no
+                // matching server login.
+                var orphanSql = string.Concat(usePrefix, @"
+SELECT TOP (", MaxRowsPerDb.ToString(CultureInfo.InvariantCulture), @") dp.name
+FROM sys.database_principals dp
+LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid
+WHERE dp.type IN ('S','U','G') AND sp.sid IS NULL
+  AND dp.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys')
+ORDER BY dp.name;");
+                await using var cmd = new SqlCommand(orphanSql, conn);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                    if (!reader.IsDBNull(0))
+                        orphanedUsers.Add(new { databaseName = db, principalName = reader.GetString(0) });
+            }
+            catch (SqlException) { /* best-effort */ }
+
+            try
+            {
+                // guest enabled = guest has CONNECT on the database.
+                var guestSql = string.Concat(usePrefix, @"
+SELECT COUNT(*) FROM sys.database_permissions dperm
+JOIN sys.database_principals dp ON dperm.grantee_principal_id = dp.principal_id
+WHERE dp.name = 'guest' AND dperm.permission_name = 'CONNECT' AND dperm.state_desc = 'GRANT';");
+                await using var cmd = new SqlCommand(guestSql, conn);
+                var result = await cmd.ExecuteScalarAsync(ct);
+                if (result is int gc && gc > 0) guestEnabledDbs.Add(db);
+            }
+            catch (SqlException) { /* best-effort */ }
+        }
+
+        if (serverRoleMembers.Count == 0 && dbRoleMembers.Count == 0
+            && orphanedUsers.Count == 0 && guestEnabledDbs.Count == 0 && sysadmins.Count == 0)
+        {
+            return null;
+        }
+
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            serverRoleMembers,
+            databaseRoleMembers = dbRoleMembers,
+            orphanedUsers,
+            guestEnabledDatabases = guestEnabledDbs,
+            sysadmins
+        });
     }
 
     /// <summary>

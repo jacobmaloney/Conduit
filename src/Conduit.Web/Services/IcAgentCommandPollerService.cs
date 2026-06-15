@@ -42,6 +42,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
 {
     private const string CommandRunSqlDiscovery = "RunSqlDiscovery";
     private const string CommandApplyObjectWrite = "ApplyObjectWrite";
+    private const string CommandApplySqlWrite = "ApplySqlWrite";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
     private const string IcCredentialName = "identitycenter";
 
@@ -434,6 +435,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message) = await ApplyObjectWriteAsync(command.Id, command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandApplySqlWrite, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message) = await ApplySqlWriteAsync(command.Id, command.PayloadJson, ct);
+        }
         else
         {
             success = false;
@@ -530,6 +535,19 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentWriteExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+    }
+
+    /// <summary>
+    /// ApplySqlWrite: route a single SQL Server security DDL change through this
+    /// agent. Thin shim — all allow-listing / identifier validation / parameterized
+    /// QUOTENAME DDL lives in SqlAgentWriteExecutor, resolved from a per-command DI
+    /// scope (the CredentialProtector it needs is scoped). Raw payload NEVER logged.
+    /// </summary>
+    private async Task<(bool Success, string Message)> ApplySqlWriteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.SqlAgentWriteExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 

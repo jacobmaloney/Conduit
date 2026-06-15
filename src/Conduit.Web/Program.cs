@@ -483,6 +483,11 @@ builder.Services.AddHttpClient("IcAgentCommandPoller")
 // drives the AD sink. Scoped: it resolves the scoped connector adapters + tenant
 // repo + credential protector. The poller resolves it per-command from its scope.
 builder.Services.AddScoped<Conduit.Web.Services.AdAgentWriteExecutor>();
+// ApplySqlWrite executor — validates + allow-lists an IC-routed SQL security DDL
+// change (CREATE/DROP user/login, role membership) and runs it through parameterized
+// QUOTENAME dynamic SQL with the per-connection scan credential. Scoped: it resolves
+// the scoped CredentialProtector. The poller resolves it per-command from its scope.
+builder.Services.AddScoped<Conduit.Web.Services.SqlAgentWriteExecutor>();
 // Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
 builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
 builder.Services.AddHostedService<Conduit.Web.Services.IcAgentCommandPollerService>();

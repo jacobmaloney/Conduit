@@ -9,6 +9,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- SqlAgentWriteExecutor (Conduit.Web) reuses the internal SqlDiscoveryConfigReader
+         to obtain the per-connection scan credential the discovery source already uses. -->
+    <InternalsVisibleTo Include="Conduit.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageReference Include="System.DirectoryServices.Protocols" Version="8.0.0" />
