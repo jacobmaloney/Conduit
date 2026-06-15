@@ -44,6 +44,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandRunSqlDiscovery = "RunSqlDiscovery";
     private const string CommandApplyObjectWrite = "ApplyObjectWrite";
     private const string CommandApplySqlWrite = "ApplySqlWrite";
+    private const string CommandApplyAwsWrite = "ApplyAwsWrite";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
     private const string IcCredentialName = "identitycenter";
 
@@ -451,6 +452,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message) = await ApplySqlWriteAsync(command.Id, command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandApplyAwsWrite, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message) = await ApplyAwsWriteAsync(command.Id, command.PayloadJson, ct);
+        }
         else
         {
             success = false;
@@ -560,6 +565,20 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.SqlAgentWriteExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+    }
+
+    /// <summary>
+    /// ApplyAwsWrite: route a single whitelisted AWS IAM change through this agent.
+    /// Thin shim — all allow-listing / name + ARN validation / privileged-attach
+    /// backstop / AWS SDK calls live in AwsAgentWriteExecutor (+ AwsIamWriter),
+    /// resolved from a per-command DI scope (the CredentialProtector it needs is
+    /// scoped). The raw payload is NEVER logged here.
+    /// </summary>
+    private async Task<(bool Success, string Message)> ApplyAwsWriteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AwsAgentWriteExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 
