@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Conduit.Connectors.IdentityCenter;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Orchestration;
 using Conduit.Sync.Security;
@@ -224,6 +225,17 @@ public sealed class IcAgentCommandPollerService : BackgroundService
                     s.AgentLocation = location;
                 });
                 _logger.LogDebug("IC agent heartbeat ok at {BaseUrl} — enrolled as '{Name}' ({AgentId}).", baseUrl, name, agentId);
+
+                // Drift check (advisory, non-blocking): the key driving this channel should
+                // be bound to THIS installation's provenance id, so write-back commands route
+                // to the same agent that stamps Objects.SourceJobServerId. A mismatch means
+                // the agent was enrolled in IC without (or with a wrong) instance id.
+                if (agentId.HasValue && agentId.Value != ConduitInstanceIdentity.InstanceId)
+                {
+                    _logger.LogWarning(
+                        "IC agent key at {BaseUrl} is bound to agent id {EnrolledId}, which differs from this instance's provenance id {InstanceId} — write-back may not route to this agent. Re-enroll in IdentityCenter using this instance's Instance ID.",
+                        baseUrl, agentId.Value, ConduitInstanceIdentity.InstanceId);
+                }
             }
             else
             {

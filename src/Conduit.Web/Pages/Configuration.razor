@@ -4,6 +4,7 @@
 @using Conduit.DataAccess
 @using Conduit.Web.Authentication
 @using Conduit.Web.Services
+@using Conduit.Connectors.IdentityCenter
 @inject IConfiguration Config
 @inject NavigationManager Navigation
 @inject OpenAccessState OpenAccess
@@ -78,6 +79,22 @@
                         Agent API Key field drives this channel; when it is blank the shared
                         API key is used (legacy mode).
                     </p>
+
+                    <dl class="row mb-3">
+                        <dt class="col-sm-4">Instance ID:</dt>
+                        <dd class="col-sm-8">
+                            <code id="conduitInstanceId">@instanceId</code>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
+                                    @onclick="CopyInstanceId">
+                                <i class="oi oi-clipboard"></i> @copyInstanceLabel
+                            </button>
+                            <div class="small text-muted mt-1">
+                                Use this when enrolling this agent in IdentityCenter — paste it into the
+                                <strong>Conduit instance ID</strong> field on IC's Agents page so the minted
+                                key is bound to the same id this agent stamps on synced objects.
+                            </div>
+                        </dd>
+                    </dl>
 
                     @if (icAgentEndpoints.Count == 0)
                     {
@@ -384,10 +401,28 @@
 
     private List<IcAgentStatusService.EndpointStatus> icAgentEndpoints = new();
 
+    // This installation's durable provenance id. It is the value an admin pastes into
+    // IdentityCenter's enrollment so the minted key's AgentId == this id.
+    private string instanceId = ConduitInstanceIdentity.InstanceId.ToString();
+    private string copyInstanceLabel = "Copy";
+
     protected override async Task OnInitializedAsync()
     {
         icAgentEndpoints = IcAgentStatus.Snapshot();
         await TestDatabaseConnection();
+    }
+
+    private async Task CopyInstanceId()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", instanceId);
+            copyInstanceLabel = "Copied!";
+        }
+        catch
+        {
+            copyInstanceLabel = "Copy failed";
+        }
     }
 
     private async Task OnToggleOpenAccess(ChangeEventArgs e)
