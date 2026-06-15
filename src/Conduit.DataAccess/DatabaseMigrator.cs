@@ -1277,6 +1277,34 @@ END;
 "
             });
 
+            // Migration 28: SinkConnectionCredentialMap — bridges an IdentityCenter
+            // source-connection name (the sanitized DirectoryConnections.Name IC stores)
+            // to the Conduit source Tenant whose credential backs form-driven write-back.
+            // The orchestrator self-populates this whenever a sync runs to an IC sink;
+            // the agent-write executors resolve it (name → ConduitTenantId → credential).
+            // UNIQUE(SourceConnectionName) is REQUIRED: one source name must resolve to
+            // exactly one tenant — a collision is loud, never a silent mis-resolve.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 28,
+                Name = "SinkConnectionCredentialMap",
+                Description = "Maps an IC source-connection name to the Conduit source Tenant whose credential backs write-back. Populated by the orchestrator on every sync to an IC sink; resolved by the AD/SQL agent-write executors.",
+                SqlScript = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SinkConnectionCredentialMap')
+BEGIN
+    CREATE TABLE [dbo].[SinkConnectionCredentialMap] (
+        [Id]                   UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_SinkConnCredMap_Id] DEFAULT NEWID(),
+        [SourceConnectionName] NVARCHAR(100)    NOT NULL,
+        [ConduitTenantId]      UNIQUEIDENTIFIER NOT NULL,
+        [CreatedAt]            DATETIME2        NOT NULL CONSTRAINT [DF_SinkConnCredMap_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [LastModified]         DATETIME2        NOT NULL CONSTRAINT [DF_SinkConnCredMap_LastModified] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_SinkConnectionCredentialMap] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [UQ_SinkConnCredMap_Name] UNIQUE ([SourceConnectionName])
+    );
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

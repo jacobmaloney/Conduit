@@ -398,6 +398,7 @@ builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunAsyncJobRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.WorkflowRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkRecordHashRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.ConnectionCredentialRepository>();
 builder.Services.AddScoped<Conduit.Sync.Security.CredentialProtector>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.ActiveDirectory.ActiveDirectoryAdapter>();

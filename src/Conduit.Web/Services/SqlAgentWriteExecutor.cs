@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Conduit.Connectors.SqlDiscovery;
+using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Security;
 using Microsoft.Data.SqlClient;
 
@@ -89,11 +90,19 @@ public sealed class SqlAgentWriteExecutor
     };
 
     private readonly CredentialProtector _protector;
+    private readonly SinkConnectionCredentialMapRepository _credentialMap;
+    private readonly TenantRepository _tenants;
     private readonly ILogger<SqlAgentWriteExecutor> _logger;
 
-    public SqlAgentWriteExecutor(CredentialProtector protector, ILogger<SqlAgentWriteExecutor> logger)
+    public SqlAgentWriteExecutor(
+        CredentialProtector protector,
+        SinkConnectionCredentialMapRepository credentialMap,
+        TenantRepository tenants,
+        ILogger<SqlAgentWriteExecutor> logger)
     {
         _protector = protector;
+        _credentialMap = credentialMap;
+        _tenants = tenants;
         _logger = logger;
     }
 
@@ -130,9 +139,6 @@ public sealed class SqlAgentWriteExecutor
         if (string.IsNullOrEmpty(operation) || !AllowedOperations.Contains(operation))
             return (false, $"ApplySqlWrite: operation '{p.Operation}' is not allowed.");
 
-        if (!Guid.TryParse(p.ConnectionId, out var connectionId) || connectionId == Guid.Empty)
-            return (false, "ApplySqlWrite: connectionId is missing or not a GUID.");
-
         var serverName = p.ServerName?.Trim();
         if (string.IsNullOrEmpty(serverName))
             return (false, "ApplySqlWrite: serverName is required.");
@@ -141,11 +147,29 @@ public sealed class SqlAgentWriteExecutor
         if (serverName.IndexOfAny(new[] { ';', '\'', '"', '\r', '\n', '\0' }) >= 0)
             return (false, "ApplySqlWrite: serverName contains illegal characters.");
 
-        // ── Load the per-connection scan credential (same blob the source uses) ──
+        // ── Credential resolution (Conduit owns it) ─────────────────────────────
+        // The caller-supplied connectionId is IGNORED for credential selection.
+        // We resolve the Conduit tenant whose 'sqldiscovery' credential backs this
+        // write from the server-trusted sourceConnectionName via the orchestrator-
+        // owned mapping. No mapping / disabled tenant / missing credential → fail
+        // closed; never fall back to connectionId or a default tenant.
+        var sourceConnectionName = p.SourceConnectionName?.Trim();
+        if (string.IsNullOrEmpty(sourceConnectionName))
+            return (false, "ApplySqlWrite: sourceConnectionName is missing.");
+
+        var resolvedTenantId = await _credentialMap.GetTenantIdByNameAsync(sourceConnectionName);
+        if (resolvedTenantId is null || resolvedTenantId.Value == Guid.Empty)
+            return (false, $"ApplySqlWrite: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
+
+        var tenant = await _tenants.GetByIdAsync(resolvedTenantId.Value);
+        if (tenant is null || !tenant.IsActive)
+            return (false, $"ApplySqlWrite: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
+
+        // ── Load the scan credential for the resolved tenant (same blob the source uses) ──
         SqlDiscoveryConfig? config;
         try
         {
-            config = await SqlDiscoveryConfigReader.ReadAsync(_protector, connectionId);
+            config = await SqlDiscoveryConfigReader.ReadAsync(_protector, resolvedTenantId.Value);
         }
         catch (Exception ex)
         {
@@ -153,7 +177,7 @@ public sealed class SqlAgentWriteExecutor
             return (false, "ApplySqlWrite: could not read the SQL discovery credential for this connection.");
         }
         if (config is null)
-            return (false, "ApplySqlWrite: no 'sqldiscovery' credential is configured for this connection.");
+            return (false, $"ApplySqlWrite: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
 
         try
         {
@@ -507,7 +531,8 @@ public sealed class SqlAgentWriteExecutor
     {
         [JsonPropertyName("schemaVersion")] public int SchemaVersion { get; set; }
         [JsonPropertyName("objectGuid")] public string? ObjectGuid { get; set; }       // advisory provenance only
-        [JsonPropertyName("connectionId")] public string? ConnectionId { get; set; }
+        [JsonPropertyName("connectionId")] public string? ConnectionId { get; set; }   // transition only — IGNORED for credential selection
+        [JsonPropertyName("sourceConnectionName")] public string? SourceConnectionName { get; set; }  // server-resolved IC DirectoryConnections.Name; the credential selector
         [JsonPropertyName("serverName")] public string? ServerName { get; set; }
         [JsonPropertyName("operation")] public string? Operation { get; set; }
         [JsonPropertyName("databaseName")] public string? DatabaseName { get; set; }

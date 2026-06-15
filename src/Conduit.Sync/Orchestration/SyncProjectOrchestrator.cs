@@ -49,6 +49,7 @@ public sealed class SyncProjectOrchestrator
     private readonly SyncRunAsyncJobRepository _asyncJobRepo;
     private readonly WorkflowRepository _workflowRepo;
     private readonly SinkRecordHashRepository _hashRepo;
+    private readonly SinkConnectionCredentialMapRepository _credentialMapRepo;
     private readonly SyncCancellationRegistry _cancellation;
     private readonly ILogger<SyncProjectOrchestrator> _logger;
 
@@ -60,6 +61,7 @@ public sealed class SyncProjectOrchestrator
         SyncRunAsyncJobRepository asyncJobRepo,
         WorkflowRepository workflowRepo,
         SinkRecordHashRepository hashRepo,
+        SinkConnectionCredentialMapRepository credentialMapRepo,
         SyncCancellationRegistry cancellation,
         ILogger<SyncProjectOrchestrator> logger)
     {
@@ -70,6 +72,7 @@ public sealed class SyncProjectOrchestrator
         _asyncJobRepo = asyncJobRepo;
         _workflowRepo = workflowRepo;
         _hashRepo = hashRepo;
+        _credentialMapRepo = credentialMapRepo;
         _cancellation = cancellation;
         _logger = logger;
     }
@@ -235,6 +238,28 @@ public sealed class SyncProjectOrchestrator
                 ?? throw new InvalidOperationException($"Source tenant '{sourceTenant.Name}' ({sourceTenant.SystemType}) does not support source operations.");
             var sink = sinkAdapter.CreateSink(sinkTenant.Id)
                 ?? throw new InvalidOperationException($"Sink tenant '{sinkTenant.Name}' ({sinkTenant.SystemType}) does not support sink operations.");
+
+            // Self-register the source-connection → Conduit-tenant credential mapping
+            // whenever we push to an IdentityCenter sink. IC auto-seeds a
+            // DirectoryConnection named SanitizeSource(sourceTenant.Name) — the SAME
+            // value used as the per-record upsert Source — so form-driven write-back can
+            // resolve THIS source tenant's credential from that name alone. The
+            // orchestrator's own SourceTenant is the only writer (the name is never taken
+            // from IC). A collision (same name, different tenant) is logged and rejected.
+            if (string.Equals(sinkAdapter.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+            {
+                var mappedName = IdentityCenterSourceName.Sanitize(sourceTenant.Name);
+                try
+                {
+                    await _credentialMapRepo.UpsertAsync(mappedName, sourceTenant.Id);
+                }
+                catch (SinkConnectionCredentialMapCollisionException ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Source-connection credential mapping NOT updated for '{Name}' — it already resolves to a different tenant. Write-back will continue using the existing mapping.",
+                        mappedName);
+                }
+            }
 
             // Phase 7: load workflow tree. Backfill (V17) guarantees at least
             // one Default workflow + one Default Mapping step exists for every
@@ -1582,12 +1607,6 @@ public sealed class SyncProjectOrchestrator
         return new FlushDelta(c, u, s, f);
     }
 
-    /// <summary>
-    /// Phase 1B mapping: rename + optional transform expression. SourceAttribute →
-    /// TransformExpr → SinkAttribute. Transform DSL whitelist lives in
-    /// <see cref="AttributeTransformer"/>. If no mappings are defined, the
-    /// sourceObj is passed through unchanged.
-    /// </summary>
     /// <summary>
     /// Coerce a member-attribute value into a clean string list. Sources hand back
     /// different shapes: a single string, a List&lt;string&gt;, a List&lt;object?&gt;,

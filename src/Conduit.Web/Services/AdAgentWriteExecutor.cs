@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Conduit.Connectors.ActiveDirectory;
+using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 
 namespace Conduit.Web.Services;
@@ -89,11 +90,19 @@ public sealed class AdAgentWriteExecutor
     };
 
     private readonly IEnumerable<IConnectorAdapter> _adapters;
+    private readonly SinkConnectionCredentialMapRepository _credentialMap;
+    private readonly TenantRepository _tenants;
     private readonly ILogger<AdAgentWriteExecutor> _logger;
 
-    public AdAgentWriteExecutor(IEnumerable<IConnectorAdapter> adapters, ILogger<AdAgentWriteExecutor> logger)
+    public AdAgentWriteExecutor(
+        IEnumerable<IConnectorAdapter> adapters,
+        SinkConnectionCredentialMapRepository credentialMap,
+        TenantRepository tenants,
+        ILogger<AdAgentWriteExecutor> logger)
     {
         _adapters = adapters;
+        _credentialMap = credentialMap;
+        _tenants = tenants;
         _logger = logger;
     }
 
@@ -133,20 +142,36 @@ public sealed class AdAgentWriteExecutor
 
         if (!Guid.TryParse(p.ObjectGuid, out var objGuid) || objGuid == Guid.Empty)
             return (false, "ApplyObjectWrite: objectGuid is missing or not a GUID.");
-        if (!Guid.TryParse(p.ConnectionId, out var connectionId) || connectionId == Guid.Empty)
-            return (false, "ApplyObjectWrite: connectionId is missing or not a GUID.");
+
+        // ── Credential resolution (Conduit owns it) ─────────────────────────────
+        // The caller-supplied connectionId is IGNORED for credential selection.
+        // We resolve the Conduit tenant whose 'ldap' credential backs this write
+        // from the server-trusted sourceConnectionName via the orchestrator-owned
+        // mapping. No mapping / disabled tenant / missing credential → fail closed;
+        // never fall back to connectionId or a default tenant.
+        var sourceConnectionName = p.SourceConnectionName?.Trim();
+        if (string.IsNullOrEmpty(sourceConnectionName))
+            return (false, "ApplyObjectWrite: sourceConnectionName is missing.");
+
+        var resolvedTenantId = await _credentialMap.GetTenantIdByNameAsync(sourceConnectionName);
+        if (resolvedTenantId is null || resolvedTenantId.Value == Guid.Empty)
+            return (false, $"ApplyObjectWrite: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
+
+        var tenant = await _tenants.GetByIdAsync(resolvedTenantId.Value);
+        if (tenant is null || !tenant.IsActive)
+            return (false, $"ApplyObjectWrite: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
 
         // Bounded element count for SetAttributes — refuse pathological payloads.
         if (string.Equals(operation, OpSetAttributes, StringComparison.Ordinal)
             && p.Attributes is { Count: > MaxAttributeCount })
             return (false, $"ApplyObjectWrite: too many attributes (>{MaxAttributeCount}).");
 
-        // ── Resolve the AD connector + a sink bound to this connection (tenant) ──
+        // ── Resolve the AD connector + a sink bound to the resolved tenant ──────
         var adapter = _adapters.FirstOrDefault(a =>
             string.Equals(a.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase));
         if (adapter is null)
             return (false, "ApplyObjectWrite: Active Directory connector is not available on this agent.");
-        if (adapter.CreateSink(connectionId) is not ActiveDirectorySink sink)
+        if (adapter.CreateSink(resolvedTenantId.Value) is not ActiveDirectorySink sink)
             return (false, "ApplyObjectWrite: could not create an AD sink for the requested connection.");
 
         try
@@ -342,7 +367,8 @@ public sealed class AdAgentWriteExecutor
         [JsonPropertyName("schemaVersion")] public int SchemaVersion { get; set; }
         [JsonPropertyName("objectGuid")] public string? ObjectGuid { get; set; }
         [JsonPropertyName("dnHint")] public string? DnHint { get; set; }            // advisory only — never a write target
-        [JsonPropertyName("connectionId")] public string? ConnectionId { get; set; }
+        [JsonPropertyName("connectionId")] public string? ConnectionId { get; set; }  // transition only — IGNORED for credential selection
+        [JsonPropertyName("sourceConnectionName")] public string? SourceConnectionName { get; set; }  // server-resolved IC DirectoryConnections.Name; the credential selector
         [JsonPropertyName("objectClass")] public string? ObjectClass { get; set; }   // advisory — AD-read class wins
         [JsonPropertyName("operation")] public string? Operation { get; set; }
         [JsonPropertyName("attributes")] public Dictionary<string, JsonElement?>? Attributes { get; set; }

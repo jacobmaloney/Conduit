@@ -44,8 +44,10 @@ namespace Conduit.Connectors.SqlDiscovery;
 ///     as SPN mode (a host typed by IP still merges, via its true MachineName).
 ///   - Non-domain / unmatched instance-list hosts: SourceId = "sqldisc:&lt;MACHINENAME&gt;"
 ///     (UPPERCASE short name — collapses the same host found at several IPs/ports to
-///     ONE object) and _sourceConnection = the configured discovery source name
-///     (default "SQLDiscovery"; auto-seeds a connection IC-side).
+///     ONE object) and _sourceConnection LEFT UNSET, so the orchestrator stamps the
+///     sanitized source-tenant name (the SAME value the AD path uses). That keeps
+///     object Source == IC DirectoryConnections.Name == credential-map key by
+///     construction, so write-back auto-resolves the discovery credential.
 ///
 /// IMPORTANT: SQL Discovery projects should keep their Mapping step EMPTY
 /// (zero attribute mappings = pass-through). The emission contract keys are
@@ -330,7 +332,10 @@ public sealed class SqlDiscoverySource : IConnectorSource
                     Host = entry.Host,
                     ShortName = ShortHostName(entry.Host),
                     SourceId = sourceId,
-                    SourceConnection = config.DiscoverySourceName,
+                    // Resolved at emit time by ResolveInstanceListIdentity: AD connection
+                    // name on a computer-map match, else empty (orchestrator stamps the
+                    // tenant name). Never the discovery-source literal anymore.
+                    SourceConnection = string.Empty,
                     FromSpn = false,
                     Endpoints = { new SqlEndpoint { Instance = entry.Instance, Port = entry.Port } }
                 });
@@ -353,7 +358,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
             catch (Exception ex)
             {
                 await SourceRunLogContext.LogAsync("Warning",
-                    $"SQL Discovery: AD computer map failed ({ex.Message}) — instance-list hosts emit under '{config.DiscoverySourceName}' with stable name keys.");
+                    $"SQL Discovery: AD computer map failed ({ex.Message}) — instance-list hosts emit under the sync project's source connection with stable name keys.");
                 _logger.LogWarning(ex, "SQL Discovery AD computer map failed for tenant {TenantId}", _tenantId);
             }
         }
@@ -518,14 +523,16 @@ public sealed class SqlDiscoverySource : IConnectorSource
     /// authoritative machine name resolves to a domain computer — emitting under the
     /// AD connection with SourceId = objectGUID ENRICHES the already-synced computer
     /// object (identical routing to SPN mode). No match → stable name-based fallback
-    /// key under the discovery source. Returns (SourceId, SourceConnection).
+    /// key with an EMPTY SourceConnection, so the orchestrator stamps the sanitized
+    /// source-tenant name (the SAME value AD uses) — keeping object Source ==
+    /// DirectoryConnections.Name == credential-map key by construction. Returns
+    /// (SourceId, SourceConnection); SourceConnection is "" for the non-domain case.
     /// </summary>
     private static (string SourceId, string SourceConnection) ResolveInstanceListIdentity(
         string? authoritativeName,
         string fallbackName,
         IReadOnlyDictionary<string, string> adComputerMap,
-        string? adConnectionName,
-        string discoverySourceName)
+        string? adConnectionName)
     {
         var name = !string.IsNullOrWhiteSpace(authoritativeName) ? authoritativeName! : fallbackName;
 
@@ -539,8 +546,9 @@ public sealed class SqlDiscoverySource : IConnectorSource
         }
 
         // Non-domain / no-AD-match: stable key on the SHORT NAME (uppercased) so the
-        // same host discovered at multiple IPs/ports collapses to ONE object.
-        return ($"sqldisc:{ShortHostName(name).ToUpperInvariant()}", discoverySourceName);
+        // same host discovered at multiple IPs/ports collapses to ONE object. Empty
+        // SourceConnection here = "let the orchestrator stamp the tenant name".
+        return ($"sqldisc:{ShortHostName(name).ToUpperInvariant()}", string.Empty);
     }
 
     private static ScanTarget? SpnEntryToTarget(SearchResultEntry entry, string adConnectionName)
@@ -632,7 +640,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
         // under the discovery source. SPN hosts already carry objectGUID + AD conn.
         var (sourceId, sourceConnection) = target.FromSpn
             ? (target.SourceId, target.SourceConnection)
-            : ResolveInstanceListIdentity(facts.MachineName, target.ShortName, adComputerMap, adConnectionName, target.SourceConnection);
+            : ResolveInstanceListIdentity(facts.MachineName, target.ShortName, adComputerMap, adConnectionName);
         var fqdn = hostIsIp
             ? (facts.MachineName ?? target.Host)
             : target.Host;
@@ -661,13 +669,16 @@ public sealed class SqlDiscoverySource : IConnectorSource
             ["sqlScanStatus"] = "Success",
             ["sqlLastScanAttemptAt"] = nowUtc,
             // Clears any sqlScanError a previous failed sweep stamped.
-            ["sqlScanError"] = string.Empty,
-            // Internal routing stamp, lifted out by the IC sink (never written as
-            // a real attribute): AD connection name for SPN hosts AND instance-list
-            // hosts that matched an AD computer (enrich the existing object),
-            // discovery source name for non-domain manual hosts.
-            ["_sourceConnection"] = sourceConnection
+            ["sqlScanError"] = string.Empty
         };
+        // Internal routing stamp, lifted out by the IC sink (never written as a real
+        // attribute): AD connection name for SPN hosts AND instance-list hosts that
+        // matched an AD computer (enrich the existing object). For non-domain manual
+        // hosts it is left UNSET so the orchestrator stamps the sanitized source-tenant
+        // name — the SAME value the AD path uses — keeping object Source ==
+        // DirectoryConnections.Name == credential-map key by construction.
+        if (!string.IsNullOrWhiteSpace(sourceConnection))
+            attrs["_sourceConnection"] = sourceConnection;
         if (facts.CpuCount is { } cpu)
             attrs["cpuCores"] = cpu.ToString(CultureInfo.InvariantCulture);
         if (facts.MemoryGb is { } mem)
@@ -707,10 +718,11 @@ public sealed class SqlDiscoverySource : IConnectorSource
         // still lands ON the existing AD object (enrich); otherwise it gets the same
         // stable sqldisc:<SHORTNAME> key the success path would use — never a NEW
         // ip:port key. SPN failures keep their objectGUID. Limitation: an
-        // IP-only-typed host can't be AD-matched here and stays under SQLDiscovery.
+        // IP-only-typed host can't be AD-matched here and stays under the sync
+        // project's source connection (the sanitized source-tenant name).
         var (sourceId, sourceConnection) = target.FromSpn
             ? (target.SourceId, target.SourceConnection)
-            : ResolveInstanceListIdentity(target.ShortName, target.ShortName, adComputerMap, adConnectionName, target.SourceConnection);
+            : ResolveInstanceListIdentity(target.ShortName, target.ShortName, adComputerMap, adConnectionName);
 
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -718,9 +730,13 @@ public sealed class SqlDiscoverySource : IConnectorSource
             ["DisplayName"] = target.Host,
             ["sqlScanStatus"] = ToScanStatusToken(outcome.Status),
             ["sqlLastScanAttemptAt"] = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
-            ["sqlScanError"] = SanitizeScanError(outcome.Message),
-            ["_sourceConnection"] = sourceConnection
+            ["sqlScanError"] = SanitizeScanError(outcome.Message)
         };
+        // Non-domain hosts leave this UNSET so the orchestrator stamps the sanitized
+        // source-tenant name (matches the AD path); AD-matched/SPN failures keep their
+        // AD connection name to land the finding on the existing object.
+        if (!string.IsNullOrWhiteSpace(sourceConnection))
+            attrs["_sourceConnection"] = sourceConnection;
 
         if (!target.FromSpn)
         {

@@ -991,21 +991,13 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     }
 
     /// <summary>
-    /// IC's /api/objects/bulk and /api/objects/tombstones validate the Source field
-    /// against ^[A-Za-z0-9_.\-]{1,100}$ and 400 the WHOLE batch on any violation.
-    /// Real connection names contain spaces/parens ("EntraID (placeholder)"), so
-    /// sanitise to the allowed charset: collapse runs of disallowed chars to a single
-    /// '-', trim leading/trailing '-', cap at 100. Empty result falls back to "Conduit".
-    /// MUST be applied identically on the upsert and tombstone paths so IC resolves the
-    /// SAME auto-seeded SourceConnectionId for both.
+    /// Sanitize a source-connection name to the value IC stores as
+    /// DirectoryConnections.Name (and validates per-record Source against). Delegates
+    /// to <see cref="IdentityCenterSourceName.Sanitize"/> — the ONE shared sanitizer —
+    /// so the Source this sink stamps is byte-identical to the credential-map key the
+    /// orchestrator writes from the same ctx.SourceTenant.Name. Do NOT reimplement.
     /// </summary>
-    private static string SanitizeSource(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "Conduit";
-        var cleaned = Regex.Replace(raw, "[^A-Za-z0-9_.\\-]+", "-").Trim('-');
-        if (cleaned.Length > 100) cleaned = cleaned.Substring(0, 100).TrimEnd('-');
-        return string.IsNullOrEmpty(cleaned) ? "Conduit" : cleaned;
-    }
+    private static string SanitizeSource(string? raw) => IdentityCenterSourceName.Sanitize(raw);
 
     private static string? LookupAttr(ConnectorObject obj, string key)
     {
