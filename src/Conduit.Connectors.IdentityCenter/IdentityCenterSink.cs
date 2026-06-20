@@ -75,6 +75,13 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             if (IsSignInLogBatch(batch))
                 return await PostSignInLogBatchAsync(client, creds, batch, cancellationToken);
 
+            // M365 per-user usage rows go to the typed endpoint
+            // (/api/objects/m365-usage/bulk) — they carry OneDrive/mailbox storage +
+            // license + activity for the M365UsageReports table, NOT directory objects,
+            // so they never hit the /api/objects/bulk upsert path.
+            if (IsM365UsageBatch(batch))
+                return await PostM365UsageBatchAsync(client, creds, batch, cancellationToken);
+
             // IC accepts up to 1000 per call; adapter advertises 500 so the
             // orchestrator already pre-chunks. This is a defensive fallback.
             const int hardCap = 1000;
@@ -745,11 +752,149 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         };
     }
 
+    private static bool IsM365UsageBatch(IReadOnlyList<ConnectorObject> batch)
+    {
+        // A Mapping step pumps a single object class, so the batch is homogeneous;
+        // probe the first record's class.
+        return batch.Count > 0
+            && string.Equals(batch[0].ObjectClass, "m365usage", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// M365 per-user usage emit. POSTs each ConnectorObject (built by
+    /// <c>M365UsageReportSource.BuildUsageObject</c>) to IC's
+    /// <c>POST /api/objects/m365-usage/bulk</c>. Mirrors the sign-in-log path: Source
+    /// is the sanitized source-connection name (so IC resolves the SAME
+    /// DirectoryConnection the user upserts landed under) and SourceJobServerId/Name
+    /// carry this installation's provenance. Chunked to &lt;=1000 rows per POST.
+    /// Best-effort: a failed chunk is logged and the run proceeds (these are
+    /// observability/usage records, not the canonical directory). Returns one
+    /// SinkWriteResult per input object in order so the orchestrator counts correctly.
+    /// </summary>
+    private async Task<List<SinkWriteResult>> PostM365UsageBatchAsync(
+        HttpClient client,
+        IdentityCenterCredentials creds,
+        IReadOnlyList<ConnectorObject> batch,
+        CancellationToken cancellationToken)
+    {
+        var source = SanitizeSource(LookupAttr(batch[0], "_sourceConnection"));
+        const int maxRowsPerPost = 1000;
+        var results = new List<SinkWriteResult>(batch.Count);
+
+        for (var offset = 0; offset < batch.Count; offset += maxRowsPerPost)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(maxRowsPerPost, batch.Count - offset);
+
+            var rows = new List<object>(count);
+            for (var i = 0; i < count; i++)
+                rows.Add(BuildM365UsageRow(batch[offset + i]));
+
+            var body = new
+            {
+                BatchId = Guid.NewGuid(),
+                Source = source,
+                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerName = ConduitInstanceIdentity.Name,
+                Rows = rows
+            };
+
+            SinkWriteOutcome outcome;
+            string? error = null;
+            try
+            {
+                using var resp = await client.PostAsJsonAsync(
+                    $"{creds.BaseUrl}/api/objects/m365-usage/bulk", body, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    outcome = SinkWriteOutcome.Updated;
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
+                    var root = doc.RootElement;
+                    int persisted = root.TryGetProperty("reportsPersisted", out var pEl) && pEl.ValueKind == JsonValueKind.Number ? pEl.GetInt32() : count;
+                    int resolved = root.TryGetProperty("usersResolved", out var rEl) && rEl.ValueKind == JsonValueKind.Number ? rEl.GetInt32() : 0;
+                    int unresolved = root.TryGetProperty("usersUnresolved", out var uEl) && uEl.ValueKind == JsonValueKind.Number ? uEl.GetInt32() : 0;
+                    _logger.LogInformation(
+                        "IC m365 usage chunk pushed (tenant={TenantId}, rows={Rows}, reportsPersisted={Persisted}, usersResolved={Resolved}, usersUnresolved={Unresolved}).",
+                        _tenantId, count, persisted, resolved, unresolved);
+                }
+                else
+                {
+                    outcome = SinkWriteOutcome.Failed;
+                    var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    error = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
+                    _logger.LogError(
+                        "IC m365 usage POST failed (tenant={TenantId}, rows={Rows}): HTTP {Status} {Detail}",
+                        _tenantId, count, (int)resp.StatusCode, detail);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                outcome = SinkWriteOutcome.Failed;
+                error = ex.Message;
+                _logger.LogError(ex, "IC m365 usage chunk threw (tenant={TenantId}, rows={Rows})", _tenantId, count);
+            }
+
+            for (var i = 0; i < count; i++)
+                results.Add(outcome == SinkWriteOutcome.Failed
+                    ? SinkWriteResult.Fail(error ?? "Failed")
+                    : SinkWriteResult.Ok(outcome));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Map one m365usage ConnectorObject's attribute bag (set by
+    /// <c>M365UsageReportSource.BuildUsageObject</c>) to an IC M365UsageRow payload.
+    /// Attribute keys match the source's PascalCase emission exactly; LookupAttr is
+    /// case-insensitive. Numeric/bool/date values are parsed back from string form.
+    /// </summary>
+    private static object BuildM365UsageRow(ConnectorObject o)
+    {
+        return new
+        {
+            UserPrincipalName = LookupAttr(o, "UserPrincipalName") ?? o.SourceId,
+            DisplayName = LookupAttr(o, "DisplayName"),
+            ReportRefreshDate = ParseNullableDateTime(LookupAttr(o, "ReportRefreshDate")),
+            HasExchangeLicense = ParseBool(LookupAttr(o, "HasExchangeLicense")),
+            HasOneDriveLicense = ParseBool(LookupAttr(o, "HasOneDriveLicense")),
+            HasSharePointLicense = ParseBool(LookupAttr(o, "HasSharePointLicense")),
+            HasTeamsLicense = ParseBool(LookupAttr(o, "HasTeamsLicense")),
+            HasYammerLicense = ParseBool(LookupAttr(o, "HasYammerLicense")),
+            ExchangeLastActivityDate = ParseNullableDateTime(LookupAttr(o, "ExchangeLastActivityDate")),
+            OneDriveLastActivityDate = ParseNullableDateTime(LookupAttr(o, "OneDriveLastActivityDate")),
+            SharePointLastActivityDate = ParseNullableDateTime(LookupAttr(o, "SharePointLastActivityDate")),
+            TeamsLastActivityDate = ParseNullableDateTime(LookupAttr(o, "TeamsLastActivityDate")),
+            YammerLastActivityDate = ParseNullableDateTime(LookupAttr(o, "YammerLastActivityDate")),
+            OneDriveStorageUsedBytes = ParseLong(LookupAttr(o, "OneDriveStorageUsedBytes")),
+            OneDriveStorageAllocatedBytes = ParseLong(LookupAttr(o, "OneDriveStorageAllocatedBytes")),
+            MailboxStorageUsedBytes = ParseLong(LookupAttr(o, "MailboxStorageUsedBytes")),
+            MailboxQuotaBytes = ParseLong(LookupAttr(o, "MailboxQuotaBytes")),
+            OneDriveFilesViewed = ParseInt(LookupAttr(o, "OneDriveFilesViewed")),
+            OneDriveFilesSynced = ParseInt(LookupAttr(o, "OneDriveFilesSynced")),
+            TeamsChatMessages = ParseInt(LookupAttr(o, "TeamsChatMessages")),
+            TeamsCallCount = ParseInt(LookupAttr(o, "TeamsCallCount")),
+            TeamsMeetingCount = ParseInt(LookupAttr(o, "TeamsMeetingCount")),
+            AssignedProducts = LookupAttr(o, "AssignedProducts")
+        };
+    }
+
     private static DateTime ParseDateTime(string? v) =>
         DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
             ? dt
             : default;
+
+    private static DateTime? ParseNullableDateTime(string? v) =>
+        DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var dt)
+            ? dt
+            : (DateTime?)null;
+
+    private static long? ParseLong(string? v) =>
+        long.TryParse(v, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : (long?)null;
 
     private static int? ParseInt(string? v) =>
         int.TryParse(v, System.Globalization.NumberStyles.Integer,
