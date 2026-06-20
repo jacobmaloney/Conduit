@@ -50,15 +50,7 @@
                  Icon="fas fa-exchange-alt"
                  IconAccent="cyan">
         <PrimaryAction>
-            <button class="btn btn-success me-2" @onclick="ShowAutoGenerateModal">
-                <i class="fas fa-magic me-1"></i>
-                Auto-Generate
-            </button>
-            <button class="btn btn-outline-success me-2" @onclick="ShowBlueprintModal">
-                <i class="fas fa-layer-group me-1"></i>
-                Create from blueprint
-            </button>
-            <button class="btn btn-primary" @onclick="ShowCreateModal">
+            <button class="btn btn-primary" @onclick="ShowNewProjectChooser">
                 <i class="fas fa-plus me-1"></i>
                 New Sync Project
             </button>
@@ -145,7 +137,7 @@
                         }
                         else
                         {
-                            <p>No sync projects yet. Click "Auto-Generate" for a one-click User+Group pair, or "New Sync Project" to build one from scratch.</p>
+                            <p>No sync projects yet. Click "New Sync Project" to get started — build one yourself, start from a template, or auto-generate from a connection.</p>
                         }
                     </div>
                 </EmptyTemplate>
@@ -444,6 +436,54 @@
         </div>
     </div>
 </div>
+
+@* ───────── New Sync Project chooser — single entry point, three paths that all
+       converge into the common new-sync-project flow (matches IdentityCenter). ───────── *@
+@if (showNewProjectChooser)
+{
+    <div class="modal fade show d-block" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-plus me-2"></i>New Sync Project
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseNewProjectChooser"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted mb-3">How would you like to start? Each path leads into the same setup steps.</p>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="autogen-tpl-card h-100" @onclick="ChooseManual">
+                                <div class="autogen-tpl-icon"><i class="fas fa-sliders-h"></i></div>
+                                <div class="autogen-tpl-title">Build it yourself</div>
+                                <div class="autogen-tpl-desc">Pick the source, target and object classes step by step. Full control.</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="autogen-tpl-card h-100" @onclick="ChooseBlueprint">
+                                <div class="autogen-tpl-icon"><i class="fas fa-layer-group"></i></div>
+                                <div class="autogen-tpl-title">From a template</div>
+                                <div class="autogen-tpl-desc">Start from a curated blueprint, then confirm connections and schedule.</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="autogen-tpl-card h-100" @onclick="ChooseAutoGenerate">
+                                <div class="autogen-tpl-icon"><i class="fas fa-magic"></i></div>
+                                <div class="autogen-tpl-title">Auto-generate from a connection</div>
+                                <div class="autogen-tpl-desc">Pick a connection and we build the object-class steps and mappings for you.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseNewProjectChooser">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
 
 @* ───────── Auto-Generate Modal — IC-shape (template / connection / schedule) ───────── *@
 @if (showAutoGenerateModal)
@@ -4908,6 +4948,30 @@
     }
 
     // ─── Auto-generate modal ────────────────────────────────────────────────
+
+    // ───────── New Sync Project chooser (single entry point) ─────────
+    private bool showNewProjectChooser;
+
+    private void ShowNewProjectChooser() => showNewProjectChooser = true;
+    private void CloseNewProjectChooser() => showNewProjectChooser = false;
+
+    private async Task ChooseManual()
+    {
+        showNewProjectChooser = false;
+        await ShowCreateModal();
+    }
+
+    private void ChooseBlueprint()
+    {
+        showNewProjectChooser = false;
+        ShowBlueprintModal();
+    }
+
+    private void ChooseAutoGenerate()
+    {
+        showNewProjectChooser = false;
+        ShowAutoGenerateModal();
+    }
 
     private void ShowAutoGenerateModal()
     {
