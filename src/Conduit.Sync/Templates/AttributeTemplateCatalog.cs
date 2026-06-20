@@ -52,6 +52,10 @@ public static class AttributeTemplateCatalog
         public const string SharePoint = "SharePoint";
         public const string Aws = "Aws";
         public const string AwsIdentityCenter = "AWSIdentityCenter";
+        // IdentityCenter as a SOURCE (Objects / Identities → any sink). The IC
+        // adapter's SystemType is the bare "IdentityCenter" (no namespace), so the
+        // string must match IdentityCenterAdapter.SystemType verbatim.
+        public const string IdentityCenter = "IdentityCenter";
     }
 
     /// <summary>Look up a template by connector + object class. Null when none exists.</summary>
@@ -251,6 +255,59 @@ public static class AttributeTemplateCatalog
             // it; the orchestrator's second pass reads Attributes["member"]. DNs land
             // unresolved on IC until DN->objectGUID reconciliation.
             E("member", "member"),
+        };
+
+        // ──────────────────────────── IdentityCenter ───────────────────────────
+        // IC as a SOURCE. The source native names below are EXACTLY the keys the
+        // IdentityCenterSource emits into the attribute bag (Convert / ConvertIdentity)
+        // — sourceUniqueId, userName/sAMAccountName, displayName, cn, dn,
+        // userPrincipalName, mail/email, isActive, plus the flattened ObjectAttributes
+        // (department, jobTitle, manager, …) and the Identities typed columns
+        // (firstName, lastName, primaryEmail, employeeId, …). Each maps to the SAME
+        // canonical key (= IC Objects column) the other connectors use, so:
+        //   • IC → IC  (Objects → Identities/Persons)  bridges native→canonical→native
+        //   • IC → any external sink                    bridges on the shared canonical
+        // Without these entries the resolver found no SOURCE template for an IC-sourced
+        // project and returned ZERO mappings (the "new project on the IC connection had
+        // no mappings" bug). The User set covers BOTH the Objects and Identities tables
+        // (both surface as ObjectClass "User"); Identities-only keys are additive and
+        // harmless when absent on an Objects row.
+        c[(Systems.IdentityCenter, "User")] = new[]
+        {
+            E("sourceUniqueId", "SourceUniqueId", true),
+            E("dn", "DN"),
+            E("cn", "CN"),
+            E("userName", "Username", true),
+            E("userPrincipalName", "UserPrincipalName"),
+            E("displayName", "DisplayName"),
+            E("firstName", "FirstName"),
+            E("lastName", "LastName"),
+            E("email", "Email"),
+            E("phoneNumber", "PhoneNumber"),
+            E("mobilePhone", "MobilePhone"),
+            E("department", "Department"),
+            E("jobTitle", "JobTitle"),
+            E("company", "Company"),
+            E("division", "Division"),
+            E("office", "Office"),
+            E("costCenter", "CostCenter"),
+            E("manager", "ManagerSourceId"),
+            E("employeeId", "EmployeeId"),
+            E("isActive", "IsActive", false, "Boolean"),
+            E("whenChanged", "WhenChanged"),
+            E("whenCreated", "WhenCreated"),
+        };
+        c[(Systems.IdentityCenter, "Group")] = new[]
+        {
+            E("sourceUniqueId", "SourceUniqueId", true),
+            E("dn", "DN"),
+            E("cn", "CN"),
+            E("userName", "Username"),
+            E("displayName", "DisplayName"),
+            E("description", "Description"),
+            E("email", "Email"),
+            E("whenChanged", "WhenChanged"),
+            E("whenCreated", "WhenCreated"),
         };
 
         // ─────────────────────────────── EntraID ────────────────────────────────
