@@ -262,6 +262,156 @@ public static class SyncProjectBlueprintCatalog
                 "Source-only inventory: classes whose scope was not granted are skipped with a "
                     + "warning rather than failing the whole run."
             }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "active-directory-governance",
+            Name = "Active Directory Governance",
+            Description =
+                "Inventories the on-prem Active Directory core — users, groups (with "
+                + "membership), computers, contacts, and organizational units — into "
+                + "IdentityCenter for governance.",
+            SourceSystemType = "ActiveDirectory",
+            ExplicitClasses = new[] { "user", "group", "computer", "contact", "organizationalUnit" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires a read-capable directory account; the default LDAP scope reads the "
+                    + "whole domain naming context (refine the per-step filter to scope it down).",
+                "Group membership is pushed on a second pass from the AD 'member' attribute; "
+                    + "member DNs land unresolved until DN->objectGUID reconciliation."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "active-roles-governance",
+            Name = "Active Roles RBAC & SoD",
+            Description =
+                "Inventories One Identity Active Roles — users and groups read over raw AD "
+                + "LDAP, plus the Active Roles virtual attributes (RBAC role flags) joined "
+                + "from CVSAValues — into IdentityCenter for role and SoD governance.",
+            SourceSystemType = "ActiveRoles",
+            ExplicitClasses = new[] { "user", "group" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Active Roles objects ARE AD objects: the fast read is raw AD LDAP, so the "
+                    + "same directory-account and scope guidance as Active Directory applies.",
+                "The user mapping is pre-seeded with the UNITE-2026 role virtual attributes; "
+                    + "every deployment's own virtual attributes flow through whatever CVSAValues "
+                    + "returns — edit the grid to match your VA names."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "okta-directory-governance",
+            Name = "Okta Directory Governance",
+            Description =
+                "Inventories the Okta universal directory — users, groups, and application "
+                + "assignments — into IdentityCenter for governance.",
+            SourceSystemType = "Okta",
+            ExplicitClasses = new[] { "user", "group", "application" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires an Okta API token (or OAuth service app) with read scopes for "
+                    + "users, groups, and apps (okta.users.read, okta.groups.read, okta.apps.read).",
+                "Source-only inventory: classes the token cannot read are skipped with a "
+                    + "warning rather than failing the whole run."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "google-workspace-directory",
+            Name = "Google Workspace Directory",
+            Description =
+                "Inventories the Google Workspace directory — users, groups, organizational "
+                + "units, admin roles, and domains — into IdentityCenter for governance.",
+            SourceSystemType = "GoogleWorkspace",
+            ExplicitClasses = new[] { "user", "group", "organizationalUnit", "role", "domain" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires a GCP service account with domain-wide delegation, an impersonated "
+                    + "admin email, and the read-only Admin SDK Directory scopes "
+                    + "(admin.directory.user/group/orgunit/rolemanagement/domain .readonly).",
+                "Source-only inventory: classes whose scope was not granted are skipped with a "
+                    + "warning rather than failing the whole run."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "generic-ldap-directory",
+            Name = "Generic LDAP Directory",
+            Description =
+                "Inventories a standards-based LDAP directory (OpenLDAP, 389-DS, etc.) — "
+                + "users, groups, and organizational units — into IdentityCenter for governance.",
+            SourceSystemType = "GenericLdap",
+            ExplicitClasses = new[] { "user", "group", "organizationalUnit" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires a bind DN with read access. The templates assume RFC-standard "
+                    + "attributes (entryUUID, uid, cn, mail); edit the grid if your schema differs.",
+                "The default scope reads the whole base DN — refine the per-step LDAP filter "
+                    + "to scope it to the right subtree."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "scim-directory-governance",
+            Name = "SCIM Directory Governance",
+            Description =
+                "Inventories any SCIM 2.0 source — users and groups — into IdentityCenter "
+                + "for governance.",
+            SourceSystemType = "Scim",
+            ExplicitClasses = new[] { "user", "group" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires the SCIM base URL and a bearer token with read access to "
+                    + "/Users and /Groups.",
+                "Source-only inventory: maps the core SCIM user/group schema; extend the grid "
+                    + "for enterprise or custom SCIM extension attributes."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "database-directory-governance",
+            Name = "Database Directory Governance",
+            Description =
+                "Inventories an identity store backed by a SQL database — users and groups "
+                + "read from configured queries — into IdentityCenter for governance.",
+            SourceSystemType = "Database",
+            ExplicitClasses = new[] { "user", "group" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires a connection string and the user/group read queries configured on "
+                    + "the connection. The templates assume the default column aliases "
+                    + "(objectGuid, sAMAccountName, displayName, …); edit the grid to match yours.",
+                "Source-only inventory."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "sql-server-discovery",
+            Name = "SQL Server Discovery",
+            Description =
+                "Scans the network for SQL Server hosts and inventories each as a computer "
+                + "asset — edition, version, instance, databases, logins, and principals — "
+                + "into IdentityCenter for SQL estate and license governance.",
+            SourceSystemType = "SqlDiscovery",
+            ExplicitClasses = new[] { "computer" },
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires network reach to the SQL hosts and a SQL/Windows credential that "
+                    + "can read server metadata (edition, version, databases, logins).",
+                "The discovered MSSQLSvc SPN drives IdentityCenter's SQL Servers page and "
+                    + "License Center. Source-only scan: hosts that fail to scan are recorded "
+                    + "with a scan error rather than failing the whole run."
+            }
         }
     };
 

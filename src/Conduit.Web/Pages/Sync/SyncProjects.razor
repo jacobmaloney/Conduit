@@ -682,13 +682,14 @@
                         {
                             <div class="alert alert-warning py-2">
                                 <i class="fas fa-circle-info me-1"></i>
-                                No blueprint matches your existing connections yet. Add an
-                                Entra ID or Azure Resource Graph connection first.
+                                No blueprint matches your existing connections yet. Add a
+                                source connection (Active Directory, Entra ID, Okta, AWS,
+                                Google Workspace, LDAP, SCIM, and more) first.
                             </div>
                         }
                         else
                         {
-                            <div class="autogen-tpl-grid">
+                            <div class="autogen-tpl-grid blueprint-picker-grid">
                                 @foreach (var bp in OfferableBlueprints)
                                 {
                                     var bpRef = bp;

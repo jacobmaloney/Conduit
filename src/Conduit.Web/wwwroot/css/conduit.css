@@ -3201,6 +3201,13 @@ details summary::-webkit-details-marker { color: var(--accent); }
     gap: 10px;
     margin-bottom: 6px;
 }
+/* Blueprint picker can hold 10+ cards — cap height and scroll inside the
+   modal body so a large catalog never pushes the dialog off-screen. */
+.blueprint-picker-grid {
+    max-height: 52vh;
+    overflow-y: auto;
+    padding-right: 4px;
+}
 .autogen-tpl-card {
     padding: 12px 14px;
     border: 1px solid var(--border-2, rgba(120, 160, 220, 0.18));
