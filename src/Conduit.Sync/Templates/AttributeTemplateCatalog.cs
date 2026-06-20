@@ -52,6 +52,7 @@ public static class AttributeTemplateCatalog
         public const string SharePoint = "SharePoint";
         public const string Aws = "Aws";
         public const string AwsIdentityCenter = "AWSIdentityCenter";
+        public const string SqlDiscovery = "SqlDiscovery";
         // IdentityCenter as a SOURCE (Objects / Identities → any sink). The IC
         // adapter's SystemType is the bare "IdentityCenter" (no namespace), so the
         // string must match IdentityCenterAdapter.SystemType verbatim.
@@ -956,6 +957,14 @@ public static class AttributeTemplateCatalog
             E("description", "Description"),
             E("dn", "DN"),
         };
+        // Full tier emits organizationalUnit; without this the OU step had ZERO mappings.
+        c[(Systems.GenericLdap, "OrganizationalUnit")] = new[]
+        {
+            E("entryUUID", "SourceUniqueId", true),
+            E("ou", "CN", true),
+            E("dn", "DN"),
+            E("description", "Description"),
+        };
 
         // ──────────────────────────────── Database ─────────────────────────────
         c[(Systems.Database, "User")] = new[]
@@ -983,6 +992,40 @@ public static class AttributeTemplateCatalog
             E("displayName", "DisplayName", true),
             E("cn", "CN"),
             E("description", "Description"),
+        };
+
+        // ───────────────────────────── SQL Discovery ───────────────────────────
+        // Source-only scan: each scanned SQL host is emitted as a "computer". The
+        // SourceUniqueId is carried structurally on ConnectorObject.SourceId (not an
+        // attribute). The names below match SqlDiscoverySource.cs verbatim. CN /
+        // DisplayName / servicePrincipalName / operatingSystem / dNSHostName / IsActive
+        // bridge to IC Objects columns (servicePrincipalName lands in ObjectAttributes
+        // — the MSSQLSvc SPN drives IC's SQL Servers page + License Center). The sql*
+        // facts pass through to same-named canonical keys (like azureresource), so the
+        // sink stores them verbatim. Without this template the SqlDiscovery computer
+        // step generated ZERO mappings and the sink wrote only the structural baseline.
+        c[(Systems.SqlDiscovery, "computer")] = new[]
+        {
+            E("CN", "CN", true),
+            E("DisplayName", "DisplayName", true),
+            E("dNSHostName", "DNSHostName"),
+            E("operatingSystem", "OperatingSystem"),
+            E("IsActive", "IsActive", false, "Boolean"),
+            E("servicePrincipalName", "servicePrincipalName"),
+            E("sqlServerEdition", "sqlServerEdition"),
+            E("sqlServerVersion", "sqlServerVersion"),
+            E("sqlInstanceName", "sqlInstanceName"),
+            E("sqlServerPort", "sqlServerPort"),
+            E("sqlDatabasesJson", "sqlDatabasesJson"),
+            E("sqlLoginsJson", "sqlLoginsJson"),
+            E("sqlPrincipalsJson", "sqlPrincipalsJson"),
+            E("cpuCores", "cpuCores", false, "Integer"),
+            E("memoryGB", "memoryGB", false, "Integer"),
+            E("ipHostNumber", "ipHostNumber"),
+            E("sqlLastScannedAt", "sqlLastScannedAt", false, "DateTime"),
+            E("sqlScanStatus", "sqlScanStatus"),
+            E("sqlLastScanAttemptAt", "sqlLastScanAttemptAt", false, "DateTime"),
+            E("sqlScanError", "sqlScanError"),
         };
 
         return c;
