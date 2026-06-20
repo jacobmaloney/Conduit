@@ -2749,6 +2749,42 @@ details summary::-webkit-details-marker { color: var(--accent); }
     color: var(--fg, #e5e7eb);
 }
 
+/* ── IC-parity full-screen Edit modal ────────────────────────────────────
+   Edit mode renders modal-fullscreen with a gradient hero header (mirrors IC's
+   .center-hero). The body scrolls; header stays put. Tokens come from
+   brand-tokens.css so it tracks the brand. */
+.sync-form-modal-full .modal-fullscreen .modal-content {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    max-height: 100vh;
+    overflow: hidden;
+}
+.sync-form-modal-full .modal-fullscreen .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+.sync-edit-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.15rem 1.5rem;
+    background: linear-gradient(135deg, var(--conduit-700) 0%, var(--accent) 100%);
+    color: #fff;
+    flex: 0 0 auto;
+}
+.sync-edit-hero-title {
+    margin: 0 0 0.15rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.15;
+}
+.sync-edit-hero-name { opacity: 0.85; font-weight: 600; }
+.sync-edit-hero-sub { margin: 0; opacity: 0.9; font-size: 0.9rem; }
+.sync-edit-hero .btn-outline-light { white-space: nowrap; }
+
 .form-section-title {
     font-size: 12px;
     text-transform: uppercase;

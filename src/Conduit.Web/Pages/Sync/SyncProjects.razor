@@ -1071,19 +1071,46 @@
     <div class="modal-backdrop fade show"></div>
 }
 
-@* ───────── Create / Edit Modal (Setup + Scope + Mappings) ───────── *@
+@* ───────── Create / Edit Modal ─────────
+   Edit mode = IC-parity full-screen modal: gradient hero header + three tabs
+   (Setup / Workflows / Schedule). Scope + Mappings are NOT top-level tabs in
+   edit mode — they live PER-STEP inside the Workflows tab, so there is ONE
+   place to set them (this is the de-clutter Jacob asked for). The CREATE wizard
+   still drives Scope (step 3) + Mappings (step 4) through wizardStep; those body
+   sections below are shared and intentionally kept. *@
 @if (showFormModal)
 {
-    <div class="modal show d-block sync-form-modal" tabindex="-1">
-        <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal show d-block sync-form-modal sync-form-modal-full" tabindex="-1">
+        <div class="modal-dialog @(isWizard ? "modal-xl modal-dialog-centered" : "modal-fullscreen")">
             <div class="modal-content">
-                <div class="modal-header sync-modal-header-default">
-                    <h5 class="modal-title">
-                        <i class="fas @(editingId.HasValue ? "fa-edit" : "fa-magic") me-2"></i>
-                        @(editingId.HasValue ? "Edit Sync Project" : "Create New Sync Project")
-                    </h5>
-                    <button type="button" class="btn-close" @onclick="CloseFormModal"></button>
-                </div>
+                @if (isWizard)
+                {
+                    <div class="modal-header sync-modal-header-default">
+                        <h5 class="modal-title">
+                            <i class="fas fa-magic me-2"></i>Create New Sync Project
+                        </h5>
+                        <button type="button" class="btn-close" @onclick="CloseFormModal"></button>
+                    </div>
+                }
+                else
+                {
+                    @* IC-parity gradient hero header for the edit experience. *@
+                    <div class="sync-edit-hero">
+                        <div class="sync-edit-hero-text">
+                            <h1 class="sync-edit-hero-title">
+                                <i class="fas fa-sync-alt me-2"></i>Edit Sync Project
+                                @if (!string.IsNullOrEmpty(form.Name))
+                                {
+                                    <span class="sync-edit-hero-name">- @form.Name</span>
+                                }
+                            </h1>
+                            <p class="sync-edit-hero-sub">Configure directory synchronization workflows and settings</p>
+                        </div>
+                        <button type="button" class="btn btn-outline-light" @onclick="CloseFormModal">
+                            <i class="fas fa-times me-1"></i>Close
+                        </button>
+                    </div>
+                }
                 <div class="modal-body">
                     @if (!string.IsNullOrEmpty(formError))
                     {
@@ -1115,6 +1142,13 @@
                     }
                     else
                     {
+                        @* IC-parity edit tabs: Setup / Workflows / Schedule only.
+                           Scope + Mappings are deliberately NOT top tabs here — each
+                           Mapping step in the Workflows tab owns its own Scope +
+                           Mappings (with an "inherit from project" default), so the
+                           per-step editors are the single place to set them. This is
+                           the de-clutter: no more competing project-level Scope /
+                           Mappings tabs next to the per-step ones. *@
                         <ul class="nav nav-tabs mb-3">
                             <li class="nav-item">
                                 <button class="nav-link @(formTab == "setup" ? "active" : "")" @onclick='() => formTab = "setup"'>
@@ -1122,22 +1156,8 @@
                                 </button>
                             </li>
                             <li class="nav-item">
-                                <button class="nav-link @(formTab == "scope" ? "active" : "")" @onclick='() => formTab = "scope"'>
-                                    <i class="fas fa-filter me-1"></i>Scope &amp; Filter
-                                </button>
-                            </li>
-                            <li class="nav-item">
-                                <button class="nav-link @(formTab == "mappings" ? "active" : "")" @onclick='() => formTab = "mappings"'>
-                                    <i class="fas fa-arrows-alt-h me-1"></i>Mappings
-                                    @if (mappingForm.Count > 0)
-                                    {
-                                        <span class="badge bg-primary ms-1">@mappingForm.Count</span>
-                                    }
-                                </button>
-                            </li>
-                            <li class="nav-item">
                                 <button class="nav-link @(formTab == "workflows" ? "active" : "")" @onclick="OpenWorkflowsTab" disabled="@(!editingId.HasValue)">
-                                    <i class="fas fa-project-diagram me-1"></i>Workflows
+                                    <i class="fas fa-layer-group me-1"></i>Workflows
                                     @if (workflowsForm.Count > 0)
                                     {
                                         <span class="badge bg-primary ms-1">@workflowsForm.Count</span>
@@ -2135,8 +2155,9 @@
                             </div>
                         </div>
                         <p class="text-muted small mt-3 mb-0">
-                            Workflows are saved when you click <strong>Save changes</strong>. Mapping steps inherit the project-level
-                            Mappings + Scope tabs by default; expand any Mapping step to override per-step.
+                            Workflows are saved when you click <strong>Save changes</strong>. Select a Mapping step on the
+                            left, then set its <strong>Scope</strong> and <strong>Attribute Mappings</strong> in the panel on
+                            the right. Each step inherits the project defaults until you turn off "inherit" and override it.
                         </p>
                     }
                     else if (formTab == "schedule")
