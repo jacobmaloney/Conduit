@@ -1305,6 +1305,41 @@ END;
 "
             });
 
+            // Migration 29: CredentialKeyring — stores the single active AES credential key
+            // in the shared Conduit DB so every server connecting to that DB auto-decrypts
+            // stored credentials with ZERO per-box setup (turnkey).
+            //
+            // ACCEPTED RISK (per Jacob's decision — option b): Key material is intentionally
+            // co-located with ciphertext in the same DB (turnkey, zero per-box setup) —
+            // accepted tradeoff. This table must never be exposed by any controller/export/
+            // admin endpoint, and KeyMaterial must never be logged.
+            //
+            // This migration creates the EMPTY table ONLY. It never inserts key material —
+            // the real key is seeded operationally on the deployment DB later. Never hardcode
+            // key bytes here.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 29,
+                Name = "CredentialKeyring",
+                Description = "Stores the single active AES credential key in the shared Conduit DB for turnkey, zero-per-box auto-decrypt. ACCEPTED RISK: key material is intentionally co-located with ciphertext in the same DB (accepted tradeoff per Jacob's decision). Must never be exposed by any controller/export/admin endpoint, and KeyMaterial must never be logged. This migration creates the EMPTY table only and never inserts key material.",
+                SqlScript = @"
+-- ACCEPTED RISK: Key material is intentionally co-located with ciphertext in the same DB
+-- (turnkey, zero per-box setup) — accepted tradeoff per Jacob's decision. This table must
+-- never be exposed by any controller/export/admin endpoint, and KeyMaterial must never be
+-- logged. This script creates the EMPTY table only; it never inserts key material.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CredentialKeyring')
+BEGIN
+    CREATE TABLE [dbo].[CredentialKeyring] (
+        [KeyId]       INT IDENTITY(1,1) NOT NULL,
+        [KeyMaterial] NVARCHAR(64)      NOT NULL,  -- base64 of 32 raw bytes
+        [CreatedAt]   DATETIME2         NOT NULL CONSTRAINT [DF_CredentialKeyring_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [IsActive]    BIT               NOT NULL CONSTRAINT [DF_CredentialKeyring_IsActive] DEFAULT 1,
+        CONSTRAINT [PK_CredentialKeyring] PRIMARY KEY CLUSTERED ([KeyId])
+    );
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

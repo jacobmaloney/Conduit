@@ -37,7 +37,8 @@ public class AwsAgentWriteExecutorGateTests
             .Build();
 
         var credRepo = new ConnectionCredentialRepository(dbConfig);
-        var protector = new CredentialProtector(config, credRepo);
+        var keyring = new CredentialKeyringRepository(dbConfig);
+        var protector = new CredentialProtector(config, credRepo, keyring);
         var credMap = new SinkConnectionCredentialMapRepository(dbConfig);
         var tenants = new TenantRepository(dbConfig);
 
