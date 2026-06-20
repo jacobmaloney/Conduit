@@ -2,19 +2,20 @@
 @attribute [Authorize]
 @inject Conduit.DataAccess.Repositories.UserRepository UserRepository
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+@inject IWebHostEnvironment Environment
 
-<PageTitle>Conduit — identity data, normalized.</PageTitle>
+<PageTitle>Conduit — move identities across connected systems.</PageTitle>
 
 <div class="hero-section mx-n4 mt-n4">
     <div class="hero-content">
         <h1 class="hero-title">Conduit</h1>
-        <p class="hero-subtitle">Identity data, normalized. SCIM 2.0 in, one clean schema out.</p>
+        <p class="hero-subtitle">Move identities, accounts, and entitlements across every connected system — one project, one clean schema.</p>
         <div class="hero-actions">
-            <a href="/users" class="btn btn-hero-primary">
-                <i class="oi oi-people"></i> View users
+            <a href="/synchronization-center" class="btn btn-hero-primary">
+                <i class="oi oi-loop-circular"></i> Synchronization Center
             </a>
-            <a href="/api-explorer" class="btn btn-hero-secondary">
-                <i class="oi oi-code"></i> API explorer
+            <a href="/connected-systems" class="btn btn-hero-secondary">
+                <i class="oi oi-plug"></i> Connections
             </a>
         </div>
     </div>
@@ -50,21 +51,21 @@
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="feature-card">
                 <div class="feature-icon bg-warning-gradient">
-                    <i class="oi oi-key"></i>
+                    <i class="oi oi-plug"></i>
                 </div>
-                <h3>API tokens</h3>
-                <p>Mint and rotate bearer tokens. Each token scopes to one connected system.</p>
-                <a href="/tokens" class="feature-link">API tokens <i class="oi oi-arrow-right"></i></a>
+                <h3>Connections</h3>
+                <p>Connect Active Directory, Entra ID, Okta, Google, SCIM, databases, and more. Test the bind, then sync.</p>
+                <a href="/connected-systems" class="feature-link">Manage connections <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="feature-card">
                 <div class="feature-icon bg-info-gradient">
-                    <i class="oi oi-code"></i>
+                    <i class="oi oi-loop-square"></i>
                 </div>
-                <h3>API explorer</h3>
-                <p>Test endpoints in the browser. Paste a token, run a request, read the response.</p>
-                <a href="/api-explorer" class="feature-link">Open explorer <i class="oi oi-arrow-right"></i></a>
+                <h3>Sync Projects</h3>
+                <p>Define source → target, auto-map attributes per object class, schedule it, and watch every run.</p>
+                <a href="/sync-projects" class="feature-link">Open sync projects <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
@@ -83,8 +84,8 @@
                     <i class="oi oi-graph"></i>
                 </div>
                 <h3>Audit trail</h3>
-                <p>Every SCIM operation is logged: who, what, when, and the request body.</p>
-                <a href="/audit" class="feature-link">View logs <i class="oi oi-arrow-right"></i></a>
+                <p>Every operation is logged: who, what, when, and the request body.</p>
+                <a href="/audit-log" class="feature-link">View logs <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
     </div>
@@ -107,11 +108,11 @@
             <div class="col-md-3 col-sm-6 mb-4">
                 <div class="stat-card">
                     <div class="stat-icon text-success">
-                        <i class="oi oi-check"></i>
+                        <i class="oi oi-plug"></i>
                     </div>
                     <div class="stat-content">
-                        <h3>@activeUserCount</h3>
-                        <p>Active Users</p>
+                        <h3>@connectionCount</h3>
+                        <p>Connections</p>
                     </div>
                 </div>
             </div>
@@ -187,6 +188,11 @@
     }
 </div>
 
+@* SCIM endpoint reference is developer chrome (SCIMServer origin) — kept for
+   dev/debugging but gated off the production front door so the directory-sync
+   story leads during a walkthrough. *@
+@if (Environment.IsDevelopment())
+{
 <div class="api-section">
     <div class="container-fluid">
         <div class="section-header">
@@ -227,10 +233,11 @@
         </div>
     </div>
 </div>
+}
 
 @code {
     private int userCount = 0;
-    private int activeUserCount = 0;
+    private int connectionCount = 0;
     private int groupCount = 0;
     private int tokenCount = 0;
     private List<Conduit.DataAccess.Repositories.TenantStats> systemStats = new();
@@ -239,18 +246,19 @@
     {
         try
         {
-            var (users, count) = await UserRepository.GetAllAsync(new Conduit.Core.Models.ScimQueryOptions { Count = 1 });
+            // Count-only fetch: the total comes from the COUNT(*) in the same query,
+            // not from the returned page (Count=1 keeps the SELECT cheap).
+            var (_, count) = await UserRepository.GetAllAsync(new Conduit.Core.Models.ScimQueryOptions { Count = 1 });
             userCount = count;
-            activeUserCount = users.Count(u => u.Active);
         }
         catch
         {
             userCount = 0;
-            activeUserCount = 0;
         }
         try
         {
             systemStats = await TenantRepo.GetStatsAsync();
+            connectionCount = systemStats.Count;
             groupCount = systemStats.Sum(s => s.GroupCount);
             tokenCount = systemStats.Sum(s => s.TokenCount);
         }
