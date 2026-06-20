@@ -91,12 +91,43 @@
     </AuthorizeView>
 
     <nav class="nav-menu @NavMenuCssClass">
+        @* SYNC is the primary experience for a directory-sync pump. Dashboard is
+           the landing; everything else about MOVING identities lives under the
+           Synchronization Center hub (which hosts Projects / History / Schedules /
+           Processing / Connections as tabs — see SynchronizationCenter.razor).
+           We deliberately surface ONE Sync front door instead of five nav links
+           that all open tabs of the same hub (dedup decision 2026-06-20). *@
         <div class="nav-section nav-section-main">
             <div class="nav-section-title">Main</div>
             <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
                 <i class="oi oi-dashboard"></i>
                 <span>Dashboard</span>
             </NavLink>
+        </div>
+
+        <div class="nav-section nav-section-sync">
+            <div class="nav-section-title">Sync</div>
+            @* Canonical home. The hub's tabs replace the old standalone
+               Sync Projects / Sync History / Schedule Manager / Processing Center
+               links — those routes still resolve for deep links, they're just no
+               longer a second front door (dedup, 2026-06-20). *@
+            <NavLink class="nav-item" href="synchronization-center">
+                <i class="oi oi-loop-circular"></i>
+                <span>Synchronization Center</span>
+            </NavLink>
+            <NavLink class="nav-item" href="connected-systems">
+                <i class="oi oi-globe"></i>
+                <span>Connections</span>
+            </NavLink>
+        </div>
+
+        @* Directory browse pages are SCIM-server DNA (a sync PUMP doesn't lead
+           with "Users / Groups" the way a SCIM server does). Demoted out of the
+           top "Main" block into their own clearly-secondary section so the Sync
+           experience reads as primary (declutter decision 2026-06-20). Still one
+           click away; counts preserved. *@
+        <div class="nav-section nav-section-directory">
+            <div class="nav-section-title">Directory</div>
             <NavLink class="nav-item" href="users">
                 <i class="oi oi-people"></i>
                 <span>Users</span>
@@ -112,30 +143,6 @@
                 {
                     <span class="nav-count" title="@CountTooltip">@gc.ToString("N0")</span>
                 }
-            </NavLink>
-        </div>
-
-        <div class="nav-section nav-section-sync">
-            <div class="nav-section-title">Sync</div>
-            <NavLink class="nav-item" href="synchronization-center">
-                <i class="oi oi-loop-circular"></i>
-                <span>Synchronization Center</span>
-            </NavLink>
-            <NavLink class="nav-item" href="sync-projects">
-                <i class="oi oi-loop-square"></i>
-                <span>Sync Projects</span>
-            </NavLink>
-            <NavLink class="nav-item" href="sync-history">
-                <i class="oi oi-clock"></i>
-                <span>Sync History</span>
-            </NavLink>
-            <NavLink class="nav-item" href="schedule-manager">
-                <i class="oi oi-calendar"></i>
-                <span>Schedule Manager</span>
-            </NavLink>
-            <NavLink class="nav-item" href="processing-center">
-                <i class="oi oi-pulse"></i>
-                <span>Processing Center</span>
             </NavLink>
         </div>
 
@@ -174,10 +181,8 @@
 
         <div class="nav-section nav-section-settings">
             <div class="nav-section-title">Settings</div>
-            <NavLink class="nav-item" href="connected-systems">
-                <i class="oi oi-globe"></i>
-                <span>Connections</span>
-            </NavLink>
+            @* Connections moved up to the Sync section (it's core to the pump,
+               not a setting). Not duplicated here to avoid a second front door. *@
             <NavLink class="nav-item" href="configuration">
                 <i class="oi oi-cog"></i>
                 <span>Configuration</span>

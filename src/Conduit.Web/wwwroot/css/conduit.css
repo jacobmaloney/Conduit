@@ -284,7 +284,14 @@ hr { border-color: var(--border); }
 }
 .nav-section-main .nav-section-title,
 .nav-section-tools .nav-section-title,
+.nav-section-directory .nav-section-title,
 .nav-section-settings .nav-section-title { color: var(--muted-2); }
+
+/* Sync is the primary experience for the directory-sync pump — give its
+   section heading the brand accent so the eye lands there first, and give the
+   hub link a touch more presence than the rest (declutter, 2026-06-20). */
+.nav-section-sync .nav-section-title { color: var(--accent); }
+.nav-section-sync .nav-item { font-weight: 600; }
 
 .nav-item {
   display: flex;
@@ -334,18 +341,23 @@ hr { border-color: var(--border); }
 /* Override stale per-section coloring rules — everything is brand cyan now */
 .nav-section-main .nav-item.active,
 .nav-section-tools .nav-item.active,
+.nav-section-directory .nav-item.active,
 .nav-section-settings .nav-item.active { background: var(--accent-50); color: var(--accent); }
 .nav-section-main .nav-item.active i,
 .nav-section-tools .nav-item.active i,
+.nav-section-directory .nav-item.active i,
 .nav-section-settings .nav-item.active i { color: var(--accent); }
 .nav-section-main .nav-item:hover,
 .nav-section-tools .nav-item:hover,
+.nav-section-directory .nav-item:hover,
 .nav-section-settings .nav-item:hover { background: var(--panel); color: var(--text); }
 .nav-section-main .nav-item i,
 .nav-section-tools .nav-item i,
+.nav-section-directory .nav-item i,
 .nav-section-settings .nav-item i { color: var(--text-3); }
 .nav-section-main .nav-item:hover i,
 .nav-section-tools .nav-item:hover i,
+.nav-section-directory .nav-item:hover i,
 .nav-section-settings .nav-item:hover i { color: var(--text); }
 
 .nav-item .nav-count {
