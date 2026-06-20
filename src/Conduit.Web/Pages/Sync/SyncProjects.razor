@@ -1115,7 +1115,7 @@
                     @if (formTab == "setup")
                     {
                         <div class="row g-3">
-                            <div class="col-md-8">
+                            <div class="@(isWizard ? "col-12" : "col-md-8")">
                                 <div class="mb-3">
                                     <label class="form-label fw-semibold">Project Name <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control form-control-lg @(ShowNameError ? "is-invalid-field" : "")" @bind="form.Name" @bind:event="oninput" placeholder="e.g., AD → Emulator User Sync" />
@@ -1287,30 +1287,38 @@
                                         Pick a different connection for the target.
                                     </div>
                                 }
-                                <div class="row g-3 mt-1">
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-semibold">Source Credential <span class="text-muted">(optional)</span></label>
-                                        <select class="form-select" @bind="form.SourceCredentialName">
-                                            <option value="">(default)</option>
-                                            @foreach (var name in sourceCredentialNames)
-                                            {
-                                                <option value="@name">@name</option>
-                                            }
-                                        </select>
-                                        <small class="form-text text-muted">Override when the source tenant holds multiple credentials.</small>
+                                @* Credential overrides are an ADVANCED detail, not a first-step
+                                   decision. The wizard's step 1 is name + connections only
+                                   (ARS-style); the default credential is used and the operator can
+                                   override it later from the edit modal's Setup tab. Shown inline on
+                                   the edit modal only. *@
+                                @if (!isWizard)
+                                {
+                                    <div class="row g-3 mt-1">
+                                        <div class="col-md-6">
+                                            <label class="form-label fw-semibold">Source Credential <span class="text-muted">(optional)</span></label>
+                                            <select class="form-select" @bind="form.SourceCredentialName">
+                                                <option value="">(default)</option>
+                                                @foreach (var name in sourceCredentialNames)
+                                                {
+                                                    <option value="@name">@name</option>
+                                                }
+                                            </select>
+                                            <small class="form-text text-muted">Override when the source tenant holds multiple credentials.</small>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label fw-semibold">Target Credential <span class="text-muted">(optional)</span></label>
+                                            <select class="form-select" @bind="form.SinkCredentialName">
+                                                <option value="">(default)</option>
+                                                @foreach (var name in sinkCredentialNames)
+                                                {
+                                                    <option value="@name">@name</option>
+                                                }
+                                            </select>
+                                            <small class="form-text text-muted">Override when the target connection holds multiple credentials.</small>
+                                        </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label fw-semibold">Target Credential <span class="text-muted">(optional)</span></label>
-                                        <select class="form-select" @bind="form.SinkCredentialName">
-                                            <option value="">(default)</option>
-                                            @foreach (var name in sinkCredentialNames)
-                                            {
-                                                <option value="@name">@name</option>
-                                            }
-                                        </select>
-                                        <small class="form-text text-muted">Override when the target connection holds multiple credentials.</small>
-                                    </div>
-                                </div>
+                                }
                                 @if (!isWizard)
                                 {
                                     <div class="row g-3 mt-1">
@@ -1334,24 +1342,30 @@
                                     </div>
                                 }
                             </div>
-                            <div class="col-md-4">
-                                <div class="sync-form-aside">
-                                    <h6 class="sync-form-aside-title">
-                                        <i class="fas fa-sliders-h me-2"></i>Status
-                                    </h6>
-                                    <div class="form-check form-switch mb-3">
-                                        <input class="form-check-input sync-form-switch" type="checkbox" id="formIsEnabled" @bind="form.IsEnabled" />
-                                        <label class="form-check-label ms-2" for="formIsEnabled">
-                                            <span class="badge @(form.IsEnabled ? "bg-success" : "bg-secondary")">
-                                                @(form.IsEnabled ? "Enabled" : "Disabled")
-                                            </span>
-                                        </label>
+                            @* Status (Enabled/Disabled) is a final-step decision in the wizard —
+                               it lives on the Review step there. Shown as a side panel on the
+                               edit modal only. *@
+                            @if (!isWizard)
+                            {
+                                <div class="col-md-4">
+                                    <div class="sync-form-aside">
+                                        <h6 class="sync-form-aside-title">
+                                            <i class="fas fa-sliders-h me-2"></i>Status
+                                        </h6>
+                                        <div class="form-check form-switch mb-3">
+                                            <input class="form-check-input sync-form-switch" type="checkbox" id="formIsEnabled" @bind="form.IsEnabled" />
+                                            <label class="form-check-label ms-2" for="formIsEnabled">
+                                                <span class="badge @(form.IsEnabled ? "bg-success" : "bg-secondary")">
+                                                    @(form.IsEnabled ? "Enabled" : "Disabled")
+                                                </span>
+                                            </label>
+                                        </div>
+                                        <p class="small text-muted mb-0">
+                                            Disabled projects keep their config and run history but are skipped by the scheduler and the orchestrator's queue.
+                                        </p>
                                     </div>
-                                    <p class="small text-muted mb-0">
-                                        Disabled projects keep their config and run history but are skipped by the scheduler and the orchestrator's queue.
-                                    </p>
                                 </div>
-                            </div>
+                            }
                         </div>
                     }
                     else if (formTab == "object")
@@ -2138,7 +2152,17 @@
                             <dt>Skip unchanged</dt>
                             <dd>@(form.SkipUnchanged ? "Yes" : "No")</dd>
                             <dt>Status</dt>
-                            <dd>@(form.IsEnabled ? "Enabled" : "Disabled")</dd>
+                            <dd>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input sync-form-switch" type="checkbox" id="reviewIsEnabled" @bind="form.IsEnabled" />
+                                    <label class="form-check-label ms-2" for="reviewIsEnabled">
+                                        <span class="badge @(form.IsEnabled ? "bg-success" : "bg-secondary")">
+                                            @(form.IsEnabled ? "Enabled" : "Disabled")
+                                        </span>
+                                    </label>
+                                </div>
+                                <small class="text-muted">Enable now to let the scheduler run it, or leave disabled and run it manually first.</small>
+                            </dd>
                         </dl>
                     }
                 </div>
