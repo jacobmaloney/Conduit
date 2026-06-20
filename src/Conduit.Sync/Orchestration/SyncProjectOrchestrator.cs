@@ -1054,10 +1054,12 @@ public sealed class SyncProjectOrchestrator
         // populated for the "group" class + a sink that absorbs membership; otherwise
         // it stays empty and the second pass is a no-op.
         var groupMembershipBuffer = new List<GroupMembership>();
-        // Capture membership only on a group-class step into a sink that absorbs it.
+        // Capture membership only on a group-like step into a sink that absorbs it.
         // Conduit native class names are lowercase; compare case-insensitively.
+        // "team" carries member edges in Attributes["members"] exactly like "group".
         var captureGroupMembership =
-            string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase)
+            (string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(objectClass, "team", StringComparison.OrdinalIgnoreCase))
             && sink is IGroupMembershipEmittingSink;
         int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, ttlRefreshed = 0;
 

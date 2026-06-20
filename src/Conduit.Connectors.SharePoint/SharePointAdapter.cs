@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -17,8 +18,10 @@ namespace Conduit.Connectors.SharePoint;
 /// <summary>
 /// SharePoint Online / Teams adapter — source-only (Phase 1.5 P2 scope). Uses
 /// Microsoft Graph via ClientSecretCredential. Credentials shape mirrors
-/// EntraID: { TenantId, ClientId, ClientSecret }. Object classes: "Site",
-/// "Team". Sink for SharePoint is intentionally not shipped — write-back is
+/// EntraID: { TenantId, ClientId, ClientSecret }. Object classes: "Site" (with a
+/// parentSiteId hierarchy ref), "Team" (with member edges), "channel" (teamId
+/// parent ref), and "channelfile" (a bounded set of top-level channel files,
+/// channelId parent ref). Sink for SharePoint is intentionally not shipped — write-back is
 /// usually orchestrated through Graph Sites API differently per scenario.
 /// </summary>
 public sealed class SharePointAdapter : IConnectorAdapter
@@ -110,13 +113,23 @@ public sealed class SharePointSource : IConnectorSource
     }
 
     // ── Least-privilege app-registration scopes (application permissions) ────────
-    //   Sites.Read.All   — /sites enumeration + the getSharePointSiteUsageDetail
-    //                       storage report used to enrich "site" objects.
-    //   Group.Read.All   — Microsoft 365 / Teams group reads.
-    //   Reports.Read.All — usage reports (site storage). Optional; a 403 only
-    //                      drops storage enrichment, the site still emits.
-    // Per-class 403 handling: a missing scope warns + skips that class/report,
-    // it never aborts the whole run.
+    //   Sites.Read.All     — /sites enumeration + /sites/{id}/sites subsite
+    //                        hierarchy + the getSharePointSiteUsageDetail storage
+    //                        report used to enrich "site" objects.
+    //   Group.Read.All     — Microsoft 365 / Teams group reads.
+    //   Reports.Read.All   — usage reports (site storage). Optional; a 403 only
+    //                        drops storage enrichment, the site still emits.
+    //   Team.ReadBasic.All — /teams listing ("team" class spine).
+    //   TeamMember.Read.All — /teams/{id}/members (team membership edges).
+    //   Channel.ReadBasic.All — /teams/{id}/channels ("channel" class spine).
+    //   Files.Read.All     — channel filesFolder + drive items ("channelfile").
+    // Per-class 403 handling: a missing scope on a SPINE listing (teams, channels)
+    // aborts that class loudly; a 403 on an ENRICHMENT (members, channel files,
+    // subsite hierarchy, storage) warns + drops only those columns/children.
+
+    // Channel-file fetch is bounded — directory libraries are unbounded, so we
+    // emit at most this many top-level file refs per channel (no recursion).
+    internal const int MaxChannelFiles = 50;
 
     public async IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
@@ -144,31 +157,127 @@ public sealed class SharePointSource : IConnectorSource
             yield break;
         }
 
+        // ── team: list teams, fetch members per team, emit membership edges ──────
         if (string.Equals(objectClass, "Team", StringComparison.OrdinalIgnoreCase))
         {
-            var teams = await client.Teams.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
+            Microsoft.Graph.Models.TeamCollectionResponse? teams = null;
+            try
+            {
+                teams = await client.Teams.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
+            }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+            {
+                _logger.LogWarning(
+                    "SharePoint: skipping class team — app registration lacks scope Team.ReadBasic.All (403).");
+                yield break;
+            }
             while (teams?.Value != null)
             {
                 foreach (var t in teams.Value)
                 {
                     if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
-                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["objectClass"] = "team",
-                        ["id"] = t.Id,
-                        ["objectGuid"] = t.Id,
-                        ["displayName"] = t.DisplayName,
-                        ["cn"] = t.DisplayName,
-                        ["description"] = t.Description,
-                        ["webUrl"] = t.WebUrl
-                    };
+                    var members = await TryGetTeamMembersAsync(client, t.Id, cancellationToken);
                     emitted++;
-                    yield return new ConnectorObject
+                    yield return MapTeam(t, members);
+                }
+                if (string.IsNullOrEmpty(teams.OdataNextLink)) break;
+                teams = await client.Teams.WithUrl(teams.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+            yield break;
+        }
+
+        // ── channel: for each team, list its channels (parent ref = teamId) ──────
+        if (string.Equals(objectClass, "channel", StringComparison.OrdinalIgnoreCase))
+        {
+            Microsoft.Graph.Models.TeamCollectionResponse? teams = null;
+            try
+            {
+                teams = await client.Teams.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
+            }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+            {
+                _logger.LogWarning(
+                    "SharePoint: skipping class channel — listing parent teams requires Team.ReadBasic.All (403).");
+                yield break;
+            }
+            while (teams?.Value != null)
+            {
+                foreach (var t in teams.Value)
+                {
+                    Microsoft.Graph.Models.ChannelCollectionResponse? channels = null;
+                    try
                     {
-                        SourceId = t.Id ?? string.Empty,
-                        ObjectClass = "Team",
-                        Attributes = attrs
-                    };
+                        channels = await client.Teams[t.Id].Channels.GetAsync(cancellationToken: cancellationToken);
+                    }
+                    catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+                    {
+                        _logger.LogWarning(
+                            "SharePoint: skipping channels for team {TeamId} — app registration lacks scope Channel.ReadBasic.All (403).",
+                            t.Id);
+                        continue;
+                    }
+                    while (channels?.Value != null)
+                    {
+                        foreach (var ch in channels.Value)
+                        {
+                            if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                            emitted++;
+                            yield return MapChannel(ch, t.Id, t.DisplayName);
+                        }
+                        if (string.IsNullOrEmpty(channels.OdataNextLink)) break;
+                        channels = await client.Teams[t.Id].Channels
+                            .WithUrl(channels.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+                    }
+                }
+                if (string.IsNullOrEmpty(teams.OdataNextLink)) break;
+                teams = await client.Teams.WithUrl(teams.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+            yield break;
+        }
+
+        // ── channelfile: bounded top-level file refs per channel (parent = channelId)
+        if (string.Equals(objectClass, "channelfile", StringComparison.OrdinalIgnoreCase))
+        {
+            Microsoft.Graph.Models.TeamCollectionResponse? teams = null;
+            try
+            {
+                teams = await client.Teams.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
+            }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+            {
+                _logger.LogWarning(
+                    "SharePoint: skipping class channelfile — listing parent teams requires Team.ReadBasic.All (403).");
+                yield break;
+            }
+            while (teams?.Value != null)
+            {
+                foreach (var t in teams.Value)
+                {
+                    // Stop issuing per-team/per-channel Graph calls once MaxObjects is hit.
+                    if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                    Microsoft.Graph.Models.ChannelCollectionResponse? channels = null;
+                    try
+                    {
+                        channels = await client.Teams[t.Id].Channels.GetAsync(cancellationToken: cancellationToken);
+                    }
+                    catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+                    {
+                        _logger.LogWarning(
+                            "SharePoint: skipping channel files for team {TeamId} — Channel.ReadBasic.All missing (403).",
+                            t.Id);
+                        continue;
+                    }
+                    foreach (var ch in channels?.Value ?? new List<Microsoft.Graph.Models.Channel>())
+                    {
+                        if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                        var files = await TryGetChannelFilesAsync(client, t.Id, ch.Id, cancellationToken);
+                        foreach (var f in files)
+                        {
+                            if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                            emitted++;
+                            yield return MapChannelFile(f, ch.Id, t.Id);
+                        }
+                    }
                 }
                 if (string.IsNullOrEmpty(teams.OdataNextLink)) break;
                 teams = await client.Teams.WithUrl(teams.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -182,45 +291,271 @@ public sealed class SharePointSource : IConnectorSource
         // skips enrichment with a warning but every site still emits.
         var storageByUrl = await TryGetSiteStorageAsync(creds, cancellationToken);
 
+        // Collect the flat /sites list first so we can resolve each site's parent
+        // by webUrl path containment (the tenant returns no parentReference on the
+        // /sites collection). Site counts are modest vs. users; buffering is cheap.
+        var allSites = new List<Microsoft.Graph.Models.Site>();
         var sites = await client.Sites.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
         while (sites?.Value != null)
         {
-            foreach (var s in sites.Value)
-            {
-                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
-                var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["objectClass"] = "site",
-                    ["id"] = s.Id,
-                    ["objectGuid"] = s.Id,
-                    ["displayName"] = s.DisplayName,
-                    ["cn"] = s.DisplayName,
-                    ["description"] = s.Description,
-                    ["webUrl"] = s.WebUrl,
-                    ["name"] = s.Name,
-                    ["whenCreated"] = s.CreatedDateTime?.ToString("o")
-                };
-                if (storageByUrl is not null && !string.IsNullOrEmpty(s.WebUrl) &&
-                    storageByUrl.TryGetValue(s.WebUrl!, out var storage))
-                {
-                    if (storage.UsedBytes.HasValue) attrs["StorageUsedBytes"] = storage.UsedBytes.Value;
-                    if (storage.AllocatedBytes.HasValue) attrs["StorageAllocatedBytes"] = storage.AllocatedBytes.Value;
-                    if (storage.FileCount.HasValue) attrs["FileCount"] = storage.FileCount.Value;
-                }
-                emitted++;
-                yield return new ConnectorObject
-                {
-                    SourceId = s.Id ?? string.Empty,
-                    ObjectClass = "Site",
-                    Attributes = attrs
-                };
-            }
+            allSites.AddRange(sites.Value);
             if (string.IsNullOrEmpty(sites.OdataNextLink)) break;
             sites = await client.Sites.WithUrl(sites.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
         }
+
+        var parentById = BuildSiteHierarchy(allSites);
+        foreach (var s in allSites)
+        {
+            if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+            parentById.TryGetValue(s.Id ?? string.Empty, out var parentSiteId);
+            emitted++;
+            yield return MapSite(s, parentSiteId, storageByUrl);
+        }
     }
 
-    private readonly record struct SiteStorage(long? UsedBytes, long? AllocatedBytes, long? FileCount);
+    /// <summary>
+    /// Resolves the channel's filesFolder driveItem then lists its children,
+    /// capped at <see cref="MaxChannelFiles"/> top-level items (no recursion into
+    /// subfolders, no paging past the cap). A 403 (Files.Read.All missing) or any
+    /// resolution miss warns and yields an empty list — channels still emit.
+    /// </summary>
+    private async Task<List<Microsoft.Graph.Models.DriveItem>> TryGetChannelFilesAsync(
+        GraphServiceClient client, string? teamId, string? channelId, CancellationToken cancellationToken)
+    {
+        var result = new List<Microsoft.Graph.Models.DriveItem>();
+        if (string.IsNullOrEmpty(teamId) || string.IsNullOrEmpty(channelId)) return result;
+        try
+        {
+            var folder = await client.Teams[teamId].Channels[channelId].FilesFolder
+                .GetAsync(cancellationToken: cancellationToken);
+            var driveId = folder?.ParentReference?.DriveId;
+            var itemId = folder?.Id;
+            if (string.IsNullOrEmpty(driveId) || string.IsNullOrEmpty(itemId)) return result;
+
+            var children = await client.Drives[driveId].Items[itemId].Children
+                .GetAsync(req => req.QueryParameters.Top = MaxChannelFiles, cancellationToken);
+            foreach (var item in children?.Value ?? new List<Microsoft.Graph.Models.DriveItem>())
+            {
+                if (result.Count >= MaxChannelFiles) break;
+                result.Add(item);
+            }
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+        {
+            _logger.LogWarning(
+                "SharePoint: skipping files for channel {ChannelId} — app registration lacks scope Files.Read.All (403).",
+                channelId);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Lists a team's members and returns their stable member source ids. A 403
+    /// (TeamMember.Read.All missing) warns and returns an empty list — the team
+    /// still emits, just without membership edges.
+    /// </summary>
+    private async Task<List<string>> TryGetTeamMembersAsync(
+        GraphServiceClient client, string? teamId, CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        if (string.IsNullOrEmpty(teamId)) return ids;
+        try
+        {
+            var page = await client.Teams[teamId].Members.GetAsync(cancellationToken: cancellationToken);
+            while (page?.Value != null)
+            {
+                foreach (var m in page.Value)
+                {
+                    var id = MemberSourceId(m);
+                    if (!string.IsNullOrEmpty(id)) ids.Add(id!);
+                }
+                if (string.IsNullOrEmpty(page.OdataNextLink)) break;
+                page = await client.Teams[teamId].Members
+                    .WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+        {
+            _logger.LogWarning(
+                "SharePoint: skipping members for team {TeamId} — app registration lacks scope TeamMember.Read.All (403).",
+                teamId);
+        }
+        return ids;
+    }
+
+    // ── Pure mapping / hierarchy helpers (unit-tested without live Graph) ────────
+
+    /// <summary>
+    /// Member edge id: prefer the resolved AAD user object id (joins to the IC
+    /// user object), falling back to the conversation-member id. Empty when neither.
+    /// </summary>
+    internal static string? MemberSourceId(Microsoft.Graph.Models.ConversationMember member)
+    {
+        if (member is Microsoft.Graph.Models.AadUserConversationMember aad &&
+            !string.IsNullOrEmpty(aad.UserId))
+            return aad.UserId;
+        return member.Id;
+    }
+
+    /// <summary>
+    /// Maps a flat list of sites to each site's parent site id. A site B is a child
+    /// of site A when A.webUrl is the longest other site webUrl that is a path
+    /// prefix of B.webUrl. Roots (no containing site) are absent from the map (the
+    /// caller treats a miss as an empty parent). Pure — no Graph calls.
+    /// </summary>
+    internal static Dictionary<string, string> BuildSiteHierarchy(
+        IReadOnlyList<Microsoft.Graph.Models.Site> sites)
+    {
+        var parentById = new Dictionary<string, string>(StringComparer.Ordinal);
+        var withUrl = sites
+            .Where(s => !string.IsNullOrEmpty(s.Id) && !string.IsNullOrEmpty(s.WebUrl))
+            .ToList();
+
+        foreach (var child in withUrl)
+        {
+            var childUrl = NormalizeUrl(child.WebUrl!);
+            string? bestParentId = null;
+            var bestParentLen = -1;
+            foreach (var candidate in withUrl)
+            {
+                if (ReferenceEquals(candidate, child)) continue;
+                var candUrl = NormalizeUrl(candidate.WebUrl!);
+                if (candUrl.Length >= childUrl.Length) continue;
+                if (!childUrl.StartsWith(candUrl + "/", StringComparison.OrdinalIgnoreCase)) continue;
+                if (candUrl.Length > bestParentLen)
+                {
+                    bestParentLen = candUrl.Length;
+                    bestParentId = candidate.Id;
+                }
+            }
+            if (!string.IsNullOrEmpty(bestParentId))
+                parentById[child.Id!] = bestParentId!;
+        }
+        return parentById;
+    }
+
+    private static string NormalizeUrl(string url) => url.TrimEnd('/');
+
+    internal static ConnectorObject MapSite(
+        Microsoft.Graph.Models.Site s,
+        string? parentSiteId,
+        IReadOnlyDictionary<string, SiteStorage>? storageByUrl)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "site",
+            ["id"] = s.Id,
+            ["objectGuid"] = s.Id,
+            ["displayName"] = s.DisplayName,
+            ["cn"] = s.DisplayName,
+            ["description"] = s.Description,
+            ["webUrl"] = s.WebUrl,
+            ["name"] = s.Name,
+            ["parentSiteId"] = parentSiteId,
+            ["whenCreated"] = s.CreatedDateTime?.ToString("o")
+        };
+        if (storageByUrl is not null && !string.IsNullOrEmpty(s.WebUrl) &&
+            storageByUrl.TryGetValue(s.WebUrl!, out var storage))
+        {
+            if (storage.UsedBytes.HasValue) attrs["StorageUsedBytes"] = storage.UsedBytes.Value;
+            if (storage.AllocatedBytes.HasValue) attrs["StorageAllocatedBytes"] = storage.AllocatedBytes.Value;
+            if (storage.FileCount.HasValue) attrs["FileCount"] = storage.FileCount.Value;
+        }
+        return new ConnectorObject
+        {
+            SourceId = s.Id ?? string.Empty,
+            ObjectClass = "Site",
+            Attributes = attrs
+        };
+    }
+
+    internal static ConnectorObject MapTeam(
+        Microsoft.Graph.Models.Team t, List<string> members)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "team",
+            ["id"] = t.Id,
+            ["objectGuid"] = t.Id,
+            ["displayName"] = t.DisplayName,
+            ["cn"] = t.DisplayName,
+            ["description"] = t.Description,
+            ["webUrl"] = t.WebUrl,
+            // Membership edges — the orchestrator's second pass + IGroupMembershipEmittingSink
+            // carry these to IC /api/objects/group-memberships/bulk (no sink change).
+            ["members"] = members
+        };
+        return new ConnectorObject
+        {
+            SourceId = t.Id ?? string.Empty,
+            ObjectClass = "Team",
+            Attributes = attrs
+        };
+    }
+
+    internal static ConnectorObject MapChannel(
+        Microsoft.Graph.Models.Channel ch, string? teamId, string? teamName)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "channel",
+            ["id"] = ch.Id,
+            ["objectGuid"] = ch.Id,
+            ["displayName"] = ch.DisplayName,
+            ["cn"] = ch.DisplayName,
+            ["description"] = ch.Description,
+            ["membershipType"] = ch.MembershipType?.ToString(),
+            ["webUrl"] = ch.WebUrl,
+            ["teamId"] = teamId,
+            ["teamName"] = teamName,
+            ["createdDateTime"] = ch.CreatedDateTime?.ToString("o")
+        };
+        return new ConnectorObject
+        {
+            SourceId = ch.Id ?? string.Empty,
+            ObjectClass = "Channel",
+            Attributes = attrs
+        };
+    }
+
+    internal static ConnectorObject MapChannelFile(
+        Microsoft.Graph.Models.DriveItem f, string? channelId, string? teamId)
+    {
+        // A DriveItem.Id is unique only within its drive; compose it with the
+        // channel id so the SourceId is globally unique across drives/channels.
+        var sourceId = string.IsNullOrEmpty(channelId) ? (f.Id ?? string.Empty) : $"{channelId}:{f.Id}";
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "channelfile",
+            ["id"] = sourceId,
+            ["objectGuid"] = sourceId,
+            ["driveItemId"] = f.Id,
+            ["displayName"] = f.Name,
+            ["cn"] = f.Name,
+            ["webUrl"] = f.WebUrl,
+            ["size"] = f.Size,
+            ["isFolder"] = f.Folder is not null,
+            ["channelId"] = channelId,
+            ["teamId"] = teamId,
+            ["lastModifiedDateTime"] = f.LastModifiedDateTime?.ToString("o")
+        };
+        return new ConnectorObject
+        {
+            SourceId = sourceId,
+            ObjectClass = "channelfile",
+            Attributes = attrs
+        };
+    }
+
+    private static bool IsForbidden(Microsoft.Graph.Models.ODataErrors.ODataError ex)
+    {
+        if (ex.ResponseStatusCode == 403) return true;
+        var code = ex.Error?.Code;
+        return string.Equals(code, "Authorization_RequestDenied", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(code, "Forbidden", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal readonly record struct SiteStorage(long? UsedBytes, long? AllocatedBytes, long? FileCount);
 
     /// <summary>
     /// Fetches getSharePointSiteUsageDetail(period='D30') as JSON and indexes

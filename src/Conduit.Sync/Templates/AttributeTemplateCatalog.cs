@@ -441,6 +441,9 @@ public static class AttributeTemplateCatalog
             E("description", "Description"),
             E("createdDateTime", "WhenCreated"),
             E("lastModifiedDateTime", "WhenChanged"),
+            // Site-tree hierarchy ref: parent site's SourceId (empty for roots).
+            // Derived by webUrl path containment in the connector (no Graph call).
+            E("parentSiteId", "ParentSiteId"),
             // Storage joined from getSharePointSiteUsageDetail (Reports.Read.All).
             E("StorageUsedBytes", "StorageUsedBytes", false, "Integer"),
             E("StorageAllocatedBytes", "StorageAllocatedBytes", false, "Integer"),
@@ -468,6 +471,10 @@ public static class AttributeTemplateCatalog
             E("mail", "Email"),
             E("visibility", "Visibility"),
             E("createdDateTime", "WhenCreated"),
+            // Team membership edges. Mapped so the orchestrator's group-membership
+            // second pass reads Attributes["members"] and pushes the edges to IC
+            // /api/objects/group-memberships/bulk (identical to AD group "member").
+            E("members", "members"),
         };
         c[(Systems.SharePoint, "Drive")] = new[]
         {
@@ -493,6 +500,21 @@ public static class AttributeTemplateCatalog
             E("teamId", "TeamId"),
             E("teamName", "TeamName"),
             E("createdDateTime", "WhenCreated"),
+        };
+        // Bounded set of top-level channel files (driveItems under the channel's
+        // filesFolder). channelId/teamId are hierarchy refs so IC can browse
+        // team -> channel -> files. Capped per channel by the connector.
+        c[(Systems.SharePoint, "channelfile")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("driveItemId", "DriveItemId"),
+            E("displayName", "DisplayName", true),
+            E("webUrl", "WebUrl"),
+            E("size", "Size", false, "Integer"),
+            E("isFolder", "IsFolder", false, "Boolean"),
+            E("channelId", "ChannelId"),
+            E("teamId", "TeamId"),
+            E("lastModifiedDateTime", "WhenChanged"),
         };
         c[(Systems.SharePoint, "List")] = new[]
         {

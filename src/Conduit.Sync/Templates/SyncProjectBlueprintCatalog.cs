@@ -159,6 +159,36 @@ public static class SyncProjectBlueprintCatalog
         },
         new SyncProjectBlueprint
         {
+            Id = "sharepoint-collaboration-governance",
+            Name = "SharePoint & Teams Collaboration",
+            Description =
+                "Inventories the M365 collaboration surface — the SharePoint site tree, Teams "
+                + "(with member edges), team channels, a bounded set of top-level channel files, "
+                + "document drives, and lists — into IdentityCenter for governance.",
+            SourceSystemType = "SharePoint",
+            Mode = GenerationMode.SharePointCollaboration,
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "Requires Graph application scopes: Sites.Read.All (sites + hierarchy), "
+                    + "Team.ReadBasic.All (teams), TeamMember.Read.All (team membership edges), "
+                    + "Channel.ReadBasic.All (channels), Files.Read.All (channel files + drives).",
+                "Channel files are bounded — only the top-level items of each channel's "
+                    + "filesFolder are emitted (no recursion, capped per channel); this is a "
+                    + "browse aid, not a full document-library export.",
+                "OneDrive-on-user is delivered via the EntraID m365usage class (UPN join), "
+                    + "not by enumerating per-user drives here."
+            },
+            ClassAdvisories = new Dictionary<string, string>
+            {
+                ["team"] = "Member edges require TeamMember.Read.All; without it teams still emit, minus membership.",
+                ["channel"] = "Requires Channel.ReadBasic.All.",
+                ["channelfile"] = "Requires Files.Read.All; bounded to top-level items per channel.",
+                ["sharepointgroup"] = "Deferred — per-site SharePoint groups need the SharePoint REST API, not Graph; emits nothing."
+            }
+        },
+        new SyncProjectBlueprint
+        {
             Id = "azure-resource-inventory",
             Name = "Azure Resource Inventory",
             Description =

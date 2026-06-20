@@ -117,8 +117,8 @@ namespace Conduit.Sync.Templates
 
         // ── SharePoint / M365: Core(2) / Collaboration(6) / Full(7) ──
         private static readonly string[] SharePointCore = { "site", "team" };
-        private static readonly string[] SharePointCollaboration = { "site", "team", "drive", "channel", "list", "sharepointgroup" };
-        private static readonly string[] SharePointFull = { "site", "team", "drive", "channel", "list", "subscribedSku", "sharepointgroup" };
+        private static readonly string[] SharePointCollaboration = { "site", "team", "channel", "channelfile", "drive", "list", "sharepointgroup" };
+        private static readonly string[] SharePointFull = { "site", "team", "channel", "channelfile", "drive", "list", "subscribedSku", "sharepointgroup" };
 
         // ── SCIM(2), Okta(2/3), Google(2/3), AWS(2/3), Generic LDAP(2/3), Database(1/2) ──
         private static readonly string[] ScimCore = { "user", "group" };
