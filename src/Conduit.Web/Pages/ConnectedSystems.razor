@@ -24,6 +24,7 @@
 @inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
 @inject Conduit.DataAccess.Repositories.ConnectionCredentialRepository CredRepo
 @inject Conduit.DataAccess.Repositories.SyncProjectRepository ProjectRepo
+@inject Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository CredMapRepo
 @inject IServiceScopeFactory ScopeFactory
 @inject Microsoft.Extensions.Logging.ILogger<ConnectedSystems> Logger
 
@@ -177,6 +178,9 @@
                             <button class="ic-btn" @onclick="() => EditSystem(s.TenantId)" title="Edit">
                                 <i class="oi oi-pencil"></i>
                             </button>
+                            <button class="ic-btn" @onclick="() => ShowRenameModal(s)" title="Rename connection (updates credential map + sync project names)">
+                                <i class="oi oi-tag"></i>
+                            </button>
                             @* ── SCIM-server chrome (moved 2026-05-31, item 2) ──────────
                                Quick Sync, Endpoints, Legal Hold, and Clear Data are
                                SCIMServer-fork surfaces with no IC directory-connection
@@ -242,6 +246,50 @@
         </div>
     }
 </div>
+
+<!-- Rename connection modal — self-service rename (one Conduit-local txn) -->
+@if (showRenameModal && renameTarget is not null)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="oi oi-tag me-2"></i>Rename connection</h5>
+                    <button type="button" class="btn-close" @onclick="CloseRenameModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">
+                        Renaming <strong>@renameTarget.Name</strong> updates the connection name and slug,
+                        migrates its write-back credential mapping, and rewrites the names of sync projects
+                        that reference it. Synced object history is not rewritten.
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label">New name *</label>
+                        <input class="form-control" maxlength="100" autocomplete="off"
+                               @bind="renameNewName" @bind:event="oninput" placeholder="@renameTarget.Name" />
+                        <small class="form-text text-muted">
+                            Credential-map key will become: <code>@renameSanitizedPreview</code>
+                        </small>
+                    </div>
+                    @if (!string.IsNullOrEmpty(renameError))
+                    {
+                        <div class="alert alert-danger py-2 mb-0">@renameError</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseRenameModal">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="RenameConnectionAsync" disabled="@renameBusy">
+                        @if (renameBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        }
+                        <span>Rename</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 <!-- Create / Edit modal — IC "New Connection" parity (Cc-styled, Test-gated) -->
 <div class="modal conn-editor-modal @(showModal ? "show d-block" : "")" tabindex="-1">
@@ -1992,6 +2040,159 @@
         ClearAutoRegStatus();
         ResetCreateCredentialState();
         showModal = true;
+    }
+
+    // ── Self-service rename ────────────────────────────────────────────────
+    private bool showRenameModal;
+    private bool renameBusy;
+    private TenantStats? renameTarget;
+    private string renameNewName = "";
+    private string? renameError;
+    private string renameSanitizedPreview => Conduit.Sync.Security.IdentityCenterSourceName.Sanitize(renameNewName?.Trim());
+
+    private void ShowRenameModal(TenantStats s)
+    {
+        renameTarget = s;
+        renameNewName = s.Name;
+        renameError = null;
+        renameBusy = false;
+        showRenameModal = true;
+    }
+
+    private void CloseRenameModal()
+    {
+        showRenameModal = false;
+        renameTarget = null;
+        renameNewName = "";
+        renameError = null;
+        renameBusy = false;
+    }
+
+    // Server-side, fail-closed display-name validation. Returns null when valid,
+    // else the rejection reason. Charset: letters, digits, space, and a small set
+    // of punctuation used by existing connection names (parens, #, ., _, -).
+    private static string? ValidateConnectionName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "Name is required.";
+        var trimmed = raw.Trim();
+        if (trimmed.Length < 1 || trimmed.Length > 100) return "Name must be 1-100 characters.";
+        foreach (var c in trimmed)
+        {
+            if (char.IsControl(c)) return "Name contains a control character.";
+            var allowed = char.IsLetterOrDigit(c) || " ().#_-".IndexOf(c) >= 0;
+            if (!allowed) return "Name contains an unsupported character.";
+        }
+        var key = Conduit.Sync.Security.IdentityCenterSourceName.Sanitize(trimmed);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[A-Za-z0-9_.\\-]{1,100}$"))
+            return "Name does not produce a valid credential-map key.";
+        return null;
+    }
+
+    private async Task RenameConnectionAsync()
+    {
+        if (renameTarget is null) return;
+        renameError = null;
+
+        var newName = (renameNewName ?? "").Trim();
+        var validation = ValidateConnectionName(newName);
+        if (validation is not null) { renameError = validation; return; }
+
+        // Idempotent no-op: nothing to change.
+        if (string.Equals(newName, renameTarget.Name, StringComparison.Ordinal))
+        {
+            CloseRenameModal();
+            return;
+        }
+
+        renameBusy = true;
+        try
+        {
+            // Re-resolve the tenant by Id server-side (IDOR guard) and read CURRENT name.
+            var tenantId = renameTarget.TenantId;
+            var tenant = await TenantRepo.GetByIdAsync(tenantId);
+            if (tenant is null) { renameError = "Connection no longer exists."; return; }
+
+            var oldName = tenant.Name;
+            var oldKey = Conduit.Sync.Security.IdentityCenterSourceName.Sanitize(oldName);
+            var newKey = Conduit.Sync.Security.IdentityCenterSourceName.Sanitize(newName);
+
+            // Collision pre-check 1: another tenant's Name/Slug.
+            if (await TenantRepo.NameOrSlugInUseByOtherAsync(newName, tenantId))
+            {
+                renameError = "Another connection already uses that name.";
+                return;
+            }
+            // Collision pre-check 2: another tenant's credential-map key.
+            if (!string.Equals(oldKey, newKey, StringComparison.Ordinal))
+            {
+                var keyOwner = await CredMapRepo.GetTenantIdByNameAsync(newKey);
+                if (keyOwner.HasValue && keyOwner.Value != tenantId)
+                {
+                    renameError = "The credential-map key for that name is already in use by another connection.";
+                    return;
+                }
+            }
+
+            int projectsRewritten;
+            try
+            {
+                projectsRewritten = await TenantRepo.RenameAsync(tenantId, oldName, newName, oldKey, newKey);
+            }
+            catch (Conduit.DataAccess.Repositories.SinkConnectionCredentialMapCollisionException)
+            {
+                renameError = "The credential-map key for that name is already in use by another connection.";
+                return;
+            }
+
+            await AuditRenameAsync(tenantId, oldName, newName, oldKey, newKey, projectsRewritten);
+
+            CloseRenameModal();
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            renameError = string.Concat("Rename failed: ", ex.Message);
+        }
+        finally
+        {
+            renameBusy = false;
+        }
+    }
+
+    private async Task AuditRenameAsync(Guid tenantId, string oldName, string newName, string oldKey, string newKey, int projectsRewritten)
+    {
+        try
+        {
+            string userName = "unknown";
+            try
+            {
+                var auth = await AuthState.GetAuthenticationStateAsync();
+                userName = auth.User?.Identity?.Name ?? "unknown";
+            }
+            catch { /* best-effort */ }
+
+            var ip = HttpCtx.HttpContext?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            var ua = HttpCtx.HttpContext?.Request.Headers["User-Agent"].ToString();
+            var details = string.Concat(
+                "Connection renamed. Credential-map key '", oldKey, "' -> '", newKey,
+                "'. SyncProjects rewritten: ", projectsRewritten.ToString(), ".");
+
+            await Audit.LogAsync(
+                action: "ConnectionRenamed",
+                resourceType: "Tenant",
+                resourceId: tenantId.ToString(),
+                userName: userName,
+                ipAddress: ip,
+                userAgent: ua,
+                statusCode: 200,
+                details: details,
+                oldValue: oldName,
+                newValue: newName);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Audit write failed for ConnectionRenamed on {tenantId}: {ex.Message}");
+        }
     }
 
     private async Task EditSystem(Guid id)

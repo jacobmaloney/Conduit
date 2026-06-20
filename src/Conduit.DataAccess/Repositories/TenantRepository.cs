@@ -240,6 +240,142 @@ namespace Conduit.DataAccess.Repositories
         }
 
         /// <summary>
+        /// True if any OTHER tenant (excluding <paramref name="excludeTenantId"/>) already
+        /// owns <paramref name="newName"/> as its Name or Slug. Server-side collision
+        /// pre-check for the self-service rename (Worf constraint 3). Case-insensitive to
+        /// match SQL Server's default collation; the SinkConnectionCredentialMap key
+        /// collision is checked separately by the caller against the sanitized form.
+        /// </summary>
+        public async Task<bool> NameOrSlugInUseByOtherAsync(string newName, Guid excludeTenantId)
+        {
+            var count = await ExecuteScalarAsync<int>(@"
+                SELECT COUNT(*)
+                  FROM Tenants
+                 WHERE Id <> @ExcludeId
+                   AND (Name = @NewName OR Slug = @NewName);",
+                new { ExcludeId = excludeTenantId, NewName = newName });
+            return count > 0;
+        }
+
+        /// <summary>
+        /// Self-service connection rename. ONE Conduit-local transaction that, atomically:
+        ///   1. Tenants.Name + Tenants.Slug → new name (Slug == Name convention).
+        ///   2. SinkConnectionCredentialMap.SourceConnectionName → the new sanitized key,
+        ///      migrating the OLD key row in place (UPDATE, never delete).
+        ///   3. SyncProjects.Name / .Description → exact-substring replace of the old
+        ///      display name, preserving suffixes, scoped to this tenant.
+        /// Tenants.Domain and SyncRunLogs history are deliberately untouched.
+        ///
+        /// The caller is responsible for: authz, input validation, computing
+        /// <paramref name="oldSanitizedKey"/>/<paramref name="newSanitizedKey"/> via
+        /// IdentityCenterSourceName.Sanitize, the cross-tenant collision pre-check, and
+        /// auditing. This method scopes every UPDATE by Id AND the exact CURRENT old value
+        /// read here under the transaction (optimistic-concurrency: the supplied
+        /// <paramref name="expectedOldName"/> must match the row's current Name or it
+        /// rolls back). The Tenants update must affect exactly 1 row or the whole
+        /// transaction rolls back.
+        ///
+        /// Returns the number of SyncProjects rows rewritten (informational; 0 is valid).
+        /// </summary>
+        public async Task<int> RenameAsync(
+            Guid tenantId,
+            string expectedOldName,
+            string newName,
+            string oldSanitizedKey,
+            string newSanitizedKey)
+        {
+            using var connection = CreateConnection();
+            using var tx = connection.BeginTransaction();
+            try
+            {
+                // Optimistic-concurrency: the row's CURRENT Name is the authoritative
+                // scope predicate. If the supplied old name no longer matches, abort —
+                // the connection was renamed/changed out from under this operator.
+                var current = await connection.QuerySingleOrDefaultAsync<Tenant>(
+                    "SELECT * FROM Tenants WHERE Id = @Id",
+                    new { Id = tenantId }, tx);
+                if (current is null)
+                    throw new InvalidOperationException($"Tenant {tenantId} not found.");
+                if (!string.Equals(current.Name, expectedOldName, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        "Connection name changed since this rename was started; refresh and retry.");
+
+                // 1) Tenants — scoped by Id AND exact old Name. Must touch exactly 1 row.
+                var tenantRows = await connection.ExecuteAsync(@"
+                    UPDATE Tenants
+                       SET Name = @NewName,
+                           Slug = @NewName,
+                           LastModified = SYSUTCDATETIME()
+                     WHERE Id = @Id
+                       AND Name = @OldName;",
+                    new { Id = tenantId, OldName = expectedOldName, NewName = newName }, tx);
+                if (tenantRows != 1)
+                    throw new InvalidOperationException(
+                        $"Tenant rename affected {tenantRows} rows (expected 1); rolled back.");
+
+                // 2) SinkConnectionCredentialMap — migrate the old key in place. Only act
+                //    when the key actually changes and the new key isn't already present
+                //    for THIS tenant (idempotent). Cross-tenant collision is pre-checked
+                //    by the caller; we additionally guard here against re-pointing another
+                //    tenant's key.
+                if (!string.Equals(oldSanitizedKey, newSanitizedKey, StringComparison.Ordinal))
+                {
+                    var collision = await connection.ExecuteScalarAsync<int>(@"
+                        SELECT COUNT(*)
+                          FROM SinkConnectionCredentialMap
+                         WHERE SourceConnectionName = @NewKey
+                           AND ConduitTenantId <> @TenantId;",
+                        new { NewKey = newSanitizedKey, TenantId = tenantId }, tx);
+                    if (collision > 0)
+                        throw new SinkConnectionCredentialMapCollisionException(
+                            newSanitizedKey, Guid.Empty, tenantId);
+
+                    await connection.ExecuteAsync(@"
+                        UPDATE SinkConnectionCredentialMap
+                           SET SourceConnectionName = @NewKey,
+                               LastModified = @Now
+                         WHERE ConduitTenantId = @TenantId
+                           AND SourceConnectionName = @OldKey;",
+                        new
+                        {
+                            TenantId = tenantId,
+                            OldKey = oldSanitizedKey,
+                            NewKey = newSanitizedKey,
+                            Now = DateTime.UtcNow
+                        }, tx);
+                }
+
+                // 3) SyncProjects — exact-substring replace of the old display name in
+                //    Name and Description, scoped to this tenant. REPLACE only rewrites
+                //    rows that actually contain the substring, so suffixes are preserved.
+                var projectRows = 0;
+                if (!string.Equals(expectedOldName, newName, StringComparison.Ordinal))
+                {
+                    projectRows = await connection.ExecuteAsync(@"
+                        UPDATE SyncProjects
+                           SET Name = REPLACE(Name, @OldName, @NewName),
+                               Description = CASE
+                                   WHEN Description IS NOT NULL AND CHARINDEX(@OldName, Description) > 0
+                                       THEN REPLACE(Description, @OldName, @NewName)
+                                   ELSE Description END,
+                               LastModified = SYSUTCDATETIME()
+                         WHERE SourceTenantId = @TenantId
+                           AND (CHARINDEX(@OldName, Name) > 0
+                                OR (Description IS NOT NULL AND CHARINDEX(@OldName, Description) > 0));",
+                        new { TenantId = tenantId, OldName = expectedOldName, NewName = newName }, tx);
+                }
+
+                tx.Commit();
+                return projectRows;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
+
+        /// <summary>
         /// Returns user + group + active-token counts for each tenant.
         /// Used by the Connected Systems dashboard.
         /// </summary>
