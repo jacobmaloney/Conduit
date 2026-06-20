@@ -20,30 +20,35 @@
                     publish root, so the service creates publish\Logs at runtime.
       * log, uploads, temp -> defensive conventional runtime dir names.
 
-    The PORTABLE credential keyring (C:\ProgramData\Conduit\credential.key) is a flat
+    The local credential key file (C:\ProgramData\Conduit\credential.key) is a flat
     base64 AES key that lives OUTSIDE the publish root and is never touched by this deploy.
-    It must be copied to the server out of band (see SHARED CREDENTIAL KEY below); without
-    it every stored ConnectionCredential fails to decrypt.
+    It is now only a FALLBACK behind the DB keyring (see SHARED CREDENTIAL KEY below);
+    without a resolvable key every stored ConnectionCredential fails to decrypt.
 
     SHARED CREDENTIAL KEY (multi-box estate)
-      CredentialProtector (src\Conduit.Sync\Security\CredentialProtector.cs) resolves the
-      32-byte AES key in this precedence (ResolveKey, ctor):
-        1. config "Sync:CredentialKey" (base64 of exactly 32 bytes) -- wins if set.
-        2. key file at "Sync:CredentialKeyPath", else %PROGRAMDATA%\Conduit\credential.key
-           (generated with locked-down ACLs on first run if absent).
-      A box that already has its OWN generated credential.key CANNOT decrypt blobs that were
-      encrypted on a different box -- the keys differ. ConnectionCredentials ciphertext and
-      the key live in separate trust domains (DB vs. file/config) BY DESIGN; do NOT store the
-      key in the DB and do NOT add a migration for it.
+      The AES credential key is now stored in the CredentialKeyring DB table (migration V29,
+      commit b920739) so every server pointed at the shared Conduit DB auto-decrypts stored
+      credentials with ZERO per-box setup. This deliberately co-locates the key with the
+      ciphertext in the same shared Conduit DB; that is the accepted, turnkey tradeoff Jacob
+      chose over the old copy-a-key-file-to-every-box workflow.
 
-      To make every box use the canonical key (the one that encrypted the live .56 blobs):
-      copy .56's C:\ProgramData\Conduit\credential.key to the SAME path on the new box BEFORE
-      first run. The file IS the portable key. Do this once per box, out of band, over an
-      admin channel -- never paste the key value into chat, appsettings.json, or a log.
-      Preferred over "Sync:CredentialKey" in config for this estate (Windows services) because
-      it keeps the secret off disk in plaintext config and matches the existing ACL-locked
-      file pattern. If a box has a STALE self-generated key, replace the file and restart the
-      service; existing blobs only decrypt once the matching key is in place.
+      CredentialProtector (src\Conduit.Sync\Security\CredentialProtector.cs) resolves the
+      32-byte AES key in this precedence:
+        1. config "Sync:CredentialKey" (base64 of exactly 32 bytes) -- wins if set.
+        2. key file at "Sync:CredentialKeyPath" if that config value is set.
+        3. CredentialKeyring DB table (the canonical shared-estate source).
+        4. local key file %PROGRAMDATA%\Conduit\credential.key (legacy fallback).
+        5. first-run generate (if none of the above yield a key).
+      Because the DB keyring sits above the local file, a fresh box against the shared Conduit
+      DB decrypts existing blobs with no key file at all.
+
+      Standing up a NEW box against an EXISTING Conduit DB that already holds encrypted
+      credentials: seed that DB's matching key into the CredentialKeyring table rather than
+      letting the new box generate a fresh local key (a fresh local key cannot decrypt blobs
+      encrypted under the estate's key). Never paste the key value into chat, appsettings.json,
+      or a log. If a box has a STALE self-generated local key, ensure the keyring row is
+      populated and restart the service; existing blobs only decrypt once the matching key is
+      resolvable.
 
       Wrong-length / malformed key = FAIL LOUDLY, never silent-regenerate:
         * config key bad base64 or != 32 bytes -> InvalidOperationException (CredentialProtector.cs ~L67, ~L75).
