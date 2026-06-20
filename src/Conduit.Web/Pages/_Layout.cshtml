@@ -21,10 +21,15 @@
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     @* Vendor stylesheets first (Bootstrap grid + open-iconic), then the single
        canonical Conduit stylesheet last so its rules win where they need to. *@
+    @* Brand tokens FIRST — the single source of truth for the whole palette
+       (css/brand-tokens.css). Everything below consumes these variables; change
+       the brand in that one file. Must load before Bootstrap so our tokens are
+       defined when later rules reference them. *@
+    <link rel="stylesheet" href="css/brand-tokens.css" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
-    @* Shared design system stylesheet first (tokens + cc-* components), then
-       Conduit-owned overrides so consumer rules win where they overlap. *@
+    @* Shared design system stylesheet (cc-* components), then Conduit-owned
+       overrides so consumer rules win where they overlap. *@
     <link rel="stylesheet" href="css/conduit-design.css" />
     <link href="css/conduit.css" rel="stylesheet" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />

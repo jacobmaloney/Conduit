@@ -27,67 +27,12 @@
    ═══════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────── 1. Tokens ────────────────────────── */
-:root {
-  /* Conduit brand cyan ramp (handoff §2) */
-  --conduit-300: #67E8F9;
-  --conduit-500: #22D3EE;
-  --conduit-700: #0E7490;
-
-  /* Functional dark theme */
-  --bg:        #0B1424;
-  --bg-2:      #0E1A2D;
-  --panel:     #0F1B2F;
-  --panel-2:   #131F36;
-  --panel-hi:  #15263F;
-  --surface:   #0F1B2F;        /* alias of --panel for legacy class names */
-  --surface-2: #131F36;        /* alias of --panel-2 */
-  --border:    rgba(120, 160, 220, 0.10);
-  --border-2:  rgba(120, 160, 220, 0.18);
-  --line:      rgba(120, 160, 220, 0.10);
-  --line-2:    rgba(120, 160, 220, 0.14);
-  --line-3:    rgba(120, 160, 220, 0.08);
-  --text:      #E4EDFB;
-  --text-2:    #9DB0CC;
-  --text-3:    #6B809E;
-  --ink:       #E4EDFB;        /* alias of --text */
-  --ink-2:     #9DB0CC;        /* alias of --text-2 */
-  --muted:     #6B809E;
-  --muted-2:   #52667F;
-
-  /* Status (shared with the suite) */
-  --ok:      #10B981;
-  --warn:    #F59E0B;
-  --bad:     #EF4444;
-  --info:    #3B82F6;
-  --success: #10B981;
-  --warning: #F59E0B;
-  --danger:  #EF4444;
-  --err:     #EF4444;
-
-  /* Accent — Conduit brand cyan is the singular accent */
-  --accent:     var(--conduit-500);
-  --accent-on:  #05202A;
-  --accent-50:  rgba(34, 211, 238, 0.06);
-  --accent-100: rgba(34, 211, 238, 0.14);
-  --accent-200: rgba(34, 211, 238, 0.22);
-
-  /* Geometry */
-  --radius:    10px;
-  --radius-sm: 7px;
-  --radius-lg: 14px;
-  --row-h:     44px;
-
-  --shadow-sm: 0 1px 0 rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.18);
-  --shadow-md: 0 4px 16px rgba(0,0,0,0.32), 0 1px 3px rgba(0,0,0,0.20);
-  --shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.25);
-  --shadow:    0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35);
-
-  /* Typography — Geist primary, Inter fallback. Inter stays as fallback so
-     the app survives a font-CDN outage without dropping to system serif. */
-  --font-sans:    'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-display: 'Geist', 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-}
+/* MOVED. Every brand variable (palette, surfaces, text, status, accent,
+   section-accent ramp, geometry, typography) now lives in ONE source-of-truth
+   file: css/brand-tokens.css, linked FIRST in _Layout.cshtml. Change the brand
+   there and it cascades through conduit-design.css + conduit.css + IC-ported
+   markup. Do NOT re-add a :root token block here — it would shadow the single
+   source and re-introduce the drift we just eliminated. */
 
 /* ─────────────────── 2. Base / typography / reset ──────────────── */
 * { box-sizing: border-box; }

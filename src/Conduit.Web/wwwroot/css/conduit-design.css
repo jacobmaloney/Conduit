@@ -16,26 +16,12 @@
    ════════════════════════════════════════════════════════════════ */
 
 /* ─────────── 1. Shared design tokens ─────────── */
-/* These are SAFE FALLBACKS for the palette. conduit.css may redefine
-   these — its :root wins because it loads after. */
-:root {
-  /* Conduit brand */
-  --cc-conduit-300: #67E8F9;
-  --cc-conduit-500: #22D3EE;
-  --cc-conduit-700: #0E7490;
-
-  --cc-gold-300: #E9C25E;
-  --cc-gold-500: #C9A227;
-  --cc-gold-700: #8A6A0E;
-
-  /* Sec-accent ramp used by CcTemplate1 IconAccent.
-     These mirror IC's --sec-* tokens so existing IC pages match. */
-  --cc-sec-identity:   #22D3EE;
-  --cc-sec-governance: #14B8A6;
-  --cc-sec-analytics:  #A78BFA;
-  --cc-sec-operations: #FBBF24;
-  --cc-sec-configure:  #94A3B8;
-}
+/* MOVED to the single source of truth: css/brand-tokens.css (linked first in
+   _Layout.cshtml). This file used to hand-mirror IC's --sec-* ramp here, and
+   that mirror had DRIFTED (--cc-sec-governance / --cc-sec-analytics no longer
+   matched IC). brand-tokens.css now defines --sec-* (from IC) AND the
+   --cc-sec-* aliases, so the CcTemplate1 accent rules below still resolve and
+   the two products' accents finally agree. Do NOT re-declare these here. */
 
 /* ─────────── 2. CcTemplate1 ─────────── */
 .cc-template1-icon-tile {

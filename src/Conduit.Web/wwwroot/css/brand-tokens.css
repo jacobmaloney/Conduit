@@ -1,0 +1,121 @@
+/* ════════════════════════════════════════════════════════════════════════
+   BRAND TOKENS — single source of truth for the whole brand palette.
+   ════════════════════════════════════════════════════════════════════════
+
+   WHY THIS FILE EXISTS
+   --------------------
+   Jacob wants ONE place to change the brand for the entire product family.
+   Previously the palette was defined inline at the top of conduit.css, and
+   the section-accent ramp was *hand-copied* from IdentityCenter's
+   ic-design-system.css into conduit-design.css — a mirror that had already
+   DRIFTED (e.g. --sec-governance / --sec-analytics no longer matched IC).
+
+   This file collects every brand variable in one block. Change a colour here
+   and it cascades everywhere because it loads FIRST (before Bootstrap, before
+   conduit-design.css, before conduit.css). conduit.css / conduit-design.css
+   no longer define these tokens — they only consume them.
+
+   CROSS-PRODUCT SINGLE-SOURCE (the part that needs Jacob's call)
+   --------------------------------------------------------------
+   To make IdentityCenter consume the EXACT same file (true one-place-for-the-
+   whole-brand), this file must live somewhere both repos reference at build /
+   publish time. That is a structural decision with real trade-offs — see
+   docs/SHARED-BRAND-CSS-PLAN.md. Until that decision is made, this is the
+   canonical brand file for CONDUIT, authored so it can be lifted verbatim into
+   the shared location with no edits.
+
+   The token VALUES below are deliberately aligned to IdentityCenter's
+   ic-design-system.css :root so the two products already render the same brand
+   today. The variable NAMES differ between the codebases (Conduit: --accent /
+   --bg / --text;  IC: --sec-identity / --bg / --text-primary). The shared file
+   will need to expose BOTH name sets (aliases) — captured in the plan doc.
+   ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Brand cyan ramp (handoff §2) ───────────────────────────────────── */
+  --conduit-300: #67E8F9;
+  --conduit-500: #22D3EE;
+  --conduit-700: #0E7490;
+
+  /* ── Gold ramp (suite secondary) ───────────────────────────────────── */
+  --conduit-gold-300: #E9C25E;
+  --conduit-gold-500: #C9A227;
+  --conduit-gold-700: #8A6A0E;
+
+  /* ── Surface / background — aligned to IC --bg / --surface family ───── */
+  --bg:        #0B1424;
+  --bg-2:      #0E1A2D;
+  --panel:     #0F1B2F;
+  --panel-2:   #131F36;
+  --panel-hi:  #15263F;
+  --surface:   #0F1B2F;        /* alias of --panel for legacy class names */
+  --surface-2: #131F36;        /* alias of --panel-2 */
+
+  /* ── Borders / lines — aligned to IC --border family ───────────────── */
+  --border:    rgba(120, 160, 220, 0.10);
+  --border-2:  rgba(120, 160, 220, 0.18);
+  --line:      rgba(120, 160, 220, 0.10);
+  --line-2:    rgba(120, 160, 220, 0.14);
+  --line-3:    rgba(120, 160, 220, 0.08);
+
+  /* ── Text — aligned to IC --text-primary / secondary / tertiary ────── */
+  --text:      #E4EDFB;
+  --text-2:    #9DB0CC;
+  --text-3:    #6B809E;
+  --ink:       #E4EDFB;        /* alias of --text */
+  --ink-2:     #9DB0CC;        /* alias of --text-2 */
+  --muted:     #6B809E;
+  --muted-2:   #52667F;
+
+  /* ── Status (shared with the suite) ────────────────────────────────── */
+  --ok:      #10B981;
+  --warn:    #F59E0B;
+  --bad:     #EF4444;
+  --info:    #3B82F6;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger:  #EF4444;
+  --err:     #EF4444;
+
+  /* ── Accent — Conduit brand cyan is the singular accent ─────────────── */
+  --accent:     var(--conduit-500);
+  --accent-on:  #05202A;
+  --accent-50:  rgba(34, 211, 238, 0.06);
+  --accent-100: rgba(34, 211, 238, 0.14);
+  --accent-200: rgba(34, 211, 238, 0.22);
+
+  /* ── Section-accent ramp ─────────────────────────────────────────────
+     Source of truth = IdentityCenter ic-design-system.css :root. These
+     values are now COPIED FROM IC (not the stale conduit-design.css mirror)
+     so the two products' section accents finally match. Exposed under both
+     the IC --sec-* names (so any ported IC markup just works) and the
+     Conduit --cc-sec-* aliases (kept for back-compat with existing rules). */
+  --sec-identity:    #22D3EE;   /* electric cyan      */
+  --sec-governance:  #8B9BFF;   /* violet-blue        */
+  --sec-analytics:   #14B89B;   /* teal-green         */
+  --sec-licenses:    #FBBF24;   /* gold               */
+  --sec-operations:  #F97316;   /* orange             */
+  --sec-configure:   #A855F7;   /* purple             */
+
+  --cc-sec-identity:   var(--sec-identity);
+  --cc-sec-governance: var(--sec-governance);
+  --cc-sec-analytics:  var(--sec-analytics);
+  --cc-sec-operations: var(--sec-operations);
+  --cc-sec-configure:  var(--sec-configure);
+
+  /* ── Geometry ──────────────────────────────────────────────────────── */
+  --radius:    10px;
+  --radius-sm: 7px;
+  --radius-lg: 14px;
+  --row-h:     44px;
+
+  --shadow-sm: 0 1px 0 rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.18);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.32), 0 1px 3px rgba(0,0,0,0.20);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.25);
+  --shadow:    0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35);
+
+  /* ── Typography ────────────────────────────────────────────────────── */
+  --font-sans:    'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Geist', 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
