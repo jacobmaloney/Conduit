@@ -187,6 +187,92 @@ public static class AttributeTemplateCatalog
             E("gPOptions", "GPOptions", false, "Integer"),
         };
 
+        // ───────────────── AD infrastructure classes (baseline) ─────────────────
+        // The Auto-Generate "Infrastructure" / "Full" tiers emit 19 more AD classes
+        // beyond User/Group/Computer/Contact/OU. Previously NONE of them had a
+        // template, so each generated a Mapping step with ZERO mappings → the AD read
+        // returned only the structural baseline and the sink wrote nothing useful.
+        // These give every infra class the universal AD identity set every adObject
+        // carries (objectGUID, distinguishedName, cn/name, whenCreated/whenChanged,
+        // description) plus a few SAFE class-specific attributes. The grid is fully
+        // operator-editable; richer per-class attribute sets are deferred (need the
+        // directory owner's judgment). AddAdInfra appends the per-class extras.
+        void AddAdInfra(string objectClass, params Entry[] extras)
+        {
+            var rows = new List<Entry>
+            {
+                E("objectGUID", "SourceUniqueId", true),
+                E("distinguishedName", "DN", true),
+                E("name", "CN", true),
+                E("displayName", "DisplayName"),
+                E("whenCreated", "WhenCreated"),
+                E("whenChanged", "WhenChanged"),
+                E("description", "Description"),
+            };
+            rows.AddRange(extras);
+            c[(Systems.ActiveDirectory, objectClass)] = rows;
+        }
+
+        AddAdInfra("container");
+        AddAdInfra("domainDNS",
+            E("dc", "DomainComponent"),
+            E("ms-DS-MachineAccountQuota", "MachineAccountQuota", false, "Integer"));
+        AddAdInfra("groupPolicyContainer",
+            E("gPCFileSysPath", "GPCFileSysPath"),
+            E("versionNumber", "VersionNumber", false, "Integer"),
+            E("flags", "Flags", false, "Integer"));
+        AddAdInfra("msDS-GroupManagedServiceAccount",
+            E("sAMAccountName", "Username"),
+            E("dNSHostName", "DNSHostName"),
+            E("userAccountControl", "UserAccountControl", false, "Integer"));
+        AddAdInfra("msDS-ManagedServiceAccount",
+            E("sAMAccountName", "Username"),
+            E("dNSHostName", "DNSHostName"),
+            E("userAccountControl", "UserAccountControl", false, "Integer"));
+        AddAdInfra("foreignSecurityPrincipal",
+            E("objectSid", "ObjectSid"));
+        AddAdInfra("trustedDomain",
+            E("trustPartner", "TrustPartner"),
+            E("trustDirection", "TrustDirection", false, "Integer"),
+            E("trustType", "TrustType", false, "Integer"),
+            E("flatName", "FlatName"));
+        AddAdInfra("serviceConnectionPoint",
+            E("serviceClassName", "ServiceClassName"),
+            E("serviceDNSName", "ServiceDNSName"),
+            E("keywords", "Keywords"));
+        AddAdInfra("printQueue",
+            E("printerName", "PrinterName"),
+            E("serverName", "ServerName"),
+            E("location", "Location"),
+            E("driverName", "DriverName"));
+        AddAdInfra("subnet",
+            E("siteObject", "SiteObject"),
+            E("location", "Location"));
+        AddAdInfra("site");
+        AddAdInfra("siteLink",
+            E("cost", "Cost", false, "Integer"),
+            E("replInterval", "ReplInterval", false, "Integer"),
+            E("siteList", "SiteList"));
+        AddAdInfra("pKICertificateTemplate",
+            E("pKIDefaultKeySpec", "PKIDefaultKeySpec", false, "Integer"),
+            E("msPKI-Cert-Template-OID", "CertTemplateOID"));
+        AddAdInfra("msFVE-RecoveryInformation",
+            E("msFVE-RecoveryGuid", "RecoveryGuid"));
+        AddAdInfra("certificationAuthority",
+            E("cACertificateDN", "CACertificateDN"),
+            E("dNSHostName", "DNSHostName"));
+        AddAdInfra("attributeSchema",
+            E("lDAPDisplayName", "LdapDisplayName"),
+            E("attributeID", "AttributeID"),
+            E("isSingleValued", "IsSingleValued", false, "Boolean"));
+        AddAdInfra("classSchema",
+            E("lDAPDisplayName", "LdapDisplayName"),
+            E("governsID", "GovernsID"),
+            E("objectClassCategory", "ObjectClassCategory", false, "Integer"));
+        AddAdInfra("dnsNode",
+            E("dnsTombstoned", "DnsTombstoned", false, "Boolean"));
+        AddAdInfra("dnsZone");
+
         // ─────────────────────────── Active Roles (ARS) ─────────────────────────
         // Mirrors the Active Directory real-attribute set verbatim (ARS objects ARE
         // AD objects; the fast read is raw AD LDAP) so Auto-Generate fills the same
@@ -458,6 +544,33 @@ public static class AttributeTemplateCatalog
             E("TeamsMeetingCount", "TeamsMeetingCount", false, "Integer"),
             E("AssignedProducts", "AssignedProducts"),
             E("ReportRefreshDate", "ReportRefreshDate", false, "DateTime"),
+        };
+
+        // Entra sign-in EVENT stream (objectClass "signinlog"). Pumped as a Mapping
+        // step; the IC sink routes it to its sign-in ingest endpoint. SourceUniqueId =
+        // the Graph sign-in id; userSourceUniqueId/userPrincipalName join the event to
+        // the user. Event-shaped fields pass through to same-named canonical keys (no
+        // person column), like m365usage / azureresource. Source-native names match
+        // EntraSignInLogSource.Convert verbatim.
+        c[(Systems.EntraID, "signinlog")] = new[]
+        {
+            E("signInId", "SourceUniqueId", true),
+            E("userSourceUniqueId", "userSourceUniqueId"),
+            E("userPrincipalName", "UserPrincipalName"),
+            E("signInDateTime", "signInDateTime", false, "DateTime"),
+            E("appDisplayName", "appDisplayName"),
+            E("appId", "appId"),
+            E("clientAppUsed", "clientAppUsed"),
+            E("ipAddress", "ipAddress"),
+            E("location", "location"),
+            E("status", "status"),
+            E("errorCode", "errorCode", false, "Integer"),
+            E("isInteractive", "isInteractive", false, "Boolean"),
+            E("riskLevel", "riskLevel"),
+            E("riskState", "riskState"),
+            E("conditionalAccessStatus", "conditionalAccessStatus"),
+            E("resourceDisplayName", "resourceDisplayName"),
+            E("resourceId", "resourceId"),
         };
 
         // ────────────────────────── Azure Resource Graph ───────────────────────
