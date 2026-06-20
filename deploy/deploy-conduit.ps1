@@ -22,8 +22,36 @@
 
     The PORTABLE credential keyring (C:\ProgramData\Conduit\credential.key) is a flat
     base64 AES key that lives OUTSIDE the publish root and is never touched by this deploy.
-    It must be copied to the server out of band (see deploy notes); without it every stored
-    ConnectionCredential fails to decrypt.
+    It must be copied to the server out of band (see SHARED CREDENTIAL KEY below); without
+    it every stored ConnectionCredential fails to decrypt.
+
+    SHARED CREDENTIAL KEY (multi-box estate)
+      CredentialProtector (src\Conduit.Sync\Security\CredentialProtector.cs) resolves the
+      32-byte AES key in this precedence (ResolveKey, ctor):
+        1. config "Sync:CredentialKey" (base64 of exactly 32 bytes) -- wins if set.
+        2. key file at "Sync:CredentialKeyPath", else %PROGRAMDATA%\Conduit\credential.key
+           (generated with locked-down ACLs on first run if absent).
+      A box that already has its OWN generated credential.key CANNOT decrypt blobs that were
+      encrypted on a different box -- the keys differ. ConnectionCredentials ciphertext and
+      the key live in separate trust domains (DB vs. file/config) BY DESIGN; do NOT store the
+      key in the DB and do NOT add a migration for it.
+
+      To make every box use the canonical key (the one that encrypted the live .56 blobs):
+      copy .56's C:\ProgramData\Conduit\credential.key to the SAME path on the new box BEFORE
+      first run. The file IS the portable key. Do this once per box, out of band, over an
+      admin channel -- never paste the key value into chat, appsettings.json, or a log.
+      Preferred over "Sync:CredentialKey" in config for this estate (Windows services) because
+      it keeps the secret off disk in plaintext config and matches the existing ACL-locked
+      file pattern. If a box has a STALE self-generated key, replace the file and restart the
+      service; existing blobs only decrypt once the matching key is in place.
+
+      Wrong-length / malformed key = FAIL LOUDLY, never silent-regenerate:
+        * config key bad base64 or != 32 bytes -> InvalidOperationException (CredentialProtector.cs ~L67, ~L75).
+        * persisted file bad base64 or != 32 bytes -> InvalidOperationException (CredentialProtector.cs ~L139, ~L148).
+
+      The IC API fork needs NONE of this: it uses ASP.NET DataProtection
+      (C:\ProgramData\IdentityCenter\Keys, purpose "IdentityCenter.Encryption") for its own
+      connection string and never reads ConnectionCredentials or credential.key.
 
 .NOTES
     No secrets are stored in this file. Pass the SMB credential via -Credential, or
