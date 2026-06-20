@@ -37,4 +37,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- ════════════════════════════════════════════════════════════════════
+       SHARED BRAND CSS (single source of truth)
+       The canonical brand-tokens.css lives in the standalone `brand` repo
+       (sibling of this repo). At build time we copy it into wwwroot/css so
+       the app links the canonical file. FAIL-SAFE: the copy only runs if the
+       shared file exists; if the `brand` repo is absent, the committed
+       wwwroot/css/brand-tokens.css remains as the fallback and the build still
+       succeeds. No cross-repo project reference, no NuGet feed.
+       ════════════════════════════════════════════════════════════════════ -->
+  <PropertyGroup>
+    <SharedBrandTokens>$(MSBuildProjectDirectory)\..\..\..\brand\css\brand-tokens.css</SharedBrandTokens>
+  </PropertyGroup>
+  <Target Name="SyncSharedBrandTokens" BeforeTargets="BeforeBuild"
+          Condition="Exists('$(SharedBrandTokens)')">
+    <Copy SourceFiles="$(SharedBrandTokens)"
+          DestinationFiles="$(MSBuildProjectDirectory)\wwwroot\css\brand-tokens.css"
+          SkipUnchangedFiles="true" OverwriteReadOnlyFiles="true" />
+    <Message Importance="high" Text="Brand: synced brand-tokens.css from shared source $(SharedBrandTokens)" />
+  </Target>
+
 </Project>

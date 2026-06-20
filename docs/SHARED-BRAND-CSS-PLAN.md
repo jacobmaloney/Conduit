@@ -1,6 +1,30 @@
-# Shared brand CSS — single source of truth (plan + decision needed)
+# Shared brand CSS — single source of truth (DECIDED + IMPLEMENTED)
 
-_Status: Conduit-side single-source DONE. Cross-repo single-source = needs Jacob's call._
+_Status (2026-06-20): **Option B chosen and built.** Standalone `brand` repo is
+now the single source of truth. Conduit consumes it via a fail-safe build-time
+copy target. IC wiring: see "Cross-repo wiring as built" below._
+
+## Cross-repo wiring as built (Option B)
+- Shared source lives in its own repo: `C:/Users/jacob/source/repos/brand/`
+  (`css/brand-tokens.css` + README). Initial commit `a0d1075`.
+- The shared file carries BOTH vocabularies: Conduit names (`--accent`,
+  `--panel`, `--text/-2/-3`) AND a full IdentityCenter alias block
+  (`--text-primary/secondary/tertiary`, `--surface*`, `--border-strong`,
+  `--radius-md`, the `--text-*` scale, `--sec-*` ramp). Neither product's CSS
+  breaks.
+- Each product copies the shared file into its own `wwwroot/css/brand-tokens.css`
+  at build via an MSBuild `Target` (`SyncSharedBrandTokens`, BeforeBuild),
+  `Condition="Exists(...)"`. **Fail-safe:** if the `brand` repo is absent, the
+  committed copy in each product remains and the build still succeeds. No
+  cross-repo project reference, no runtime sibling-path, no NuGet feed.
+- Conduit `_Layout.cshtml` already `<link>`s `css/brand-tokens.css` first, so the
+  synced file cascades over Bootstrap / conduit-design.css / conduit.css.
+
+This supersedes the "needs Jacob's call" section below (kept for the rationale).
+
+---
+
+_Original plan (Conduit-side single-source DONE; cross-repo was Jacob's call):_
 
 ## Goal (Jacob)
 > "Using global css that everyone can see, both [IdentityCenter and Conduit] use the

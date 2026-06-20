@@ -1,34 +1,26 @@
 /* ════════════════════════════════════════════════════════════════════════
-   BRAND TOKENS — single source of truth for the whole brand palette.
+   BRAND TOKENS — SINGLE SOURCE OF TRUTH for the entire product family.
    ════════════════════════════════════════════════════════════════════════
 
-   WHY THIS FILE EXISTS
-   --------------------
-   Jacob wants ONE place to change the brand for the entire product family.
-   Previously the palette was defined inline at the top of conduit.css, and
-   the section-accent ramp was *hand-copied* from IdentityCenter's
-   ic-design-system.css into conduit-design.css — a mirror that had already
-   DRIFTED (e.g. --sec-governance / --sec-analytics no longer matched IC).
+   This is the ONE place to change the brand for IdentityCenter AND Conduit.
+   It lives in its own repository (`brand`) so neither product owns it and
+   neither depends on the other's source tree at build time. Each product
+   copies this file into its own wwwroot/css at build via a fail-safe MSBuild
+   target (see each repo's .csproj) — change a value here, rebuild either app,
+   and the brand updates everywhere. No hand-copy discipline; no runtime
+   sibling-path; no NuGet feed required.
 
-   This file collects every brand variable in one block. Change a colour here
-   and it cascades everywhere because it loads FIRST (before Bootstrap, before
-   conduit-design.css, before conduit.css). conduit.css / conduit-design.css
-   no longer define these tokens — they only consume them.
+   VOCABULARY
+   ----------
+   Two products grew two variable name sets for the same palette:
+     • Conduit:        --accent / --bg / --panel / --text / --text-2 / --text-3
+     • IdentityCenter: --sec-identity / --bg / --surface / --text-primary / ...
+   This file defines the Conduit names as primary, the shared --sec-* ramp once,
+   and then a full IC-vocabulary ALIAS block so IdentityCenter's existing CSS
+   resolves against the exact same values. Neither product's CSS breaks.
 
-   CROSS-PRODUCT SINGLE-SOURCE (the part that needs Jacob's call)
-   --------------------------------------------------------------
-   To make IdentityCenter consume the EXACT same file (true one-place-for-the-
-   whole-brand), this file must live somewhere both repos reference at build /
-   publish time. That is a structural decision with real trade-offs — see
-   docs/SHARED-BRAND-CSS-PLAN.md. Until that decision is made, this is the
-   canonical brand file for CONDUIT, authored so it can be lifted verbatim into
-   the shared location with no edits.
-
-   The token VALUES below are deliberately aligned to IdentityCenter's
-   ic-design-system.css :root so the two products already render the same brand
-   today. The variable NAMES differ between the codebases (Conduit: --accent /
-   --bg / --text;  IC: --sec-identity / --bg / --text-primary). The shared file
-   will need to expose BOTH name sets (aliases) — captured in the plan doc.
+   The token VALUES are the canonical brand. They were reconciled from
+   IdentityCenter's ic-design-system.css :root (the historical source of truth).
    ════════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -85,11 +77,8 @@
   --accent-200: rgba(34, 211, 238, 0.22);
 
   /* ── Section-accent ramp ─────────────────────────────────────────────
-     Source of truth = IdentityCenter ic-design-system.css :root. These
-     values are now COPIED FROM IC (not the stale conduit-design.css mirror)
-     so the two products' section accents finally match. Exposed under both
-     the IC --sec-* names (so any ported IC markup just works) and the
-     Conduit --cc-sec-* aliases (kept for back-compat with existing rules). */
+     One per top-level nav section. Canonical values; exposed under both the
+     IC --sec-* names and the Conduit --cc-sec-* aliases. */
   --sec-identity:    #22D3EE;   /* electric cyan      */
   --sec-governance:  #8B9BFF;   /* violet-blue        */
   --sec-analytics:   #14B89B;   /* teal-green         */
@@ -118,4 +107,59 @@
   --font-sans:    'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'Geist', 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ════════════════════════════════════════════════════════════════════
+     IDENTITYCENTER VOCABULARY (aliases) — so IC's existing ic-design-system
+     CSS resolves against the SAME canonical values above. IC authored its
+     stylesheet against these names; mapping them here means IC can consume
+     this shared file with no rule rewrites. Conduit ignores names it
+     doesn't reference.
+     ════════════════════════════════════════════════════════════════════ */
+
+  /* IC surfaces (IC uses rgba glassmorphic surfaces; map to the panel ramp) */
+  --surface-deep:   rgba(8,14,28,0.97);
+  --surface-inset:  rgba(18,32,56,0.70);
+  --surface-hover:  rgba(21,38,63,0.85);
+
+  /* IC borders */
+  --border-subtle:  rgba(120,160,220,0.06);
+  --border-strong:  rgba(120,160,220,0.18);
+
+  /* IC text names → canonical text values */
+  --text-primary:   #E4EDFB;
+  --text-secondary: #9DB0CC;
+  --text-tertiary:  #6B809E;
+
+  /* IC semantic status names */
+  --color-success:  #10B981;
+  --color-warning:  #F59E0B;
+  --color-danger:   #EF4444;
+  --color-info:     #3B82F6;
+  --color-purple:   #A855F7;
+  --color-indigo:   #8B9BFF;
+  --color-orange:   #F97316;
+  --color-teal:     #14B8A6;
+  --color-primary:  #00BCD4;   /* IC legacy cyan accent (CLAUDE.md) */
+
+  /* IC layout */
+  --topbar-h:  56px;
+  --sidebar-w: 220px;
+
+  /* IC typography scale */
+  --text-xs:   0.66rem;
+  --text-sm:   0.75rem;
+  --text-base: 0.875rem;
+  --text-md:   0.9rem;
+  --text-lg:   1rem;
+  --text-xl:   1.3rem;
+  --text-2xl:  1.5rem;
+
+  /* IC radii names */
+  --radius-md:   10px;
+  --radius-xl:   16px;
+  --radius-pill: 20px;
+  --radius-full: 9999px;
+
+  /* IC transitions */
+  --transition-fast: 120ms ease;
 }
