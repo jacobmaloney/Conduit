@@ -129,8 +129,21 @@ public sealed class ActiveRolesSource : IConnectorSource
         // ─── POLICY PATH (legacy, Phase 1): EDMS:// DirectorySearcher + per-object VA resolve ───
         var baseDn = scope.GetIncludedBaseList() is { Count: > 0 } bases ? bases[0] : scope.BaseDN;
         if (string.IsNullOrWhiteSpace(baseDn))
-            throw new InvalidOperationException(
-                "Active Roles source (policy read) requires an explicit Base DN on the project scope.");
+        {
+            // No explicit Base DN. Match the AD source (and IC's whole-domain default):
+            // resolve the directory root from RootDSE.defaultNamingContext and read the
+            // whole domain as a Subtree — the UI explicitly promises "leave blank to use
+            // the source's defaultNamingContext", so a blank scope must NOT hard-stop.
+            // The AR ADSI provider answers a "rootDSE" bind (same probe ArsProbe uses).
+            baseDn = ResolveDefaultNamingContext(settings);
+            if (string.IsNullOrWhiteSpace(baseDn))
+                throw new InvalidOperationException(
+                    "Active Roles source (policy read) has no Base DN and the AR provider did not advertise a " +
+                    "defaultNamingContext on rootDSE. Set a Base DN on the project scope, or supply a TestBindDn anchor.");
+            _logger.LogInformation(
+                "ARS source: no Base DN on scope; defaulting to the directory root {RootDn} " +
+                "(rootDSE defaultNamingContext), matching the AD source's whole-domain default.", baseDn);
+        }
 
         var filter = BuildFilter(objectClass, scope.LdapFilter);
         var max = scope.MaxObjects ?? int.MaxValue;
@@ -409,6 +422,30 @@ public sealed class ActiveRolesSource : IConnectorSource
         "sAMAccountName",
         "userPrincipalName",
     };
+
+    /// <summary>
+    /// Resolve the directory's domain root through the AR ADSI provider by binding
+    /// its "rootDSE" object and reading <c>defaultNamingContext</c> — the same probe
+    /// <see cref="ArsProbe"/> uses. Returns null when the provider does not expose
+    /// rootDSE (some provider builds need an explicit anchor DN instead), so the
+    /// caller surfaces an actionable error rather than a blind throw. Routing through
+    /// EDMS:// keeps the read policy-aware and matches the rest of the policy path.
+    /// </summary>
+    private string? ResolveDefaultNamingContext(ArsConnectionSettings settings)
+    {
+        try
+        {
+            using var rootDse = ArsBind.Bind(settings, "rootDSE");
+            rootDse.RefreshCache(new[] { "defaultNamingContext" });
+            var dnc = rootDse.Properties["defaultNamingContext"].Value?.ToString();
+            return string.IsNullOrWhiteSpace(dnc) ? null : dnc;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ARS source: rootDSE defaultNamingContext probe failed; no Base DN could be auto-detected.");
+            return null;
+        }
+    }
 
     /// <summary>
     /// Split a "host" or "host:port" hint into (host, port). Defaults to LDAP 389

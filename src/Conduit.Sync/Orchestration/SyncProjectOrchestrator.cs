@@ -564,6 +564,41 @@ public sealed class SyncProjectOrchestrator
             ? step.ObjectClass!
             : ctx.Project.ObjectClass;
 
+        // Resilience: a step persisted with ZERO mappings would silently read nothing
+        // useful (the sink writes only the structural baseline) and the run shows
+        // "Mappings=0". This happens when a project was created against a build whose
+        // AttributeTemplateCatalog had no template for the source/class yet (the
+        // mappings are frozen at creation, never re-derived) — e.g. an ARS-source
+        // project created before the ActiveRoles templates shipped. Rather than fail
+        // a red run, resolve mappings LIVE from the now-complete catalog using the
+        // run's source/sink SystemType + this step's class. These are NOT persisted
+        // (the operator can still edit/persist via the Workflows tab); they just keep
+        // the run honest. If the catalog also has nothing, we fall through with the
+        // empty set and the existing "Mappings=0" log line makes the gap visible.
+        if (mappings.Count == 0)
+        {
+            var resolved = Templates.AttributeMapResolver.Resolve(
+                ctx.SourceTenant.SystemType, ctx.SinkTenant.SystemType, objectClass);
+            if (resolved.Count > 0)
+            {
+                mappings = resolved
+                    .Select(r => new AttributeMapping
+                    {
+                        Id = Guid.NewGuid(),
+                        SyncProjectId = ctx.Project.Id,
+                        WorkflowStepId = step.Id,
+                        SourceAttribute = r.SourceAttribute,
+                        SinkAttribute = r.SinkAttribute,
+                        IsRequired = r.IsRequired
+                    })
+                    .ToList();
+                await Log(ctx.RunId, "Warning",
+                    $"    Step '{step.Name}' had no saved mappings; auto-resolved {mappings.Count} from the " +
+                    $"attribute-template catalog ({ctx.SourceTenant.SystemType} {objectClass} -> {ctx.SinkTenant.SystemType}). " +
+                    "Open the step in the Workflows tab and Save to persist them.");
+            }
+        }
+
         var pump = await PumpAsync(ctx, mappings, scope, objectClass, step, needEmitted, ct);
 
         // V25 per-STEP cursor save. Persist the advanced cursor back to THIS step —
