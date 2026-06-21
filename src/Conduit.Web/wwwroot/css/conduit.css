@@ -2790,34 +2790,67 @@ details summary::-webkit-details-marker { color: var(--accent); }
     --center-accent:         #059669;
 }
 
-/* Active nav-tab: IC uses its default cyan/neutral accent (NOT orange). Undo
-   the .ops-section orange override and restore IC's color-primary. */
+/* Active nav-tab: DELIBERATE divergence from IC — all-green modal. IC keeps its
+   cyan accent here; we paint the active tab the modal's hero green instead
+   (still scoped so the orange list page + rest of Conduit are untouched). */
 .ops-section .sync-edit-modal .nav-tabs .nav-link.active {
-    color: var(--color-primary, #00bcd4);
+    color: #059669;
     border-color: var(--color-border, rgba(148,163,184,0.25));
     border-bottom-color: transparent;
 }
-/* Links + focus ring inside the modal follow IC's accent, not ops-orange. */
+/* Links + focus ring inside the modal follow the hero green (--center-accent
+   is pinned to #059669 at the modal root above). */
 .ops-section .sync-edit-modal a:not(.btn):hover { color: var(--center-accent); }
 .ops-section .sync-edit-modal :focus-visible { outline-color: var(--center-accent); }
 
-/* Mappings pill (.btn-primary) inside the workflow step cards is IC-blue, and
-   the +Add Step card is IC orange-dashed — both already correct in
-   center-shared.css. We only need to stop .ops-section from repainting a bare
-   .btn-primary orange; let it fall back to its themed/default appearance. */
+/* Mappings pill (.btn-primary) inside the workflow step cards was IC-blue; paint
+   it the modal's emerald→teal green to match the hero. Scoped to the modal so a
+   bare .btn-primary on the orange list page is unaffected. */
 .ops-section .sync-edit-modal .btn-primary {
-    background: #3b82f6;
-    border-color: #2563eb;
+    background: #059669;
+    border-color: #047857;
     color: #fff;
 }
-/* The footer Save Changes button opts back into GREEN via its inline
-   token gradient (set in markup), so it overrides the blue above. */
+.ops-section .sync-edit-modal .btn-primary:hover {
+    background: #0d9488;
+    border-color: #0f766e;
+    color: #fff;
+}
+/* The footer Save Changes button opts into the GREEN gradient via its inline
+   token gradient (set in markup); the solid green above keeps it on-family. */
 
-/* Count-badge pills (.badge.bg-primary, e.g. the Workflows tab count) — IC
-   renders these as its standard primary badge, not ops-orange. */
+/* Count-badge pills (.badge.bg-primary, e.g. the Workflows tab count and the
+   per-workflow #N index) were IC-blue — make them solid hero green, white text. */
 .ops-section .sync-edit-modal .badge.bg-primary {
-    background: #3b82f6 !important;
+    background: #059669 !important;
     color: #fff !important;
+}
+
+/* Mappings count badge (.badge.bg-light.text-primary) had cyan count text on a
+   light pill — repaint the count to a darker, legible green (white-on-green would
+   not read on the light badge). Scoped to the modal. */
+.ops-section .sync-edit-modal .badge.bg-light.text-primary {
+    color: #047857 !important;
+}
+
+/* "N step(s)" expand pill (.btn-outline-info) and the Rename button
+   (.btn-outline-primary) rendered cyan — bring both into the green family so the
+   whole modal reads coherently green. */
+.ops-section .sync-edit-modal .btn-outline-info,
+.ops-section .sync-edit-modal .btn-outline-primary {
+    color: #059669;
+    border-color: #059669;
+}
+.ops-section .sync-edit-modal .btn-outline-info:hover,
+.ops-section .sync-edit-modal .btn-outline-primary:hover {
+    background: #059669;
+    border-color: #059669;
+    color: #fff;
+}
+.ops-section .sync-edit-modal .btn-info {
+    background: #059669;
+    border-color: #047857;
+    color: #fff;
 }
 
 .form-section-title {
