@@ -238,6 +238,7 @@ builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<SetupService>();
 builder.Services.AddScoped<SystemConfigurationService>();
 builder.Services.AddScoped<DemoSeedService>();
+builder.Services.AddScoped<ParityDemoSeedService>();
 builder.Services.AddScoped<ActiveSystemState>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<Conduit.Core.Services.UserGenerationService>();

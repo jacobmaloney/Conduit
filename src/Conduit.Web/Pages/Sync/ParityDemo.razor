@@ -1,0 +1,92 @@
+@page "/sync/parity-demo"
+@attribute [Authorize]
+@using Conduit.Web.Services
+@inject ParityDemoSeedService ParitySeed
+
+<PageTitle>Parity Demo Fixture</PageTitle>
+
+<div class="container py-4" style="max-width: 820px;">
+    <h3 class="mb-1">IC Parity Demo Fixture</h3>
+    <p class="text-muted">
+        Seeds ONE removable, sentinel-tagged sync project that mirrors an IdentityCenter
+        multi-class project (user / group / computer / contact, one workflow per class, the
+        user workflow carrying the <strong>Resolve Manager Relationships</strong> Lookup step).
+        Open <a href="/sync/projects">Sync Projects</a> → Edit on the
+        <code>@ParityDemoSeedService.SentinelPrefix</code> project and compare it side-by-side
+        with IdentityCenter's Edit Sync Project modal.
+    </p>
+
+    <div class="alert alert-info py-2 small mb-3">
+        Non-destructive. It only ever touches its own sentinel-tagged rows. Remove it any time
+        with the button below, or run:
+        <code>DELETE FROM SyncProjects WHERE Name LIKE '[PARITY-DEMO]%';</code>
+    </div>
+
+    <div class="d-flex gap-2 mb-3">
+        <button class="btn btn-primary" @onclick="Seed" disabled="@busy">
+            <i class="fas fa-wand-magic-sparkles me-1"></i>Seed parity fixture
+        </button>
+        <button class="btn btn-outline-danger" @onclick="Remove" disabled="@busy">
+            <i class="fas fa-trash me-1"></i>Remove fixture
+        </button>
+        <div class="form-check form-switch align-self-center ms-2">
+            <input class="form-check-input" type="checkbox" id="rmTenants" @bind="removeTenants" />
+            <label class="form-check-label small" for="rmTenants">also remove sentinel tenants</label>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(message))
+    {
+        <div class="alert @alertClass py-2 small mb-0">@message</div>
+    }
+</div>
+
+@code {
+    private bool busy;
+    private bool removeTenants;
+    private string? message;
+    private string alertClass = "alert-success";
+
+    private async Task Seed()
+    {
+        busy = true;
+        message = null;
+        try
+        {
+            var r = await ParitySeed.SeedAsync();
+            alertClass = r.Created ? "alert-success" : "alert-warning";
+            message = r.Created
+                ? $"Created '{r.ProjectName}' — {r.Workflows} workflow(s), {r.Steps} step(s). {r.Note}"
+                : r.Note;
+        }
+        catch (Exception ex)
+        {
+            alertClass = "alert-danger";
+            message = $"Seed failed: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task Remove()
+    {
+        busy = true;
+        message = null;
+        try
+        {
+            message = await ParitySeed.RemoveAsync(removeTenants);
+            alertClass = "alert-success";
+        }
+        catch (Exception ex)
+        {
+            alertClass = "alert-danger";
+            message = $"Remove failed: {ex.Message}";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}
