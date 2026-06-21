@@ -309,9 +309,8 @@ namespace Conduit.Sync.Templates
                     Enabled = true
                 };
 
-                // Only Mapping steps. The orchestrator skips every non-Mapping (governance)
-                // step type, so we never emit Lookup / GroupMembership / License /
-                // UsageReport / AppRole steps — those are IC governance, not the free pump.
+                // The Mapping step. The orchestrator skips every non-Mapping (governance)
+                // step type by default. For the FREE pump we emit Mapping only.
                 // NOTE: "signinlog" (and "m365usage") are pumped AS Mapping steps — they
                 // ride the normal source→sink loop and the IC sink routes them to their
                 // dedicated ingest endpoints, so they are NOT filtered out here.
@@ -342,18 +341,29 @@ namespace Conduit.Sync.Templates
                     m.WorkflowStepId = stepId;
                 }
 
+                var generatedSteps = new List<GeneratedSyncStep>
+                {
+                    new GeneratedSyncStep
+                    {
+                        Step = step,
+                        Scope = scope,
+                        Mappings = mappings
+                    }
+                };
+
+                // LICENSED IC feature: emit the IC-parity relationship-resolution
+                // (Lookup) step ONLY when the SINK is an IdentityCenter connection.
+                // For any non-IC sink (the free pump) we keep the Mapping-only shape.
+                // This is the structural gate; the connection-license gate (Task 3)
+                // governs whether an IC sink can exist at all.
+                var lookupStep = BuildResolveRelationshipsStep(sinkType, objectClass, projectId, workflowId);
+                if (lookupStep is not null)
+                    generatedSteps.Add(lookupStep);
+
                 workflows.Add(new GeneratedWorkflow
                 {
                     Workflow = workflow,
-                    Steps = new List<GeneratedSyncStep>
-                    {
-                        new GeneratedSyncStep
-                        {
-                            Step = step,
-                            Scope = scope,
-                            Mappings = mappings
-                        }
-                    }
+                    Steps = generatedSteps
                 });
             }
 
@@ -364,6 +374,88 @@ namespace Conduit.Sync.Templates
                     Project = project,
                     Workflows = workflows
                 }
+            };
+        }
+
+        /// <summary>
+        /// IC-parity relationship-resolution (Lookup) step, mirroring IdentityCenter's
+        /// AutoSyncProjectGenerator. Emitted ONLY when the sink is an IdentityCenter
+        /// connection (the licensed IC integration) AND the object class is one IC
+        /// attaches a DN-resolution lookup to:
+        ///   user → "Resolve Manager Relationships" (manager)
+        ///   contact → "Resolve Manager Relationships" (manager)
+        ///   computer / organizationalUnit → "Resolve ManagedBy Relationships" (managedBy)
+        ///   group → "Resolve Group Owner Relationships" (managedBy → owner)
+        /// Returns null for the free pump (non-IC sink) or any other class, preserving
+        /// the Mapping-only shape. The step is a STRUCTURAL/VISUAL marker today: it
+        /// persists and renders 1:1 with IC's dashed Lookup card, but the orchestrator
+        /// has no Lookup arm so it is cleanly Skipped at run time (manager-resolution
+        /// itself is IC-side governance, not implemented in the pump).
+        /// </summary>
+        private static GeneratedSyncStep? BuildResolveRelationshipsStep(
+            string sinkType, string objectClass, Guid projectId, Guid workflowId)
+        {
+            // Connection-target gate: only IdentityCenter sinks get governance Lookup steps.
+            if (!string.Equals(sinkType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var (stepName, sourceAttr) = objectClass.ToLowerInvariant() switch
+            {
+                "user"               => ("Resolve Manager Relationships",     "ManagerSourceId"),
+                "contact"            => ("Resolve Manager Relationships",     "ManagerSourceId"),
+                "computer"           => ("Resolve ManagedBy Relationships",   "ManagedBySourceId"),
+                "organizationalunit" => ("Resolve ManagedBy Relationships",   "ManagedBySourceId"),
+                "group"              => ("Resolve Group Owner Relationships", "ManagedBySourceId"),
+                _                    => (null, null)
+            };
+
+            if (stepName is null || sourceAttr is null)
+                return null;
+
+            var stepId = Guid.NewGuid();
+            var lookupStep = new WorkflowStep
+            {
+                Id = stepId,
+                WorkflowId = workflowId,
+                Name = stepName,
+                StepType = WorkflowStepTypes.Lookup,
+                ObjectClass = objectClass,
+                // After the class's Mapping step (ordinal 0), mirroring IC's order.
+                Ordinal = 1,
+                Enabled = true
+            };
+
+            // IC seeds a single DNLookup attribute mapping (DN → IdentityColumn).
+            // We mirror it so the step's Mappings count and shape match IC. It is not
+            // executed by the pump (Lookup steps are skipped); it is structural.
+            var mapping = new AttributeMapping
+            {
+                Id = Guid.NewGuid(),
+                SyncProjectId = projectId,
+                WorkflowStepId = stepId,
+                SourceAttribute = sourceAttr,
+                SinkAttribute = objectClass.Equals("group", StringComparison.OrdinalIgnoreCase)
+                    ? "OwnerObjectId"
+                    : "ManagerObjectId",
+                // Conduit's mapping model has no dedicated TransformationType; the DN→
+                // ObjectId resolution intent (IC's "DNLookup") is carried in TransformExpr.
+                TransformExpr = "DNLookup"
+            };
+
+            var scope = new SyncProjectScope
+            {
+                Id = Guid.NewGuid(),
+                SyncProjectId = projectId,
+                WorkflowStepId = stepId,
+                LdapFilter = string.Empty,
+                PageSize = 0
+            };
+
+            return new GeneratedSyncStep
+            {
+                Step = lookupStep,
+                Scope = scope,
+                Mappings = new List<AttributeMapping> { mapping }
             };
         }
 

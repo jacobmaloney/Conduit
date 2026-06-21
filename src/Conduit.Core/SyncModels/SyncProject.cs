@@ -320,8 +320,19 @@ public static class WorkflowStepTypes
     public const string AssignGroupOwner = "AssignGroupOwner";
     public const string Custom = "Custom";
 
+    /// <summary>
+    /// IC-parity relationship-resolution step (e.g. "Resolve Manager Relationships").
+    /// LICENSED IdentityCenter feature: only emitted when a project's SINK is an
+    /// IdentityCenter connection. It mirrors IC's per-class Lookup card (manager /
+    /// managedBy / owner DN-resolution). At runtime today it is a STRUCTURAL MARKER
+    /// — the orchestrator's step router has no Lookup arm, so it falls through to the
+    /// safe default and is cleanly Skipped (the actual manager-resolution is IC-side
+    /// governance, not the free pump). It persists, opens, and never crashes a run.
+    /// </summary>
+    public const string Lookup = "Lookup";
+
     public static readonly IReadOnlyList<string> All = new[]
     {
-        Mapping, PersonMatch, PersonCreate, AssignManager, AssignGroupOwner, Custom
+        Mapping, PersonMatch, PersonCreate, AssignManager, AssignGroupOwner, Custom, Lookup
     };
 }
