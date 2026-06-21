@@ -239,9 +239,11 @@ builder.Services.AddScoped<SetupService>();
 builder.Services.AddScoped<SystemConfigurationService>();
 builder.Services.AddScoped<DemoSeedService>();
 builder.Services.AddScoped<ParityDemoSeedService>();
-// Default-LOCKED IC-connection entitlement check (inert until the gate is wired —
-// see the IC-connection license-gate plan). Singleton: pure config read.
-builder.Services.AddSingleton<IcEntitlementService>();
+// IC-connection license gate (ENFORCED). Validated-link entitlement: an IC
+// connection is licensed iff a successful authenticated handshake was recorded
+// on its Tenant row (or it was grandfathered by V30). Dev-override config flag
+// is the escape hatch. Scoped — it now reads the (Scoped) TenantRepository.
+builder.Services.AddScoped<IcEntitlementService>();
 builder.Services.AddScoped<ActiveSystemState>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<Conduit.Core.Services.UserGenerationService>();

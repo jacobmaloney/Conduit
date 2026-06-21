@@ -1340,6 +1340,46 @@ END;
 "
             });
 
+            // Migration 30: IC-connection license gate — validated-link entitlement.
+            // An IdentityCenter connection is "licensed" iff Conduit has a SUCCESSFUL
+            // AUTHENTICATED HANDSHAKE to a real IC instance for it (the IC connection's
+            // Test IS the proof). We record that durably on the Tenant row so it
+            // survives restarts:
+            //   IcEntitlementValidatedAt — UTC of the validating handshake (NULL = not
+            //     validated; an unvalidated IC connection can't be USED for runs).
+            //   IcEntitlementBaseUrl     — the IC base URL the handshake reached (audit).
+            //
+            // GRANDFATHER: every PRE-EXISTING IdentityCenter tenant is stamped validated
+            // NOW (SYSUTCDATETIME), so flipping enforcement NEVER breaks the current live
+            // install or the parity demo (e.g. "IdentityCenter (Phase 2.2)"). New IC
+            // connections created AFTER this migration start unvalidated and must pass a
+            // handshake. Additive + idempotent.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 30,
+                Name = "IC connection entitlement (validated link)",
+                Description = "Adds Tenants.IcEntitlementValidatedAt + IcEntitlementBaseUrl for the IdentityCenter-connection license gate (validated authenticated handshake). Grandfathers every pre-existing IdentityCenter tenant as validated so enabling enforcement never breaks the current live install / parity demo.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.Tenants','IcEntitlementValidatedAt') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[Tenants] ADD [IcEntitlementValidatedAt] DATETIME2 NULL;
+END;
+IF COL_LENGTH('dbo.Tenants','IcEntitlementBaseUrl') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[Tenants] ADD [IcEntitlementBaseUrl] NVARCHAR(500) NULL;
+END;
+
+-- Grandfather pre-existing IdentityCenter connections: mark them validated so
+-- enabling enforcement does not break a live install / the parity demo. Only
+-- touches rows that are IC-typed AND not already validated; never overwrites a
+-- real handshake timestamp, and never validates a non-IC system type.
+UPDATE [dbo].[Tenants]
+   SET [IcEntitlementValidatedAt] = SYSUTCDATETIME()
+ WHERE [SystemType] = 'IdentityCenter'
+   AND [IcEntitlementValidatedAt] IS NULL;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

@@ -41,6 +41,7 @@ namespace Conduit.Web.Controllers
         private readonly TenantRepository _tenants;
         private readonly ITenantContext _tenantContext;
         private readonly SyncProjectOrchestrator _orchestrator;
+        private readonly Microsoft.Extensions.Configuration.IConfiguration _config;
         private readonly ILogger<ApiV1SyncRunsController> _logger;
 
         public ApiV1SyncRunsController(
@@ -49,6 +50,7 @@ namespace Conduit.Web.Controllers
             TenantRepository tenants,
             ITenantContext tenantContext,
             SyncProjectOrchestrator orchestrator,
+            Microsoft.Extensions.Configuration.IConfiguration config,
             ILogger<ApiV1SyncRunsController> logger)
         {
             _projects = projects;
@@ -56,6 +58,7 @@ namespace Conduit.Web.Controllers
             _tenants = tenants;
             _tenantContext = tenantContext;
             _orchestrator = orchestrator;
+            _config = config;
             _logger = logger;
         }
 
@@ -370,6 +373,15 @@ namespace Conduit.Web.Controllers
             var scopeError = AuthorizeForProject(project);
             if (scopeError is not null) return scopeError;
 
+            // IC license gate (ENFORCEMENT POINT 2 — server-side, API boundary).
+            // Reject a run of a project whose SINK is an unlicensed IdentityCenter
+            // connection BEFORE claiming IsRunning, so the API caller gets an honest
+            // 403 (not a silent fire-and-forget skip). The orchestrator run-guard
+            // (point 3) is the true convergence point that also covers the scheduler
+            // and UI; this is defense-in-depth at the public API surface.
+            var icGate = await RejectIfUnlicensedIcSinkAsync(project).ConfigureAwait(false);
+            if (icGate is not null) return icGate;
+
             var triggeredBy = SanitizeTriggeredBy(User.Identity?.Name, body?.Reason);
 
             // Atomic IsRunning 0 → 1 claim BEFORE firing the orchestrator
@@ -455,6 +467,32 @@ namespace Conduit.Web.Controllers
         }
 
         // ─── Helpers ──────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// IC license gate, server-side. Returns a 403 result when the project's
+        /// SINK is an IdentityCenter connection that is NOT entitled (no validated
+        /// handshake link recorded / not grandfathered, and the dev override is off).
+        /// Returns null when the run may proceed (non-IC sink, validated/grandfathered
+        /// IC sink, or dev override on). Mirrors the orchestrator run-guard's logic so
+        /// the two never disagree.
+        /// </summary>
+        private async Task<IActionResult?> RejectIfUnlicensedIcSinkAsync(SyncProject project)
+        {
+            var sink = await _tenants.GetByIdAsync(project.SinkTenantId).ConfigureAwait(false);
+            if (sink is null || !IcEntitlement.IsIdentityCenterType(sink.SystemType))
+                return null;
+
+            var overrideRaw = _config[IcEntitlement.DevOverrideConfigKey];
+            var devOverride = bool.TryParse(overrideRaw, out var ov) && ov;
+            if (IcEntitlement.IsValidated(sink, devOverride))
+                return null;
+
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = "IdentityCenter sink is not licensed. Validate the IdentityCenter " +
+                        "connection (Test Connection in Connected Systems) before running a sync to it."
+            });
+        }
 
         private SyncRunSummaryDto ProjectRun(SyncRun r, SyncProject p, IDictionary<Guid, Tenant> tenants) => new()
         {

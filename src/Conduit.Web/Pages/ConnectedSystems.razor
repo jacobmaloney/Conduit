@@ -27,6 +27,7 @@
 @inject Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository CredMapRepo
 @inject IServiceScopeFactory ScopeFactory
 @inject Microsoft.Extensions.Logging.ILogger<ConnectedSystems> Logger
+@inject IcEntitlementService IcEntitlement
 
 <PageTitle>Connections - Conduit</PageTitle>
 
@@ -205,6 +206,26 @@
                             <i class="fas fa-exclamation-triangle"></i>
                             Config incomplete
                         </span>
+                    }
+                    @* IC license gate: validated link = Licensed; otherwise a
+                       locked-with-upsell badge. Test Connection (an authenticated
+                       handshake to a real IdentityCenter) unlocks it. *@
+                    @if (IcEntitlement.IsIdentityCenterType(s.SystemType))
+                    {
+                        @if (s.IcEntitlementValidatedAt.HasValue)
+                        {
+                            <span class="sync-badge sync-badge-enabled" title="@($"IdentityCenter link validated {s.IcEntitlementValidatedAt.Value:u}. Licensed for sync runs.")">
+                                <i class="fas fa-id-badge"></i>
+                                Licensed
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="sync-badge sync-badge-warn" title="Connect to IdentityCenter — included with an IdentityCenter license. Click Test to validate the link and unlock sync runs.">
+                                <i class="fas fa-lock"></i>
+                                License required — Test to unlock
+                            </span>
+                        }
                     }
                 </div>
 
@@ -1337,6 +1358,12 @@
                             </div>
                             break;
                         case "IdentityCenter":
+                            <div class="alert alert-info py-2">
+                                <i class="fas fa-id-badge me-1"></i>
+                                <strong>Connect to IdentityCenter</strong> — included with an IdentityCenter license.
+                                Enter your IdentityCenter URL + API key and click <strong>Save &amp; Test</strong>.
+                                A successful handshake validates the link and unlocks this connection for sync runs.
+                            </div>
                             <div class="mb-3">
                                 <label class="form-label">Base URL</label>
                                 <input class="form-control" @bind="credForm.BaseUrl" placeholder="https://identitycenter.local:7048" />
@@ -1601,6 +1628,18 @@
             cardTestMessage = string.IsNullOrWhiteSpace(result.Message)
                 ? (result.IsSuccessful ? "Connection succeeded." : "Connection failed.")
                 : result.Message;
+
+            // IC license gate (ENFORCEMENT POINT 1 — unlock on validated handshake).
+            // A successful Test against a REAL, AUTHENTICATING IdentityCenter IS the
+            // entitlement proof. Record it durably so the connection can be USED for
+            // runs (and the upsell lock lifts). Only IC-typed connections; only on
+            // a genuinely successful probe.
+            if (result.IsSuccessful && IcEntitlement.IsIdentityCenterType(s.SystemType))
+            {
+                await IcEntitlement.MarkValidatedAsync(s.TenantId, IcValidatedBaseUrlFromMessage(result.Message));
+                cardTestMessage = string.Concat(cardTestMessage, " IdentityCenter connection validated — now licensed for sync runs.");
+                await Load();
+            }
         }
         catch (Exception ex)
         {
@@ -2899,6 +2938,20 @@
             var result = await ProbeTenantAsync(adapter, probeTenantId);
             formTestMessage = result.Message;
             formTestSuccess = result.IsSuccessful;
+
+            // IC license gate (ENFORCEMENT POINT 1 — unlock on validated handshake).
+            // When EDITING a real IC connection, a successful Test validates it
+            // durably. The CREATE path probes a throw-away scratch tenant (deleted in
+            // finally), so it can't be stamped here — the operator saves the IC
+            // connection, then validates it from the card or by editing it.
+            if (result.IsSuccessful
+                && editingId.HasValue
+                && probeTenantId == editingId.Value
+                && IcEntitlement.IsIdentityCenterType(form.SystemType))
+            {
+                await IcEntitlement.MarkValidatedAsync(editingId.Value, IcValidatedBaseUrlFromMessage(result.Message));
+                formTestMessage = string.Concat(formTestMessage, " — IdentityCenter connection validated; now licensed for sync runs.");
+            }
         }
         catch (Exception ex)
         {
@@ -2919,6 +2972,22 @@
             }
             formTesting = false;
         }
+    }
+
+    // Best-effort extraction of the validated IC base URL from the IdentityCenter
+    // TestConnectionAsync success message ("Connected to {BaseUrl} (table=...).").
+    // Audit-only; a miss returns null and the validation timestamp still stands.
+    private static string? IcValidatedBaseUrlFromMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return null;
+        const string marker = "Connected to ";
+        var i = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return null;
+        var start = i + marker.Length;
+        var end = message.IndexOf(" (", start, StringComparison.Ordinal);
+        if (end < 0) end = message.Length;
+        var url = message.Substring(start, end - start).Trim().TrimEnd('.', ' ');
+        return string.IsNullOrWhiteSpace(url) ? null : url;
     }
 
     private static async Task<Conduit.Sync.Connectors.ConnectorTestResult> ProbeTenantAsync(
@@ -3299,6 +3368,7 @@
                 var test = await probe.TestConnectionAsync(CancellationToken.None);
                 credTestMessage = test.Message;
                 credTestSuccess = test.IsSuccessful;
+                await StampIcValidatedIfApplicableAsync(credentialsFor, test);
                 return;
             }
             var sink = adapter.CreateSink(credentialsFor.TenantId);
@@ -3311,6 +3381,7 @@
             var sinkTest = await sink.TestConnectionAsync(CancellationToken.None);
             credTestMessage = sinkTest.Message;
             credTestSuccess = sinkTest.IsSuccessful;
+            await StampIcValidatedIfApplicableAsync(credentialsFor, sinkTest);
         }
         catch (Exception ex)
         {
@@ -3321,6 +3392,20 @@
         {
             credBusy = false;
         }
+    }
+
+    // IC license gate (ENFORCEMENT POINT 1 — unlock on validated handshake) for the
+    // Credentials modal. On a successful Test against a REAL, AUTHENTICATING
+    // IdentityCenter, record the validated link durably so the connection becomes
+    // usable for runs and the upsell lock lifts. No-op for non-IC types / failures.
+    private async Task StampIcValidatedIfApplicableAsync(
+        TenantStats target, Conduit.Sync.Connectors.ConnectorTestResult test)
+    {
+        if (target is null || !test.IsSuccessful) return;
+        if (!IcEntitlement.IsIdentityCenterType(target.SystemType)) return;
+        await IcEntitlement.MarkValidatedAsync(target.TenantId, IcValidatedBaseUrlFromMessage(test.Message));
+        credTestMessage = string.Concat(credTestMessage, " — IdentityCenter connection validated; now licensed for sync runs.");
+        try { await Load(); } catch { /* non-fatal stats refresh */ }
     }
 
     private async Task ConfirmDeleteSystem()
