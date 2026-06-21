@@ -936,7 +936,7 @@
                 }
                 else
                 {
-                    @* IC-parity gradient hero header for the edit experience. *@
+                    @* IC-parity solid-orange (operations accent) hero header for the edit experience. *@
                     <div class="sync-edit-hero">
                         <div class="sync-edit-hero-text">
                             <h1 class="sync-edit-hero-title">
@@ -1724,6 +1724,10 @@
                                                     @onclick="() => ToggleWorkflowSettings(wfRef.Id)" title="Rename Workflow">
                                                 <i class="fas fa-edit"></i>
                                             </button>
+                                            <button type="button" class="btn btn-sm btn-outline-success"
+                                                    @onclick="() => CopyWorkflowById(wfRef.Id)" title="Copy Workflow">
+                                                <i class="fas fa-copy"></i>
+                                            </button>
                                             <button type="button" class="btn btn-sm btn-outline-danger"
                                                     @onclick="() => DeleteWorkflowById(wfRef.Id)" title="Delete Workflow">
                                                 <i class="fas fa-trash"></i>
@@ -2505,6 +2509,111 @@
         DeleteWorkflow();
         expandedWorkflows.Remove(id);
         expandedWorkflowSettings.Remove(id);
+    }
+
+    // IC-parity per-workflow COPY (SyncProjectWizard.razor ExecuteCopyWorkflow,
+    // ~lines 5535-5639). Deep-copies the workflow + every step + each loaded
+    // Mapping step's per-step attribute mappings AND scope into NEW ids, so the
+    // copy is fully independent (mutating the copy never touches the original)
+    // and persists through PersistWorkflowsAsync on Save. New step ids are
+    // registered in the *Loaded / *Inherit maps so the persist loop flushes the
+    // cloned mappings/scope (it only writes loaded steps).
+    private void CopyWorkflowById(Guid id)
+    {
+        var src = workflowsForm.FirstOrDefault(w => w.Id == id);
+        if (src is null) return;
+
+        var newWf = new Workflow
+        {
+            Id = Guid.NewGuid(),
+            SyncProjectId = src.SyncProjectId,
+            Name = src.Name + " (Copy)",
+            Description = src.Description,
+            Ordinal = workflowsForm.Count,
+            Enabled = src.Enabled
+        };
+
+        var newSteps = new List<WorkflowStep>();
+        var srcSteps = StepsFor(src.Id);
+        for (int i = 0; i < srcSteps.Count; i++)
+        {
+            var ss = srcSteps[i];
+            var newStep = new WorkflowStep
+            {
+                Id = Guid.NewGuid(),
+                WorkflowId = newWf.Id,
+                Name = ss.Name,
+                StepType = ss.StepType,
+                Ordinal = i,
+                ObjectClass = ss.ObjectClass,
+                Enabled = ss.Enabled,
+                Configuration = ss.Configuration,
+                // A copy starts fresh — never inherit the source step's
+                // incremental high-water mark (next run does a full enumeration).
+                IncrementalCursor = null,
+                CursorUpdatedAt = null
+            };
+
+            // Deep-copy per-step mappings + scope ONLY for Mapping steps the
+            // operator had loaded into the editor (others stay project-inherited;
+            // the source step never had per-step rows to clone).
+            var isMapping = string.Equals(ss.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase);
+            if (isMapping && stepMappingsLoaded.Contains(ss.Id))
+            {
+                var clonedMappings = GetStepMappings(ss.Id)
+                    .Select(m => new AttributeMapping
+                    {
+                        Id = Guid.NewGuid(),
+                        SyncProjectId = m.SyncProjectId,
+                        WorkflowStepId = newStep.Id,
+                        SourceAttribute = m.SourceAttribute,
+                        SinkAttribute = m.SinkAttribute,
+                        TransformExpr = m.TransformExpr,
+                        IsRequired = m.IsRequired,
+                        SortOrder = m.SortOrder
+                    })
+                    .ToList();
+                stepMappings[newStep.Id] = clonedMappings;
+                stepMappingsLoaded.Add(newStep.Id);
+                stepMappingsInherit[newStep.Id] =
+                    !stepMappingsInherit.TryGetValue(ss.Id, out var inhM) || inhM;
+            }
+
+            if (isMapping && stepScopesLoaded.Contains(ss.Id))
+            {
+                var inhS = !stepScopeInherit.TryGetValue(ss.Id, out var sInh) || sInh;
+                SyncProjectScope? clonedScope = null;
+                if (stepScopes.TryGetValue(ss.Id, out var srcScope) && srcScope is not null)
+                {
+                    clonedScope = new SyncProjectScope
+                    {
+                        Id = Guid.NewGuid(),
+                        SyncProjectId = srcScope.SyncProjectId,
+                        WorkflowStepId = newStep.Id,
+                        BaseDN = srcScope.BaseDN,
+                        IncludedBaseDNs = srcScope.IncludedBaseDNs,
+                        ExcludedBaseDNs = srcScope.ExcludedBaseDNs,
+                        LdapFilter = srcScope.LdapFilter,
+                        QueryExpression = srcScope.QueryExpression,
+                        PageSize = srcScope.PageSize,
+                        MaxObjects = srcScope.MaxObjects,
+                        IncludeDeleted = srcScope.IncludeDeleted
+                    };
+                }
+                stepScopes[newStep.Id] = clonedScope;
+                stepScopesLoaded.Add(newStep.Id);
+                stepScopeInherit[newStep.Id] = inhS;
+            }
+
+            newSteps.Add(newStep);
+        }
+
+        workflowsForm.Add(newWf);
+        stepsByWorkflow[newWf.Id] = newSteps;
+        expandedWorkflows.Add(newWf.Id);
+        selectedWorkflowId = newWf.Id;
+        selectedStepId = newSteps.FirstOrDefault()?.Id;
+        workflowsDirty = true;
     }
 
     private void MoveStepUpById(Guid id)   { selectedStepId = id; MoveStepUp(); }

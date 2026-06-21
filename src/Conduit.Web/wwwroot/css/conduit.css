@@ -2771,7 +2771,9 @@ details summary::-webkit-details-marker { color: var(--accent); }
     justify-content: space-between;
     gap: 1rem;
     padding: 1.15rem 1.5rem;
-    background: var(--conduit-700);
+    /* Operations accent — solid orange so the Edit hero matches the rest of
+       Conduit's orange sync/operations area (was deep-teal --conduit-700). */
+    background: var(--sec-operations, #F97316);
     color: #fff;
     flex: 0 0 auto;
 }
