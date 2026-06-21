@@ -231,9 +231,11 @@
         {
             var r = await Parity.ImportFromIdentityCenterAsync(icConnString, icProjectName);
             alertClass = r.Created ? "alert-success" : "alert-warning";
-            var noteHtml = string.Join("<br/>", r.Notes);
+            // HTML-encode data-derived text before it goes into the MarkupString alert (Worf: prevent XSS via a crafted IC project name / note).
+            var safeName = System.Net.WebUtility.HtmlEncode(r.ProjectName);
+            var noteHtml = string.Join("<br/>", r.Notes.Select(n => System.Net.WebUtility.HtmlEncode(n)));
             message = r.Created
-                ? $"Imported <strong>'{r.ProjectName}'</strong>: {r.Workflows} workflows, {r.Steps} steps, {r.Mappings} mappings, {r.Scopes} scopes.<br/>{noteHtml}"
+                ? $"Imported <strong>'{safeName}'</strong>: {r.Workflows} workflows, {r.Steps} steps, {r.Mappings} mappings, {r.Scopes} scopes.<br/>{noteHtml}"
                 : noteHtml;
         }
         catch (Exception ex) { Fail($"Import failed: {ex.Message}"); }
