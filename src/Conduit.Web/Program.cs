@@ -239,6 +239,9 @@ builder.Services.AddScoped<SetupService>();
 builder.Services.AddScoped<SystemConfigurationService>();
 builder.Services.AddScoped<DemoSeedService>();
 builder.Services.AddScoped<ParityDemoSeedService>();
+// Default-LOCKED IC-connection entitlement check (inert until the gate is wired —
+// see the IC-connection license-gate plan). Singleton: pure config read.
+builder.Services.AddSingleton<IcEntitlementService>();
 builder.Services.AddScoped<ActiveSystemState>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<Conduit.Core.Services.UserGenerationService>();
