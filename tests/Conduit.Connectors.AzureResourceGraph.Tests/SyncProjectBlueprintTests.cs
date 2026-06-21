@@ -8,7 +8,8 @@ namespace Conduit.Connectors.AzureResourceGraph.Tests;
 /// <summary>
 /// Proves the blueprint catalog expands — through the real ISyncProjectGenerator
 /// and AttributeMapService (catalog-backed, no DB, no live fetch) — into a fully
-/// configured multi-class project: one Mapping step per class, with mappings.
+/// configured multi-class project: ONE WORKFLOW PER CLASS (IC parity), each holding
+/// one Mapping step with mappings.
 /// </summary>
 public class SyncProjectBlueprintTests
 {
@@ -35,8 +36,14 @@ public class SyncProjectBlueprintTests
         return Assert.Single(projects);
     }
 
+    // V23.1: each class is now its own workflow holding a single Mapping step.
+    // Flatten back to the per-class step list (workflow order, then step order)
+    // so the behavioral assertions below read the same as before the IC-parity split.
+    private static List<GeneratedSyncStep> StepsOf(GeneratedSyncProject p) =>
+        p.Workflows.SelectMany(w => w.Steps).ToList();
+
     private static string[] StepClasses(GeneratedSyncProject p) =>
-        p.Steps.Select(s => s.Step.ObjectClass!).ToArray();
+        StepsOf(p).Select(s => s.Step.ObjectClass!).ToArray();
 
     [Fact]
     public void Catalog_ShipsExactlySixBlueprints()
@@ -58,7 +65,7 @@ public class SyncProjectBlueprintTests
         var project = ExpandOne(bp);
 
         Assert.Equal(new[] { "user", "group", "role", "policy", "account" }, StepClasses(project));
-        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
@@ -70,7 +77,7 @@ public class SyncProjectBlueprintTests
         var project = ExpandOne(bp);
 
         Assert.Equal(new[] { "user", "group", "permissionSet" }, StepClasses(project));
-        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
@@ -82,7 +89,7 @@ public class SyncProjectBlueprintTests
         var project = ExpandOne(bp);
 
         Assert.Equal(new[] { "user", "group", "organizationalUnit", "role", "domain" }, StepClasses(project));
-        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
@@ -147,8 +154,17 @@ public class SyncProjectBlueprintTests
             Assert.False(project.Project.IsEnabled);
             Assert.True(project.Project.SkipUnchanged);
             Assert.Equal(StepClasses(project)[0], project.Project.ObjectClass);
-            Assert.All(project.Steps, s =>
+            Assert.All(StepsOf(project), s =>
                 Assert.Equal(WorkflowStepTypes.Mapping, s.Step.StepType));
+
+            // IC parity: one workflow per class, each holding exactly one Mapping step,
+            // named "<class> Upsert Sync".
+            Assert.Equal(StepClasses(project).Length, project.Workflows.Count);
+            Assert.All(project.Workflows, w =>
+            {
+                var step = Assert.Single(w.Steps);
+                Assert.Equal($"{step.Step.ObjectClass} Upsert Sync", w.Workflow.Name);
+            });
         }
     }
 
@@ -172,7 +188,7 @@ public class SyncProjectBlueprintTests
 
         // Every step in this blueprint is a real (non-deferred) class, so each must
         // have at least one attribute mapping resolved from the catalog.
-        foreach (var step in project.Steps)
+        foreach (var step in StepsOf(project))
         {
             Assert.False(SyncProjectBlueprintCatalog.IsDeferredClass(step.Step.ObjectClass!));
             Assert.True(step.Mappings.Count > 0,
@@ -182,7 +198,7 @@ public class SyncProjectBlueprintTests
         // Spot-check the called-out non-empty classes explicitly.
         foreach (var cls in new[] { "user", "group", "m365usage" })
         {
-            var step = project.Steps.Single(s => s.Step.ObjectClass == cls);
+            var step = StepsOf(project).Single(s => s.Step.ObjectClass == cls);
             Assert.True(step.Mappings.Count > 0, $"{cls} mappings empty");
         }
     }
@@ -195,7 +211,7 @@ public class SyncProjectBlueprintTests
 
         var actual = StepClasses(project);
         Assert.Equal(new[] { "azuresubscription", "azureresource" }, actual);
-        Assert.All(project.Steps, s => Assert.True(s.Mappings.Count > 0,
+        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
@@ -223,13 +239,15 @@ public class SyncProjectBlueprintTests
         var viaExplicit = Assert.Single(
             gen.Generate(src, sink, new[] { "user", "group" }, null, Array.Empty<string>()));
 
+        var viaModeSteps = StepsOf(viaMode);
+        var viaExplicitSteps = StepsOf(viaExplicit);
         Assert.Equal(StepClasses(viaMode), StepClasses(viaExplicit));
-        Assert.Equal(viaMode.Steps.Count, viaExplicit.Steps.Count);
+        Assert.Equal(viaModeSteps.Count, viaExplicitSteps.Count);
 
-        for (var i = 0; i < viaMode.Steps.Count; i++)
+        for (var i = 0; i < viaModeSteps.Count; i++)
         {
-            var m = viaMode.Steps[i];
-            var e = viaExplicit.Steps[i];
+            var m = viaModeSteps[i];
+            var e = viaExplicitSteps[i];
             Assert.Equal(m.Step.ObjectClass, e.Step.ObjectClass);
             Assert.Equal(m.Step.StepType, e.Step.StepType);
             Assert.Equal(m.Scope.LdapFilter, e.Scope.LdapFilter);

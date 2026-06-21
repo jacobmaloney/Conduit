@@ -32,16 +32,29 @@ namespace Conduit.Sync.Templates
     }
 
     /// <summary>
+    /// One generated per-class workflow: the <see cref="Workflow"/> entity plus the
+    /// single Mapping step (with its scope + mappings) it carries. IC-parity shape —
+    /// each object class becomes its OWN workflow, named like IC ("user Upsert Sync"),
+    /// holding exactly one Mapping step, so the Edit Sync Project → Workflows tab
+    /// renders one collapsible per class.
+    /// </summary>
+    public class GeneratedWorkflow
+    {
+        public Workflow Workflow { get; set; } = new();
+        public List<GeneratedSyncStep> Steps { get; set; } = new();
+    }
+
+    /// <summary>
     /// A fully-populated, in-memory sync-project graph spanning MANY object classes
-    /// (V23 redesign): ONE project -> ONE workflow -> N Mapping steps, one per object
-    /// class, each step carrying its own ObjectClass + scope + attribute mappings.
-    /// Nothing is persisted here; the caller writes it through the repositories.
+    /// (V23.1 redesign): ONE project -> N workflows, ONE PER OBJECT CLASS, each
+    /// workflow carrying that class's single Mapping step (ObjectClass + scope +
+    /// attribute mappings). This mirrors IdentityCenter's "Configured Workflows (N)"
+    /// layout. Nothing is persisted here; the caller writes it through the repositories.
     /// </summary>
     public class GeneratedSyncProject
     {
         public SyncProject Project { get; set; } = new();
-        public Workflow Workflow { get; set; } = new();
-        public List<GeneratedSyncStep> Steps { get; set; } = new();
+        public List<GeneratedWorkflow> Workflows { get; set; } = new();
     }
 
     public interface ISyncProjectGenerator
@@ -50,13 +63,13 @@ namespace Conduit.Sync.Templates
         IReadOnlyList<string> GetObjectClasses(string sourceSystemType, GenerationMode mode);
 
         /// <summary>
-        /// V23: builds ONE in-memory sync-project graph for the (source, sink, mode)
-        /// pair — a single project whose one workflow holds N Mapping steps, one per
-        /// object class in the source connector's set. Each step carries its own
-        /// ObjectClass, default scope/filter, and auto-filled attribute mappings (via
-        /// the Phase 2 <see cref="IAttributeMapService"/>). The project name is
-        /// de-duplicated against <paramref name="existingNames"/> (#2/#3 suffix like IC).
-        /// Returns a list for forward-compatibility, but today yields a single project.
+        /// V23.1: builds ONE in-memory sync-project graph for the (source, sink, mode)
+        /// pair — a single project with ONE WORKFLOW PER OBJECT CLASS (IC parity), each
+        /// workflow named "<class> Upsert Sync" and holding a single Mapping step. Each
+        /// step carries its own ObjectClass, default scope/filter, and auto-filled
+        /// attribute mappings (via the Phase 2 <see cref="IAttributeMapService"/>). The
+        /// project name is de-duplicated against <paramref name="existingNames"/> (#2/#3
+        /// suffix like IC). Returns a list for forward-compatibility, but yields one project.
         /// </summary>
         IReadOnlyList<GeneratedSyncProject> Generate(
             Tenant sourceTenant,
@@ -70,8 +83,9 @@ namespace Conduit.Sync.Templates
         /// mode-based overload, but over an EXPLICIT lowercase native class list
         /// instead of <see cref="GetObjectClasses"/>. Used by the blueprint catalog
         /// for curated class selections (e.g. {user, m365usage, site}). Behaviour is
-        /// identical per class (Mapping step + default scope/page size + auto-filled
-        /// attribute mappings); IsEnabled=false, SkipUnchanged=true, ObjectClass=classes[0].
+        /// identical per class (one workflow + its Mapping step + default scope/page size
+        /// + auto-filled mappings); IsEnabled=false, SkipUnchanged=true, project
+        /// ObjectClass=classes[0] as the back-compat fallback.
         /// </summary>
         IReadOnlyList<GeneratedSyncProject> Generate(
             Tenant sourceTenant,
@@ -225,8 +239,8 @@ namespace Conduit.Sync.Templates
 
         /// <summary>
         /// The ONE per-class build loop shared by both Generate overloads. Produces a
-        /// single project + single workflow + one Mapping step per class, each with its
-        /// own scope, page size and auto-filled mappings. Persists nothing.
+        /// single project + ONE WORKFLOW PER CLASS (IC parity), each workflow holding one
+        /// Mapping step with its own scope, page size and auto-filled mappings. Persists nothing.
         /// </summary>
         private IReadOnlyList<GeneratedSyncProject> Build(
             Tenant sourceTenant,
@@ -245,10 +259,12 @@ namespace Conduit.Sync.Templates
             if (objectClasses.Count == 0)
                 return new List<GeneratedSyncProject>();
 
-            // V23: ONE project + ONE workflow for the whole (source, sink, mode) pair.
-            // Each object class becomes a Mapping STEP under that single workflow.
+            // V23.1: ONE project, then ONE WORKFLOW PER OBJECT CLASS (IC parity).
+            // Each object class becomes its own workflow named "<class> Upsert Sync"
+            // (IC's convention) holding exactly one Mapping step. The orchestrator
+            // iterates workflows in Ordinal order, so N per-class workflows run
+            // identically to the prior one-workflow-N-steps shape.
             var projectId = Guid.NewGuid();
-            var workflowId = Guid.NewGuid();
 
             var baseName = $"{sourceTenant.Name} to {sinkTenant.Name} ({modeLabel})";
             var projectName = UniqueName(baseName, taken);
@@ -274,20 +290,24 @@ namespace Conduit.Sync.Templates
                 SkipUnchanged = true
             };
 
-            var workflow = new Workflow
-            {
-                Id = workflowId,
-                SyncProjectId = projectId,
-                Name = $"{modeLabel} sync",
-                Ordinal = 0,
-                Enabled = true
-            };
-
-            var steps = new List<GeneratedSyncStep>(objectClasses.Count);
-            var ordinal = 0;
+            var workflows = new List<GeneratedWorkflow>(objectClasses.Count);
+            var workflowOrdinal = 0;
             foreach (var objectClass in objectClasses)
             {
+                var workflowId = Guid.NewGuid();
                 var stepId = Guid.NewGuid();
+
+                // One workflow per class, named IC-style ("user Upsert Sync"). The
+                // workflow carries the class; the step is the Mapping. Workflow order
+                // mirrors class order; the single step sits at ordinal 0 within it.
+                var workflow = new Workflow
+                {
+                    Id = workflowId,
+                    SyncProjectId = projectId,
+                    Name = $"{objectClass} Upsert Sync",
+                    Ordinal = workflowOrdinal++,
+                    Enabled = true
+                };
 
                 // Only Mapping steps. The orchestrator skips every non-Mapping (governance)
                 // step type, so we never emit Lookup / GroupMembership / License /
@@ -302,7 +322,7 @@ namespace Conduit.Sync.Templates
                     Name = $"{objectClass} mapping",
                     StepType = WorkflowStepTypes.Mapping,
                     ObjectClass = objectClass,
-                    Ordinal = ordinal++,
+                    Ordinal = 0,
                     Enabled = true
                 };
 
@@ -322,11 +342,18 @@ namespace Conduit.Sync.Templates
                     m.WorkflowStepId = stepId;
                 }
 
-                steps.Add(new GeneratedSyncStep
+                workflows.Add(new GeneratedWorkflow
                 {
-                    Step = step,
-                    Scope = scope,
-                    Mappings = mappings
+                    Workflow = workflow,
+                    Steps = new List<GeneratedSyncStep>
+                    {
+                        new GeneratedSyncStep
+                        {
+                            Step = step,
+                            Scope = scope,
+                            Mappings = mappings
+                        }
+                    }
                 });
             }
 
@@ -335,8 +362,7 @@ namespace Conduit.Sync.Templates
                 new GeneratedSyncProject
                 {
                     Project = project,
-                    Workflow = workflow,
-                    Steps = steps
+                    Workflows = workflows
                 }
             };
         }

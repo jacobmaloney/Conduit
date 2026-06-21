@@ -2908,34 +2908,14 @@
             return;
         }
 
-        // Resolve (or create) the workflow the steps attach to. Prefer the selected
-        // workflow; otherwise the first; otherwise stand one up (matches AddStep's
-        // single-step path but for the whole class set).
-        var workflow = SelectedWorkflow ?? workflowsForm.FirstOrDefault();
-        if (workflow is null)
-        {
-            workflow = new Workflow
-            {
-                Id = Guid.NewGuid(),
-                SyncProjectId = editingId.Value,
-                Name = $"{ModeLabel(workflowsClassMode)} sync",
-                Ordinal = workflowsForm.Count,
-                Enabled = true
-            };
-            workflowsForm.Add(workflow);
-            stepsByWorkflow[workflow.Id] = new List<WorkflowStep>();
-        }
-        selectedWorkflowId = workflow.Id;
-
-        if (!stepsByWorkflow.TryGetValue(workflow.Id, out var list))
-        {
-            list = new List<WorkflowStep>();
-            stepsByWorkflow[workflow.Id] = list;
-        }
-
-        // Classes this workflow already covers (case-insensitive on native names).
+        // V23.1 / IC parity: create ONE WORKFLOW PER OBJECT CLASS (named "<class>
+        // Upsert Sync", matching Auto-Generate + IdentityCenter), each holding a single
+        // Mapping step. Classes already covered by ANY existing per-class workflow are
+        // skipped so re-running is idempotent.
         var existing = new HashSet<string>(
-            list.Where(s => string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase)
+            stepsByWorkflow.Values
+                .SelectMany(l => l)
+                .Where(s => string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase)
                             && !string.IsNullOrWhiteSpace(s.ObjectClass))
                 .Select(s => s.ObjectClass!),
             StringComparer.OrdinalIgnoreCase);
@@ -2949,6 +2929,19 @@
         {
             if (existing.Contains(objectClass)) continue;
 
+            // Stand up this class's own workflow, appended after any current ones.
+            var workflow = new Workflow
+            {
+                Id = Guid.NewGuid(),
+                SyncProjectId = editingId.Value,
+                Name = $"{objectClass} Upsert Sync",
+                Ordinal = workflowsForm.Count,
+                Enabled = true
+            };
+            workflowsForm.Add(workflow);
+            var list = new List<WorkflowStep>();
+            stepsByWorkflow[workflow.Id] = list;
+
             var step = new WorkflowStep
             {
                 Id = Guid.NewGuid(),
@@ -2956,7 +2949,7 @@
                 Name = $"{objectClass} mapping",
                 StepType = WorkflowStepTypes.Mapping,
                 ObjectClass = objectClass, // lowercase native name — matches generator + option set
-                Ordinal = list.Count,
+                Ordinal = 0,
                 Enabled = true
             };
             list.Add(step);
@@ -2979,15 +2972,19 @@
 
         if (added == 0)
         {
-            bulkBuilderMessage = "This workflow already has steps for every object class in that tier. Nothing to add.";
+            bulkBuilderMessage = "This project already has a workflow for every object class in that tier. Nothing to add.";
             return;
         }
 
-        if (lastAdded is not null) await SelectStep(lastAdded.Id);
+        if (lastAdded is not null)
+        {
+            selectedWorkflowId = lastAdded.WorkflowId;
+            await SelectStep(lastAdded.Id);
+        }
         workflowsDirty = true;
         bulkBuilderMessage = added == 1
-            ? "Added 1 object-class step (auto-mapped). Click Save changes to persist."
-            : $"Added {added} object-class steps (auto-mapped). Click Save changes to persist.";
+            ? "Added 1 per-class workflow (auto-mapped). Click Save changes to persist."
+            : $"Added {added} per-class workflows (auto-mapped). Click Save changes to persist.";
     }
 
     /// <summary>
@@ -5378,14 +5375,15 @@
             var srcTable = AutoGenSourceIsIdentityCenter ? autoGenSourceTable : null;
             var sinkTable = AutoGenSinkIsIdentityCenter ? autoGenSinkTable : null;
 
-            // V23: each generated graph is ONE project + ONE workflow + N Mapping
-            // steps (one per object class). Persist project -> workflow -> each step
-            // (+ its per-step scope + mappings). Today the generator yields a single
-            // project, but we loop to stay forward-compatible.
+            // V23.1: each generated graph is ONE project + ONE WORKFLOW PER OBJECT
+            // CLASS (IC parity), each workflow holding a single Mapping step. Persist
+            // project -> each per-class workflow -> its step (+ per-step scope +
+            // mappings). Today the generator yields a single project, but we loop to
+            // stay forward-compatible.
             // IDENTITIES RULE: the generator is table-blind (shared IC-parity signature),
-            // so when an IC/Identities endpoint is involved we drop every non-user step
-            // here — Identities holds people only. Same single source of truth the modal
-            // preview + cards already filter through (ApplyIdentitiesConstraint).
+            // so when an IC/Identities endpoint is involved we drop every non-user
+            // WORKFLOW here — Identities holds people only. Same single source of truth
+            // the modal preview + cards already filter through (ApplyIdentitiesConstraint).
             var identitiesOnly = AutoGenIcIdentitiesInvolved;
             var totalSteps = 0;
             foreach (var g in generated)
@@ -5397,30 +5395,37 @@
                 // Post-redesign the generator yields ONE project, so this names it; the
                 // loop stays forward-compatible. Empty→default already resolved above.
                 g.Project.Name = chosenName;
+
+                var workflowsToPersist = g.Workflows.AsEnumerable();
                 if (identitiesOnly)
                 {
-                    g.Steps = g.Steps
-                        .Where(s => string.IsNullOrWhiteSpace(s.Step.ObjectClass)
-                                    || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase))
-                        .ToList();
+                    // A per-class workflow's class is carried on its single Mapping step;
+                    // keep only user (and any class-less) workflows.
+                    workflowsToPersist = workflowsToPersist.Where(w =>
+                        w.Steps.All(s => string.IsNullOrWhiteSpace(s.Step.ObjectClass)
+                                         || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase)));
                 }
+
                 await ProjectRepo.CreateAsync(g.Project);
-                await WorkflowRepo.CreateAsync(g.Workflow);
-                foreach (var st in g.Steps)
+                foreach (var w in workflowsToPersist)
                 {
-                    await WorkflowRepo.CreateStepAsync(st.Step);
-                    await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
-                    if (st.Mappings.Count > 0)
+                    await WorkflowRepo.CreateAsync(w.Workflow);
+                    foreach (var st in w.Steps)
                     {
-                        await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                        await WorkflowRepo.CreateStepAsync(st.Step);
+                        await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
+                        if (st.Mappings.Count > 0)
+                        {
+                            await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                        }
+                        totalSteps++;
                     }
-                    totalSteps++;
                 }
             }
 
             // Close the modal only AFTER the single successful persist.
             showAutoGenerateModal = false;
-            toastSuccess = $"Auto-generated 1 sync project with {totalSteps} per-class step(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
+            toastSuccess = $"Auto-generated 1 sync project with {totalSteps} per-class workflow(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
             await Reload();
         }
         catch (Exception ex)
@@ -5522,36 +5527,41 @@
                 : null;
 
             // IDENTITIES RULE: same single source of truth — if the IC target lands in the
-            // people-only Identities table, drop every non-user step. Sink table is Objects
-            // here, so this is a no-op today, but routed through the same guard for safety.
+            // people-only Identities table, drop every non-user WORKFLOW. Sink table is
+            // Objects here, so this is a no-op today, but routed through the same guard.
             var identitiesOnly = IsIcIdentitiesTable(true, sinkTable);
             var totalSteps = 0;
             foreach (var g in generated)
             {
                 g.Project.SinkTable = sinkTable;
+
+                var workflowsToPersist = g.Workflows.AsEnumerable();
                 if (identitiesOnly)
                 {
-                    g.Steps = g.Steps
-                        .Where(s => string.IsNullOrWhiteSpace(s.Step.ObjectClass)
-                                    || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase))
-                        .ToList();
+                    workflowsToPersist = workflowsToPersist.Where(w =>
+                        w.Steps.All(s => string.IsNullOrWhiteSpace(s.Step.ObjectClass)
+                                         || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase)));
                 }
+
                 await ProjectRepo.CreateAsync(g.Project);
-                await WorkflowRepo.CreateAsync(g.Workflow);
-                foreach (var st in g.Steps)
+                foreach (var w in workflowsToPersist)
                 {
-                    await WorkflowRepo.CreateStepAsync(st.Step);
-                    await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
-                    if (st.Mappings.Count > 0)
+                    await WorkflowRepo.CreateAsync(w.Workflow);
+                    foreach (var st in w.Steps)
                     {
-                        await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                        await WorkflowRepo.CreateStepAsync(st.Step);
+                        await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
+                        if (st.Mappings.Count > 0)
+                        {
+                            await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                        }
+                        totalSteps++;
                     }
-                    totalSteps++;
                 }
             }
 
             showBlueprintModal = false;
-            toastSuccess = $"Created '{bp.Name}' with {totalSteps} per-class step(s) from {src.Name} to {sink.Name}.";
+            toastSuccess = $"Created '{bp.Name}' with {totalSteps} per-class workflow(s) from {src.Name} to {sink.Name}.";
             await Reload();
         }
         catch (Exception ex)
