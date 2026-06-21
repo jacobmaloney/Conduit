@@ -511,22 +511,61 @@
                         </div>
                     }
 
-                    @if (selectedBlueprint is null)
+                    @if (selectedBlueprint is null && string.IsNullOrEmpty(blueprintSourceType))
                     {
+                        @* STEP 1 — choose the SOURCE connection type FIRST, so we only offer
+                           templates that make sense for that source. *@
                         <p class="text-muted">
-                            Pick a blueprint. Each one creates a fully-configured sync project —
-                            one Mapping step per object class, with default scope and attribute
-                            mappings already filled in. You only choose the source connection,
-                            the IdentityCenter target, and a schedule.
+                            First, pick the <strong>source connection type</strong>. We'll then show only the
+                            templates that fit that source. Each template creates a fully-configured sync project —
+                            one Mapping step per object class, with default scope and attribute mappings already filled in.
+                        </p>
+
+                        @if (OfferableSourceTypes.Count == 0)
+                        {
+                            <div class="alert alert-warning py-2">
+                                <i class="fas fa-circle-info me-1"></i>
+                                No template matches your existing connections yet. Add a
+                                source connection (Active Directory, Entra ID, Okta, AWS,
+                                Google Workspace, LDAP, SCIM, and more) first.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="autogen-tpl-grid blueprint-picker-grid">
+                                @foreach (var st in OfferableSourceTypes)
+                                {
+                                    var stRef = st;
+                                    var tplCount = Conduit.Sync.Templates.SyncProjectBlueprintCatalog.ForSourceSystemType(stRef).Count;
+                                    <div class="autogen-tpl-card" @onclick="() => SelectBlueprintSourceType(stRef)">
+                                        <div class="autogen-tpl-card-head">
+                                            <span class="autogen-tpl-card-name">@SourceTypeLabel(stRef)</span>
+                                        </div>
+                                        <div class="autogen-tpl-card-count">@tplCount template@(tplCount == 1 ? "" : "s")</div>
+                                        <div class="autogen-tpl-card-classes">Source: @stRef</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                    else if (selectedBlueprint is null)
+                    {
+                        @* STEP 2 — templates FILTERED to the chosen source type. *@
+                        <div class="mb-2">
+                            <button type="button" class="btn btn-sm btn-link ps-0" @onclick="ClearBlueprintSourceType">
+                                <i class="fas fa-arrow-left me-1"></i>Pick a different source type
+                            </button>
+                        </div>
+                        <p class="text-muted">
+                            Templates for <strong>@SourceTypeLabel(blueprintSourceType)</strong> sources.
+                            Pick one, then confirm the specific connection, the IdentityCenter target, and a schedule.
                         </p>
 
                         @if (OfferableBlueprints.Count == 0)
                         {
                             <div class="alert alert-warning py-2">
                                 <i class="fas fa-circle-info me-1"></i>
-                                No blueprint matches your existing connections yet. Add a
-                                source connection (Active Directory, Entra ID, Okta, AWS,
-                                Google Workspace, LDAP, SCIM, and more) first.
+                                No template is defined for @SourceTypeLabel(blueprintSourceType) yet.
                             </div>
                         }
                         else
@@ -3710,18 +3749,56 @@
     // ── Create-from-blueprint modal state ──
     private bool showBlueprintModal;
     private Conduit.Sync.Templates.SyncProjectBlueprint? selectedBlueprint;
+    // SOURCE-FIRST flow: the operator picks the source connection TYPE before any
+    // template is offered, so the template grid only shows blueprints that fit that
+    // source. Empty = the source-type picker (step 1) is showing.
+    private string blueprintSourceType = string.Empty;
     private Guid blueprintSourceId = Guid.Empty;
     private Guid blueprintSinkId = Guid.Empty;
     private string blueprintCronSchedule = string.Empty;
     private bool blueprintInProgress;
     private string blueprintError = string.Empty;
 
-    /// <summary>Blueprints whose required SystemType matches at least one existing connection.</summary>
-    private IReadOnlyList<Conduit.Sync.Templates.SyncProjectBlueprint> OfferableBlueprints =>
+    /// <summary>
+    /// SOURCE-FIRST: the distinct source connection TYPES that (a) have at least one
+    /// existing connection AND (b) have at least one template defined. These are the
+    /// cards the operator chooses from before any template is shown.
+    /// </summary>
+    private IReadOnlyList<string> OfferableSourceTypes =>
         Conduit.Sync.Templates.SyncProjectBlueprintCatalog.All
-            .Where(bp => allTenants.Any(t =>
-                string.Equals(t.SystemType, bp.SourceSystemType, StringComparison.OrdinalIgnoreCase)))
+            .Select(bp => bp.SourceSystemType)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(st => allTenants.Any(t => string.Equals(t.SystemType, st, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(st => SourceTypeLabel(st), StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    /// <summary>
+    /// Templates offered AFTER a source type is chosen: every blueprint for that source
+    /// type (the connections-present check already passed at the type-picker step).
+    /// </summary>
+    private IReadOnlyList<Conduit.Sync.Templates.SyncProjectBlueprint> OfferableBlueprints =>
+        string.IsNullOrEmpty(blueprintSourceType)
+            ? Array.Empty<Conduit.Sync.Templates.SyncProjectBlueprint>()
+            : Conduit.Sync.Templates.SyncProjectBlueprintCatalog.ForSourceSystemType(blueprintSourceType);
+
+    /// <summary>Friendly label for a connection SystemType (matches the connection UI naming).</summary>
+    private static string SourceTypeLabel(string systemType) => systemType switch
+    {
+        "ActiveDirectory" => "Active Directory",
+        "ActiveRoles" => "Active Roles",
+        "EntraID" => "Entra ID",
+        "SharePoint" => "SharePoint / Teams",
+        "AzureResourceGraph" => "Azure Resource Graph",
+        "AWS" => "AWS IAM",
+        "AWSIdentityCenter" => "AWS Identity Center",
+        "GoogleWorkspace" => "Google Workspace",
+        "Okta" => "Okta",
+        "GenericLdap" => "Generic LDAP",
+        "Scim" => "SCIM 2.0",
+        "Database" => "Database",
+        "SqlDiscovery" => "SQL Server Discovery",
+        _ => systemType
+    };
 
     /// <summary>The classes a blueprint will create, resolved through the live generator.</summary>
     private IReadOnlyList<string> BlueprintClasses(Conduit.Sync.Templates.SyncProjectBlueprint bp) =>
@@ -5461,11 +5538,30 @@
     private void ShowBlueprintModal()
     {
         selectedBlueprint = null;
+        blueprintSourceType = string.Empty;   // start at the source-type picker (step 1)
         blueprintSourceId = Guid.Empty;
         blueprintSinkId = Guid.Empty;
         blueprintCronSchedule = string.Empty;
         blueprintError = string.Empty;
         showBlueprintModal = true;
+    }
+
+    /// <summary>STEP 1 → STEP 2: a source connection type is chosen; offer its templates.</summary>
+    private void SelectBlueprintSourceType(string systemType)
+    {
+        blueprintSourceType = systemType;
+        selectedBlueprint = null;
+        blueprintError = string.Empty;
+    }
+
+    /// <summary>Back from the template list to the source-type picker.</summary>
+    private void ClearBlueprintSourceType()
+    {
+        if (blueprintInProgress) return;
+        blueprintSourceType = string.Empty;
+        selectedBlueprint = null;
+        blueprintSourceId = Guid.Empty;
+        blueprintError = string.Empty;
     }
 
     private void CloseBlueprintModal()
