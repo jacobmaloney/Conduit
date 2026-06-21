@@ -106,6 +106,7 @@ public static class AttributeTemplateCatalog
             E("employeeID", "EmployeeId"),
             E("userAccountControl", "UserAccountControl", false, "Integer"),
             E("pwdLastSet", "PasswordLastSet", false, "DateTime"),
+            E("lastLogonTimestamp", "LastLogonTimestamp"),
         };
         c[(Systems.ActiveDirectory, "Group")] = new[]
         {
@@ -857,6 +858,7 @@ public static class AttributeTemplateCatalog
             E("mail", "Email"),
             E("title", "JobTitle"),
             E("accountEnabled", "IsActive", false, "Boolean"),
+            E("lastLogin", "LastLogin"),
         };
         c[(Systems.Aws, "Group")] = new[]
         {
