@@ -3642,3 +3642,222 @@ details summary::-webkit-details-marker { color: var(--accent); }
     font-size: 0.85rem;
     font-weight: 600;
 }
+
+/* ==========================================================================
+   CONNECTIONS PAGE — IC "Directory Connections" PARITY PORT
+   --------------------------------------------------------------------------
+   Faithful port of IdentityCenter's center-shared.css connection-list rules
+   (sync-summary-card stat row + sync-project-card list rows + sync-badge +
+   action buttons). IC's source hardcodes its cyan accent (rgba(0,188,212,*)
+   / var(--color-primary)); here the accent is re-sourced to the OPERATIONS
+   section token (--sec-operations = #F97316 orange) defined ONCE in the shared
+   brand-tokens.css, so the page reads orange like IC's Operations section
+   without any hardcoded hex. Scoped under .conn-operations so the orange
+   accent is contained to the Connections surface (see report for scope notes).
+   ========================================================================== */
+.conn-operations {
+    /* Local accent override — everything below references --conn-accent, which
+       points at the shared operations-orange token. Single-sourced. */
+    --conn-accent:      var(--sec-operations, #F97316);
+    --conn-accent-soft: rgba(249, 115, 22, 0.15);
+    --conn-accent-line: rgba(249, 115, 22, 0.18);
+    --conn-accent-faint:rgba(249, 115, 22, 0.06);
+}
+
+/* Header row */
+.conn-operations .conn-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.25rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+.conn-operations .conn-head h2 {
+    font-weight: 700;
+    margin: 0 0 0.25rem 0;
+    color: var(--text-primary, #E4EDFB);
+}
+.conn-operations .conn-head h2 i { color: var(--conn-accent); margin-right: 0.5rem; }
+.conn-operations .conn-head .conn-sub { color: var(--text-secondary, #9DB0CC); margin: 0; }
+.conn-operations .conn-new-btn {
+    background: var(--conn-accent);
+    border: none;
+    color: #0a0e1a;
+    font-weight: 600;
+    padding: 0.5rem 0.9rem;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.conn-operations .conn-new-btn:hover { filter: brightness(1.07); color: #0a0e1a; }
+
+/* Stat row (ports .sync-summary-* ) */
+.conn-operations .sync-summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.conn-operations .sync-summary-card {
+    background: var(--color-surface-card, var(--panel, rgba(15,27,47,0.85)));
+    border: 1px solid var(--conn-accent-line);
+    border-radius: 10px;
+    padding: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.conn-operations .sync-summary-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+}
+.conn-operations .sync-summary-icon.blue   { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.conn-operations .sync-summary-icon.green  { background: rgba(34, 197, 94, 0.15);  color: #4ade80; }
+.conn-operations .sync-summary-icon.yellow { background: rgba(245, 158, 11, 0.15);  color: #fbbf24; }
+.conn-operations .sync-summary-icon.purple { background: rgba(147, 51, 234, 0.15);  color: #c084fc; }
+.conn-operations .sync-summary-icon.orange { background: var(--conn-accent-soft);   color: var(--conn-accent); }
+.conn-operations .sync-summary-content { flex: 1; }
+.conn-operations .sync-summary-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary, #E4EDFB);
+    line-height: 1;
+}
+.conn-operations .sync-summary-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #9DB0CC);
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+/* List rows (ports .sync-project-card + children) */
+.conn-operations .sync-project-card {
+    background: var(--color-surface-card, var(--panel, rgba(15,27,47,0.85)));
+    border: 1px solid var(--conn-accent-line);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+.conn-operations .sync-project-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    border-color: var(--conn-accent);
+}
+.conn-operations .sync-project-card.is-inactive { opacity: 0.62; }
+.conn-operations .sync-project-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+}
+.conn-operations .sync-project-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary, #E4EDFB);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.conn-operations .sync-project-title i { color: var(--conn-accent); }
+.conn-operations .sync-project-description {
+    color: var(--text-secondary, #9DB0CC);
+    font-size: 0.875rem;
+    margin: 0.5rem 0;
+}
+.conn-operations .sync-project-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    color: var(--text-tertiary, #6B809E);
+    font-size: 0.8rem;
+}
+.conn-operations .sync-project-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--conn-accent-faint);
+    border-bottom: 1px solid var(--conn-accent-faint);
+}
+.conn-operations .sync-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.65rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+.conn-operations .sync-badge-connection { background: var(--conn-accent-soft); color: var(--conn-accent); }
+.conn-operations .sync-badge-enabled    { background: rgba(34, 197, 94, 0.15);  color: #4ade80; }
+.conn-operations .sync-badge-disabled   { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
+.conn-operations .sync-badge-scheduled  { background: rgba(245, 158, 11, 0.15);  color: #fbbf24; }
+.conn-operations .sync-badge-warn       { background: rgba(239, 68, 68, 0.15);   color: #f87171; }
+
+/* Action row (ports .sync-project-actions + button variants) */
+.conn-operations .sync-project-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+.conn-operations .sync-project-actions .btn {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.conn-operations .sync-project-actions .btn i { font-size: 0.75rem; }
+.conn-operations .btn-history {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    color: #fff !important;
+}
+.conn-operations .btn-history:hover { filter: brightness(1.08); color: #fff !important; }
+.conn-operations .btn-manage {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--conn-accent-line);
+    color: var(--text-secondary, #9DB0CC);
+}
+.conn-operations .btn-manage:hover {
+    background: var(--conn-accent-faint);
+    border-color: var(--conn-accent);
+    color: var(--conn-accent);
+}
+.conn-operations .btn-test {
+    background: var(--conn-accent-soft);
+    border: 1px solid var(--conn-accent-line);
+    color: var(--conn-accent);
+}
+.conn-operations .btn-test:hover { background: var(--conn-accent-soft); border-color: var(--conn-accent); filter: brightness(1.1); }
+.conn-operations .btn-test:disabled { opacity: 0.6; cursor: not-allowed; }
+.conn-operations .btn-delete {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    color: #f87171;
+}
+.conn-operations .btn-delete:hover:not(:disabled) { background: rgba(239, 68, 68, 0.15); border-color: #f87171; }
+.conn-operations .btn-delete:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Inline per-row test result (ports the card-test-result chip) */
+.conn-operations .card-test-result {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+}
+.conn-operations .card-test-result.ok  { color: #4ade80; }
+.conn-operations .card-test-result.err { color: #f87171; }
