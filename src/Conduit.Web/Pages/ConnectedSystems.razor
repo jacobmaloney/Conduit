@@ -30,39 +30,41 @@
 
 <PageTitle>Connections - Conduit</PageTitle>
 
-<div class="container-fluid conn-operations">
-    @* Connections page rebuilt 2026-06-20 to MATCH IdentityCenter's
-       "Directory Connections" surface (SystemCenter.razor §connections):
-       Directory-Connections header + New Connection, the sync-summary-card
-       stat row, and the sync-project-card vertical LIST of rows. Class names
-       mirror IC's center-shared.css; the ported rules live in conduit.css
-       under .conn-operations and re-source IC's cyan accent to the OPERATIONS
-       orange token (--sec-operations) from the shared brand-tokens.css. The
-       old .head-row/.cards/.sys-card grid was replaced. All real Conduit
+<div class="container-fluid ops-section">
+    @* Connections single-sourced on the SHARED center-shared.css component
+       classes (sync-summary-card stat row + sync-project-card list rows +
+       sync-badge + btn-history/manage/delete), exactly like the re-skinned
+       Sync Projects page. The page wrapper is .ops-section, which re-sources
+       the accent to the OPERATIONS orange token (--sec-operations) and bridges
+       IC's design-token names to Conduit's palette so center-shared.css renders
+       directly — no per-page copy of the component rules. Header uses the same
+       CcTemplate1 as Sync Projects for sibling parity. The only Connections-
+       specific CSS that remains in conduit.css is the small set center-shared
+       does not cover: .sync-summary-icon.orange, .sync-badge-warn, .btn-test,
+       .card-test-result (now scoped under .ops-section). All real Conduit
        actions (Test/Edit/Rename/Deactivate/Delete + dev chrome) are preserved. *@
-    <div class="conn-head">
-        <div>
-            <h2><i class="fas fa-plug"></i>Directory Connections</h2>
-            <p class="conn-sub">Directory and target systems Conduit syncs identities to and from.</p>
-        </div>
-        <div class="head-actions d-flex gap-2">
-            <button class="btn" @onclick="SeedDemo" disabled="@seeding">
+    <CcTemplate1 Title="Directory Connections"
+                 Subtitle="Directory and target systems Conduit syncs identities to and from."
+                 Icon="fas fa-plug"
+                 IconAccent="cyan">
+        <PrimaryAction>
+            <button class="btn btn-outline-secondary" @onclick="SeedDemo" disabled="@seeding">
                 @if (seeding)
                 {
                     <span class="spinner-border spinner-border-sm" role="status"></span>
                 }
                 else
                 {
-                    <i class="oi oi-data-transfer-download"></i>
+                    <i class="oi oi-data-transfer-download me-1"></i>
                 }
                 <span>Seed Demo Data</span>
             </button>
-            <button class="conn-new-btn" @onclick="ShowCreateModal">
-                <i class="fas fa-plus"></i>
+            <button class="btn btn-primary" @onclick="ShowCreateModal">
+                <i class="fas fa-plus me-1"></i>
                 <span>New Connection</span>
             </button>
-        </div>
-    </div>
+        </PrimaryAction>
+    </CcTemplate1>
 
     @if (!string.IsNullOrEmpty(toastError))
     {
