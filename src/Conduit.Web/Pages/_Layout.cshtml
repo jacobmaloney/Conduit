@@ -31,6 +31,11 @@
     @* Shared design system stylesheet (cc-* components), then Conduit-owned
        overrides so consumer rules win where they overlap. *@
     <link rel="stylesheet" href="css/conduit-design.css" />
+    @* Shared component CSS (the "center" look — synced from the brand repo at
+       build, single-sourced with IdentityCenter). Loaded AFTER the design
+       system so its component rules layer on the cc-* base, and BEFORE
+       conduit.css so Conduit-owned overrides still win where they overlap. *@
+    <link href="css/center-shared.css" rel="stylesheet" />
     <link href="css/conduit.css" rel="stylesheet" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />

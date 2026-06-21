@@ -48,6 +48,15 @@
        ════════════════════════════════════════════════════════════════════ -->
   <PropertyGroup>
     <SharedBrandTokens>$(MSBuildProjectDirectory)\..\..\..\brand\css\brand-tokens.css</SharedBrandTokens>
+    <!-- Shared component CSS (the "center" look from IdentityCenter). Now
+         single-sourced in the brand repo so both products run identical
+         component styling (sync-summary-card, sync-project-card, sync-badge,
+         btn-history/manage/delete, split-panel layout). Copied into wwwroot\css
+         and linked from _Layout.cshtml AFTER conduit-design.css and BEFORE
+         conduit.css so Conduit overrides still win where they need to.
+         FAIL-SAFE: copy only runs if the shared file exists; absent brand repo
+         → committed copy stays, build succeeds. -->
+    <SharedCenterCss>$(MSBuildProjectDirectory)\..\..\..\brand\css\components\center-shared.css</SharedCenterCss>
   </PropertyGroup>
   <Target Name="SyncSharedBrandTokens" BeforeTargets="BeforeBuild"
           Condition="Exists('$(SharedBrandTokens)')">
@@ -55,6 +64,13 @@
           DestinationFiles="$(MSBuildProjectDirectory)\wwwroot\css\brand-tokens.css"
           SkipUnchangedFiles="true" OverwriteReadOnlyFiles="true" />
     <Message Importance="high" Text="Brand: synced brand-tokens.css from shared source $(SharedBrandTokens)" />
+  </Target>
+  <Target Name="SyncSharedCenterCss" BeforeTargets="BeforeBuild"
+          Condition="Exists('$(SharedCenterCss)')">
+    <Copy SourceFiles="$(SharedCenterCss)"
+          DestinationFiles="$(MSBuildProjectDirectory)\wwwroot\css\center-shared.css"
+          SkipUnchangedFiles="true" OverwriteReadOnlyFiles="true" />
+    <Message Importance="high" Text="Brand: synced center-shared.css from shared source $(SharedCenterCss)" />
   </Target>
 
 </Project>

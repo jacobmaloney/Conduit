@@ -3861,3 +3861,132 @@ details summary::-webkit-details-marker { color: var(--accent); }
 }
 .conn-operations .card-test-result.ok  { color: #4ade80; }
 .conn-operations .card-test-result.err { color: #f87171; }
+
+/* ==========================================================================
+   OPERATIONS SECTION WRAPPER (.ops-section)  — Change 2
+   --------------------------------------------------------------------------
+   Generalizes the .conn-operations approach into ONE reusable wrapper for the
+   whole SYNC / OPERATIONS nav group (Connections, Sync Projects, Sync Center,
+   Sync History, Schedule Manager, Processing Center). It does two jobs, and
+   ONLY these two, so the shared center-shared.css does all the actual
+   component rendering:
+
+     1) ACCENT  → re-source every accent the shared component CSS reads
+        (--center-accent / --center-gradient-* / --color-primary*, and the
+        conn-* family) to the OPERATIONS section token --sec-operations
+        (#F97316 orange), defined ONCE in the shared brand-tokens.css. No
+        hardcoded hex for the accent itself — change the token, the whole sync
+        area re-tints. (The rgba tints below are alpha ramps of that same
+        orange; kept literal only because CSS can't yet alpha-multiply a hex
+        custom property without color-mix, which is used where supported.)
+
+     2) TOKEN BRIDGE → center-shared.css was authored against IdentityCenter's
+        design-tokens.css var names (--color-surface-card, --color-border,
+        --card-bg, --table-header-bg, --category-card-*, etc.) which do NOT
+        exist in Conduit's palette. Map each to its Conduit equivalent so the
+        ported components render correctly here instead of falling back to
+        unset/transparent. Scoped to .ops-section so Conduit's own pages
+        (Dashboard/Users/Groups/API/Config) keep their normal cyan accent.
+   ========================================================================== */
+.ops-section,
+.conn-operations {
+    /* ---- Operations-orange accent (single-sourced from the shared token) ---- */
+    --accent:            var(--sec-operations, #F97316);
+    --center-accent:        var(--sec-operations, #F97316);
+    --center-gradient-start: var(--sec-operations, #F97316);
+    --center-gradient-end:   #FBBF24;            /* amber tail, matches IC processing theme */
+
+    /* IC component CSS reads --color-primary* for its accents; point them at orange */
+    --color-primary:     var(--sec-operations, #F97316);
+    --color-primary-50:  rgba(249, 115, 22, 0.06);
+    --color-primary-100: rgba(249, 115, 22, 0.14);
+
+    /* conn-* family kept for the already-shipped Connections markup */
+    --conn-accent:       var(--sec-operations, #F97316);
+    --conn-accent-soft:  rgba(249, 115, 22, 0.15);
+    --conn-accent-line:  rgba(249, 115, 22, 0.18);
+    --conn-accent-faint: rgba(249, 115, 22, 0.06);
+
+    /* ---- Token bridge: IC design-tokens.css names → Conduit palette ---- */
+    --color-surface-card:   var(--panel, rgba(15,27,47,0.85));
+    --color-surface-hover:  var(--panel-hi, rgba(21,38,63,0.85));
+    --color-surface-inset:  var(--panel-2, rgba(18,32,56,0.70));
+    --surface-inset:        var(--panel-2, rgba(18,32,56,0.70));
+    --card-bg:              var(--panel, rgba(15,27,47,0.85));
+    --table-header-bg:      var(--panel-2, rgba(18,32,56,0.90));
+    --color-border:         var(--border, rgba(120,160,220,0.10));
+    --color-border-default: var(--border, rgba(120,160,220,0.10));
+    --color-text-primary:   var(--text, #E4EDFB);
+    --color-text-secondary: var(--text-2, #9DB0CC);
+    --color-text-tertiary:  var(--text-3, #6B809E);
+    --text-tertiary:        var(--text-3, #6B809E);
+    --color-success:        var(--ok, #10B981);
+    --color-warning:        var(--warn, #F59E0B);
+    --color-danger:         var(--bad, #EF4444);
+    --danger-subtle:        rgba(239, 68, 68, 0.12);
+    --warning-subtle:       rgba(245, 158, 11, 0.12);
+    --radius-md:            var(--radius, 10px);
+
+    /* category cards (Auto-Generate template picker) — orange selection state */
+    --category-card-icon-bg:        rgba(249, 115, 22, 0.10);
+    --category-card-selected-bg:    rgba(249, 115, 22, 0.14);
+    --category-card-selected-border: var(--sec-operations, #F97316);
+}
+
+/* Interactive states that must read orange explicitly (cover anything the
+   shared CSS hardcoded to its cyan rather than via a variable). */
+.ops-section .nav-tabs .nav-link.active,
+.ops-section .card-tab.active,
+.ops-section .center-tab.active {
+    color: var(--sec-operations, #F97316);
+    border-color: var(--sec-operations, #F97316);
+}
+.ops-section a:not(.btn):hover { color: var(--sec-operations, #F97316); }
+.ops-section :focus-visible { outline-color: var(--sec-operations, #F97316); }
+.ops-section .btn-primary,
+.ops-section .conn-new-btn {
+    background: var(--sec-operations, #F97316);
+    border-color: var(--sec-operations, #F97316);
+    color: #0a0e1a;
+}
+.ops-section .sync-badge.active,
+.ops-section .badge.bg-primary {
+    background: rgba(249, 115, 22, 0.15) !important;
+    color: var(--sec-operations, #F97316) !important;
+}
+
+/* ---- Re-tint the prominent CYAN LITERALS baked into center-shared.css ----
+   The shared component file hardcodes a handful of bright cyan values
+   (rgba(0,188,212,*) ≥0.2, #22d3ee, #67e8f9) that are literals, not vars, so
+   the token bridge above cannot reach them. Inside .ops-section these would
+   read as the WRONG section color. Override exactly that bounded set to orange
+   so the sync area is coherently operations-orange. Faint chrome borders
+   (≤0.15 alpha) are left as-is — they read neutral and match IC. */
+.ops-section .center-list-scrollable::-webkit-scrollbar-thumb {
+    background: rgba(249, 115, 22, 0.30);
+}
+.ops-section .center-list-scrollable::-webkit-scrollbar-thumb:hover {
+    background: rgba(249, 115, 22, 0.45);
+}
+.ops-section .attribute-value code,
+.ops-section .workflow-step-card .step-details code {
+    color: var(--sec-operations, #F97316);
+}
+.ops-section .object-header-border-view {
+    border-bottom-color: rgba(249, 115, 22, 0.25);
+}
+.ops-section .workflow-step-card {
+    border-color: rgba(249, 115, 22, 0.25);
+}
+.ops-section .workflow-step-card:hover {
+    border-color: rgba(249, 115, 22, 0.40);
+}
+.ops-section .workflow-step-card .btn-outline-secondary:hover {
+    border-color: rgba(249, 115, 22, 0.35);
+}
+.ops-section .workflow-section-card {
+    border-color: rgba(249, 115, 22, 0.30);
+}
+.ops-section .btn-schedule:hover {
+    border-color: rgba(249, 115, 22, 0.25);
+}
