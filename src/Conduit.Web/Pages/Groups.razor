@@ -31,6 +31,14 @@
         </Actions>
     </PageHeader>
 
+    @if (!string.IsNullOrEmpty(toastError))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            <i class="fas fa-exclamation-circle me-2"></i>@toastError
+            <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
+        </div>
+    }
+
     @if (loading)
     {
         <div class="text-center py-5">
@@ -334,6 +342,10 @@
 }
 
 @code {
+    // Operator-facing surface for load/save failures that were previously
+    // swallowed to Console.WriteLine (save/delete group, load available users).
+    private string toastError = string.Empty;
+
     private static string GroupInitials(ScimGroup g)
     {
         var name = g.DisplayName?.Trim();
@@ -474,6 +486,7 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error saving group: {ex.Message}");
+            toastError = $"Could not save group: {ex.Message}";
         }
     }
 
@@ -492,6 +505,7 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error deleting group: {ex.Message}");
+            toastError = $"Could not delete group: {ex.Message}";
         }
     }
 
@@ -625,6 +639,7 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error loading available users: {ex.Message}");
+            toastError = $"Could not load available users to add: {ex.Message}";
             availableUsers = new List<ScimUser>();
         }
     }

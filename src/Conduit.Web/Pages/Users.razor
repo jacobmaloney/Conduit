@@ -34,6 +34,14 @@
         </Actions>
     </PageHeader>
 
+    @if (!string.IsNullOrEmpty(toastError))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            <i class="fas fa-exclamation-circle me-2"></i>@toastError
+            <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
+        </div>
+    }
+
     @if (loading)
     {
         <div class="text-center py-5">
@@ -539,6 +547,10 @@
 }
 
 @code {
+    // Operator-facing surface for load failures that were previously swallowed
+    // to Console.WriteLine (e.g. loading a user's group memberships).
+    private string toastError = string.Empty;
+
     // ── User detail drawer state ────────────────────────────────────────
     private ScimUser? drawerUser;
     private string drawerTab = "overview";
@@ -975,6 +987,7 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error loading user groups: {ex.Message}");
+            toastError = $"Could not load group memberships: {ex.Message}";
         }
     }
     

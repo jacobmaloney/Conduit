@@ -59,6 +59,14 @@
         </div>
     </div>
 
+    @if (!string.IsNullOrEmpty(toastError))
+    {
+        <div class="alert alert-danger alert-dismissible">
+            <i class="fas fa-exclamation-circle me-2"></i>@toastError
+            <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
+        </div>
+    }
+
     @if (lastSeedResult != null)
     {
         <div class="alert alert-success">
@@ -1459,6 +1467,9 @@
     private Guid? editingId;
     private Tenant form = new();
     private string errorMessage = "";
+    // Operator-facing surface for non-modal load failures that were previously
+    // swallowed to Console.WriteLine (e.g. the endpoints-view token load).
+    private string toastError = string.Empty;
     private DemoSeedService.SeedResult? lastSeedResult;
 
     // In-form live connectivity test (create + edit). Mirrors the Credentials &
@@ -1901,7 +1912,8 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to load tokens for endpoints view: {ex.Message}");
+            Logger.LogWarning(ex, "Failed to load tokens for endpoints view (tenant {TenantId})", s.TenantId);
+            toastError = $"Could not load endpoint tokens for '{s.Slug}': {ex.Message}";
             endpointTokens = new();
         }
     }
