@@ -3400,6 +3400,75 @@ details summary::-webkit-details-marker { color: var(--accent); }
     margin-bottom: 4px;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Workflow CARD idiom (ported from IdentityCenter SyncProjectWizard).
+   Expandable workflow cards → expandable step cards with reorder arrows,
+   a Mappings count badge, gear (Settings), Scope, and delete. Uses the brand
+   tokens so it tracks the shared palette.
+   ───────────────────────────────────────────────────────────────────────── */
+.workflow-cards-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+.workflow-cards-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--text-3);
+    border: 1px dashed var(--border-2, var(--border));
+    border-radius: var(--radius);
+    background: var(--panel, var(--surface));
+}
+.workflow-section-card {
+    border: 1px solid var(--border-2, var(--border));
+    border-radius: var(--radius);
+    background: var(--panel, var(--surface));
+    margin-bottom: 14px;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+.workflow-section-card > .workflow-header {
+    padding: 12px 14px;
+    background: var(--panel-2, var(--surface-2));
+    border-bottom: 1px solid var(--border);
+}
+.workflow-settings-strip {
+    padding: 12px 14px;
+    background: var(--panel-hi, var(--surface-inset));
+    border-bottom: 1px solid var(--border);
+}
+.workflow-body {
+    padding: 12px 14px;
+}
+.workflow-step-card {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm);
+    background: var(--bg-2, var(--bg));
+    padding: 10px 12px;
+    margin-bottom: 10px;
+}
+.workflow-step-card:last-of-type { margin-bottom: 6px; }
+.workflow-step-card .step-header { gap: 12px; }
+.workflow-step-card .step-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+/* Nested Attribute Mappings modal table */
+.mapping-modal-table th {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+    border-bottom: 1px solid var(--border-2, var(--border));
+}
+.mapping-modal-table td { vertical-align: middle; }
+
 /* Sync project create wizard (step-by-step header + body) */
 .sync-wizard-steps {
     display: flex;

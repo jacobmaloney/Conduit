@@ -1769,18 +1769,27 @@
                     }
                     else if (formTab == "workflows")
                     {
-                        @* ────────── Phase 7 Workflow tree editor ──────────
-                           Tree on the left (Workflows → Steps), detail panel on the right.
-                           Mapping steps reuse the existing AttributeMapping + Scope shape
-                           via per-step versions; person-aware steps just need name + enable. *@
-                        <div class="row g-3">
-                            <div class="col-md-4 workflow-tree-col">
-                                <div class="workflow-tree-toolbar">
-                                    <h6 class="form-section-title mb-0">Workflows</h6>
-                                    <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddWorkflow">
-                                        <i class="fas fa-plus me-1"></i>Add workflow
-                                    </button>
-                                </div>
+                        @* ────────── Workflow CARD editor (IC idiom) ──────────
+                           Expandable workflow cards, each holding expandable step
+                           CARDS with reorder arrows, a Mappings button + count badge,
+                           a gear (Settings), a Scope/Filter button, and delete — plus
+                           "+ Add Step". The per-step Attribute Mappings open in a nested
+                           modal (mappingModalStepId), matching IdentityCenter's
+                           SyncProjectWizard. This is a PRESENTATION swap over the
+                           existing Phase 7/8 data + handlers — nothing about persistence
+                           or the per-step mapping/scope model changed. *@
+                        <div class="workflow-cards-toolbar">
+                            <h6 class="form-section-title mb-0">
+                                <i class="fas fa-layer-group me-2"></i>Workflows (@workflowsForm.Count)
+                            </h6>
+                            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddWorkflow">
+                                <i class="fas fa-plus me-1"></i>Add workflow
+                            </button>
+                        </div>
+                        <p class="text-muted small mb-3">Click a workflow to expand its steps. Each step's <strong>Mappings</strong> button opens the attribute editor; the gear edits step settings; Scope sets a per-step filter.</p>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-12">
 
                                 @* ───── Bulk all-class step builder (IC-parity) ─────
                                    The manual analogue of Auto-Generate, inside an existing
@@ -1824,340 +1833,301 @@
                                         </div>
                                     }
                                 </div>
-
-                                @if (workflowsForm.Count == 0)
-                                {
-                                    <div class="workflow-tree-empty">
-                                        No workflows yet. Add one to compose multi-step pipelines (Mapping → PersonMatch → PersonCreate → AssignManager).
-                                    </div>
-                                }
-                                else
-                                {
-                                    <ul class="workflow-tree">
-                                        @foreach (var wf in workflowsForm)
-                                        {
-                                            var wfRef = wf;
-                                            <li class="workflow-tree-wf @(selectedWorkflowId == wfRef.Id ? "selected" : "")">
-                                                <div class="workflow-tree-wf-head" @onclick="() => SelectWorkflow(wfRef.Id)">
-                                                    <i class="fas @(wfRef.Enabled ? "fa-toggle-on text-success" : "fa-toggle-off text-muted") me-2"></i>
-                                                    <span class="workflow-tree-wf-name">@wfRef.Name</span>
-                                                </div>
-                                                <ul class="workflow-tree-steps">
-                                                    @foreach (var st in StepsFor(wfRef.Id))
-                                                    {
-                                                        var stRef = st;
-                                                        <li class="workflow-tree-step @(selectedStepId == stRef.Id ? "selected" : "")"
-                                                            @onclick="() => SelectStep(stRef.Id)">
-                                                            <i class="fas fa-circle-notch me-2 text-muted"></i>
-                                                            <span class="workflow-tree-step-name">@stRef.Name</span>
-                                                            <span class="badge bg-secondary ms-2">@stRef.StepType</span>
-                                                        </li>
-                                                    }
-                                                    <li class="workflow-tree-add-step">
-                                                        <button type="button" class="btn btn-link btn-sm" @onclick="() => AddStep(wfRef.Id)">
-                                                            <i class="fas fa-plus me-1"></i>Add step
-                                                        </button>
-                                                    </li>
-                                                </ul>
-                                            </li>
-                                        }
-                                    </ul>
-                                }
-                            </div>
-                            <div class="col-md-8 workflow-detail-col">
-                                @if (SelectedStep is not null)
-                                {
-                                    var st = SelectedStep;
-                                    <div class="workflow-detail-panel">
-                                        <div class="workflow-detail-head">
-                                            <h6 class="form-section-title mb-0">Step</h6>
-                                            <div class="workflow-detail-actions">
-                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveStepUp" title="Move up">
-                                                    <i class="fas fa-arrow-up"></i>
-                                                </button>
-                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveStepDown" title="Move down">
-                                                    <i class="fas fa-arrow-down"></i>
-                                                </button>
-                                                <button type="button" class="btn btn-link btn-sm text-danger" @onclick="DeleteStep" title="Delete">
-                                                    <i class="fas fa-trash"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div class="row g-3 mt-1">
-                                            <div class="col-md-7">
-                                                <label class="form-label fw-semibold">Name</label>
-                                                <input class="form-control" @bind="st.Name" />
-                                            </div>
-                                            <div class="col-md-5">
-                                                <label class="form-label fw-semibold">Type</label>
-                                                <select class="form-select" @bind="st.StepType">
-                                                    <option value="Mapping">Mapping (source → target)</option>
-                                                    <option value="PersonMatch">PersonMatch</option>
-                                                    <option value="PersonCreate">PersonCreate</option>
-                                                    <option value="AssignManager">AssignManager</option>
-                                                    <option value="AssignGroupOwner">AssignGroupOwner</option>
-                                                    <option value="Custom">Custom (no-op)</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                        @if (string.Equals(st.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            <div class="row g-3 mt-1">
-                                                <div class="col-md-7">
-                                                    <label class="form-label fw-semibold">Object Class</label>
-                                                    @* V23 fix: option values MUST match what the generator + GetObjectClasses
-                                                       emit (lowercase native class names, IC convention) so a generated step's
-                                                       persisted ObjectClass selects an existing <option> instead of rendering
-                                                       blank. StepObjectClassOptions adds an extra "(current)" entry for any
-                                                       class outside the known set so the value is never silently dropped. *@
-                                                    <select class="form-select" @bind="st.ObjectClass">
-                                                        @foreach (var opt in StepObjectClassOptionsFor(st.ObjectClass))
-                                                        {
-                                                            <option value="@opt.Value">@opt.Label</option>
-                                                        }
-                                                    </select>
-                                                    <small class="form-text text-muted">
-                                                        The object class this step reads from the source. Each step in a
-                                                        project can target a different class.
-                                                    </small>
-                                                </div>
-                                                <div class="col-md-5 d-flex align-items-end">
-                                                    <button type="button" class="btn btn-outline-primary btn-sm w-100"
-                                                            @onclick="@(() => AutoMapStepForClass(st.Id))"
-                                                            disabled="@(form.SourceTenantId == Guid.Empty)"
-                                                            title="Populate this step's mappings from the template for its object class">
-                                                        <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        }
-                                        <div class="form-check form-switch mt-3">
-                                            <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{st.Id}")" @bind="st.Enabled" />
-                                            <label class="form-check-label" for="@($"stepEnabled_{st.Id}")">
-                                                <span class="badge @(st.Enabled ? "bg-success" : "bg-secondary")">@(st.Enabled ? "Enabled" : "Disabled")</span>
-                                            </label>
-                                        </div>
-                                        <p class="text-muted small mt-3 mb-0">
-                                            @switch (st.StepType)
-                                            {
-                                                case "Mapping":
-                                                    <text>Runs the source→mapping→sink pump. By default this step inherits the project-level Mappings + Scope; uncheck either toggle below to override just for this step.</text>
-                                                    break;
-                                                case "PersonMatch":
-                                                    <text>Calls the sink's MatchPerson against each upstream object. Only the IC sink implements this today.</text>
-                                                    break;
-                                                case "PersonCreate":
-                                                    <text>Creates a person record on the sink for any upstream object that the prior PersonMatch missed.</text>
-                                                    break;
-                                                case "AssignManager":
-                                                    <text>Sets the manager link on each upstream object. AD writes <code>manager</code>; Entra calls Graph Manager.Ref; IC patches the Identity row. Okta, Google, and SCIM also wired in Phase 8.</text>
-                                                    break;
-                                                case "AssignGroupOwner":
-                                                    <text>Sets the owner / managedBy on each upstream group. Same per-sink wiring as AssignManager.</text>
-                                                    break;
-                                                default:
-                                                    <text>Reserved.</text>
-                                                    break;
-                                            }
-                                        </p>
-
-                                        @* ───── Phase 8: per-step Mapping + Scope editors ───── *@
-                                        @if (string.Equals(st.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            var stepId = st.Id;
-                                            var inheritMappings = !stepMappingsInherit.TryGetValue(stepId, out var inhM) || inhM;
-                                            var inheritScope = !stepScopeInherit.TryGetValue(stepId, out var inhS) || inhS;
-
-                                            <div class="workflow-step-section">
-                                                <div class="workflow-step-section-head">
-                                                    <h6 class="form-section-title mb-0">
-                                                        <i class="fas fa-filter me-2"></i>Step Scope
-                                                    </h6>
-                                                    <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" id="@($"scopeInherit_{stepId}")"
-                                                               checked="@inheritScope"
-                                                               @onchange="@(e => OnStepScopeInheritChanged(stepId, e))" />
-                                                        <label class="form-check-label small" for="@($"scopeInherit_{stepId}")">
-                                                            Inherit from project Scope tab
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                                @if (!inheritScope)
-                                                {
-                                                    var scope = GetStepScope(stepId);
-                                                    var stepInc = scope.GetIncludedBaseList();
-                                                    var stepBlk = scope.GetExcludedBaseList();
-                                                    <div class="row g-3 mt-1">
-                                                        <div class="col-md-7">
-                                                            <label class="form-label fw-semibold">Base DN</label>
-                                                            <div class="input-group">
-                                                                <input class="form-control" @bind="scope.BaseDN" placeholder="DC=demo,DC=local — or blank for source's defaultNamingContext" />
-                                                                <button type="button" class="btn btn-outline-primary" @onclick="@(() => OpenStepScopeBrowser(stepId))" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick multiple Included / Blocked containers for this step">
-                                                                    <i class="bi bi-folder-symlink me-1"></i>Scope Locations
-                                                                </button>
-                                                            </div>
-                                                            @if (stepInc.Count > 1 || stepBlk.Count > 0)
-                                                            {
-                                                                <small class="form-text text-muted">
-                                                                    <i class="bi bi-check-circle-fill text-success me-1"></i>@stepInc.Count included
-                                                                    @if (stepBlk.Count > 0)
-                                                                    {
-                                                                        <span><i class="bi bi-slash-circle-fill text-danger ms-2 me-1"></i>@stepBlk.Count blocked</span>
-                                                                    }
-                                                                </small>
-                                                            }
-                                                        </div>
-                                                        <div class="col-md-5">
-                                                            <label class="form-label fw-semibold">Page size</label>
-                                                            <input class="form-control" type="number" min="1" max="10000" @bind="scope.PageSize" />
-                                                        </div>
-                                                    </div>
-                                                    <div class="row g-3 mt-1">
-                                                        <div class="col-md-9">
-                                                            <label class="form-label fw-semibold">LDAP filter override</label>
-                                                            <input class="form-control" @bind="scope.LdapFilter" placeholder="(leave blank for default for object class)" />
-                                                        </div>
-                                                        <div class="col-md-3">
-                                                            <label class="form-label fw-semibold">Max objects</label>
-                                                            <input class="form-control" type="number" min="0" @bind="scope.MaxObjects" />
-                                                        </div>
-                                                    </div>
-                                                }
-                                                else
-                                                {
-                                                    <p class="text-muted small mt-2 mb-0">
-                                                        This step uses the project-level Scope. Uncheck the toggle above to override only for this step.
-                                                    </p>
-                                                }
-                                            </div>
-
-                                            <div class="workflow-step-section">
-                                                <div class="workflow-step-section-head">
-                                                    <h6 class="form-section-title mb-0">
-                                                        <i class="fas fa-exchange-alt me-2"></i>Step Mappings
-                                                    </h6>
-                                                    <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" id="@($"mappingsInherit_{stepId}")"
-                                                               checked="@inheritMappings"
-                                                               @onchange="@(e => OnStepMappingsInheritChanged(stepId, e))" />
-                                                        <label class="form-check-label small" for="@($"mappingsInherit_{stepId}")">
-                                                            Inherit from project Mappings tab
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                                @if (!inheritMappings)
-                                                {
-                                                    var rows = GetStepMappings(stepId);
-                                                    <div class="mapping-editor-toolbar mt-1">
-                                                        <span class="small text-muted">
-                                                            @rows.Count rule@(rows.Count == 1 ? "" : "s") — blank = passthrough at runtime.
-                                                        </span>
-                                                        <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => AddStepMappingRow(stepId)">
-                                                            <i class="fas fa-plus me-1"></i>Add rule
-                                                        </button>
-                                                    </div>
-                                                    @if (rows.Count == 0)
-                                                    {
-                                                        <div class="mapping-editor-empty">
-                                                            No step-scoped mappings. Add a rule or re-check "Inherit from project Mappings tab".
-                                                        </div>
-                                                    }
-                                                    else
-                                                    {
-                                                        <table class="mapping-editor-table">
-                                                            <thead>
-                                                                <tr>
-                                                                    <th>Source attribute</th>
-                                                                    <th>Target attribute</th>
-                                                                    <th>Transform (optional)</th>
-                                                                    <th class="text-center">Req</th>
-                                                                    <th></th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody>
-                                                                @for (int i = 0; i < rows.Count; i++)
-                                                                {
-                                                                    var idx = i;
-                                                                    var rule = rows[idx];
-                                                                    <tr>
-                                                                        <td><input class="form-control" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
-                                                                        <td><input class="form-control" @bind="rule.SinkAttribute" placeholder="userName" /></td>
-                                                                        <td><input class="form-control" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
-                                                                        <td class="text-center"><input type="checkbox" class="form-check-input" @bind="rule.IsRequired" /></td>
-                                                                        <td>
-                                                                            <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => RemoveStepMappingRow(stepId, idx)" title="Remove">
-                                                                                <i class="fas fa-times"></i>
-                                                                            </button>
-                                                                        </td>
-                                                                    </tr>
-                                                                }
-                                                            </tbody>
-                                                        </table>
-                                                    }
-                                                    <div class="mapping-transform-hint">
-                                                        Transforms: <code>upper</code>, <code>lower</code>, <code>trim</code>, <code>prefix:X</code>, <code>suffix:X</code>,
-                                                        <code>substring:N</code>, <code>substring:N:M</code>, <code>replace:OLD:NEW</code>, <code>default:VAL</code>.
-                                                        Chain with <code>|</code>.
-                                                    </div>
-                                                }
-                                                else
-                                                {
-                                                    <p class="text-muted small mt-2 mb-0">
-                                                        This step uses the project-level Mappings. Uncheck the toggle above to override only for this step.
-                                                    </p>
-                                                }
-                                            </div>
-                                        }
-                                    </div>
-                                }
-                                else if (SelectedWorkflow is not null)
-                                {
-                                    var wf = SelectedWorkflow;
-                                    <div class="workflow-detail-panel">
-                                        <div class="workflow-detail-head">
-                                            <h6 class="form-section-title mb-0">Workflow</h6>
-                                            <div class="workflow-detail-actions">
-                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveWorkflowUp" title="Move up">
-                                                    <i class="fas fa-arrow-up"></i>
-                                                </button>
-                                                <button type="button" class="btn btn-link btn-sm" @onclick="MoveWorkflowDown" title="Move down">
-                                                    <i class="fas fa-arrow-down"></i>
-                                                </button>
-                                                <button type="button" class="btn btn-link btn-sm text-danger" @onclick="DeleteWorkflow" title="Delete">
-                                                    <i class="fas fa-trash"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div class="row g-3 mt-1">
-                                            <div class="col-md-12">
-                                                <label class="form-label fw-semibold">Name</label>
-                                                <input class="form-control" @bind="wf.Name" />
-                                            </div>
-                                            <div class="col-md-12">
-                                                <label class="form-label fw-semibold">Description</label>
-                                                <textarea class="form-control" rows="2" @bind="wf.Description"></textarea>
-                                            </div>
-                                        </div>
-                                        <div class="form-check form-switch mt-3">
-                                            <input class="form-check-input" type="checkbox" id="@($"wfEnabled_{wf.Id}")" @bind="wf.Enabled" />
-                                            <label class="form-check-label" for="@($"wfEnabled_{wf.Id}")">
-                                                <span class="badge @(wf.Enabled ? "bg-success" : "bg-secondary")">@(wf.Enabled ? "Enabled" : "Disabled")</span>
-                                            </label>
-                                        </div>
-                                    </div>
-                                }
-                                else
-                                {
-                                    <div class="workflow-detail-empty">
-                                        Select a workflow or step on the left to edit it.
-                                    </div>
-                                }
                             </div>
                         </div>
+
+                        @if (workflowsForm.Count == 0)
+                        {
+                            <div class="workflow-cards-empty">
+                                <i class="fas fa-layer-group me-2"></i>No workflows yet. Add one to compose multi-step pipelines (Mapping → PersonMatch → PersonCreate → AssignManager).
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var wf in workflowsForm)
+                            {
+                                var wfRef = wf;
+                                var wfIndex = workflowsForm.IndexOf(wfRef);
+                                var wfExpanded = expandedWorkflows.Contains(wfRef.Id);
+                                var wfSettings = expandedWorkflowSettings.Contains(wfRef.Id);
+                                var wfSteps = StepsFor(wfRef.Id);
+                                <div class="workflow-section-card">
+                                    @* Workflow header row *@
+                                    <div class="workflow-header d-flex justify-content-between align-items-center">
+                                        <div class="d-flex align-items-center flex-grow-1">
+                                            <div class="btn-group btn-group-sm me-3" role="group">
+                                                <button type="button" class="btn btn-outline-secondary"
+                                                        @onclick="() => MoveWorkflowUpById(wfRef.Id)"
+                                                        disabled="@(wfIndex == 0)" title="Move Up">
+                                                    <i class="fas fa-arrow-up"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-outline-secondary"
+                                                        @onclick="() => MoveWorkflowDownById(wfRef.Id)"
+                                                        disabled="@(wfIndex == workflowsForm.Count - 1)" title="Move Down">
+                                                    <i class="fas fa-arrow-down"></i>
+                                                </button>
+                                            </div>
+                                            <span class="badge bg-primary me-2">#@(wfIndex + 1)</span>
+                                            <strong>@wfRef.Name</strong>
+                                            <span class="badge @(wfRef.Enabled ? "bg-success" : "bg-secondary") ms-2">@(wfRef.Enabled ? "Enabled" : "Disabled")</span>
+                                        </div>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <button type="button" class="btn btn-sm btn-outline-info"
+                                                    @onclick="() => ToggleWorkflowExpanded(wfRef.Id)"
+                                                    title="@(wfExpanded ? "Collapse" : "Expand")">
+                                                <i class="fas @(wfExpanded ? "fa-chevron-up" : "fa-chevron-down") me-1"></i>
+                                                @wfSteps.Count step(s)
+                                            </button>
+                                            <button type="button" class="btn btn-sm @(wfSettings ? "btn-info" : "btn-outline-secondary")"
+                                                    @onclick="() => ToggleWorkflowSettings(wfRef.Id)" title="Workflow Settings">
+                                                <i class="fas fa-cog"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-danger"
+                                                    @onclick="() => DeleteWorkflowById(wfRef.Id)" title="Delete Workflow">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    @* Inline workflow settings (gear) *@
+                                    @if (wfSettings)
+                                    {
+                                        <div class="workflow-settings-strip">
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <label class="form-label fw-semibold">Name</label>
+                                                    <input class="form-control form-control-sm" @bind="wfRef.Name" @bind:after="MarkWorkflowsDirty" />
+                                                </div>
+                                                <div class="col-md-6 d-flex align-items-end">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" id="@($"wfEnabled_{wfRef.Id}")" @bind="wfRef.Enabled" @bind:after="MarkWorkflowsDirty" />
+                                                        <label class="form-check-label" for="@($"wfEnabled_{wfRef.Id}")">Enabled</label>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <label class="form-label fw-semibold">Description</label>
+                                                    <textarea class="form-control form-control-sm" rows="2" @bind="wfRef.Description" @bind:after="MarkWorkflowsDirty"></textarea>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+
+                                    @* Expandable steps *@
+                                    @if (wfExpanded)
+                                    {
+                                        <div class="workflow-body">
+                                            @if (wfSteps.Count > 0)
+                                            {
+                                                @for (int si = 0; si < wfSteps.Count; si++)
+                                                {
+                                                    var step = wfSteps[si];
+                                                    var stepRef = step;
+                                                    var stepIndex = si;
+                                                    var isFirstStep = stepIndex == 0;
+                                                    var isLastStep = stepIndex == wfSteps.Count - 1;
+                                                    var isMappingStep = string.Equals(stepRef.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase);
+                                                    var stepBadgeClass = stepRef.StepType switch
+                                                    {
+                                                        "Mapping" => "bg-primary",
+                                                        "PersonMatch" => "bg-info",
+                                                        "PersonCreate" => "bg-success",
+                                                        "AssignManager" => "bg-warning text-dark",
+                                                        "AssignGroupOwner" => "bg-warning text-dark",
+                                                        _ => "bg-secondary"
+                                                    };
+                                                    var mapCount = StepMappingCount(stepRef.Id);
+                                                    var settingsOpen = expandedStepSettings.Contains(stepRef.Id);
+                                                    var scopeOpen = expandedStepScope.Contains(stepRef.Id);
+
+                                                    <div class="workflow-step-card">
+                                                        <div class="step-header d-flex justify-content-between align-items-start">
+                                                            <div class="flex-grow-1">
+                                                                <div class="d-flex align-items-center">
+                                                                    <div class="btn-group btn-group-sm me-2">
+                                                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                                                @onclick="() => MoveStepUpById(stepRef.Id)" disabled="@isFirstStep" title="Move Up">
+                                                                            <i class="fas fa-arrow-up"></i>
+                                                                        </button>
+                                                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                                                @onclick="() => MoveStepDownById(stepRef.Id)" disabled="@isLastStep" title="Move Down">
+                                                                            <i class="fas fa-arrow-down"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                    <span class="badge bg-secondary me-2">#@(stepIndex + 1)</span>
+                                                                    <strong>@stepRef.Name</strong>
+                                                                    <span class="badge @stepBadgeClass ms-2">@stepRef.StepType</span>
+                                                                    @if (isMappingStep && !string.IsNullOrWhiteSpace(stepRef.ObjectClass))
+                                                                    {
+                                                                        <span class="badge bg-dark ms-2">@stepRef.ObjectClass</span>
+                                                                    }
+                                                                    @if (!stepRef.Enabled)
+                                                                    {
+                                                                        <span class="badge bg-secondary ms-2">Disabled</span>
+                                                                    }
+                                                                </div>
+                                                            </div>
+                                                            <div class="step-actions">
+                                                                @if (isMappingStep)
+                                                                {
+                                                                    <button type="button" class="btn btn-sm btn-primary"
+                                                                            @onclick="() => OpenMappingModal(stepRef.Id)" title="Edit Attribute Mappings">
+                                                                        <i class="fas fa-exchange-alt me-1"></i>Mappings
+                                                                        @if (mapCount > 0)
+                                                                        {
+                                                                            <span class="badge bg-light text-primary ms-1">@mapCount</span>
+                                                                        }
+                                                                    </button>
+                                                                    <button type="button" class="btn btn-sm @(scopeOpen ? "btn-info" : "btn-outline-secondary")"
+                                                                            @onclick="() => ToggleStepScope(stepRef.Id)" title="Step Scope / Filter">
+                                                                        <i class="fas fa-filter me-1"></i>Scope
+                                                                    </button>
+                                                                }
+                                                                <button type="button" class="btn btn-sm @(settingsOpen ? "btn-info" : "btn-outline-secondary")"
+                                                                        @onclick="() => ToggleStepSettings(stepRef.Id)" title="Step Settings">
+                                                                    <i class="fas fa-cog me-1"></i>Settings
+                                                                </button>
+                                                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                                                        @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">
+                                                                    <i class="fas fa-trash fa-sm"></i>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+
+                                                        @* Inline step settings (gear) *@
+                                                        @if (settingsOpen)
+                                                        {
+                                                            <div class="workflow-settings-strip">
+                                                                <div class="row g-3">
+                                                                    <div class="col-md-7">
+                                                                        <label class="form-label fw-semibold">Name</label>
+                                                                        <input class="form-control form-control-sm" @bind="stepRef.Name" @bind:after="MarkWorkflowsDirty" />
+                                                                    </div>
+                                                                    <div class="col-md-5">
+                                                                        <label class="form-label fw-semibold">Type</label>
+                                                                        <select class="form-select form-select-sm" @bind="stepRef.StepType" @bind:after="MarkWorkflowsDirty">
+                                                                            <option value="Mapping">Mapping (source → target)</option>
+                                                                            <option value="PersonMatch">PersonMatch</option>
+                                                                            <option value="PersonCreate">PersonCreate</option>
+                                                                            <option value="AssignManager">AssignManager</option>
+                                                                            <option value="AssignGroupOwner">AssignGroupOwner</option>
+                                                                            <option value="Custom">Custom (no-op)</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    @if (isMappingStep)
+                                                                    {
+                                                                        <div class="col-md-7">
+                                                                            <label class="form-label fw-semibold">Object Class</label>
+                                                                            <select class="form-select form-select-sm" @bind="stepRef.ObjectClass" @bind:after="MarkWorkflowsDirty">
+                                                                                @foreach (var opt in StepObjectClassOptionsFor(stepRef.ObjectClass))
+                                                                                {
+                                                                                    <option value="@opt.Value">@opt.Label</option>
+                                                                                }
+                                                                            </select>
+                                                                            <small class="form-text text-muted">Each step in a project can target a different class.</small>
+                                                                        </div>
+                                                                        <div class="col-md-5 d-flex align-items-end">
+                                                                            <button type="button" class="btn btn-outline-primary btn-sm w-100"
+                                                                                    @onclick="@(() => AutoMapStepForClass(stepRef.Id))"
+                                                                                    disabled="@(form.SourceTenantId == Guid.Empty)"
+                                                                                    title="Populate this step's mappings from the template for its object class">
+                                                                                <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
+                                                                            </button>
+                                                                        </div>
+                                                                    }
+                                                                    <div class="col-md-12">
+                                                                        <div class="form-check form-switch">
+                                                                            <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{stepRef.Id}")" @bind="stepRef.Enabled" @bind:after="MarkWorkflowsDirty" />
+                                                                            <label class="form-check-label" for="@($"stepEnabled_{stepRef.Id}")">Enabled</label>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <p class="text-muted small mt-2 mb-0">@StepTypeHint(stepRef.StepType)</p>
+                                                            </div>
+                                                        }
+
+                                                        @* Inline per-step Scope (Filter button) *@
+                                                        @if (scopeOpen && isMappingStep)
+                                                        {
+                                                            var stepId = stepRef.Id;
+                                                            var inheritScope = !stepScopeInherit.TryGetValue(stepId, out var inhS) || inhS;
+                                                            <div class="workflow-settings-strip">
+                                                                <div class="workflow-step-section-head">
+                                                                    <h6 class="form-section-title mb-0"><i class="fas fa-filter me-2"></i>Step Scope</h6>
+                                                                    <div class="form-check form-switch">
+                                                                        <input class="form-check-input" type="checkbox" id="@($"scopeInherit_{stepId}")"
+                                                                               checked="@inheritScope"
+                                                                               @onchange="@(e => OnStepScopeInheritChanged(stepId, e))" />
+                                                                        <label class="form-check-label small" for="@($"scopeInherit_{stepId}")">Inherit from project Scope tab</label>
+                                                                    </div>
+                                                                </div>
+                                                                @if (!inheritScope)
+                                                                {
+                                                                    var scope = GetStepScope(stepId);
+                                                                    var stepInc = scope.GetIncludedBaseList();
+                                                                    var stepBlk = scope.GetExcludedBaseList();
+                                                                    <div class="row g-3 mt-1">
+                                                                        <div class="col-md-7">
+                                                                            <label class="form-label fw-semibold">Base DN</label>
+                                                                            <div class="input-group input-group-sm">
+                                                                                <input class="form-control" @bind="scope.BaseDN" placeholder="DC=demo,DC=local — or blank for source's defaultNamingContext" />
+                                                                                <button type="button" class="btn btn-outline-primary" @onclick="@(() => OpenStepScopeBrowser(stepId))" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick Included / Blocked containers">
+                                                                                    <i class="bi bi-folder-symlink me-1"></i>Locations
+                                                                                </button>
+                                                                            </div>
+                                                                            @if (stepInc.Count > 1 || stepBlk.Count > 0)
+                                                                            {
+                                                                                <small class="form-text text-muted">
+                                                                                    <i class="bi bi-check-circle-fill text-success me-1"></i>@stepInc.Count included
+                                                                                    @if (stepBlk.Count > 0)
+                                                                                    {
+                                                                                        <span><i class="bi bi-slash-circle-fill text-danger ms-2 me-1"></i>@stepBlk.Count blocked</span>
+                                                                                    }
+                                                                                </small>
+                                                                            }
+                                                                        </div>
+                                                                        <div class="col-md-5">
+                                                                            <label class="form-label fw-semibold">Page size</label>
+                                                                            <input class="form-control form-control-sm" type="number" min="1" max="10000" @bind="scope.PageSize" />
+                                                                        </div>
+                                                                        <div class="col-md-9">
+                                                                            <label class="form-label fw-semibold">LDAP filter override</label>
+                                                                            <input class="form-control form-control-sm" @bind="scope.LdapFilter" placeholder="(leave blank for default for object class)" />
+                                                                        </div>
+                                                                        <div class="col-md-3">
+                                                                            <label class="form-label fw-semibold">Max objects</label>
+                                                                            <input class="form-control form-control-sm" type="number" min="0" @bind="scope.MaxObjects" />
+                                                                        </div>
+                                                                    </div>
+                                                                }
+                                                                else
+                                                                {
+                                                                    <p class="text-muted small mt-2 mb-0">This step uses the project-level Scope. Uncheck the toggle above to override only for this step.</p>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                            }
+                                            else
+                                            {
+                                                <div class="text-center text-muted py-3">
+                                                    <i class="fas fa-info-circle me-2"></i>No steps configured for this workflow.
+                                                </div>
+                                            }
+                                            <button type="button" class="btn btn-sm btn-outline-success mt-2"
+                                                    @onclick="() => AddStepExpanded(wfRef.Id)">
+                                                <i class="fas fa-plus me-1"></i>Add Step
+                                            </button>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+
                         <p class="text-muted small mt-3 mb-0">
-                            Workflows are saved when you click <strong>Save changes</strong>. Select a Mapping step on the
-                            left, then set its <strong>Scope</strong> and <strong>Attribute Mappings</strong> in the panel on
-                            the right. Each step inherits the project defaults until you turn off "inherit" and override it.
+                            Workflows are saved when you click <strong>Save changes</strong>. Open a Mapping step's
+                            <strong>Mappings</strong> button to edit its attribute map; each step inherits the project defaults
+                            until you turn off "inherit" and override it.
                         </p>
                     }
                     else if (formTab == "schedule")
@@ -2270,6 +2240,139 @@
                             Save changes
                         </button>
                     }
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ────────── Nested per-step Attribute Mappings modal (IC idiom) ──────────
+   Opened by a step card's "Mappings" button. Mirrors IdentityCenter's
+   "Attribute Mappings: <step>" modal: header actions Auto-Fill / Refresh /
+   Clear All; an inherit banner; a SOURCE → TARGET → TRANSFORM → REQ table with
+   per-row delete and Add rule. Auto-Fill + Refresh both resolve from the live
+   attribute catalog (IAttributeMapService) for the step's object class. *@
+@if (mappingModalStepId is { } mmStepId && MappingModalStep is { } mmStep)
+{
+    var mmInherit = !stepMappingsInherit.TryGetValue(mmStepId, out var mmInh) || mmInh;
+    var mmRows = GetStepMappings(mmStepId);
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-exchange-alt me-2"></i>Attribute Mappings: @mmStep.Name
+                        @if (!string.IsNullOrWhiteSpace(mmStep.ObjectClass))
+                        {
+                            <span class="badge bg-dark ms-2">@mmStep.ObjectClass</span>
+                        }
+                    </h5>
+                    <div class="ms-auto me-2 d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-success"
+                                @onclick="() => AutoFillMappingModal(mmStepId)"
+                                disabled="@(form.SourceTenantId == Guid.Empty)"
+                                title="Fill from the attribute catalog for this step's object class">
+                            <i class="fas fa-magic me-1"></i><span>Auto-Fill Mappings</span>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                @onclick="() => RefreshMappingModal(mmStepId)"
+                                disabled="@(form.SourceTenantId == Guid.Empty)"
+                                title="Re-resolve the attribute catalog for this step's object class">
+                            <i class="fas fa-sync-alt me-1"></i><span>Refresh Attributes</span>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger"
+                                @onclick="() => ClearMappingModal(mmStepId)"
+                                title="Remove all attribute mappings for this step">
+                            <i class="fas fa-trash-alt me-1"></i><span>Clear All</span>
+                        </button>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseMappingModal"></button>
+                </div>
+                <div class="modal-body">
+                    @* Inherit banner — the Conduit equivalent of IC's mandatory-unique-key banner. *@
+                    <div class="alert @(mmInherit ? "alert-secondary" : "alert-primary") d-flex align-items-start mb-3">
+                        <i class="fas fa-key fa-lg me-3 mt-1"></i>
+                        <div class="flex-grow-1">
+                            <strong>@(mmInherit ? "Inheriting project-level Mappings" : "This step owns its Mappings")</strong>
+                            <p class="mb-2 mt-1"><small>
+                                When inheriting, this step runs the project Mappings tab's rules. Turn the toggle off (or add a
+                                rule below) to give this step its own attribute map for the <strong>@(string.IsNullOrWhiteSpace(mmStep.ObjectClass) ? "user" : mmStep.ObjectClass)</strong> class.
+                            </small></p>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="@($"mmInherit_{mmStepId}")"
+                                       checked="@mmInherit"
+                                       @onchange="@(e => OnStepMappingsInheritChanged(mmStepId, e))" />
+                                <label class="form-check-label small" for="@($"mmInherit_{mmStepId}")">Inherit from project Mappings tab</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mapping-editor-toolbar mb-2">
+                        <span class="small text-muted">
+                            @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — blank = passthrough at runtime.
+                        </span>
+                        <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => AddStepMappingRow(mmStepId)">
+                            <i class="fas fa-plus me-1"></i>Add Mapping
+                        </button>
+                    </div>
+
+                    @if (mmRows.Count == 0)
+                    {
+                        <div class="alert alert-warning mb-0">
+                            <i class="fas fa-exclamation-triangle me-2"></i>No mappings configured. Click "Auto-Fill Mappings" or "Add Mapping" to start.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm mapping-modal-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 32%">Source Attribute</th>
+                                        <th style="width: 5%" class="text-center">→</th>
+                                        <th style="width: 32%">Target Attribute</th>
+                                        <th style="width: 21%">Transform</th>
+                                        <th style="width: 5%" class="text-center">Req</th>
+                                        <th style="width: 5%"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @for (int i = 0; i < mmRows.Count; i++)
+                                    {
+                                        var idx = i;
+                                        var rule = mmRows[idx];
+                                        <tr>
+                                            <td><input class="form-control form-control-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
+                                            <td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>
+                                            <td><input class="form-control form-control-sm" @bind="rule.SinkAttribute" placeholder="userName" /></td>
+                                            <td><input class="form-control form-control-sm" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
+                                            <td class="text-center">
+                                                <div class="form-check form-switch d-inline-block">
+                                                    <input class="form-check-input" type="checkbox" @bind="rule.IsRequired" />
+                                                </div>
+                                            </td>
+                                            <td class="text-end">
+                                                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveStepMappingRow(mmStepId, idx)" title="Remove">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mapping-transform-hint">
+                            Transforms: <code>upper</code>, <code>lower</code>, <code>trim</code>, <code>prefix:X</code>, <code>suffix:X</code>,
+                            <code>substring:N</code>, <code>substring:N:M</code>, <code>replace:OLD:NEW</code>, <code>default:VAL</code>.
+                            Chain with <code>|</code>.
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseMappingModal">
+                        <i class="fas fa-times me-1"></i>Done
+                    </button>
                 </div>
             </div>
         </div>
@@ -2492,6 +2595,118 @@
     // having to diff old vs new state.
     private readonly HashSet<Guid> workflowsDeleted = new();
     private readonly HashSet<Guid> stepsDeleted = new();
+
+    // ─── IC card-idiom UI state (presentation only; no new persisted data) ───
+    // Which workflow cards / step settings / step scope blocks are expanded, and
+    // which step's Attribute Mappings modal is open. These replace the old
+    // tree+detail selection; selectedWorkflowId/selectedStepId are still kept in
+    // sync by the wrapper handlers so the existing move/delete helpers work.
+    private readonly HashSet<Guid> expandedWorkflows = new();
+    private readonly HashSet<Guid> expandedWorkflowSettings = new();
+    private readonly HashSet<Guid> expandedStepSettings = new();
+    private readonly HashSet<Guid> expandedStepScope = new();
+    private Guid? mappingModalStepId;
+
+    private WorkflowStep? MappingModalStep =>
+        mappingModalStepId is { } id ? StepById(id) : null;
+
+    private void MarkWorkflowsDirty() => workflowsDirty = true;
+
+    private void ToggleWorkflowExpanded(Guid id)
+    {
+        if (!expandedWorkflows.Remove(id)) expandedWorkflows.Add(id);
+    }
+
+    private void ToggleWorkflowSettings(Guid id)
+    {
+        if (!expandedWorkflowSettings.Remove(id)) expandedWorkflowSettings.Add(id);
+    }
+
+    private void ToggleStepSettings(Guid id)
+    {
+        if (!expandedStepSettings.Remove(id)) expandedStepSettings.Add(id);
+    }
+
+    private async Task ToggleStepScope(Guid id)
+    {
+        if (!expandedStepScope.Remove(id))
+        {
+            expandedStepScope.Add(id);
+            await EnsureStepScopeLoadedAsync(id);
+        }
+    }
+
+    /// <summary>Count of non-blank rules a step owns (drives the Mappings count badge).</summary>
+    private int StepMappingCount(Guid stepId)
+    {
+        if (!stepMappings.TryGetValue(stepId, out var rows)) return 0;
+        return rows.Count(m => !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute));
+    }
+
+    private string StepTypeHint(string? stepType) => stepType switch
+    {
+        "Mapping" => "Runs the source→mapping→sink pump. By default this step inherits the project-level Mappings + Scope; override via the Mappings and Scope buttons.",
+        "PersonMatch" => "Calls the sink's MatchPerson against each upstream object. Only the IC sink implements this today.",
+        "PersonCreate" => "Creates a person record on the sink for any upstream object that the prior PersonMatch missed.",
+        "AssignManager" => "Sets the manager link on each upstream object (AD manager / Entra Manager.Ref / IC Identity row / Okta / Google / SCIM).",
+        "AssignGroupOwner" => "Sets the owner / managedBy on each upstream group. Same per-sink wiring as AssignManager.",
+        _ => "Reserved."
+    };
+
+    // ── Card-button wrappers: select-then-delegate so the existing move/delete
+    //    helpers (which act on the current selection) keep working unchanged. ──
+    private void MoveWorkflowUpById(Guid id)   { selectedWorkflowId = id; selectedStepId = null; MoveWorkflowUp(); }
+    private void MoveWorkflowDownById(Guid id) { selectedWorkflowId = id; selectedStepId = null; MoveWorkflowDown(); }
+    private void DeleteWorkflowById(Guid id)
+    {
+        selectedWorkflowId = id; selectedStepId = null;
+        DeleteWorkflow();
+        expandedWorkflows.Remove(id);
+        expandedWorkflowSettings.Remove(id);
+    }
+
+    private void MoveStepUpById(Guid id)   { selectedStepId = id; MoveStepUp(); }
+    private void MoveStepDownById(Guid id) { selectedStepId = id; MoveStepDown(); }
+    private void DeleteStepById(Guid id)
+    {
+        selectedStepId = id;
+        DeleteStep();
+        expandedStepSettings.Remove(id);
+        expandedStepScope.Remove(id);
+        if (mappingModalStepId == id) mappingModalStepId = null;
+    }
+
+    /// <summary>Add a step from a card and keep its parent workflow expanded + the new step's settings open.</summary>
+    private void AddStepExpanded(Guid workflowId)
+    {
+        AddStep(workflowId);
+        expandedWorkflows.Add(workflowId);
+        if (selectedStepId is { } newId) expandedStepSettings.Add(newId);
+    }
+
+    // ── Nested Attribute Mappings modal ──
+    private async Task OpenMappingModal(Guid stepId)
+    {
+        mappingModalStepId = stepId;
+        await EnsureStepMappingsLoadedAsync(stepId);
+    }
+
+    private void CloseMappingModal() => mappingModalStepId = null;
+
+    /// <summary>Auto-Fill: resolve the live attribute catalog for the step's class (delegates to the existing catalog-backed handler).</summary>
+    private Task AutoFillMappingModal(Guid stepId) => AutoMapStepForClass(stepId);
+
+    /// <summary>Refresh: re-resolve the catalog for the step's class. Same live source as Auto-Fill.</summary>
+    private Task RefreshMappingModal(Guid stepId) => AutoMapStepForClass(stepId);
+
+    /// <summary>Clear All: drop this step's own mappings and revert it to inherit-from-project.</summary>
+    private void ClearMappingModal(Guid stepId)
+    {
+        stepMappings[stepId] = new List<AttributeMapping>();
+        stepMappingsLoaded.Add(stepId);
+        stepMappingsInherit[stepId] = true;
+        workflowsDirty = true;
+    }
 
     private Workflow? SelectedWorkflow =>
         selectedWorkflowId is { } id ? workflowsForm.FirstOrDefault(w => w.Id == id) : null;
