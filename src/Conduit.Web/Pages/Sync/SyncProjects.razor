@@ -1790,6 +1790,11 @@
                                                         "AssignManager" => "bg-warning text-dark",
                                                         "AssignGroupOwner" => "bg-warning text-dark",
                                                         "Lookup" => "bg-warning text-dark",
+                                                        "LicenseSync" => "step-badge-governance",
+                                                        "SignInLogSync" => "step-badge-governance",
+                                                        "UsageReportSync" => "step-badge-governance",
+                                                        "AppRoleSync" => "step-badge-governance",
+                                                        "GroupMembership" => "step-badge-governance",
                                                         _ => "bg-secondary"
                                                     };
                                                     var mapCount = StepMappingCount(stepRef.Id);
@@ -1868,6 +1873,11 @@
                                                                             <option value="AssignManager">AssignManager</option>
                                                                             <option value="AssignGroupOwner">AssignGroupOwner</option>
                                                                             <option value="Lookup">Lookup - Resolve Relationships (Manager, Owner)</option>
+                                                                            <option value="LicenseSync">LicenseSync - M365 Licenses (IC)</option>
+                                                                            <option value="SignInLogSync">SignInLogSync - Sign-In Logs (IC)</option>
+                                                                            <option value="UsageReportSync">UsageReportSync - M365 Usage (IC)</option>
+                                                                            <option value="AppRoleSync">AppRoleSync - App Role Assignments (IC)</option>
+                                                                            <option value="GroupMembership">GroupMembership - Group Memberships (IC)</option>
                                                                             <option value="Custom">Custom (no-op)</option>
                                                                         </select>
                                                                     </div>
@@ -2518,6 +2528,11 @@
         "AssignManager" => "Sets the manager link on each upstream object (AD manager / Entra Manager.Ref / IC Identity row / Okta / Google / SCIM).",
         "AssignGroupOwner" => "Sets the owner / managedBy on each upstream group. Same per-sink wiring as AssignManager.",
         "Lookup" => "IdentityCenter relationship resolution (manager / managedBy / owner DN → ObjectId). Licensed IC feature — emitted only when the sink is an IdentityCenter connection. Structural step today: resolution runs IC-side, so the pump skips it at run time.",
+        "LicenseSync" => "IdentityCenter M365 license-assignment sync (Entra → IC). Licensed IC feature — emitted only for an Entra source into an IdentityCenter sink. Marker today: the ingest runs IC-side, so the pump skips it at run time.",
+        "SignInLogSync" => "IdentityCenter sign-in-log sync (Entra → IC). Licensed IC feature — emitted only for an Entra source into an IdentityCenter sink. Marker today: the ingest runs IC-side, so the pump skips it at run time.",
+        "UsageReportSync" => "IdentityCenter M365 usage-activity sync (Entra → IC). Licensed IC feature — emitted only for an Entra source into an IdentityCenter sink. Marker today: the ingest runs IC-side, so the pump skips it at run time.",
+        "AppRoleSync" => "IdentityCenter enterprise-app role-assignment sync (Entra → IC). Licensed IC feature — emitted only for an Entra source into an IdentityCenter sink. Marker today: the ingest runs IC-side, so the pump skips it at run time.",
+        "GroupMembership" => "IdentityCenter group-membership sync (memberOf → membership). Licensed IC feature — emitted only when the sink is an IdentityCenter connection. Marker today: Conduit has no membership-ingest, so the pump skips it at run time.",
         _ => "Reserved."
     };
 

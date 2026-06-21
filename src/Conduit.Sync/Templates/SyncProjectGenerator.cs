@@ -360,6 +360,19 @@ namespace Conduit.Sync.Templates
                 if (lookupStep is not null)
                     generatedSteps.Add(lookupStep);
 
+                // LICENSED IC feature: the IC-parity "deeper governance" steps
+                // (LicenseSync / SignInLogSync / UsageReportSync / AppRoleSync on
+                // the USER class for Entra sources; GroupMembership on the GROUP
+                // class). Same single IC-sink chokepoint as the Lookup step above.
+                // The ordinal continues after whatever steps already sit in this
+                // workflow (Mapping = 0, Lookup = 1 when present), mirroring IC's
+                // ExecutionOrder. These are MARKERS — see WorkflowStepTypes docs and
+                // BuildGovernanceSteps; the orchestrator run-skips them cleanly.
+                var governanceSteps = BuildGovernanceSteps(
+                    sourceType, sinkType, objectClass, projectId, workflowId,
+                    startOrdinal: generatedSteps.Count);
+                generatedSteps.AddRange(governanceSteps);
+
                 workflows.Add(new GeneratedWorkflow
                 {
                     Workflow = workflow,
@@ -456,6 +469,99 @@ namespace Conduit.Sync.Templates
                 Step = lookupStep,
                 Scope = scope,
                 Mappings = new List<AttributeMapping> { mapping }
+            };
+        }
+
+        /// <summary>
+        /// IC-parity "deeper governance" steps, mirroring IdentityCenter's
+        /// AutoSyncProjectGenerator.CreateWorkflowAsync. Emitted ONLY when the sink
+        /// is an IdentityCenter connection (the licensed IC integration):
+        ///   user (Entra source only): "Sync M365 Licenses" (LicenseSync),
+        ///                             "Sync Sign-In Logs" (SignInLogSync),
+        ///                             "Sync M365 Usage Reports" (UsageReportSync),
+        ///                             "Sync App Role Assignments" (AppRoleSync)
+        ///   group:                    "Sync Group Memberships" (GroupMembership)
+        /// IC gates the four user-class steps on the SOURCE connection being Entra ID /
+        /// Azure AD; we mirror that with <paramref name="sourceType"/> == "EntraID".
+        /// GroupMembership has no source gate in IC (it rides the AD/Entra group memberOf).
+        ///
+        /// HONEST STATUS — MARKERS, NOT FUNCTIONAL. The orchestrator has no router arm
+        /// for any of these step types, so each falls through to the safe
+        /// `_ => StepResult.Skipped(...)` default at run time: they persist, open, and
+        /// render like IC's dashed cards, but perform NO license/sign-in/usage/app-role
+        /// or membership ingest in the free pump. Conduit has no membership-ingest
+        /// capability today, so GroupMembership is a marker too. Returns an empty list
+        /// for non-IC sinks (free pump) and for any class IC does not decorate. These
+        /// steps carry no attribute mappings (matching IC, which seeds none for them)
+        /// and an empty scope.
+        /// </summary>
+        private static IReadOnlyList<GeneratedSyncStep> BuildGovernanceSteps(
+            string sourceType, string sinkType, string objectClass,
+            Guid projectId, Guid workflowId, int startOrdinal)
+        {
+            var result = new List<GeneratedSyncStep>();
+
+            // Connection-target gate: only IdentityCenter sinks get governance steps.
+            if (!string.Equals(sinkType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+                return result;
+
+            var lower = objectClass.ToLowerInvariant();
+            var ordinal = startOrdinal;
+
+            if (lower == "user")
+            {
+                // IC gates these four on the SOURCE being Entra ID / Azure AD.
+                var isEntraSource =
+                    string.Equals(sourceType, "EntraID", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(sourceType, "AzureAD", StringComparison.OrdinalIgnoreCase);
+                if (isEntraSource)
+                {
+                    result.Add(MakeGovernanceStep("Sync M365 Licenses",        WorkflowStepTypes.LicenseSync,     objectClass, projectId, workflowId, ordinal++));
+                    result.Add(MakeGovernanceStep("Sync Sign-In Logs",         WorkflowStepTypes.SignInLogSync,   objectClass, projectId, workflowId, ordinal++));
+                    result.Add(MakeGovernanceStep("Sync M365 Usage Reports",   WorkflowStepTypes.UsageReportSync, objectClass, projectId, workflowId, ordinal++));
+                    result.Add(MakeGovernanceStep("Sync App Role Assignments", WorkflowStepTypes.AppRoleSync,     objectClass, projectId, workflowId, ordinal++));
+                }
+            }
+            else if (lower == "group")
+            {
+                // IC attaches membership sync to the GROUP workflow (after groups +
+                // owners) with ObjectClass "GroupMembership". No source-type gate.
+                result.Add(MakeGovernanceStep("Sync Group Memberships", WorkflowStepTypes.GroupMembership, "GroupMembership", projectId, workflowId, ordinal++));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Builds one marker governance step: no attribute mappings, empty scope,
+        /// enabled. The orchestrator run-skips it (no router arm for these types).
+        /// </summary>
+        private static GeneratedSyncStep MakeGovernanceStep(
+            string name, string stepType, string objectClass,
+            Guid projectId, Guid workflowId, int ordinal)
+        {
+            var stepId = Guid.NewGuid();
+            return new GeneratedSyncStep
+            {
+                Step = new WorkflowStep
+                {
+                    Id = stepId,
+                    WorkflowId = workflowId,
+                    Name = name,
+                    StepType = stepType,
+                    ObjectClass = objectClass,
+                    Ordinal = ordinal,
+                    Enabled = true
+                },
+                Scope = new SyncProjectScope
+                {
+                    Id = Guid.NewGuid(),
+                    SyncProjectId = projectId,
+                    WorkflowStepId = stepId,
+                    LdapFilter = string.Empty,
+                    PageSize = 0
+                },
+                Mappings = new List<AttributeMapping>()
             };
         }
 

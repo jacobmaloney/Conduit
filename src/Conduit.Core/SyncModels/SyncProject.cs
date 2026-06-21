@@ -331,8 +331,42 @@ public static class WorkflowStepTypes
     /// </summary>
     public const string Lookup = "Lookup";
 
+    // ── IC-parity "deeper governance" step types ────────────────────────────
+    // These mirror IdentityCenter's AutoSyncProjectGenerator step types beyond
+    // manager/owner resolution. Like <see cref="Lookup"/>, they are LICENSED IC
+    // features: emitted ONLY when a project's SINK is an IdentityCenter connection
+    // (and the source-gated ones — License/SignInLog/UsageReport/AppRole — only
+    // when the SOURCE is Entra ID, matching IC's connectionType gate).
+    //
+    // HONEST STATUS (markers, not functional): the orchestrator's step router has
+    // NO arm for any of these, so at run time they fall through to the safe
+    // `_ => StepResult.Skipped(...)` default — they persist, open, and render 1:1
+    // with IC's dashed step cards, but the actual governance (M365 license sync,
+    // sign-in/usage/app-role ingest, group-membership ingest) runs IC-side and is
+    // NOT implemented in the free pump. They must never claim to do governance.
+
+    /// <summary>IC "Sync M365 Licenses" — Entra→IC license-assignment ingest. MARKER (run-skipped).</summary>
+    public const string LicenseSync = "LicenseSync";
+
+    /// <summary>IC "Sync Sign-In Logs" — Entra→IC sign-in-log ingest. MARKER (run-skipped).</summary>
+    public const string SignInLogSync = "SignInLogSync";
+
+    /// <summary>IC "Sync M365 Usage Reports" — Entra→IC usage-activity ingest. MARKER (run-skipped).</summary>
+    public const string UsageReportSync = "UsageReportSync";
+
+    /// <summary>IC "Sync App Role Assignments" — Entra→IC enterprise-app role ingest. MARKER (run-skipped).</summary>
+    public const string AppRoleSync = "AppRoleSync";
+
+    /// <summary>
+    /// IC "Sync Group Memberships" — memberOf → membership ingest, attached to the
+    /// GROUP class (after groups + owners exist). MARKER (run-skipped): Conduit has
+    /// no membership-ingest capability today, so this is structural only.
+    /// </summary>
+    public const string GroupMembership = "GroupMembership";
+
     public static readonly IReadOnlyList<string> All = new[]
     {
-        Mapping, PersonMatch, PersonCreate, AssignManager, AssignGroupOwner, Custom, Lookup
+        Mapping, PersonMatch, PersonCreate, AssignManager, AssignGroupOwner, Custom, Lookup,
+        LicenseSync, SignInLogSync, UsageReportSync, AppRoleSync, GroupMembership
     };
 }

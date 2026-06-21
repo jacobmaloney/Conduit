@@ -1819,6 +1819,16 @@
     font-weight: 500;
 }
 
+/* Step-type badge variant for the IC-parity "deeper governance" steps
+   (LicenseSync / SignInLogSync / UsageReportSync / AppRoleSync / GroupMembership).
+   Distinct violet so the licensed IC governance steps read apart from the
+   Mapping (blue) and relationship (amber) steps. Applied to a Bootstrap
+   .badge element in the workflow-step card, so it sets its own colors. */
+.step-badge-governance {
+    background-color: #7c3aed;
+    color: #ffffff;
+}
+
 /* ==========================================================================
    PERSON/IDENTITY INITIALS AVATARS
    Colorful gradient avatars with initials for People and Objects pages
