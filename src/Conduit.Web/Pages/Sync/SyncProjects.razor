@@ -924,7 +924,12 @@
 {
     <div class="modal show d-block sync-form-modal sync-form-modal-full" tabindex="-1">
         <div class="modal-dialog @(isWizard ? "modal-xl modal-dialog-centered" : "modal-fullscreen")">
-            <div class="modal-content">
+            @* Edit experience is IC's GREEN modal: center-theme-system supplies the
+               emerald/teal tokens (--center-gradient-* / --center-accent) and the
+               sync-edit-modal scope (in conduit.css) overrides the .ops-section
+               operations-orange literals back to IC's green inside the modal only,
+               so the Sync Projects LIST page behind it stays orange. *@
+            <div class="modal-content @(isWizard ? "" : "center-theme-system sync-edit-modal")">
                 @if (isWizard)
                 {
                     <div class="modal-header sync-modal-header-default">
@@ -936,21 +941,26 @@
                 }
                 else
                 {
-                    @* IC-parity solid-orange (operations accent) hero header for the edit experience. *@
-                    <div class="sync-edit-hero">
-                        <div class="sync-edit-hero-text">
-                            <h1 class="sync-edit-hero-title">
-                                <i class="fas fa-sync-alt me-2"></i>Edit Sync Project
-                                @if (!string.IsNullOrEmpty(form.Name))
-                                {
-                                    <span class="sync-edit-hero-name">- @form.Name</span>
-                                }
-                            </h1>
-                            <p class="sync-edit-hero-sub">Configure directory synchronization workflows and settings</p>
+                    @* IC-parity GREEN hero header (exact IdentityCenter SyncProjectWizard markup):
+                       .center-hero draws linear-gradient(135deg, var(--center-gradient-start) 0%,
+                       var(--center-gradient-end) 100%) which, under center-theme-system, is
+                       emerald→teal (#059669 → #0d9488). *@
+                    <div class="center-hero mb-0" style="border-radius: 0; padding: 1.25rem 1.5rem;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h1 class="mb-1" style="font-size: 1.5rem;">
+                                    <i class="fas fa-sync-alt me-2"></i>Edit Sync Project
+                                    @if (!string.IsNullOrEmpty(form.Name))
+                                    {
+                                        <span style="opacity: 0.85; font-weight: 600;">- @form.Name</span>
+                                    }
+                                </h1>
+                                <p class="lead mb-0">Configure directory synchronization workflows and settings</p>
+                            </div>
+                            <button type="button" class="btn btn-outline-light" @onclick="CloseFormModal">
+                                <i class="fas fa-times me-1"></i>Close
+                            </button>
                         </div>
-                        <button type="button" class="btn btn-outline-light" @onclick="CloseFormModal">
-                            <i class="fas fa-times me-1"></i>Close
-                        </button>
                     </div>
                 }
                 <div class="modal-body">
@@ -2077,13 +2087,22 @@
                     }
                     else
                     {
-                        <button class="btn btn-secondary" @onclick="CloseFormModal">Cancel</button>
-                        <button class="btn btn-primary" @onclick="SaveForm" disabled="@saving">
+                        <button class="btn btn-outline-secondary btn-lg" @onclick="CloseFormModal">
+                            <i class="fas fa-times me-2"></i>Cancel
+                        </button>
+                        @* IC-parity GREEN Save: inline gradient reads the center-theme-system
+                           tokens (emerald→teal), exactly as IdentityCenter's SyncProjectWizard. *@
+                        <button class="btn btn-primary btn-lg" @onclick="SaveForm" disabled="@saving"
+                                style="background: linear-gradient(135deg, var(--center-gradient-start) 0%, var(--center-gradient-end) 100%); border: none;">
                             @if (saving)
                             {
-                                <span class="spinner-border spinner-border-sm me-1"></span>
+                                <span class="spinner-border spinner-border-sm me-2"></span>
                             }
-                            Save changes
+                            else
+                            {
+                                <i class="fas fa-save me-2"></i>
+                            }
+                            Save Changes
                         </button>
                     }
                 </div>

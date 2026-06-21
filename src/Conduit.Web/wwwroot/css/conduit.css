@@ -2765,27 +2765,60 @@ details summary::-webkit-details-marker { color: var(--accent); }
     min-height: 0;
     overflow-y: auto;
 }
-.sync-edit-hero {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1.15rem 1.5rem;
-    /* Operations accent — solid orange so the Edit hero matches the rest of
-       Conduit's orange sync/operations area (was deep-teal --conduit-700). */
-    background: var(--sec-operations, #F97316);
+/* ──────────────────────────────────────────────────────────────────────────
+   EDIT SYNC PROJECT MODAL — IC GREEN THEME (single-sourced via center-shared.css)
+   ──────────────────────────────────────────────────────────────────────────
+   The edit modal is rendered with `.modal-content.center-theme-system.sync-edit-modal`.
+   `center-theme-system` (center-shared.css) already remaps --center-gradient-*
+   and --center-accent to IdentityCenter's emerald→teal (#059669 → #0d9488), so
+   the .center-hero header and any accent chrome go green for free.
+
+   BUT this modal is a descendant of the page's `.ops-section` wrapper, which
+   hard-sets a few literals to operations-orange (nav-tab .active, .btn-primary,
+   .badge.bg-primary, link hover, focus ring). Those literals don't follow the
+   token, so we re-assert IC's values INSIDE the modal only — leaving the Sync
+   Projects LIST page behind the modal orange, exactly like IC (orange list,
+   green edit modal). conduit.css loads AFTER center-shared.css and the
+   .sync-edit-modal compound selector out-specifies the bare `.ops-section`
+   rules, so green wins in here. */
+
+/* Belt-and-suspenders: pin the green tokens at the modal root too, so anything
+   token-driven is green regardless of cascade. Matches center-theme-system. */
+.sync-edit-modal {
+    --center-gradient-start: #059669;
+    --center-gradient-end:   #0d9488;
+    --center-accent:         #059669;
+}
+
+/* Active nav-tab: IC uses its default cyan/neutral accent (NOT orange). Undo
+   the .ops-section orange override and restore IC's color-primary. */
+.ops-section .sync-edit-modal .nav-tabs .nav-link.active {
+    color: var(--color-primary, #00bcd4);
+    border-color: var(--color-border, rgba(148,163,184,0.25));
+    border-bottom-color: transparent;
+}
+/* Links + focus ring inside the modal follow IC's accent, not ops-orange. */
+.ops-section .sync-edit-modal a:not(.btn):hover { color: var(--center-accent); }
+.ops-section .sync-edit-modal :focus-visible { outline-color: var(--center-accent); }
+
+/* Mappings pill (.btn-primary) inside the workflow step cards is IC-blue, and
+   the +Add Step card is IC orange-dashed — both already correct in
+   center-shared.css. We only need to stop .ops-section from repainting a bare
+   .btn-primary orange; let it fall back to its themed/default appearance. */
+.ops-section .sync-edit-modal .btn-primary {
+    background: #3b82f6;
+    border-color: #2563eb;
     color: #fff;
-    flex: 0 0 auto;
 }
-.sync-edit-hero-title {
-    margin: 0 0 0.15rem;
-    font-size: 1.5rem;
-    font-weight: 700;
-    line-height: 1.15;
+/* The footer Save Changes button opts back into GREEN via its inline
+   token gradient (set in markup), so it overrides the blue above. */
+
+/* Count-badge pills (.badge.bg-primary, e.g. the Workflows tab count) — IC
+   renders these as its standard primary badge, not ops-orange. */
+.ops-section .sync-edit-modal .badge.bg-primary {
+    background: #3b82f6 !important;
+    color: #fff !important;
 }
-.sync-edit-hero-name { opacity: 0.85; font-weight: 600; }
-.sync-edit-hero-sub { margin: 0; opacity: 0.9; font-size: 0.9rem; }
-.sync-edit-hero .btn-outline-light { white-space: nowrap; }
 
 .form-section-title {
     font-size: 12px;
