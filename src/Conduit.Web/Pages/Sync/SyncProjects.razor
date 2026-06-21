@@ -1720,9 +1720,9 @@
                                                 <i class="fas @(wfExpanded ? "fa-chevron-up" : "fa-chevron-down") me-1"></i>
                                                 @wfSteps.Count step(s)
                                             </button>
-                                            <button type="button" class="btn btn-sm @(wfSettings ? "btn-info" : "btn-outline-secondary")"
-                                                    @onclick="() => ToggleWorkflowSettings(wfRef.Id)" title="Workflow Settings">
-                                                <i class="fas fa-cog"></i>
+                                            <button type="button" class="btn btn-sm @(wfSettings ? "btn-info" : "btn-outline-primary")"
+                                                    @onclick="() => ToggleWorkflowSettings(wfRef.Id)" title="Rename Workflow">
+                                                <i class="fas fa-edit"></i>
                                             </button>
                                             <button type="button" class="btn btn-sm btn-outline-danger"
                                                     @onclick="() => DeleteWorkflowById(wfRef.Id)" title="Delete Workflow">
@@ -1819,14 +1819,14 @@
                                                                             <span class="badge bg-light text-primary ms-1">@mapCount</span>
                                                                         }
                                                                     </button>
-                                                                    <button type="button" class="btn btn-sm @(scopeOpen ? "btn-info" : "btn-outline-secondary")"
-                                                                            @onclick="() => ToggleStepScope(stepRef.Id)" title="Step Scope / Filter">
-                                                                        <i class="fas fa-filter me-1"></i>Scope
+                                                                    <button type="button" class="btn btn-sm @(scopeOpen ? "btn-info" : "btn-outline-primary")"
+                                                                            @onclick="() => ToggleStepScope(stepRef.Id)" title="Configure filter">
+                                                                        <i class="fas fa-filter"></i>
                                                                     </button>
                                                                 }
                                                                 <button type="button" class="btn btn-sm @(settingsOpen ? "btn-info" : "btn-outline-secondary")"
-                                                                        @onclick="() => ToggleStepSettings(stepRef.Id)" title="Step Settings">
-                                                                    <i class="fas fa-cog me-1"></i>Settings
+                                                                        @onclick="() => ToggleStepSettings(stepRef.Id)" title="Edit settings">
+                                                                    <i class="fas fa-cog"></i>
                                                                 </button>
                                                                 <button type="button" class="btn btn-sm btn-outline-danger"
                                                                         @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">

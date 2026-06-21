@@ -2771,7 +2771,7 @@ details summary::-webkit-details-marker { color: var(--accent); }
     justify-content: space-between;
     gap: 1rem;
     padding: 1.15rem 1.5rem;
-    background: linear-gradient(135deg, var(--conduit-700) 0%, var(--accent) 100%);
+    background: var(--conduit-700);
     color: #fff;
     flex: 0 0 auto;
 }
