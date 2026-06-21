@@ -116,7 +116,11 @@
      doesn't reference.
      ════════════════════════════════════════════════════════════════════ */
 
-  /* IC surfaces (IC uses rgba glassmorphic surfaces; map to the panel ramp) */
+  /* IC surfaces — IC uses translucent glassmorphic surfaces. These are IC's
+     exact values so that when IC fully adopts this file, its frosted cards do
+     not flatten to the opaque Conduit --panel value. Conduit does not consume
+     var(--surface*) (it uses --panel), so these are safe for both. */
+  --surface:        rgba(15,27,47,0.85);
   --surface-deep:   rgba(8,14,28,0.97);
   --surface-inset:  rgba(18,32,56,0.70);
   --surface-hover:  rgba(21,38,63,0.85);
