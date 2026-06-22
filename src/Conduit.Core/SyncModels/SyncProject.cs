@@ -321,13 +321,18 @@ public static class WorkflowStepTypes
     public const string Custom = "Custom";
 
     /// <summary>
-    /// IC-parity relationship-resolution step (e.g. "Resolve Manager Relationships").
-    /// LICENSED IdentityCenter feature: only emitted when a project's SINK is an
-    /// IdentityCenter connection. It mirrors IC's per-class Lookup card (manager /
-    /// managedBy / owner DN-resolution). At runtime today it is a STRUCTURAL MARKER
-    /// — the orchestrator's step router has no Lookup arm, so it falls through to the
-    /// safe default and is cleanly Skipped (the actual manager-resolution is IC-side
-    /// governance, not the free pump). It persists, opens, and never crashes a run.
+    /// IC-parity relationship-resolution step (e.g. "Resolve Manager Relationships" /
+    /// "Resolve ManagedBy" / "Resolve Group Owner"). LICENSED IdentityCenter feature:
+    /// only meaningful when a project's SINK is an IdentityCenter connection. It mirrors
+    /// IC's per-class Lookup card (manager / managedBy / owner resolution).
+    ///
+    /// FUNCTIONAL (as of the governance-step build): the orchestrator's step router has
+    /// a Lookup arm (<c>ExecuteLookupStepAsync</c>). It reads the manager/managedBy/owner
+    /// reference the upstream Mapping step carried on each object and hands the pair to
+    /// IC via the sink's <c>AssignManagerAsync</c> (user/contact class) or
+    /// <c>AssignGroupOwnerAsync</c> (group/team class) — IC owns the object store and the
+    /// resolution. A non-IC sink (no capability) clean-skips; AD manager DNs that IC
+    /// cannot resolve against PrimaryEmail are counted as SKIPPED, never a fake success.
     /// </summary>
     public const string Lookup = "Lookup";
 

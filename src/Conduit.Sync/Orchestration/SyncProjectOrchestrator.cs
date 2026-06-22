@@ -365,7 +365,12 @@ public sealed class SyncProjectOrchestrator
                             if (t == WorkflowStepTypes.PersonMatch
                                 || t == WorkflowStepTypes.PersonCreate
                                 || t == WorkflowStepTypes.AssignManager
-                                || t == WorkflowStepTypes.AssignGroupOwner)
+                                || t == WorkflowStepTypes.AssignGroupOwner
+                                // Lookup (IC-parity relationship resolution) consumes the
+                                // upstream Mapping batch to read each object's manager /
+                                // managedBy reference, so the prior Mapping step must
+                                // accumulate its emitted batch when a Lookup follows it.
+                                || t == WorkflowStepTypes.Lookup)
                             {
                                 needEmitted = true;
                                 break;
@@ -382,6 +387,7 @@ public sealed class SyncProjectOrchestrator
                                 WorkflowStepTypes.PersonCreate       => await ExecutePersonCreateStepAsync(ctx, step, lastBatch, lastMatches, cancellationToken),
                                 WorkflowStepTypes.AssignManager      => await ExecuteAssignManagerStepAsync(ctx, step, lastBatch, cancellationToken),
                                 WorkflowStepTypes.AssignGroupOwner   => await ExecuteAssignGroupOwnerStepAsync(ctx, step, lastBatch, cancellationToken),
+                                WorkflowStepTypes.Lookup             => await ExecuteLookupStepAsync(ctx, step, lastBatch, cancellationToken),
                                 WorkflowStepTypes.Custom             => await ExecuteCustomStepAsync(ctx, step, cancellationToken),
                                 _                                    => StepResult.Skipped($"Unknown StepType '{step.StepType}' — skipped.")
                             };
@@ -899,6 +905,164 @@ public sealed class SyncProjectOrchestrator
         return new StepResult
         {
             Delta = new RunDelta(0, 0, updated, skipped, failed, 0),
+            EmittedBatch = lastBatch
+        };
+    }
+
+    /// <summary>
+    /// A sink <c>Failed</c> result that actually means "the reference could not be
+    /// resolved on IC" (the manager/owner external id matched no IC row, or the object
+    /// itself isn't synced yet) rather than a genuine transport/server error. These are
+    /// benign for relationship resolution — counted as skipped, not failed.
+    /// </summary>
+    private static bool IsUnresolvedReference(string? error)
+    {
+        if (string.IsNullOrEmpty(error)) return false;
+        return error.Contains("404", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("Not Found", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("No IC Identity matches", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("No IC group", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("not found", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// IC-parity relationship-resolution step ("Resolve Manager Relationships" /
+    /// "Resolve ManagedBy" / "Resolve Group Owner"). This is the FUNCTIONAL Lookup
+    /// arm — it no longer falls through to the Skipped default.
+    ///
+    /// DESIGN — the canonical Conduit→IC governance-step pattern (settled here):
+    ///   Conduit is a stateless pump; it has no Objects/Identities store and cannot
+    ///   resolve a reference (manager DN → manager GUID) across batches the way IC can.
+    ///   So a relationship-resolution step does NOT resolve locally. It (a) reads the
+    ///   raw reference attribute that the upstream Mapping step already carried on each
+    ///   object (manager / managedBy / owner) and (b) hands the (object, reference) pair
+    ///   to IdentityCenter via the SINK's already-proven capability calls
+    ///   (<c>AssignManagerAsync</c> / <c>AssignGroupOwnerAsync</c>) — IC owns the object
+    ///   store + the resolution + this is an IC-licensed feature. The same transport the
+    ///   <see cref="WorkflowStepTypes.AssignManager"/>/<see cref="WorkflowStepTypes.AssignGroupOwner"/>
+    ///   steps use; Lookup is the IC-parity-named relationship resolver over it.
+    ///
+    /// GATING: functional only when the sink advertises the relevant capability — today
+    ///   only the IdentityCenter sink does. A non-IC sink clean-skips (no crash, truthful
+    ///   Skipped count). Same-source=target is harmless: the references are just pushed.
+    ///
+    /// HONEST DEGRADATION (verified against IC's contract): IC's
+    ///   <c>PATCH /api/identities/{id}/manager</c> resolves the manager external id
+    ///   against <c>Identities.PrimaryEmail</c> (UPN/email), NOT a DN. AD's <c>manager</c>
+    ///   attribute is a DN, so an AD-sourced manager reference will come back unresolved
+    ///   on IC and is counted as SKIPPED here (never a fake success). Entra/cloud sources
+    ///   whose manager maps to a UPN/email resolve fully. Group owner is stored as-is by
+    ///   IC (no resolution gate), so it resolves for any source.
+    /// </summary>
+    private async Task<StepResult> ExecuteLookupStepAsync(
+        RunContext ctx, WorkflowStep step,
+        List<ConnectorObject>? lastBatch, CancellationToken ct)
+    {
+        // The class this Lookup resolves: prefer the step's own class, fall back to the
+        // project's. group/team → owner resolution; everything else → manager resolution.
+        var objectClass = !string.IsNullOrWhiteSpace(step.ObjectClass)
+            ? step.ObjectClass!
+            : ctx.Project.ObjectClass;
+        var isGroupClass =
+            string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(objectClass, "team", StringComparison.OrdinalIgnoreCase);
+
+        // Capability gate — only a sink that absorbs the relationship can run this.
+        // Non-IC sinks (and an IC sink that doesn't advertise the cap) clean-skip.
+        var capable = isGroupClass
+            ? ctx.SinkAdapter.Capabilities.SupportsAssignGroupOwner
+            : ctx.SinkAdapter.Capabilities.SupportsAssignManager;
+        if (!capable)
+        {
+            await Log(ctx.RunId, "Warning",
+                $"    Lookup step '{step.Name}': sink {ctx.SinkTenant.SystemType} does not implement " +
+                $"{(isGroupClass ? "AssignGroupOwner" : "AssignManager")} relationship resolution — step skipped (no-op).");
+            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+        }
+
+        if (lastBatch is null || lastBatch.Count == 0)
+        {
+            await Log(ctx.RunId, "Warning",
+                $"    Lookup step '{step.Name}' has no upstream batch to resolve against — it needs a Mapping step before it. Skipped.");
+            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+        }
+
+        var refKeys = isGroupClass
+            ? new[] { "managedBy", "owner", "Owner", "ownerId", "ownerDN", "ownerUpn" }
+            : new[] { "manager", "Manager", "managerId", "managerDN", "managerUpn" };
+
+        int resolved = 0, skipped = 0, failed = 0;
+        foreach (var obj in lastBatch)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            string? reference = null;
+            foreach (var key in refKeys)
+            {
+                if (obj.Attributes.TryGetValue(key, out var v) && v is not null)
+                {
+                    reference = v.ToString();
+                    if (!string.IsNullOrWhiteSpace(reference)) break;
+                }
+            }
+            // No reference on this object (most objects have no manager/owner) — not an
+            // error; just nothing to resolve.
+            if (string.IsNullOrWhiteSpace(reference)) { skipped++; continue; }
+
+            try
+            {
+                var r = isGroupClass
+                    ? await ctx.Sink.AssignGroupOwnerAsync(obj.SourceId, reference!, ct)
+                    : await ctx.Sink.AssignManagerAsync(obj.SourceId, reference!, ct);
+                switch (r.Outcome)
+                {
+                    case SinkWriteOutcome.Updated:
+                    case SinkWriteOutcome.Created:
+                        resolved++;
+                        break;
+                    case SinkWriteOutcome.Skipped:
+                        // IC could not resolve the reference (e.g. AD manager DN vs IC's
+                        // PrimaryEmail match) — truthfully a skip, not a success.
+                        skipped++;
+                        break;
+                    case SinkWriteOutcome.Failed:
+                        // Distinguish an UNRESOLVED reference from a genuine failure.
+                        // IC returns 404 when the manager external id (an AD manager DN)
+                        // doesn't match Identities.PrimaryEmail, and the sink returns a
+                        // "No IC Identity matches" fail when the object/group itself isn't
+                        // synced yet. Both are benign "nothing to resolve" outcomes — count
+                        // them as SKIPPED, not failed, so an AD source (DN-keyed managers)
+                        // doesn't paint the step/run red. Reserve `failed` for real errors
+                        // (5xx, transport, unexpected).
+                        if (IsUnresolvedReference(r.ErrorMessage))
+                        {
+                            skipped++;
+                        }
+                        else
+                        {
+                            failed++;
+                            await Log(ctx.RunId, "Error",
+                                $"    Lookup resolve failed for {obj.SourceId}: {r.ErrorMessage}");
+                        }
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                await Log(ctx.RunId, "Error", $"    Lookup resolve threw for {obj.SourceId}: {ex.Message}");
+            }
+        }
+
+        await Log(ctx.RunId, "Info",
+            $"    Lookup ({(isGroupClass ? "group owner" : "manager")} resolution): resolved={resolved} skipped={skipped} failed={failed}.");
+
+        // Updated = links actually resolved on IC. Skipped covers both "no reference"
+        // and "IC could not resolve" — the log line above disambiguates. EmittedBatch
+        // is passed through so a later step in the same workflow can still consume it.
+        return new StepResult
+        {
+            Delta = new RunDelta(0, 0, resolved, skipped, failed, 0),
             EmittedBatch = lastBatch
         };
     }
