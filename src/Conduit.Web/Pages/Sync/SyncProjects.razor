@@ -2224,7 +2224,7 @@
 
                     <div class="mapping-editor-toolbar mb-2">
                         <span class="small text-muted">
-                            @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — blank Transform = passthrough. Use const:TEXT to write a fixed value to every object (leave Source blank); default:TEXT fills only when the source is empty.
+                            @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — set Value mode per row: Direct maps from the source (blank Transform = passthrough), Constant always writes a fixed value, Default fills the fixed value only when the source is empty.
                         </span>
                         <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => AddStepMappingRow(mmStepId)">
                             <i class="fas fa-plus me-1"></i>Add Mapping
@@ -2243,12 +2243,13 @@
                             <table class="table table-sm mapping-modal-table">
                                 <thead>
                                     <tr>
-                                        <th style="width: 32%">Source Attribute</th>
-                                        <th style="width: 5%" class="text-center">→</th>
-                                        <th style="width: 32%">Target Attribute</th>
-                                        <th style="width: 21%">Transform</th>
+                                        <th style="width: 13%">Value</th>
+                                        <th style="width: 26%">Source Attribute</th>
+                                        <th style="width: 4%" class="text-center">→</th>
+                                        <th style="width: 26%">Target Attribute</th>
+                                        <th style="width: 22%">Transform / Value</th>
                                         <th style="width: 5%" class="text-center">Req</th>
-                                        <th style="width: 5%"></th>
+                                        <th style="width: 4%"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -2256,11 +2257,40 @@
                                     {
                                         var idx = i;
                                         var rule = mmRows[idx];
+                                        var rowMode = MappingMode(rule);
                                         <tr>
-                                            <td><input class="form-control form-control-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
+                                            <td>
+                                                <select class="form-select form-select-sm" value="@rowMode"
+                                                        @onchange="@(e => SetMappingMode(rule, e.Value?.ToString() ?? "direct"))">
+                                                    <option value="direct">Direct</option>
+                                                    <option value="const">Constant</option>
+                                                    <option value="default">Default</option>
+                                                </select>
+                                            </td>
+                                            <td>
+                                                @if (rowMode == "const")
+                                                {
+                                                    <input class="form-control form-control-sm" placeholder="(ignored)" disabled />
+                                                }
+                                                else
+                                                {
+                                                    <input class="form-control form-control-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" />
+                                                }
+                                            </td>
                                             <td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>
                                             <td><input class="form-control form-control-sm" @bind="rule.SinkAttribute" placeholder="userName" /></td>
-                                            <td><input class="form-control form-control-sm" @bind="rule.TransformExpr" placeholder="trim | lower  ·  const:Active" /></td>
+                                            <td>
+                                                @if (rowMode == "direct")
+                                                {
+                                                    <input class="form-control form-control-sm" placeholder="trim | lower"
+                                                           @bind:get="DirectTransform(rule)" @bind:set="@(v => SetDirectTransform(rule, v))" />
+                                                }
+                                                else
+                                                {
+                                                    <input class="form-control form-control-sm" placeholder="fixed value"
+                                                           @bind:get="MappingLiteral(rule)" @bind:set="@(v => SetMappingLiteral(rule, v))" />
+                                                }
+                                            </td>
                                             <td class="text-center">
                                                 <div class="form-check form-switch d-inline-block">
                                                     <input class="form-check-input" type="checkbox" @bind="rule.IsRequired" />
@@ -3195,6 +3225,75 @@
         var list = GetStepMappings(stepId);
         if (index < 0 || index >= list.Count) return;
         list.RemoveAt(index);
+        workflowsDirty = true;
+    }
+
+    // ── Value-generation mode (encoded in TransformExpr; no model/DB field) ──
+    // const:VAL → Constant (source ignored), default:VAL → Default (fallback when
+    // source empty), anything else → Direct (source drives it, expr = transform chain).
+    private const string mappingConstPrefix = "const:";
+    private const string mappingDefaultPrefix = "default:";
+
+    private string MappingMode(AttributeMapping r)
+    {
+        var s = r.TransformExpr ?? string.Empty;
+        if (s.StartsWith(mappingConstPrefix, StringComparison.OrdinalIgnoreCase)) return "const";
+        if (s.StartsWith(mappingDefaultPrefix, StringComparison.OrdinalIgnoreCase)) return "default";
+        return "direct";
+    }
+
+    private void SetMappingMode(AttributeMapping r, string mode)
+    {
+        var literal = MappingLiteral(r);
+        var direct = DirectTransform(r);
+        switch (mode)
+        {
+            case "const":
+                r.TransformExpr = mappingConstPrefix + literal;
+                break;
+            case "default":
+                r.TransformExpr = mappingDefaultPrefix + literal;
+                break;
+            default:
+                r.TransformExpr = direct;
+                break;
+        }
+        workflowsDirty = true;
+    }
+
+    // The literal carried by const:/default: (empty for Direct). Falls back to the
+    // current Direct chain so a value typed in one mode survives a switch.
+    private string MappingLiteral(AttributeMapping r)
+    {
+        var s = r.TransformExpr ?? string.Empty;
+        if (s.StartsWith(mappingConstPrefix, StringComparison.OrdinalIgnoreCase))
+            return s.Substring(mappingConstPrefix.Length);
+        if (s.StartsWith(mappingDefaultPrefix, StringComparison.OrdinalIgnoreCase))
+            return s.Substring(mappingDefaultPrefix.Length);
+        return s;
+    }
+
+    private void SetMappingLiteral(AttributeMapping r, string? val)
+    {
+        var v = val ?? string.Empty;
+        r.TransformExpr = MappingMode(r) == "const"
+            ? mappingConstPrefix + v
+            : mappingDefaultPrefix + v;
+        workflowsDirty = true;
+    }
+
+    // The transform chain shown in Direct mode (empty when a prefix mode is active).
+    private string DirectTransform(AttributeMapping r)
+    {
+        var s = r.TransformExpr ?? string.Empty;
+        if (s.StartsWith(mappingConstPrefix, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        if (s.StartsWith(mappingDefaultPrefix, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        return s;
+    }
+
+    private void SetDirectTransform(AttributeMapping r, string? v)
+    {
+        r.TransformExpr = v ?? string.Empty;
         workflowsDirty = true;
     }
 
