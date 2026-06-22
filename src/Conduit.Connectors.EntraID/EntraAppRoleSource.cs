@@ -35,7 +35,14 @@ internal sealed class EntraAppRoleSource
 
     // Only enumerate SPs that actually represent enterprise apps with assignments
     // (skip the noise of every first-party microsoft SP). Bounded by MaxObjects.
-    private static readonly string[] SpSelect = { "id", "displayName", "appId", "servicePrincipalType" };
+    // appRoles is selected so we can resolve each assignment's appRoleId -> friendly
+    // name without a second round-trip per SP.
+    private static readonly string[] SpSelect = { "id", "displayName", "appId", "servicePrincipalType", "appRoles" };
+
+    // The all-zeros appRoleId Graph uses when an assignment grants the app's
+    // implicit "default access" (no specific app role).
+    private static readonly Guid DefaultAccessRoleId = Guid.Empty;
+    private const string DefaultAccessLabel = "Default Access";
 
     private readonly GraphServiceClient _client;
     private readonly ILogger _logger;
@@ -72,6 +79,11 @@ internal sealed class EntraAppRoleSource
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrEmpty(sp.Id)) continue;
 
+                // Build the appRoleId -> friendly-name map ONCE per resource SP, reused
+                // across all of this app's assignments below (the SP carries appRoles
+                // because we selected it). Keyed by the role's GUID.
+                var roleNames = BuildRoleNameMap(sp);
+
                 // Per-app assignment listing, paged. A 403/404 on a single app skips it.
                 AppRoleAssignmentCollectionResponse? aPage = null;
                 if (!await TryAsync(
@@ -95,7 +107,7 @@ internal sealed class EntraAppRoleSource
                             break;
                         }
                         emitted++;
-                        yield return Build(a, sp);
+                        yield return Build(a, sp, roleNames);
                     }
                     if (capped) break;
                     if (string.IsNullOrEmpty(aPage.OdataNextLink)) break;
@@ -117,7 +129,9 @@ internal sealed class EntraAppRoleSource
                 emitted, scope.MaxObjects!.Value);
     }
 
-    private static ConnectorObject Build(Microsoft.Graph.Models.AppRoleAssignment a, ServicePrincipal resourceSp)
+    private static ConnectorObject Build(
+        Microsoft.Graph.Models.AppRoleAssignment a, ServicePrincipal resourceSp,
+        IReadOnlyDictionary<Guid, string> roleNames)
     {
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -131,6 +145,10 @@ internal sealed class EntraAppRoleSource
         Set(attrs, "ResourceId", (a.ResourceId ?? Guid.Empty) != Guid.Empty ? a.ResourceId?.ToString() : resourceSp.Id);
         Set(attrs, "ResourceDisplayName", a.ResourceDisplayName ?? resourceSp.DisplayName);
         Set(attrs, "AppRoleId", a.AppRoleId?.ToString());
+        // Friendly name resolved from the resource SP's appRoles; never null (falls
+        // back to "Default Access" for the all-zeros default-access grant or an
+        // appRoleId not present in this app's role catalog).
+        Set(attrs, "AppRoleName", ResolveRoleName(a.AppRoleId, roleNames));
         Set(attrs, "CreatedDateTime", a.CreatedDateTime?.ToString("o"));
 
         return new ConnectorObject
@@ -139,6 +157,35 @@ internal sealed class EntraAppRoleSource
             ObjectClass = ObjectClassName,
             Attributes = attrs
         };
+    }
+
+    /// <summary>
+    /// Project the resource SP's appRoles collection into a GUID -> friendly-name map.
+    /// Prefers the role's DisplayName, falls back to its Value (the programmatic claim
+    /// string), then the GUID itself. Returns an empty map when the SP exposes no roles
+    /// (e.g. a default-access-only app) — resolution then falls back per assignment.
+    /// </summary>
+    private static IReadOnlyDictionary<Guid, string> BuildRoleNameMap(ServicePrincipal sp)
+    {
+        var map = new Dictionary<Guid, string>();
+        if (sp.AppRoles == null) return map;
+
+        foreach (var role in sp.AppRoles)
+        {
+            if (!role.Id.HasValue || role.Id.Value == DefaultAccessRoleId) continue;
+            var name = !string.IsNullOrWhiteSpace(role.DisplayName) ? role.DisplayName
+                : !string.IsNullOrWhiteSpace(role.Value) ? role.Value
+                : role.Id.Value.ToString();
+            map[role.Id.Value] = name!;
+        }
+        return map;
+    }
+
+    private static string ResolveRoleName(Guid? appRoleId, IReadOnlyDictionary<Guid, string> roleNames)
+    {
+        if (!appRoleId.HasValue || appRoleId.Value == DefaultAccessRoleId)
+            return DefaultAccessLabel;
+        return roleNames.TryGetValue(appRoleId.Value, out var name) ? name : DefaultAccessLabel;
     }
 
     /// <summary>
