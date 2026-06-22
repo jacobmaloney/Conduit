@@ -15,6 +15,10 @@ namespace Conduit.Sync.Orchestration;
 ///   substring:N:M      — start at N, length M
 ///   replace:OLD:NEW    — String.Replace(OLD, NEW)
 ///   default:VAL        — return VAL when input is null/empty
+///   const:VAL          — ALWAYS return VAL, ignoring the source value entirely
+///                        (ARS Synchronization Service "constant" value-generation:
+///                         set the sink attribute to a fixed literal on every object,
+///                         e.g. const:Synced by Conduit to stamp every description).
 ///
 /// Chains via "|": e.g. "trim | lower | prefix:user_" → trim, lowercase, prefix.
 /// Unknown expressions are skipped (logged-but-non-fatal at orchestration time
@@ -51,6 +55,7 @@ public static class AttributeTransformer
         foreach (var rawStage in expression.Split('|', StringSplitOptions.RemoveEmptyEntries))
         {
             var s = rawStage.Trim();
+            if (s.StartsWith("const:", StringComparison.OrdinalIgnoreCase)) return true;
             if (s.StartsWith("default:", StringComparison.OrdinalIgnoreCase)) return true;
             if (s.StartsWith("prefix:", StringComparison.OrdinalIgnoreCase)) return true;
             if (s.StartsWith("suffix:", StringComparison.OrdinalIgnoreCase)) return true;
@@ -81,6 +86,10 @@ public static class AttributeTransformer
                     var s = CoerceString(input);
                     return string.IsNullOrEmpty(s) ? arg : s;
                 }
+            case "const":
+                // Always emit the literal, ignoring the source value. Pairs with a
+                // blank SourceAttribute to stamp a fixed value on every object.
+                return arg ?? string.Empty;
             case "substring":
                 {
                     var s = CoerceString(input);

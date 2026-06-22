@@ -28,6 +28,10 @@
     <link rel="stylesheet" href="css/brand-tokens.css" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
+    @* Font Awesome — the shared center-shared.css and the ported IdentityCenter
+       workflow/step action buttons use fa-* glyphs; without this they render as
+       empty boxes. Loaded locally (lib/fontawesome) to match IC, no CDN. *@
+    <link rel="stylesheet" href="lib/fontawesome/css/all.min.css" />
     @* Shared design system stylesheet (cc-* components), then Conduit-owned
        overrides so consumer rules win where they overlap. *@
     <link rel="stylesheet" href="css/conduit-design.css" />

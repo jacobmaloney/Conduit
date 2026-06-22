@@ -1227,16 +1227,14 @@
                                         }
                                     </div>
                                 }
-                                @* Self-sync HARD block — source and target must be different
-                                   connections. A connection syncing to itself is never valid;
-                                   the Next/Save guard blocks on the same condition. *@
+                                @* Same-to-same is ALLOWED — a connection pointed at itself
+                                   updates objects in place (ARS pattern). Info note, not a block. *@
                                 @if (IsSelfSync)
                                 {
-                                    <div class="alert alert-danger mt-3 mb-0 py-2">
-                                        <i class="fas fa-triangle-exclamation me-1"></i>
-                                        <strong>Source and target must be different connections.</strong>
-                                        <strong>@TenantName(form.SourceTenantId)</strong> is selected on both sides.
-                                        Pick a different connection for the target.
+                                    <div class="alert alert-info mt-3 mb-0 py-2">
+                                        <i class="fas fa-circle-info me-1"></i>
+                                        <strong>@TenantName(form.SourceTenantId)</strong> is both source and target —
+                                        Conduit will update these objects in place. Use a <code>const:</code> transform on a mapping to set an attribute to a fixed value on every object.
                                     </div>
                                 }
                                 @* Credential overrides are an ADVANCED detail, not a first-step
@@ -2226,7 +2224,7 @@
 
                     <div class="mapping-editor-toolbar mb-2">
                         <span class="small text-muted">
-                            @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — blank = passthrough at runtime.
+                            @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — blank Transform = passthrough. Use const:TEXT to write a fixed value to every object (leave Source blank); default:TEXT fills only when the source is empty.
                         </span>
                         <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => AddStepMappingRow(mmStepId)">
                             <i class="fas fa-plus me-1"></i>Add Mapping
@@ -2262,7 +2260,7 @@
                                             <td><input class="form-control form-control-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
                                             <td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>
                                             <td><input class="form-control form-control-sm" @bind="rule.SinkAttribute" placeholder="userName" /></td>
-                                            <td><input class="form-control form-control-sm" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
+                                            <td><input class="form-control form-control-sm" @bind="rule.TransformExpr" placeholder="trim | lower  ·  const:Active" /></td>
                                             <td class="text-center">
                                                 <div class="form-check form-switch d-inline-block">
                                                     <input class="form-check-input" type="checkbox" @bind="rule.IsRequired" />
@@ -4615,16 +4613,18 @@
     // both source and sink (a directory syncing to itself). The exclusion is
     // skipped while a side is unset (Guid.Empty) and never hides the currently
     // selected value from its own picker.
+    // Same-to-same is allowed: a connection may be both source AND sink so an
+    // operator can update objects in place (ARS Synchronization Service pattern —
+    // e.g. point a directory at itself and use a const: mapping to stamp an
+    // attribute on every object). So the pickers no longer exclude the other side.
     private IReadOnlyList<Tenant> SourceTenants =>
         allTenants
             .Where(TenantSupportsSource)
-            .Where(t => form.SinkTenantId == Guid.Empty || t.Id != form.SinkTenantId)
             .ToList();
 
     private IReadOnlyList<Tenant> SinkTenants =>
         allTenants
             .Where(TenantSupportsSink)
-            .Where(t => form.SourceTenantId == Guid.Empty || t.Id != form.SourceTenantId)
             .ToList();
 
     // Auto-Generate modal pickers — same capability filter as the wizard, but
@@ -4749,11 +4749,7 @@
                     formError = $"{TenantName(form.SinkTenantId)} ({TenantType(form.SinkTenantId)}) cannot act as a sink — its connector is source-only. Pick a different sink.";
                     return false;
                 }
-                if (IsSelfSync)
-                {
-                    formError = "Source and target must be different connections.";
-                    return false;
-                }
+                // Same-to-same is allowed (in-place update); no self-sync block.
                 return true;
             case 3:
                 if (scopeForm.PageSize < 1)
@@ -4881,19 +4877,8 @@
             wizardStep = 1;
             return;
         }
-        // Source and target must be DISTINCT connections — a directory syncing to
-        // itself is never valid. Primary gate is the wizard Next button; this catches
-        // a tabbed-edit jump or stale selection that lands here directly. Only
-        // meaningful on create — source/sink are locked on edit.
-        if (!editingId.HasValue && IsSelfSync)
-        {
-            formError = "Source and target must be different connections.";
-            showSourceValidation = true;
-            showSinkValidation = true;
-            formTab = "setup";
-            wizardStep = 1;
-            return;
-        }
+        // Same-to-same (source == sink) is allowed — a connection updating its own
+        // objects in place is a valid ARS-style pattern. No self-sync block here.
         if (!ScheduledSyncRunnerJob.TryValidate(form.CronSchedule, out var cronError))
         {
             formError = cronError ?? "Invalid schedule.";
