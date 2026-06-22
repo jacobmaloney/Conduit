@@ -596,6 +596,24 @@ public static class AttributeTemplateCatalog
             E("AssignmentSource", "AssignmentSource"),
         };
 
+        // Entra enterprise-app role-assignment stream (objectClass "approleassignment").
+        // Pumped as a Mapping step; the IC sink routes it to
+        // /api/objects/app-role-assignments/bulk. SourceUniqueId = the appRoleAssignment
+        // id. Principal + resource GUIDs and display names pass through to same-named
+        // keys so the sink's BuildAppRoleRow can populate the AppRoleAssignments row.
+        // Names match EntraAppRoleSource.Build verbatim.
+        c[(Systems.EntraID, "approleassignment")] = new[]
+        {
+            E("AppRoleAssignmentId", "SourceUniqueId", true),
+            E("PrincipalId", "PrincipalId"),
+            E("PrincipalType", "PrincipalType"),
+            E("PrincipalDisplayName", "PrincipalDisplayName"),
+            E("ResourceId", "ResourceId"),
+            E("ResourceDisplayName", "ResourceDisplayName"),
+            E("AppRoleId", "AppRoleId"),
+            E("CreatedDateTime", "CreatedDateTime", false, "DateTime"),
+        };
+
         // ────────────────────────── Azure Resource Graph ───────────────────────
         // Source-only cloud inventory. Non-person classes: id is the ARM resource id
         // (stable join key → SourceUniqueId). Attributes pass through to same-named

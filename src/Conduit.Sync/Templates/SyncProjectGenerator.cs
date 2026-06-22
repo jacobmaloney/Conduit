@@ -126,7 +126,7 @@ namespace Conduit.Sync.Templates
             "user", "group", "servicePrincipal", "directoryRole",
             "application", "device",
             "administrativeUnit", "conditionalAccessPolicy", "oAuth2PermissionGrant", "domain",
-            "m365usage", "signinlog", "license"
+            "m365usage", "signinlog", "license", "approleassignment"
         };
 
         // ── SharePoint / M365: Core(2) / Collaboration(6) / Full(7) ──

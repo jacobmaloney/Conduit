@@ -88,6 +88,12 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             if (IsLicenseBatch(batch))
                 return await PostLicenseBatchAsync(client, creds, batch, cancellationToken);
 
+            // App-role-assignment rows go to the typed endpoint
+            // (/api/objects/app-role-assignments/bulk) — they record who has access to
+            // which enterprise app, NOT directory objects.
+            if (IsAppRoleBatch(batch))
+                return await PostAppRoleBatchAsync(client, creds, batch, cancellationToken);
+
             // IC accepts up to 1000 per call; adapter advertises 500 so the
             // orchestrator already pre-chunks. This is a defensive fallback.
             const int hardCap = 1000;
@@ -998,6 +1004,112 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             UserSourceUniqueId = LookupAttr(o, "UserSourceUniqueId"),
             AssignedAt = ParseNullableDateTime(LookupAttr(o, "AssignedAt")),
             AssignmentSource = LookupAttr(o, "AssignmentSource")
+        };
+    }
+
+    private static bool IsAppRoleBatch(IReadOnlyList<ConnectorObject> batch)
+    {
+        return batch.Count > 0
+            && string.Equals(batch[0].ObjectClass, "approleassignment", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// App-role-assignment emit. POSTs each ConnectorObject (built by
+    /// <c>EntraAppRoleSource.Build</c>) to IC's
+    /// <c>POST /api/objects/app-role-assignments/bulk</c>. Mirrors the m365-usage /
+    /// license paths exactly (Source resolution, job-server provenance, &lt;=1000-row
+    /// chunking, best-effort). Returns one SinkWriteResult per input object in order.
+    /// </summary>
+    private async Task<List<SinkWriteResult>> PostAppRoleBatchAsync(
+        HttpClient client,
+        IdentityCenterCredentials creds,
+        IReadOnlyList<ConnectorObject> batch,
+        CancellationToken cancellationToken)
+    {
+        var source = SanitizeSource(LookupAttr(batch[0], "_sourceConnection"));
+        const int maxRowsPerPost = 1000;
+        var results = new List<SinkWriteResult>(batch.Count);
+
+        for (var offset = 0; offset < batch.Count; offset += maxRowsPerPost)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(maxRowsPerPost, batch.Count - offset);
+
+            var rows = new List<object>(count);
+            for (var i = 0; i < count; i++)
+                rows.Add(BuildAppRoleRow(batch[offset + i]));
+
+            var body = new
+            {
+                BatchId = Guid.NewGuid(),
+                Source = source,
+                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerName = ConduitInstanceIdentity.Name,
+                Rows = rows
+            };
+
+            SinkWriteOutcome outcome;
+            string? error = null;
+            try
+            {
+                using var resp = await client.PostAsJsonAsync(
+                    $"{creds.BaseUrl}/api/objects/app-role-assignments/bulk", body, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    outcome = SinkWriteOutcome.Updated;
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
+                    var root = doc.RootElement;
+                    int persisted = root.TryGetProperty("assignmentsPersisted", out var pEl) && pEl.ValueKind == JsonValueKind.Number ? pEl.GetInt32() : count;
+                    int resolved = root.TryGetProperty("principalsResolved", out var rEl) && rEl.ValueKind == JsonValueKind.Number ? rEl.GetInt32() : 0;
+                    int unresolved = root.TryGetProperty("principalsUnresolved", out var uEl) && uEl.ValueKind == JsonValueKind.Number ? uEl.GetInt32() : 0;
+                    _logger.LogInformation(
+                        "IC app-role chunk pushed (tenant={TenantId}, rows={Rows}, persisted={Persisted}, principalsResolved={Resolved}, principalsUnresolved={Unresolved}).",
+                        _tenantId, count, persisted, resolved, unresolved);
+                }
+                else
+                {
+                    outcome = SinkWriteOutcome.Failed;
+                    var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    error = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
+                    _logger.LogError(
+                        "IC app-role POST failed (tenant={TenantId}, rows={Rows}): HTTP {Status} {Detail}",
+                        _tenantId, count, (int)resp.StatusCode, detail);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                outcome = SinkWriteOutcome.Failed;
+                error = ex.Message;
+                _logger.LogError(ex, "IC app-role chunk threw (tenant={TenantId}, rows={Rows})", _tenantId, count);
+            }
+
+            for (var i = 0; i < count; i++)
+                results.Add(outcome == SinkWriteOutcome.Failed
+                    ? SinkWriteResult.Fail(error ?? "Failed")
+                    : SinkWriteResult.Ok(outcome));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Map one "approleassignment" ConnectorObject's attribute bag (set by
+    /// <c>EntraAppRoleSource.Build</c>) to an IC AppRoleAssignmentRow payload.
+    /// </summary>
+    private static object BuildAppRoleRow(ConnectorObject o)
+    {
+        return new
+        {
+            AppRoleAssignmentId = LookupAttr(o, "AppRoleAssignmentId") ?? o.SourceId,
+            PrincipalId = LookupAttr(o, "PrincipalId"),
+            PrincipalType = LookupAttr(o, "PrincipalType"),
+            PrincipalDisplayName = LookupAttr(o, "PrincipalDisplayName"),
+            ResourceId = LookupAttr(o, "ResourceId"),
+            ResourceDisplayName = LookupAttr(o, "ResourceDisplayName"),
+            AppRoleId = LookupAttr(o, "AppRoleId"),
+            AppRoleName = LookupAttr(o, "AppRoleName"),
+            CreatedDateTime = ParseNullableDateTime(LookupAttr(o, "CreatedDateTime"))
         };
     }
 

@@ -146,6 +146,23 @@ public sealed class EntraIDSource : IConnectorSource
             yield break;
         }
 
+        // Enterprise-app role-assignment stream. Pages service principals then each
+        // app's appRoleAssignedTo and emits one ConnectorObject per assignment. The IC
+        // sink routes "approleassignment" batches to /api/objects/app-role-assignments/bulk.
+        // Least-priv scopes: Application.Read.All + Directory.Read.All; a 403 on the SP
+        // listing aborts, a 403 on one app skips that app.
+        if (string.Equals(objectClass, EntraAppRoleSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            var appRoleSource = new EntraAppRoleSource(client, _logger);
+            await foreach (var obj in appRoleSource.ReadAsync(scope, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
         // Directory object types beyond User/Group. These already have attribute
         // templates (AttributeTemplateCatalog) and are advertised by
         // SyncProjectGenerator (EntraFull/EntraSecurity) but were previously
@@ -340,6 +357,12 @@ public sealed class EntraIDSource : IConnectorSource
         {
             // License assignments have no delta endpoint — full-read each run (the IC
             // ingest upserts in place), never advertise a cursor.
+            return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
+        }
+        else if (string.Equals(objectClass, EntraAppRoleSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            // App-role assignments have no delta endpoint — full-read each run (the IC
+            // ingest is idempotent on assignment id), never advertise a cursor.
             return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
         }
         else if (IsExtendedDirectoryClass(objectClass))
