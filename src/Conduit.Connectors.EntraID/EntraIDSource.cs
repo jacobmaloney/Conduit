@@ -130,6 +130,22 @@ public sealed class EntraIDSource : IConnectorSource
             yield break;
         }
 
+        // License-assignment stream. Joins /subscribedSkus (pool inventory) with each
+        // user's assignedLicenses and emits one ConnectorObject per (user, SKU). The IC
+        // sink routes "license" batches to /api/objects/licenses/bulk. Least-priv
+        // scopes: Organization.Read.All + User.Read.All; a 403 warns and yields nothing.
+        if (string.Equals(objectClass, EntraLicenseSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            var licenseSource = new EntraLicenseSource(client, _logger);
+            await foreach (var obj in licenseSource.ReadAsync(scope, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                emitted++;
+                yield return obj;
+            }
+            yield break;
+        }
+
         // Directory object types beyond User/Group. These already have attribute
         // templates (AttributeTemplateCatalog) and are advertised by
         // SyncProjectGenerator (EntraFull/EntraSecurity) but were previously
@@ -318,6 +334,12 @@ public sealed class EntraIDSource : IConnectorSource
         {
             // Sign-in events have no delta endpoint — windowed full-read each run,
             // never advertise a cursor (the windowed read is the incremental story).
+            return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
+        }
+        else if (string.Equals(objectClass, EntraLicenseSource.ObjectClassName, StringComparison.OrdinalIgnoreCase))
+        {
+            // License assignments have no delta endpoint — full-read each run (the IC
+            // ingest upserts in place), never advertise a cursor.
             return EnumerateFullForExtendedClassAsync(objectClass, scope, cancellationToken);
         }
         else if (IsExtendedDirectoryClass(objectClass))

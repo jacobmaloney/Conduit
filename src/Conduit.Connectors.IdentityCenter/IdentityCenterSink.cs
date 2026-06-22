@@ -82,6 +82,12 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             if (IsM365UsageBatch(batch))
                 return await PostM365UsageBatchAsync(client, creds, batch, cancellationToken);
 
+            // License-assignment rows go to the typed endpoint
+            // (/api/objects/licenses/bulk) — they upsert LicensePools + LicenseAssignments,
+            // NOT directory objects, so they never hit the /api/objects/bulk upsert path.
+            if (IsLicenseBatch(batch))
+                return await PostLicenseBatchAsync(client, creds, batch, cancellationToken);
+
             // IC accepts up to 1000 per call; adapter advertises 500 so the
             // orchestrator already pre-chunks. This is a defensive fallback.
             const int hardCap = 1000;
@@ -877,6 +883,121 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             TeamsCallCount = ParseInt(LookupAttr(o, "TeamsCallCount")),
             TeamsMeetingCount = ParseInt(LookupAttr(o, "TeamsMeetingCount")),
             AssignedProducts = LookupAttr(o, "AssignedProducts")
+        };
+    }
+
+    private static bool IsLicenseBatch(IReadOnlyList<ConnectorObject> batch)
+    {
+        // A Mapping step pumps a single object class, so the batch is homogeneous.
+        return batch.Count > 0
+            && string.Equals(batch[0].ObjectClass, "license", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// License-assignment emit. POSTs each ConnectorObject (built by
+    /// <c>EntraLicenseSource.Build</c>) to IC's <c>POST /api/objects/licenses/bulk</c>.
+    /// Mirrors the m365-usage path: Source is the sanitized source-connection name (so
+    /// IC resolves the SAME DirectoryConnection the user upserts landed under) and
+    /// SourceJobServerId/Name carry this installation's provenance. Chunked to &lt;=1000
+    /// rows per POST. Best-effort: a failed chunk is logged and the run proceeds.
+    /// Returns one SinkWriteResult per input object in order so the orchestrator counts
+    /// correctly.
+    /// </summary>
+    private async Task<List<SinkWriteResult>> PostLicenseBatchAsync(
+        HttpClient client,
+        IdentityCenterCredentials creds,
+        IReadOnlyList<ConnectorObject> batch,
+        CancellationToken cancellationToken)
+    {
+        var source = SanitizeSource(LookupAttr(batch[0], "_sourceConnection"));
+        const int maxRowsPerPost = 1000;
+        var results = new List<SinkWriteResult>(batch.Count);
+
+        for (var offset = 0; offset < batch.Count; offset += maxRowsPerPost)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(maxRowsPerPost, batch.Count - offset);
+
+            var rows = new List<object>(count);
+            for (var i = 0; i < count; i++)
+                rows.Add(BuildLicenseRow(batch[offset + i]));
+
+            var body = new
+            {
+                BatchId = Guid.NewGuid(),
+                Source = source,
+                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerName = ConduitInstanceIdentity.Name,
+                Rows = rows
+            };
+
+            SinkWriteOutcome outcome;
+            string? error = null;
+            try
+            {
+                using var resp = await client.PostAsJsonAsync(
+                    $"{creds.BaseUrl}/api/objects/licenses/bulk", body, cancellationToken);
+                if (resp.IsSuccessStatusCode)
+                {
+                    outcome = SinkWriteOutcome.Updated;
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
+                    var root = doc.RootElement;
+                    int pools = root.TryGetProperty("poolsUpserted", out var poEl) && poEl.ValueKind == JsonValueKind.Number ? poEl.GetInt32() : 0;
+                    int persisted = root.TryGetProperty("assignmentsPersisted", out var pEl) && pEl.ValueKind == JsonValueKind.Number ? pEl.GetInt32() : count;
+                    int resolved = root.TryGetProperty("usersResolved", out var rEl) && rEl.ValueKind == JsonValueKind.Number ? rEl.GetInt32() : 0;
+                    int unresolved = root.TryGetProperty("usersUnresolved", out var uEl) && uEl.ValueKind == JsonValueKind.Number ? uEl.GetInt32() : 0;
+                    _logger.LogInformation(
+                        "IC license chunk pushed (tenant={TenantId}, rows={Rows}, pools={Pools}, assignmentsPersisted={Persisted}, usersResolved={Resolved}, usersUnresolved={Unresolved}).",
+                        _tenantId, count, pools, persisted, resolved, unresolved);
+                }
+                else
+                {
+                    outcome = SinkWriteOutcome.Failed;
+                    var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
+                    error = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
+                    _logger.LogError(
+                        "IC license POST failed (tenant={TenantId}, rows={Rows}): HTTP {Status} {Detail}",
+                        _tenantId, count, (int)resp.StatusCode, detail);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                outcome = SinkWriteOutcome.Failed;
+                error = ex.Message;
+                _logger.LogError(ex, "IC license chunk threw (tenant={TenantId}, rows={Rows})", _tenantId, count);
+            }
+
+            for (var i = 0; i < count; i++)
+                results.Add(outcome == SinkWriteOutcome.Failed
+                    ? SinkWriteResult.Fail(error ?? "Failed")
+                    : SinkWriteResult.Ok(outcome));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Map one "license" ConnectorObject's attribute bag (set by
+    /// <c>EntraLicenseSource.Build</c>) to an IC LicenseAssignmentRow payload.
+    /// Attribute keys match the source's PascalCase emission exactly; LookupAttr is
+    /// case-insensitive. Numeric values are parsed back from string form.
+    /// </summary>
+    private static object BuildLicenseRow(ConnectorObject o)
+    {
+        return new
+        {
+            SkuId = LookupAttr(o, "SkuId"),
+            SkuName = LookupAttr(o, "SkuName"),
+            SkuPartNumber = LookupAttr(o, "SkuPartNumber"),
+            TotalUnits = ParseInt(LookupAttr(o, "TotalUnits")),
+            ConsumedUnits = ParseInt(LookupAttr(o, "ConsumedUnits")),
+            WarningUnits = ParseInt(LookupAttr(o, "WarningUnits")),
+            SuspendedUnits = ParseInt(LookupAttr(o, "SuspendedUnits")),
+            UserPrincipalName = LookupAttr(o, "UserPrincipalName"),
+            UserSourceUniqueId = LookupAttr(o, "UserSourceUniqueId"),
+            AssignedAt = ParseNullableDateTime(LookupAttr(o, "AssignedAt")),
+            AssignmentSource = LookupAttr(o, "AssignmentSource")
         };
     }
 

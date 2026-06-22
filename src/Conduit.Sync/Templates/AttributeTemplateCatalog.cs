@@ -575,6 +575,27 @@ public static class AttributeTemplateCatalog
             E("resourceId", "resourceId"),
         };
 
+        // Entra license-assignment stream (objectClass "license"). Pumped as a Mapping
+        // step; the IC sink routes it to /api/objects/licenses/bulk. SourceUniqueId =
+        // "{userId}:{skuId}" (the per-assignment key). Pool fields (SkuId/SkuName/part
+        // number + capacity counts) AND assignee fields (UPN + objectGUID) pass through
+        // to same-named keys so the sink's BuildLicenseRow can populate both the
+        // LicensePools upsert and the LicenseAssignments upsert. Names match
+        // EntraLicenseSource.Build verbatim.
+        c[(Systems.EntraID, "license")] = new[]
+        {
+            E("SkuId", "SkuId", true),
+            E("SkuName", "SkuName"),
+            E("SkuPartNumber", "SkuPartNumber"),
+            E("TotalUnits", "TotalUnits", false, "Integer"),
+            E("ConsumedUnits", "ConsumedUnits", false, "Integer"),
+            E("WarningUnits", "WarningUnits", false, "Integer"),
+            E("SuspendedUnits", "SuspendedUnits", false, "Integer"),
+            E("UserPrincipalName", "UserPrincipalName"),
+            E("UserSourceUniqueId", "UserSourceUniqueId"),
+            E("AssignmentSource", "AssignmentSource"),
+        };
+
         // ────────────────────────── Azure Resource Graph ───────────────────────
         // Source-only cloud inventory. Non-person classes: id is the ARM resource id
         // (stable join key → SourceUniqueId). Attributes pass through to same-named
