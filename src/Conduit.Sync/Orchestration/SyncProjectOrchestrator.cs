@@ -1640,18 +1640,20 @@ public sealed class SyncProjectOrchestrator
                 ? ctx.SourceTenant.Name
                 : "Conduit";
 
-            // AD member values are DNs, not objectGUIDs; IC keys members by
-            // objectGUID (Objects.SourceUniqueId). DNs will come back unresolved on
-            // IC (silently skipped, no error) until reconciliation lands. Warn so the
-            // gap is visible. Cloud sources (Entra/GWS/AWS) emit GUID-keyed member ids
-            // and resolve fully.
-            // TODO(membership): AD member DN->objectGUID reconciliation — project each
-            // member's objectGUID in the AD group read (or a DN->GUID lookup pass) so
-            // AD group membership resolves on IC the same way cloud membership does.
+            // AD member values are DNs, not objectGUIDs. IC keys members by objectGUID
+            // (Objects.SourceUniqueId) BUT its /api/objects/group-memberships/bulk
+            // endpoint already falls back to resolving member ids against Objects.DN
+            // (connection-scoped) for any id that didn't match a SourceUniqueId. That
+            // DN fallback only works when the member's directory Object actually carries
+            // a DN — which it now does: ApplyMappings carries distinguishedName forward
+            // as "DN" for every AD object regardless of the project's mapped set (see the
+            // structural DN carry-through in ApplyMappings). So AD memberships resolve
+            // the same way cloud (GUID-keyed) memberships do. Cloud sources still emit
+            // GUID-keyed member ids and resolve on the SourceUniqueId fast-path.
             if (string.Equals(sourceAdapter.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase))
             {
-                await Log(run, "Warning",
-                    $"    Group memberships (class '{objectClass}'): source is ActiveDirectory — member values are DNs, not objectGUIDs. Pushing as-is; IC will leave them UNRESOLVED until DN->objectGUID reconciliation is implemented (cloud sources resolve fully).");
+                await Log(run, "Info",
+                    $"    Group memberships (class '{objectClass}'): source is ActiveDirectory — member values are DNs. IC resolves them via its Objects.DN fallback (the member objects are upserted with their DN this same run). Memberships resolve like cloud sources.");
             }
 
             try
@@ -1910,6 +1912,23 @@ public sealed class SyncProjectOrchestrator
         {
             if (!dst.Attributes.ContainsKey(fallback) && src.Attributes.TryGetValue(fallback, out var v))
                 dst.Attributes[fallback] = v;
+        }
+
+        // Structural DN carry-through. AD group membership + manager resolution on the
+        // IC sink key off Objects.DN (members are LDAP DNs; the manager attribute is a
+        // DN). ApplyMappings otherwise drops any attribute a step didn't explicitly map,
+        // so a project that maps display fields but not distinguishedName would land the
+        // object on IC with a NULL DN and member/manager DNs would never resolve. Always
+        // carry the source DN forward under IC's column name "DN" (the IC /bulk allow-list
+        // accepts it; non-IC sinks simply ignore an attribute they don't map). The raw
+        // source bag uses "distinguishedName" (AD source) — honor either spelling, and
+        // never clobber an explicit mapping that already produced a DN.
+        if (!dst.Attributes.ContainsKey("DN"))
+        {
+            if (src.Attributes.TryGetValue("distinguishedName", out var dnVal) && dnVal is not null)
+                dst.Attributes["DN"] = dnVal;
+            else if (src.Attributes.TryGetValue("DN", out var dnVal2) && dnVal2 is not null)
+                dst.Attributes["DN"] = dnVal2;
         }
 
         return dst;
