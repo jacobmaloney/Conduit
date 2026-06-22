@@ -76,13 +76,14 @@ public sealed class SyncProjectBlueprint
         Tenant sourceTenant,
         Tenant sinkTenant,
         string? cronSchedule,
-        IReadOnlyCollection<string> existingNames)
+        IReadOnlyCollection<string> existingNames,
+        Conduit.Sync.Connectors.ConnectorCapabilities? sinkCapabilities = null)
     {
         var cron = cronSchedule ?? DefaultCronSchedule;
         if (Mode.HasValue)
-            return generator.Generate(sourceTenant, sinkTenant, Mode.Value, cron, existingNames);
+            return generator.Generate(sourceTenant, sinkTenant, Mode.Value, cron, existingNames, sinkCapabilities);
         return generator.Generate(
-            sourceTenant, sinkTenant, ExplicitClasses ?? Array.Empty<string>(), cron, existingNames);
+            sourceTenant, sinkTenant, ExplicitClasses ?? Array.Empty<string>(), cron, existingNames, sinkCapabilities);
     }
 }
 

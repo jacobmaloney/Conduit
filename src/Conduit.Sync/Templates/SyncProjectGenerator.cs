@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Conduit.Core.Models;
 using Conduit.Core.SyncModels;
+using Conduit.Sync.Connectors;
 
 namespace Conduit.Sync.Templates
 {
@@ -76,7 +77,8 @@ namespace Conduit.Sync.Templates
             Tenant sinkTenant,
             GenerationMode mode,
             string? cronSchedule,
-            IReadOnlyCollection<string> existingNames);
+            IReadOnlyCollection<string> existingNames,
+            ConnectorCapabilities? sinkCapabilities = null);
 
         /// <summary>
         /// Blueprint path: builds the SAME in-memory sync-project graph as the
@@ -92,7 +94,8 @@ namespace Conduit.Sync.Templates
             Tenant sinkTenant,
             IReadOnlyCollection<string> explicitClasses,
             string? cronSchedule,
-            IReadOnlyCollection<string> existingNames);
+            IReadOnlyCollection<string> existingNames,
+            ConnectorCapabilities? sinkCapabilities = null);
     }
 
     public class SyncProjectGenerator : ISyncProjectGenerator
@@ -214,10 +217,11 @@ namespace Conduit.Sync.Templates
             Tenant sinkTenant,
             GenerationMode mode,
             string? cronSchedule,
-            IReadOnlyCollection<string> existingNames)
+            IReadOnlyCollection<string> existingNames,
+            ConnectorCapabilities? sinkCapabilities = null)
         {
             var objectClasses = GetObjectClasses(sourceTenant.SystemType, mode);
-            return Build(sourceTenant, sinkTenant, objectClasses, ModeLabel(mode), cronSchedule, existingNames);
+            return Build(sourceTenant, sinkTenant, objectClasses, ModeLabel(mode), cronSchedule, existingNames, sinkCapabilities);
         }
 
         public IReadOnlyList<GeneratedSyncProject> Generate(
@@ -225,7 +229,8 @@ namespace Conduit.Sync.Templates
             Tenant sinkTenant,
             IReadOnlyCollection<string> explicitClasses,
             string? cronSchedule,
-            IReadOnlyCollection<string> existingNames)
+            IReadOnlyCollection<string> existingNames,
+            ConnectorCapabilities? sinkCapabilities = null)
         {
             // Preserve caller order, drop blanks/dupes, normalise to lowercase native names.
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -234,8 +239,34 @@ namespace Conduit.Sync.Templates
                 .Select(c => c.Trim())
                 .Where(c => seen.Add(c))
                 .ToArray();
-            return Build(sourceTenant, sinkTenant, classes, "Full", cronSchedule, existingNames);
+            return Build(sourceTenant, sinkTenant, classes, "Full", cronSchedule, existingNames, sinkCapabilities);
         }
+
+        // ── Phase 8: data-class ingest capability map ────────────────────────────
+        // The four "deeper governance" object classes an EntraID source can produce
+        // are ONLY meaningful when the SINK can ingest them. Keyed by the native
+        // class name the EntraID source emits (see Entra*Source.ObjectClassName).
+        // The generator drops a data class from the emitted set when the sink does
+        // not advertise the matching capability — so a non-IC sink gets the normal
+        // user/group pump and none of the license/signin/usage/approle Mapping
+        // workflows it could not absorb. This is a capability/data-availability gate,
+        // NOT a license gate.
+        private static bool SinkAcceptsDataClass(string objectClass, ConnectorCapabilities caps) =>
+            objectClass.ToLowerInvariant() switch
+            {
+                "license"           => caps.SupportsLicenseIngest,
+                "signinlog"         => caps.SupportsSignInLogIngest,
+                "m365usage"         => caps.SupportsUsageReportIngest,
+                "approleassignment" => caps.SupportsAppRoleIngest,
+                _                   => true   // ordinary classes are not gated here
+            };
+
+        /// <summary>
+        /// True for the four EntraID-produced "deeper governance" data classes whose
+        /// emission is gated on (a) an EntraID source AND (b) a sink that ingests them.
+        /// </summary>
+        private static bool IsEntraGovernanceDataClass(string objectClass) =>
+            objectClass.ToLowerInvariant() is "license" or "signinlog" or "m365usage" or "approleassignment";
 
         /// <summary>
         /// The ONE per-class build loop shared by both Generate overloads. Produces a
@@ -248,13 +279,35 @@ namespace Conduit.Sync.Templates
             IReadOnlyList<string> objectClasses,
             string modeLabel,
             string? cronSchedule,
-            IReadOnlyCollection<string> existingNames)
+            IReadOnlyCollection<string> existingNames,
+            ConnectorCapabilities? sinkCapabilities)
         {
             var sourceType = sourceTenant.SystemType;
             var sinkType = sinkTenant.SystemType;
             var cron = string.IsNullOrWhiteSpace(cronSchedule) ? null : cronSchedule;
 
+            // Resolve the EFFECTIVE sink capability set. Callers that can resolve the
+            // sink adapter pass its real Capabilities; callers that cannot (older paths)
+            // pass null and we fall back to the legacy IC-sink-name heuristic — an IC
+            // sink behaves exactly as before (all governance steps), every other sink
+            // gets the conservative Default (no governance steps). This makes the
+            // re-architecture safe to roll in without forcing every call site at once.
+            var caps = ResolveSinkCapabilities(sinkType, sinkCapabilities);
+
             var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
+
+            if (objectClasses.Count == 0)
+                return new List<GeneratedSyncProject>();
+
+            // Phase 8 data-availability + capability gate: drop the EntraID-only
+            // "deeper governance" data classes when the source can't produce them
+            // (non-Entra source) OR the sink can't ingest them. Ordinary classes
+            // (user/group/etc.) are never dropped here.
+            var isEntraSource = IsEntraSource(sourceType);
+            objectClasses = objectClasses
+                .Where(c => !IsEntraGovernanceDataClass(c)
+                            || (isEntraSource && SinkAcceptsDataClass(c, caps)))
+                .ToList();
 
             if (objectClasses.Count == 0)
                 return new List<GeneratedSyncProject>();
@@ -351,25 +404,25 @@ namespace Conduit.Sync.Templates
                     }
                 };
 
-                // LICENSED IC feature: emit the IC-parity relationship-resolution
-                // (Lookup) step ONLY when the SINK is an IdentityCenter connection.
-                // For any non-IC sink (the free pump) we keep the Mapping-only shape.
-                // This is the structural gate; the connection-license gate (Task 3)
-                // governs whether an IC sink can exist at all.
-                var lookupStep = BuildResolveRelationshipsStep(sinkType, objectClass, projectId, workflowId);
+                // FREE, CAPABILITY-GATED: emit the IC-parity relationship-resolution
+                // (Lookup) step when the SINK advertises manager/owner resolution
+                // (SupportsAssignManager / SupportsAssignGroupOwner) — regardless of
+                // whether the sink is IdentityCenter. A sink without the capability
+                // gets the Mapping-only shape. The connection-license gate (orchestrator
+                // run-guard) separately governs whether an IC sink may RUN at all.
+                var lookupStep = BuildResolveRelationshipsStep(caps, objectClass, projectId, workflowId);
                 if (lookupStep is not null)
                     generatedSteps.Add(lookupStep);
 
-                // LICENSED IC feature: the IC-parity "deeper governance" steps
-                // (LicenseSync / SignInLogSync / UsageReportSync / AppRoleSync on
-                // the USER class for Entra sources; GroupMembership on the GROUP
-                // class). Same single IC-sink chokepoint as the Lookup step above.
-                // The ordinal continues after whatever steps already sit in this
-                // workflow (Mapping = 0, Lookup = 1 when present), mirroring IC's
-                // ExecutionOrder. These are MARKERS — see WorkflowStepTypes docs and
-                // BuildGovernanceSteps; the orchestrator run-skips them cleanly.
+                // FREE, CAPABILITY-GATED: the IC-parity "deeper governance" steps.
+                // GroupMembership on the GROUP class emits when the sink advertises
+                // SupportsGroupMembership. The four user-class marker steps
+                // (LicenseSync / SignInLogSync / UsageReportSync / AppRoleSync) emit
+                // when the SOURCE is EntraID (data availability) AND the sink advertises
+                // the matching ingest capability. The ordinal continues after whatever
+                // steps already sit in this workflow, mirroring IC's ExecutionOrder.
                 var governanceSteps = BuildGovernanceSteps(
-                    sourceType, sinkType, objectClass, projectId, workflowId,
+                    sourceType, caps, objectClass, projectId, workflowId,
                     startOrdinal: generatedSteps.Count);
                 generatedSteps.AddRange(governanceSteps);
 
@@ -399,20 +452,28 @@ namespace Conduit.Sync.Templates
         ///   contact → "Resolve Manager Relationships" (manager)
         ///   computer / organizationalUnit → "Resolve ManagedBy Relationships" (managedBy)
         ///   group → "Resolve Group Owner Relationships" (managedBy → owner)
-        /// Returns null for the free pump (non-IC sink) or any other class, preserving
-        /// the Mapping-only shape. The step is a STRUCTURAL/VISUAL marker today: it
-        /// persists and renders 1:1 with IC's dashed Lookup card, but the orchestrator
-        /// has no Lookup arm so it is cleanly Skipped at run time (manager-resolution
-        /// itself is IC-side governance, not implemented in the pump).
+        /// Returns null when the sink does not advertise the relationship-resolution
+        /// capability, or for any class IC does not decorate — preserving the
+        /// Mapping-only shape. The Lookup step is FUNCTIONAL at run time: the
+        /// orchestrator's <c>ExecuteLookupStepAsync</c> arm reads the manager/owner
+        /// reference the upstream Mapping step carried and calls the sink's
+        /// AssignManager / AssignGroupOwner method. A sink that lacks the capability
+        /// is capability-skipped there (defence in depth).
         /// </summary>
         private static GeneratedSyncStep? BuildResolveRelationshipsStep(
-            string sinkType, string objectClass, Guid projectId, Guid workflowId)
+            ConnectorCapabilities caps, string objectClass, Guid projectId, Guid workflowId)
         {
-            // Connection-target gate: only IdentityCenter sinks get governance Lookup steps.
-            if (!string.Equals(sinkType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+            var lower = objectClass.ToLowerInvariant();
+            var isGroup = lower == "group";
+
+            // Capability gate (replaces the IC-sink-name gate): only a sink that can
+            // absorb the relationship gets the Lookup step. group → owner resolution;
+            // everything else → manager resolution.
+            var capable = isGroup ? caps.SupportsAssignGroupOwner : caps.SupportsAssignManager;
+            if (!capable)
                 return null;
 
-            var (stepName, sourceAttr) = objectClass.ToLowerInvariant() switch
+            var (stepName, sourceAttr) = lower switch
             {
                 "user"               => ("Resolve Manager Relationships",     "ManagerSourceId"),
                 "contact"            => ("Resolve Manager Relationships",     "ManagerSourceId"),
@@ -474,62 +535,100 @@ namespace Conduit.Sync.Templates
 
         /// <summary>
         /// IC-parity "deeper governance" steps, mirroring IdentityCenter's
-        /// AutoSyncProjectGenerator.CreateWorkflowAsync. Emitted ONLY when the sink
-        /// is an IdentityCenter connection (the licensed IC integration):
+        /// AutoSyncProjectGenerator.CreateWorkflowAsync. Now FREE + CAPABILITY-GATED
+        /// (no IC-sink-name gate):
         ///   user (Entra source only): "Sync M365 Licenses" (LicenseSync),
         ///                             "Sync Sign-In Logs" (SignInLogSync),
         ///                             "Sync M365 Usage Reports" (UsageReportSync),
         ///                             "Sync App Role Assignments" (AppRoleSync)
+        ///       — emitted per-step when the SOURCE is EntraID (data availability)
+        ///         AND the sink advertises the matching ingest capability.
         ///   group:                    "Sync Group Memberships" (GroupMembership)
-        /// IC gates the four user-class steps on the SOURCE connection being Entra ID /
-        /// Azure AD; we mirror that with <paramref name="sourceType"/> == "EntraID".
-        /// GroupMembership has no source gate in IC (it rides the AD/Entra group memberOf).
+        ///       — emitted when the sink advertises SupportsGroupMembership.
         ///
-        /// HONEST STATUS — MARKERS, NOT FUNCTIONAL. The orchestrator has no router arm
-        /// for any of these step types, so each falls through to the safe
-        /// `_ => StepResult.Skipped(...)` default at run time: they persist, open, and
-        /// render like IC's dashed cards, but perform NO license/sign-in/usage/app-role
-        /// or membership ingest in the free pump. Conduit has no membership-ingest
-        /// capability today, so GroupMembership is a marker too. Returns an empty list
-        /// for non-IC sinks (free pump) and for any class IC does not decorate. These
-        /// steps carry no attribute mappings (matching IC, which seeds none for them)
-        /// and an empty scope.
+        /// HONEST STATUS — the four user-class steps are VISUAL/STRUCTURAL MARKERS:
+        /// the orchestrator has no router arm for those StepTypes, so each is cleanly
+        /// capability-skipped at run time. The ACTUAL license/sign-in/usage/app-role
+        /// ingest is performed by the dedicated DATA-CLASS Mapping workflows (object
+        /// classes license/signinlog/m365usage/approleassignment), which the IC sink
+        /// routes to its bulk endpoints — those are gated by SinkAcceptsDataClass in
+        /// Build. GroupMembership is FUNCTIONAL: the orchestrator captures member edges
+        /// during the group Mapping pass and emits them via IGroupMembershipEmittingSink.
+        /// Returns an empty list when the sink advertises none of these (e.g. AD /
+        /// Emulator today). Steps carry no attribute mappings and an empty scope.
         /// </summary>
         private static IReadOnlyList<GeneratedSyncStep> BuildGovernanceSteps(
-            string sourceType, string sinkType, string objectClass,
+            string sourceType, ConnectorCapabilities caps, string objectClass,
             Guid projectId, Guid workflowId, int startOrdinal)
         {
             var result = new List<GeneratedSyncStep>();
-
-            // Connection-target gate: only IdentityCenter sinks get governance steps.
-            if (!string.Equals(sinkType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
-                return result;
 
             var lower = objectClass.ToLowerInvariant();
             var ordinal = startOrdinal;
 
             if (lower == "user")
             {
-                // IC gates these four on the SOURCE being Entra ID / Azure AD.
-                var isEntraSource =
-                    string.Equals(sourceType, "EntraID", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(sourceType, "AzureAD", StringComparison.OrdinalIgnoreCase);
-                if (isEntraSource)
+                // Data-availability gate: these four require an EntraID source to
+                // produce the data. Per-step capability gate: the sink must advertise
+                // the matching ingest. No license check — capability + data facts only.
+                if (IsEntraSource(sourceType))
                 {
-                    result.Add(MakeGovernanceStep("Sync M365 Licenses",        WorkflowStepTypes.LicenseSync,     objectClass, projectId, workflowId, ordinal++));
-                    result.Add(MakeGovernanceStep("Sync Sign-In Logs",         WorkflowStepTypes.SignInLogSync,   objectClass, projectId, workflowId, ordinal++));
-                    result.Add(MakeGovernanceStep("Sync M365 Usage Reports",   WorkflowStepTypes.UsageReportSync, objectClass, projectId, workflowId, ordinal++));
-                    result.Add(MakeGovernanceStep("Sync App Role Assignments", WorkflowStepTypes.AppRoleSync,     objectClass, projectId, workflowId, ordinal++));
+                    if (caps.SupportsLicenseIngest)
+                        result.Add(MakeGovernanceStep("Sync M365 Licenses",        WorkflowStepTypes.LicenseSync,     objectClass, projectId, workflowId, ordinal++));
+                    if (caps.SupportsSignInLogIngest)
+                        result.Add(MakeGovernanceStep("Sync Sign-In Logs",         WorkflowStepTypes.SignInLogSync,   objectClass, projectId, workflowId, ordinal++));
+                    if (caps.SupportsUsageReportIngest)
+                        result.Add(MakeGovernanceStep("Sync M365 Usage Reports",   WorkflowStepTypes.UsageReportSync, objectClass, projectId, workflowId, ordinal++));
+                    if (caps.SupportsAppRoleIngest)
+                        result.Add(MakeGovernanceStep("Sync App Role Assignments", WorkflowStepTypes.AppRoleSync,     objectClass, projectId, workflowId, ordinal++));
                 }
             }
             else if (lower == "group")
             {
-                // IC attaches membership sync to the GROUP workflow (after groups +
-                // owners) with ObjectClass "GroupMembership". No source-type gate.
-                result.Add(MakeGovernanceStep("Sync Group Memberships", WorkflowStepTypes.GroupMembership, "GroupMembership", projectId, workflowId, ordinal++));
+                // Capability gate: emit membership sync when the sink can absorb edges.
+                // No source-type gate (it rides the AD/Entra group member set).
+                if (caps.SupportsGroupMembership)
+                    result.Add(MakeGovernanceStep("Sync Group Memberships", WorkflowStepTypes.GroupMembership, "GroupMembership", projectId, workflowId, ordinal++));
             }
 
             return result;
+        }
+
+        /// <summary>EntraID / Azure AD source — the only source that produces the four
+        /// "deeper governance" data classes (license / signinlog / m365usage / approle).</summary>
+        private static bool IsEntraSource(string sourceType) =>
+            string.Equals(sourceType, "EntraID", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(sourceType, "AzureAD", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Resolve the effective sink capabilities. When the caller supplied them
+        /// (resolved from the sink adapter), use them verbatim. When null (legacy call
+        /// sites that cannot reach the ConnectorRegistry), fall back to a name heuristic
+        /// that PRESERVES the prior behaviour exactly: an IdentityCenter sink gets the
+        /// full IC capability set (all governance steps, as before); any other sink gets
+        /// the conservative Default (no governance steps). This keeps the change safe to
+        /// land incrementally — once a call site passes real caps, it is fully driven by
+        /// the adapter and the heuristic is bypassed.
+        /// </summary>
+        private static ConnectorCapabilities ResolveSinkCapabilities(
+            string sinkType, ConnectorCapabilities? supplied)
+        {
+            if (supplied is not null)
+                return supplied;
+
+            if (string.Equals(sinkType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+                return new ConnectorCapabilities
+                {
+                    SupportsAssignManager = true,
+                    SupportsAssignGroupOwner = true,
+                    SupportsLicenseIngest = true,
+                    SupportsSignInLogIngest = true,
+                    SupportsUsageReportIngest = true,
+                    SupportsAppRoleIngest = true,
+                    SupportsGroupMembership = true
+                };
+
+            return ConnectorCapabilities.Default;
         }
 
         /// <summary>

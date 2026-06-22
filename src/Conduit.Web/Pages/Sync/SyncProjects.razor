@@ -5541,7 +5541,12 @@
             // generator, then persist project -> workflow -> step -> scope -> mappings
             // through the repositories. Only Mapping steps are emitted -- no governance.
             var existingNames = allProjects.Select(p => p.Name).ToList();
-            var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule, existingNames);
+            // Phase 8: governance steps are emitted by SINK CAPABILITY, not by IC-sink
+            // name. Resolve the sink adapter's declared Capabilities and pass them so a
+            // capable non-IC sink also gets manager/membership steps and an IC sink gets
+            // its full set — all driven by the adapter, never a name heuristic.
+            var sinkCaps = Connectors.Get(sink.SystemType)?.Capabilities;
+            var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule, existingNames, sinkCaps);
             if (generated.Count == 0)
             {
                 autoGenError = "This source connector + mode produced no object classes.";
@@ -5712,7 +5717,10 @@
             // Expand the blueprint to the SAME GeneratedSyncProject shape Auto-Generate
             // produces, reusing the matching ISyncProjectGenerator.Generate overload.
             var existingNames = allProjects.Select(p => p.Name).ToList();
-            var generated = bp.Expand(ProjectGenerator, src, sink, blueprintCronSchedule, existingNames);
+            // Phase 8: pass the sink adapter's declared Capabilities so governance-step
+            // emission is capability-driven (not IC-sink-name driven).
+            var blueprintSinkCaps = Connectors.Get(sink.SystemType)?.Capabilities;
+            var generated = bp.Expand(ProjectGenerator, src, sink, blueprintCronSchedule, existingNames, blueprintSinkCaps);
             if (generated.Count == 0)
             {
                 blueprintError = "This blueprint produced no object classes for the chosen source.";

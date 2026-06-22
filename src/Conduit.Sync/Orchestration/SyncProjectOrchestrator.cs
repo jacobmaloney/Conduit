@@ -389,6 +389,16 @@ public sealed class SyncProjectOrchestrator
                                 WorkflowStepTypes.AssignGroupOwner   => await ExecuteAssignGroupOwnerStepAsync(ctx, step, lastBatch, cancellationToken),
                                 WorkflowStepTypes.Lookup             => await ExecuteLookupStepAsync(ctx, step, lastBatch, cancellationToken),
                                 WorkflowStepTypes.Custom             => await ExecuteCustomStepAsync(ctx, step, cancellationToken),
+                                // Phase 8 governance MARKER steps. The real ingest happens on
+                                // the dedicated data-class Mapping workflows (license/signinlog/
+                                // m365usage/approleassignment) and the membership second pass;
+                                // these named steps mirror IC's dashed cards. They are a benign
+                                // capability-skip — NOT an error and NOT a license block.
+                                WorkflowStepTypes.LicenseSync        => await GovernanceMarkerSkipAsync(ctx, step, ctx.SinkAdapter.Capabilities.SupportsLicenseIngest,     "M365 license ingest",       cancellationToken),
+                                WorkflowStepTypes.SignInLogSync      => await GovernanceMarkerSkipAsync(ctx, step, ctx.SinkAdapter.Capabilities.SupportsSignInLogIngest,   "sign-in log ingest",        cancellationToken),
+                                WorkflowStepTypes.UsageReportSync    => await GovernanceMarkerSkipAsync(ctx, step, ctx.SinkAdapter.Capabilities.SupportsUsageReportIngest, "M365 usage report ingest",  cancellationToken),
+                                WorkflowStepTypes.AppRoleSync        => await GovernanceMarkerSkipAsync(ctx, step, ctx.SinkAdapter.Capabilities.SupportsAppRoleIngest,     "app-role assignment ingest", cancellationToken),
+                                WorkflowStepTypes.GroupMembership    => await GovernanceMarkerSkipAsync(ctx, step, ctx.SinkAdapter.Capabilities.SupportsGroupMembership,   "group membership ingest",   cancellationToken),
                                 _                                    => StepResult.Skipped($"Unknown StepType '{step.StepType}' — skipped.")
                             };
                         }
@@ -1071,6 +1081,35 @@ public sealed class SyncProjectOrchestrator
     {
         // Reserved for future plugin extensibility. Log + no-op.
         await Log(ctx.RunId, "Info", $"    Custom step '{step.Name}' is a no-op placeholder.");
+        return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+    }
+
+    /// <summary>
+    /// Phase 8. Router arm for the named governance MARKER steps (LicenseSync /
+    /// SignInLogSync / UsageReportSync / AppRoleSync / GroupMembership). The ACTUAL
+    /// data movement is done elsewhere (the dedicated data-class Mapping workflows for
+    /// the four cloud streams; the membership second pass inside the group Mapping
+    /// step). These named steps exist for IC-parity visibility, so this arm just logs
+    /// a clean, capability-aware Skip — benign, never a failure, never a license block.
+    /// The message distinguishes "this sink can absorb X (handled on its data-class /
+    /// membership pass)" from "this sink does not support X" so the run log reads as a
+    /// capability statement, not an error.
+    /// </summary>
+    private async Task<StepResult> GovernanceMarkerSkipAsync(
+        RunContext ctx, WorkflowStep step, bool sinkSupports, string capabilityLabel, CancellationToken ct)
+    {
+        if (sinkSupports)
+        {
+            await Log(ctx.RunId, "Info",
+                $"    Step '{step.Name}': {capabilityLabel} is performed on this sink's dedicated " +
+                $"data-class/membership pass — marker step skipped (no-op).");
+        }
+        else
+        {
+            await Log(ctx.RunId, "Info",
+                $"    Step '{step.Name}': sink {ctx.SinkTenant.SystemType} does not support {capabilityLabel} — " +
+                $"step skipped (capability not available; not an error, not a license block).");
+        }
         return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
     }
 

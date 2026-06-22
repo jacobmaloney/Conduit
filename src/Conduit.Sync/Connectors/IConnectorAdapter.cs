@@ -470,6 +470,56 @@ public sealed class ConnectorCapabilities
     /// <summary>Sink implements <see cref="IConnectorSink.ResetPasswordAsync"/>.</summary>
     public bool SupportsResetPassword { get; init; }
 
+    // ─── Phase 8: governance ingest support (FREE, sink-agnostic) ────────────
+    //
+    // These declare that a sink can ABSORB the deeper governance data classes the
+    // pump can produce. They are NOT a license flag — they are a capability fact,
+    // exactly like SupportsBulk or SupportsAssignManager. The generator emits the
+    // matching steps when (a) the SINK advertises the capability and, for the four
+    // data-class ingests, (b) the SOURCE can actually produce the data (an EntraID
+    // source). The orchestrator capability-skips a step whose sink lacks the flag.
+    //
+    // HONEST STATUS today: only the IdentityCenter sink advertises these — it has
+    // the dedicated bulk ingest endpoints (/api/objects/licenses/bulk, …) and the
+    // membership endpoint (IGroupMembershipEmittingSink). AD / Entra / Emulator /
+    // LDAP sinks leave these false (graceful) — they can implement later WITHOUT a
+    // generator change. Relationship resolution (manager/owner) reuses the existing
+    // SupportsAssignManager / SupportsAssignGroupOwner flags — the Lookup step reads
+    // exactly those, so no separate "SupportsManagerResolution" flag is introduced.
+
+    /// <summary>
+    /// Sink can ingest Microsoft 365 license assignments (the "license" object
+    /// class produced by an EntraID source). IC routes to /api/objects/licenses/bulk.
+    /// </summary>
+    public bool SupportsLicenseIngest { get; init; }
+
+    /// <summary>
+    /// Sink can ingest sign-in log records (the "signinlog" object class produced
+    /// by an EntraID source). IC routes to its sign-in-log bulk endpoint.
+    /// </summary>
+    public bool SupportsSignInLogIngest { get; init; }
+
+    /// <summary>
+    /// Sink can ingest M365 usage report rows (the "m365usage" object class produced
+    /// by an EntraID source). IC routes to its usage-report bulk endpoint.
+    /// </summary>
+    public bool SupportsUsageReportIngest { get; init; }
+
+    /// <summary>
+    /// Sink can ingest app-role assignments (the "approleassignment" object class
+    /// produced by an EntraID source). IC routes to /api/objects/app-role-assignments/bulk.
+    /// </summary>
+    public bool SupportsAppRoleIngest { get; init; }
+
+    /// <summary>
+    /// Sink can absorb group→member edges as a second pass. This is the declarative
+    /// twin of implementing <see cref="IGroupMembershipEmittingSink"/>: the generator
+    /// reads THIS flag to decide whether to emit the "Sync Group Memberships" step,
+    /// and the orchestrator's runtime capture path independently probes the interface
+    /// (so the two never disagree — a sink that sets this MUST implement the interface).
+    /// </summary>
+    public bool SupportsGroupMembership { get; init; }
+
     public static readonly ConnectorCapabilities Default = new();
 }
 

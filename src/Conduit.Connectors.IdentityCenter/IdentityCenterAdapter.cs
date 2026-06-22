@@ -36,7 +36,18 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
         SupportsPersonMatch = true,
         SupportsPersonCreate = true,
         SupportsAssignManager = true,
-        SupportsAssignGroupOwner = true
+        SupportsAssignGroupOwner = true,
+        // Phase 8: IC has the dedicated bulk ingest endpoints for the deeper
+        // governance data classes, and implements IGroupMembershipEmittingSink.
+        // These are CAPABILITY facts, not a license flag — the IC-CONNECTION
+        // license still gates whether an IC connection can be used at all, but
+        // the steps themselves are free and run against any sink that advertises
+        // them. Today IC is the only sink that does.
+        SupportsLicenseIngest = true,
+        SupportsSignInLogIngest = true,
+        SupportsUsageReportIngest = true,
+        SupportsAppRoleIngest = true,
+        SupportsGroupMembership = true
     };
 
     public IReadOnlyList<CredentialTypeInfo> CredentialTypes { get; } = new[]
