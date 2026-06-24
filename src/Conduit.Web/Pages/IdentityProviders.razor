@@ -30,6 +30,15 @@
         by username or email — no accounts are auto-created. Changes take effect after an app restart.
     </div>
 
+    @if (!string.IsNullOrEmpty(actionMessage))
+    {
+        <div class="alert @(actionOk ? "alert-success" : "alert-danger") alert-dismissible d-flex align-items-center">
+            <i class="oi @(actionOk ? "oi-check" : "oi-warning") me-2"></i>
+            <div>@actionMessage</div>
+            <button type="button" class="btn-close ms-auto" @onclick="() => actionMessage = null"></button>
+        </div>
+    }
+
     @if (loading)
     {
         <div class="text-center py-5">
@@ -225,6 +234,12 @@
     private bool saving;
     private Guid? editingId;
     private string? formError;
+
+    // Page-level feedback for list actions (toggle / delete) that happen OUTSIDE
+    // the edit form — formError only renders inside the modal, so without this an
+    // operator's toggle/delete failure was invisible (logged to Console only).
+    private string? actionMessage;
+    private bool actionOk;
     private ProviderForm form = new();
 
     private bool testInFlight;
@@ -403,19 +418,37 @@
 
     private async Task ToggleEnabled(IdentityProvider p)
     {
+        actionMessage = null;
         try
         {
             await ProviderRepo.SetEnabledAsync(p.Id, !p.IsEnabled, await CurrentUser());
             await Load();
+            actionOk = true;
+            actionMessage = $"'{p.Name}' {(p.IsEnabled ? "disabled" : "enabled")}. Changes take effect after an app restart.";
         }
-        catch (Exception ex) { Console.WriteLine($"Toggle failed: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            actionOk = false;
+            actionMessage = $"Could not change '{p.Name}': {ex.Message}";
+        }
     }
 
     private async Task DeleteProvider(IdentityProvider p)
     {
         if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Delete identity provider '{p.Name}'?")) return;
-        try { await ProviderRepo.DeleteAsync(p.Id); await Load(); }
-        catch (Exception ex) { Console.WriteLine($"Delete failed: {ex.Message}"); }
+        actionMessage = null;
+        try
+        {
+            await ProviderRepo.DeleteAsync(p.Id);
+            await Load();
+            actionOk = true;
+            actionMessage = $"Deleted '{p.Name}'.";
+        }
+        catch (Exception ex)
+        {
+            actionOk = false;
+            actionMessage = $"Could not delete '{p.Name}': {ex.Message}";
+        }
     }
 
     private async Task TestConnection()

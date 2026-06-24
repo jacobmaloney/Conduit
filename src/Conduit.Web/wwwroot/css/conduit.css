@@ -1005,6 +1005,7 @@ hr { border-color: var(--border); }
   margin-top: 12px;
 }
 .wizard-aside-foot-label { color: var(--muted-2); }
+.wizard-aside-foot-note { margin: 0; line-height: 1.5; }
 .wizard-aside-foot a.spec-link {
   color: var(--accent); font-weight: 600; text-decoration: none;
 }

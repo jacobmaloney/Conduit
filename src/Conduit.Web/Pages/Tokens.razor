@@ -23,6 +23,15 @@
         <i class="oi oi-warning"></i> <strong>Security Notice:</strong> Treat API tokens like passwords. Never share them or commit them to source control.
     </div>
 
+    @if (!string.IsNullOrEmpty(actionMessage))
+    {
+        <div class="alert @(actionOk ? "alert-success" : "alert-danger") alert-dismissible d-flex align-items-center">
+            <i class="oi @(actionOk ? "oi-check" : "oi-warning") me-2"></i>
+            <div>@actionMessage</div>
+            <button type="button" class="btn-close ms-auto" @onclick="() => actionMessage = null"></button>
+        </div>
+    }
+
     @if (schemaError)
     {
         <div class="alert alert-danger">
@@ -213,6 +222,13 @@
                         </select>
                     </div>
 
+                    @if (!string.IsNullOrEmpty(createError))
+                    {
+                        <div class="alert alert-danger py-2">
+                            <i class="oi oi-warning"></i> @createError
+                        </div>
+                    }
+
                     @if (!string.IsNullOrEmpty(generatedToken))
                     {
                         <div class="alert alert-success">
@@ -306,6 +322,13 @@
     // "__admin__" | "__arsproxy__" | a tenant Guid string
     private string newTokenSystemSelection = "__admin__";
 
+    // Page-level feedback for list actions (toggle / delete) and an in-modal error
+    // for create — previously all three swallowed failures to Console only, so the
+    // operator saw nothing when an action failed.
+    private string? actionMessage;
+    private bool actionOk;
+    private string? createError;
+
     private string TenantNameFor(Guid? id)
     {
         if (id == null) return "Admin";
@@ -371,6 +394,7 @@
         testInFlight = false;
         testOk = false;
         testResult = "";
+        createError = null;
         showCreateModal = true;
     }
 
@@ -384,6 +408,7 @@
         testInFlight = false;
         testOk = false;
         testResult = "";
+        createError = null;
     }
 
     private async Task CreateToken()
@@ -425,20 +450,26 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error creating token: {ex.Message}");
+            // Surface the failure IN the modal so the operator isn't left staring
+            // at a dialog that silently produced no token.
+            createError = $"Could not create token: {ex.Message}";
         }
     }
 
     private async Task ToggleToken(Conduit.Web.Services.ApiToken token)
     {
+        actionMessage = null;
         try
         {
             await ApiTokenService.ToggleTokenAsync(token.Id);
             await LoadTokens();
+            actionOk = true;
+            actionMessage = $"'{token.Name}' {(token.IsActive ? "deactivated" : "activated")}.";
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error toggling token: {ex.Message}");
+            actionOk = false;
+            actionMessage = $"Could not update '{token.Name}': {ex.Message}";
         }
     }
 
@@ -449,14 +480,18 @@
             return;
         }
 
+        actionMessage = null;
         try
         {
             await ApiTokenService.DeleteTokenAsync(token.Id);
             await LoadTokens();
+            actionOk = true;
+            actionMessage = $"Deleted '{token.Name}'. Any client still using it will now get 401.";
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error deleting token: {ex.Message}");
+            actionOk = false;
+            actionMessage = $"Could not delete '{token.Name}': {ex.Message}";
         }
     }
 
@@ -486,7 +521,16 @@
     private async Task SelectAllOnFocus(MouseEventArgs _)
     {
         // Convenience: clicking the token field selects the whole value for easy copy.
-        await JSRuntime.InvokeVoidAsync("eval", "document.activeElement && document.activeElement.select && document.activeElement.select();");
+        // Uses the focused element directly rather than eval() (no string-eval smell,
+        // and works under a strict CSP that blocks unsafe-eval).
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("conduitSelectActiveElement");
+        }
+        catch
+        {
+            // Selection is a nicety — never let it disrupt the copy flow.
+        }
     }
 
     private async Task TestNewToken()

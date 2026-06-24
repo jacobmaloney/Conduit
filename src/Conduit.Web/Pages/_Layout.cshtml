@@ -92,5 +92,15 @@
         }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-pct'] });
       })();
     </script>
+    @* Selects the currently-focused input's full value (used by the API Tokens
+       page so a click on the token field highlights the whole string for copy).
+       Defined here instead of an eval() call from .razor so a strict CSP that
+       blocks 'unsafe-eval' doesn't break it. *@
+    <script>
+      window.conduitSelectActiveElement = function () {
+        var el = document.activeElement;
+        if (el && typeof el.select === 'function') { el.select(); }
+      };
+    </script>
 </body>
 </html>
