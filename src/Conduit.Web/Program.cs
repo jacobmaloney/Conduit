@@ -242,11 +242,6 @@ builder.Services.AddScoped<ParityDemoSeedService>();
 // IC↔Conduit parity PROOF + REMEDY: migrate pre-7d7e034 flat projects to per-class
 // workflows (Task 1) and import a real IC sync project's graph into Conduit (Task 2).
 builder.Services.AddScoped<IcParityImportService>();
-// IC-connection license gate (ENFORCED). Validated-link entitlement: an IC
-// connection is licensed iff a successful authenticated handshake was recorded
-// on its Tenant row (or it was grandfathered by V30). Dev-override config flag
-// is the escape hatch. Scoped — it now reads the (Scoped) TenantRepository.
-builder.Services.AddScoped<IcEntitlementService>();
 builder.Services.AddScoped<ActiveSystemState>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddScoped<Conduit.Core.Services.UserGenerationService>();

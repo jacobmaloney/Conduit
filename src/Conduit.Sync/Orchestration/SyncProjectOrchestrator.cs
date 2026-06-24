@@ -138,37 +138,6 @@ public sealed class SyncProjectOrchestrator
             }
             await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
 
-            // ── IC-connection license gate (ENFORCEMENT POINT 3 — run-guard) ──────
-            // This is the convergence point for EVERY trigger path (UI Run-Now,
-            // scheduler, API POST): all of them flow through ExecuteAsync. If the
-            // project's SINK is an IdentityCenter connection that is NOT entitled
-            // (no validated handshake link recorded, not grandfathered, and the dev
-            // override is off), we finish the run "Skipped" with a clear message and
-            // do NOT execute. Grandfathered/validated IC sinks and the dev override
-            // pass straight through. Non-IC sinks are never gated here.
-            var sinkForGate = await _tenantRepo.GetByIdAsync(project.SinkTenantId);
-            if (sinkForGate is not null
-                && Conduit.Core.Models.IcEntitlement.IsIdentityCenterType(sinkForGate.SystemType))
-            {
-                // Read via the indexer (no Configuration.Binder dependency needed):
-                // the dev-override flag is true only for an explicit truthy value.
-                var overrideRaw = _config[Conduit.Core.Models.IcEntitlement.DevOverrideConfigKey];
-                var devOverride = bool.TryParse(overrideRaw, out var ov) && ov;
-                if (!Conduit.Core.Models.IcEntitlement.IsValidated(sinkForGate, devOverride))
-                {
-                    const string gateMsg =
-                        "IdentityCenter sink is not licensed: this connection has no validated " +
-                        "link to a real IdentityCenter instance. Open the connection in Connected " +
-                        "Systems and run Test Connection to validate it (included with an " +
-                        "IdentityCenter license). Run skipped.";
-                    await _runRepo.FinishAsync(run.Id, "Skipped", gateMsg, 0);
-                    await Log(run.Id, "Warning", $"Run skipped: {gateMsg}");
-                    if (ownsFlag)
-                        await _projectRepo.FinishRunAsync(project.Id, "Skipped");
-                    return run.Id;
-                }
-            }
-
             // Register this run with the in-process cancellation registry so the
             // "Stop Sync" button can trip the SAME token the host-shutdown path
             // uses. The linked token combines the caller's token (host shutdown /

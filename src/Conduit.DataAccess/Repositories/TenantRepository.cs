@@ -42,10 +42,6 @@ namespace Conduit.DataAccess.Repositories
             tenant.Created = DateTime.UtcNow;
             tenant.LastModified = tenant.Created;
 
-            // IC entitlement columns are deliberately NOT set on create — a new
-            // IdentityCenter connection starts UNVALIDATED (NULL). It becomes validated
-            // only via SetEntitlementValidatedAsync after a successful handshake (or by
-            // the V30 grandfather UPDATE for rows that pre-date the gate).
             const string sql = @"
                 INSERT INTO Tenants (Id, Name, Slug, Description, SystemType, Domain, IsActive, LegalHold, Created, LastModified)
                 VALUES (@Id, @Name, @Slug, @Description, @SystemType, @Domain, @IsActive, @LegalHold, @Created, @LastModified);";
@@ -85,27 +81,6 @@ namespace Conduit.DataAccess.Repositories
                    SET LegalHold = @Enabled, LastModified = SYSUTCDATETIME()
                  WHERE Id = @Id;",
                 new { Id = id, Enabled = enabled });
-            return rows > 0;
-        }
-
-        /// <summary>
-        /// Records a VALIDATED IC LINK on the tenant after a successful authenticated
-        /// handshake to a real IdentityCenter instance (the IC connection's Test). This
-        /// is the durable proof of entitlement (see <see cref="Conduit.Core.Models.IcEntitlement"/>):
-        /// it survives restarts and is what the run-guard + server-side checks consult.
-        /// Stamps IcEntitlementValidatedAt = now and records the validated base URL.
-        /// Does NOT touch any other column. The caller is responsible for only calling
-        /// this on a genuinely successful handshake against an IC-typed tenant.
-        /// </summary>
-        public async Task<bool> SetEntitlementValidatedAsync(Guid id, string? validatedBaseUrl)
-        {
-            var rows = await ExecuteAsync(@"
-                UPDATE Tenants
-                   SET IcEntitlementValidatedAt = SYSUTCDATETIME(),
-                       IcEntitlementBaseUrl = @BaseUrl,
-                       LastModified = SYSUTCDATETIME()
-                 WHERE Id = @Id;",
-                new { Id = id, BaseUrl = validatedBaseUrl });
             return rows > 0;
         }
 
@@ -414,7 +389,6 @@ namespace Conduit.DataAccess.Repositories
                        t.Domain AS Domain,
                        t.IsActive AS IsActive,
                        ISNULL(t.LegalHold, 0) AS LegalHold,
-                       t.IcEntitlementValidatedAt AS IcEntitlementValidatedAt,
                        (SELECT COUNT(*) FROM Users  WHERE TenantId = t.Id) AS UserCount,
                        (SELECT COUNT(*) FROM Groups WHERE TenantId = t.Id) AS GroupCount,
                        (SELECT COUNT(*) FROM ApiTokens WHERE TenantId = t.Id AND IsActive = 1) AS TokenCount
@@ -437,13 +411,6 @@ namespace Conduit.DataAccess.Repositories
         public string? Domain { get; set; }
         public bool IsActive { get; set; }
         public bool LegalHold { get; set; }
-        /// <summary>
-        /// IC license gate: when set, this IdentityCenter connection has a validated
-        /// link (handshake-recorded or grandfathered) and may be USED for runs. NULL
-        /// for unvalidated IC connections (UI shows the locked-with-upsell state) and
-        /// is irrelevant for non-IC system types.
-        /// </summary>
-        public DateTime? IcEntitlementValidatedAt { get; set; }
         public int UserCount { get; set; }
         public int GroupCount { get; set; }
         public int TokenCount { get; set; }
