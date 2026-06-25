@@ -27,27 +27,11 @@
         <p>Move identity, accounts, and entitlements across connected systems.</p>
     </div>
 
+    @* The landing leads with the SYNC story to match the nav (Sync section above
+       Directory). Connections → Sync Projects → Sync History → Schedule are the
+       primary path through a directory-sync pump; Users/Groups are the records
+       that flow THROUGH it and come after. *@
     <div class="row">
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="feature-card">
-                <div class="feature-icon bg-primary-gradient">
-                    <i class="oi oi-people"></i>
-                </div>
-                <h3>Users</h3>
-                <p>Browse and manage the user records flowing through Conduit. Custom attributes and the full identity schema are preserved end to end.</p>
-                <a href="/users" class="feature-link">Manage users <i class="oi oi-arrow-right"></i></a>
-            </div>
-        </div>
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="feature-card">
-                <div class="feature-icon bg-success-gradient">
-                    <i class="oi oi-badge"></i>
-                </div>
-                <h3>Groups</h3>
-                <p>Manage groups and membership. Nested groups and owner references work as expected.</p>
-                <a href="/groups" class="feature-link">Manage groups <i class="oi oi-arrow-right"></i></a>
-            </div>
-        </div>
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="feature-card">
                 <div class="feature-icon bg-warning-gradient">
@@ -70,22 +54,42 @@
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="feature-card">
+                <div class="feature-icon bg-primary-gradient">
+                    <i class="oi oi-list-rich"></i>
+                </div>
+                <h3>Sync History</h3>
+                <p>Every run, every object: read / created / updated / skipped / failed, with live progress and per-step logs.</p>
+                <a href="/sync-history" class="feature-link">View run history <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-success-gradient">
+                    <i class="oi oi-clock"></i>
+                </div>
+                <h3>Schedule</h3>
+                <p>Every project's schedule in one place — when it runs next, when it last ran, and whether it's enabled.</p>
+                <a href="/schedule-manager" class="feature-link">Manage schedules <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
+                <div class="feature-icon bg-purple-gradient">
+                    <i class="oi oi-people"></i>
+                </div>
+                <h3>Directory</h3>
+                <p>Browse the user and group records flowing through Conduit. Custom attributes and the full identity schema are preserved end to end.</p>
+                <a href="/users" class="feature-link">Browse directory <i class="oi oi-arrow-right"></i></a>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-4">
+            <div class="feature-card">
                 <div class="feature-icon bg-danger-gradient">
                     <i class="oi oi-cog"></i>
                 </div>
                 <h3>Configuration</h3>
                 <p>Schemas, attributes, and server settings. Edit them where you need to.</p>
                 <a href="/configuration" class="feature-link">Configure <i class="oi oi-arrow-right"></i></a>
-            </div>
-        </div>
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="feature-card">
-                <div class="feature-icon bg-purple-gradient">
-                    <i class="oi oi-graph"></i>
-                </div>
-                <h3>Audit trail</h3>
-                <p>Every operation is logged: who, what, when, and the request body.</p>
-                <a href="/audit-log" class="feature-link">View logs <i class="oi oi-arrow-right"></i></a>
             </div>
         </div>
     </div>

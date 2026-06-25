@@ -11,8 +11,14 @@
 <PageTitle>Quick Connect - Conduit</PageTitle>
 
 <div class="container-fluid">
-    <h1>SCIM Quick Connect</h1>
+    <h1>REST / SCIM Access</h1>
     <p class="lead">
+        Conduit's synced directory is also reachable over a standard SCIM 2.0 REST
+        API — for scripts, downstream tools, or an external IdP that provisions
+        against Conduit. This page is the connection reference: base URL, endpoints,
+        auth, and copy-paste examples.
+    </p>
+    <p class="text-muted">
         @if (ActiveSystem.ActiveSystem is { } current)
         {
             <span>Examples below target <strong>@current.Name</strong> — URL slug <code>@current.Slug</code>. Switch in the sidebar to point at a different Connected System.</span>
