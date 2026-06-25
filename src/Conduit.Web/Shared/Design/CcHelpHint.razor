@@ -1,0 +1,22 @@
+@*
+    CcHelpHint — a tiny inline (?) affordance for a non-obvious field/concept.
+
+    One plain-language sentence in a native HTML title tooltip (no JS, no popper,
+    survives a strict CSP). Drop it right after a <label> so an IDM / ARS operator
+    can hover the concept where it first appears:
+
+      <label class="form-label fw-semibold">Base DN <CcHelpHint Text="..." /></label>
+
+    Deliberately attribute-string only (no child content, no interpolation) so it
+    is safe to sprinkle into the big Sync pages without tripping the Razor source
+    generator.
+*@
+
+<span class="cc-help-hint" tabindex="0" role="img" aria-label="@Text" title="@Text">
+    <i class="fas fa-circle-question"></i>
+</span>
+
+@code {
+    /// <summary>The one-sentence plain-language explanation shown on hover/focus.</summary>
+    [Parameter, EditorRequired] public string Text { get; set; } = string.Empty;
+}

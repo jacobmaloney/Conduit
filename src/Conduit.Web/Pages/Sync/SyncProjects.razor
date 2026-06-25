@@ -1116,7 +1116,7 @@
                                                 <div class="cap-pill-row">
                                                     @foreach (var pill in SourceCapabilityPills)
                                                     {
-                                                        <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
+                                                        <span class="cap-pill @pill.CssClass @(pill.Tooltip is null ? null : "cap-pill-help")" title="@pill.Tooltip"><i class="@pill.Icon me-1"></i>@pill.Label</span>
                                                     }
                                                 </div>
                                             }
@@ -1176,7 +1176,7 @@
                                                 <div class="cap-pill-row">
                                                     @foreach (var pill in SinkCapabilityPills)
                                                     {
-                                                        <span class="cap-pill @pill.CssClass"><i class="@pill.Icon me-1"></i>@pill.Label</span>
+                                                        <span class="cap-pill @pill.CssClass @(pill.Tooltip is null ? null : "cap-pill-help")" title="@pill.Tooltip"><i class="@pill.Icon me-1"></i>@pill.Label</span>
                                                     }
                                                 </div>
                                             }
@@ -1428,7 +1428,7 @@
                             </p>
                             <div class="row g-3">
                                 <div class="col-md-7">
-                                    <label class="form-label fw-semibold">Base DN</label>
+                                    <label class="form-label fw-semibold">Base DN <CcHelpHint Text="The directory container the read starts from (e.g. OU=Staff,DC=corp,DC=local). Leave blank to start at the domain root. Everything beneath it is in scope." /></label>
                                     <div class="input-group">
                                         <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
                                         <button type="button" class="btn btn-outline-secondary" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a single container">
@@ -1457,7 +1457,7 @@
                             </div>
                             <div class="row g-3 mt-1">
                                 <div class="col-md-9">
-                                    <label class="form-label fw-semibold">LDAP filter override</label>
+                                    <label class="form-label fw-semibold">LDAP filter override <CcHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></label>
                                     <input class="form-control" @bind="scopeForm.LdapFilter" placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default" />
                                     <small class="form-text text-muted">RFC 4515 LDAP filter. Blank = the per-object-class default.</small>
                                 </div>
@@ -2046,7 +2046,7 @@
                             <div class="col-md-12">
                                 <div class="form-check mt-2">
                                     <input class="form-check-input" type="checkbox" id="formSkipUnchanged" @bind="form.SkipUnchanged" />
-                                    <label class="form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records</label>
+                                    <label class="form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records <CcHelpHint Text="When on, a record whose mapped attributes haven't changed since the last run is skipped (compared by content hash) — much faster on large directories, and the run still reports it as skipped." /></label>
                                     <small class="form-text text-muted d-block">Only write records whose mapped attributes changed since the last run (faster; uses a per-record content hash). Recommended for large directories.</small>
                                 </div>
                             </div>
@@ -2248,7 +2248,7 @@
                                         <th style="width: 26%">Source Attribute</th>
                                         <th style="width: 4%" class="text-center">→</th>
                                         <th style="width: 26%">Target Attribute</th>
-                                        <th style="width: 22%">Transform / Value</th>
+                                        <th style="width: 22%">Transform / Value <CcHelpHint Text="Direct copies the source value (optionally through a transform chain like trim|lower). Constant (const:) writes a fixed value to every object, ignoring the source. Default (default:) writes a fixed value only when the source is empty." /></th>
                                         <th style="width: 5%" class="text-center">Req</th>
                                         <th style="width: 4%"></th>
                                     </tr>
@@ -4750,7 +4750,7 @@
     private IReadOnlyList<CapabilityPill> SourceCapabilityPills => CapabilityPillsFor(form.SourceTenantId, isSource: true);
     private IReadOnlyList<CapabilityPill> SinkCapabilityPills => CapabilityPillsFor(form.SinkTenantId, isSource: false);
 
-    private record CapabilityPill(string Label, string CssClass, string Icon);
+    private record CapabilityPill(string Label, string CssClass, string Icon, string? Tooltip = null);
 
     private IReadOnlyList<CapabilityPill> CapabilityPillsFor(Guid tenantId, bool isSource)
     {
@@ -4768,7 +4768,8 @@
                 : new CapabilityPill("Not a source", "cap-pill-bad", "fas fa-ban"));
             if (adapter.SupportsSource && caps.SupportsIncremental)
             {
-                pills.Add(new CapabilityPill("Incremental", "cap-pill-info", "fas fa-bolt"));
+                pills.Add(new CapabilityPill("Incremental", "cap-pill-info", "fas fa-bolt",
+                    "This source can read only what changed since the last run, tracked by a saved cursor (high-water mark). The first run reads everything; later runs are faster. Editing scope or mappings resets the cursor to a full read."));
             }
         }
         else
