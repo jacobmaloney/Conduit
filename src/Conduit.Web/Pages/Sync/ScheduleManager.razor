@@ -4,10 +4,13 @@
 @using Conduit.Core.SyncModels
 @using Conduit.DataAccess.Repositories
 @using Conduit.Sync.Orchestration
+@using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
 @using NCrontab
 @inject SyncProjectRepository ProjectRepo
-@inject SyncProjectOrchestrator Orchestrator
 @inject SyncCancellationRegistry CancellationRegistry
+@inject IServiceScopeFactory ScopeFactory
+@inject ILogger<ScheduleManager> Logger
 @inject NavigationManager Navigation
 
 @*
@@ -236,10 +239,9 @@
     private string? editError;
     private bool editSaving;
 
-    // Run-now state. runningRowId marks the row whose run is in flight (the
-    // orchestrator's ExecuteAsync runs the whole pass inline, so the await holds
-    // until the run is terminal — same as the Sync Projects page). toastClass +
-    // lastRunId drive the result toast and its "View run" link.
+    // Run-now state. runningRowId marks the row whose run is being STARTED (the
+    // brief window between Confirm and the navigate-away). toastClass + lastRunId
+    // are retained for the enable/disable/save toasts on this page.
     private CcConfirmationModal? runConfirm;
     private Guid? runningRowId;
     private string toastClass = "text-bg-success";
@@ -254,12 +256,17 @@
     }
 
     // ─── Run Now (manual, ignores schedule) ───────────────────────────────────
-    // Reuses the EXACT in-app trigger path the Sync Projects page uses:
-    // SyncProjectOrchestrator.ExecuteAsync(projectId, "Manual", ...). No new run
-    // mechanism. Double-trigger is guarded twice: the project's persisted
-    // IsRunning flag AND the in-process SyncCancellationRegistry.IsRunningHere —
-    // matching RunNowConfirmed's guard. ExecuteAsync itself also CAS-claims
-    // IsRunning, so a concurrent claim can't produce two overlapping runs.
+    // Identical fire-and-forget pattern to SyncProjects.RunNowConfirmed: this page
+    // used to AWAIT SyncProjectOrchestrator.ExecuteAsync inline, so the Run-Now
+    // button spun for the whole (minutes-long) pass with no progress. Now we
+    // pre-claim the single-run flag (atomic IsRunning 0→1 CAS), start the run in a
+    // BACKGROUND task that owns its OWN DI scope (the circuit's scoped orchestrator
+    // / DB connections would be disposed out from under it), and navigate the
+    // operator to the project's live Sync History so they watch progress.
+    //
+    // Double-trigger is guarded three ways: the disabled Run-Now button while
+    // busyId is set, the persisted IsRunning CAS below (a lost CAS = another run
+    // started, so we do NOT fire a second), and the in-process IsRunningHere check.
     private async Task RunNow(SyncProject row)
     {
         if (runConfirm is null) return;
@@ -272,49 +279,79 @@
             "It reads from the source, applies the project's mappings, and writes to the sink.");
         if (!ok) return;
 
-        // Re-check after the (awaited) confirm — a scheduler tick or another
-        // operator may have started it while the dialog was open.
-        var fresh = await ProjectRepo.GetByIdAsync(row.Id);
-        if (fresh is null)
+        var projectId = row.Id;
+        var projectName = row.Name;
+
+        runningRowId = projectId;
+        busyId = projectId;
+        lastRunId = null;
+
+        // Pre-claim the single-run flag (atomic 0→1 CAS) BEFORE firing. Guid.Empty
+        // is the placeholder run id — the orchestrator stamps the real one once the
+        // run row exists. A lost CAS means a run started between the dialog opening
+        // and Confirm (another operator, the scheduler, the API): show the
+        // already-running message and do NOT fire a second run.
+        bool claimed;
+        try
         {
+            claimed = await ProjectRepo.SetRunningAsync(projectId, Guid.Empty);
+        }
+        catch (Exception ex)
+        {
+            runningRowId = null;
+            busyId = null;
             toastClass = "text-bg-danger";
-            lastRunId = null;
-            toast = "Project no longer exists.";
+            toast = $"Could not start '{projectName}': {ex.Message}";
             await Reload();
             return;
         }
-        if (fresh.IsRunning || CancellationRegistry.IsRunningHere(row.Id))
+        if (!claimed)
         {
+            runningRowId = null;
+            busyId = null;
             toastClass = "text-bg-warning";
-            lastRunId = null;
-            toast = $"'{fresh.Name}' is already running — not started again.";
+            toast = $"'{projectName}' already has a run in progress — view its live progress in Sync History.";
             await Reload();
             return;
         }
 
-        runningRowId = row.Id;
-        busyId = row.Id;
-        lastRunId = null;
-        try
+        // The CAS persisted IsRunning=1 authoritatively; the run row + per-step
+        // counts appear in Sync History the instant the orchestrator stamps them.
+        _ = Task.Run(async () =>
         {
-            var runId = await Orchestrator.ExecuteAsync(row.Id, "Manual", CancellationToken.None);
-            lastRunId = runId;
-            toastClass = "text-bg-success";
-            toast = $"Manual run completed for '{row.Name}'.";
-            await Reload();
-        }
-        catch (Exception ex)
-        {
-            toastClass = "text-bg-danger";
-            lastRunId = null;
-            toast = $"Run failed for '{row.Name}': {ex.Message}";
-            await Reload();
-        }
-        finally
-        {
-            runningRowId = null;
-            busyId = null;
-        }
+            try
+            {
+                using var scope = ScopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
+                // preClaimed: this page won the CAS above; the orchestrator owns the
+                // release from here on every exit path.
+                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None, preClaimed: true);
+            }
+            catch (Exception ex)
+            {
+                // The orchestrator stamps the SyncRun Failed and releases IsRunning
+                // on every exit path; this is best-effort logging only. The page has
+                // navigated away — do NOT touch circuit-scoped UI state here.
+                Logger.LogError(ex, "Background Run-Now failed for project {ProjectId} ({ProjectName})", projectId, projectName);
+
+                // Defense in depth for the pre-claim: free the project if the
+                // orchestrator threw before its own release could run.
+                try
+                {
+                    using var cleanupScope = ScopeFactory.CreateScope();
+                    await cleanupScope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
+                        .ClearRunningAsync(projectId);
+                }
+                catch (Exception clearEx)
+                {
+                    Logger.LogError(clearEx, "Failed to release IsRunning for project {ProjectId} after a failed Run-Now", projectId);
+                }
+            }
+        });
+
+        // Take the operator to the project's live run history — the Running run row
+        // (and its per-step counts) updates there, same destination Sync Projects uses.
+        Navigation.NavigateTo($"/sync-history?project={projectId}");
     }
 
     private async Task Reload()

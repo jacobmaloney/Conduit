@@ -365,6 +365,12 @@
     // 2-second auto-refresh while anything is running (matches SyncHistory cadence).
     private System.Threading.Timer? pollTimer;
 
+    // Re-entrancy guard: ReloadAll does 5 repo round-trips and can take >2s on a
+    // busy DB. Without this, a slow reload would overlap the next timer tick (and
+    // a third, etc.), piling concurrent DB work on the circuit. The tick skips
+    // while a reload is in flight; the next tick picks up the fresh state.
+    private bool _isReloading;
+
     protected override async Task OnInitializedAsync()
     {
         await ReloadAll();
@@ -373,12 +379,15 @@
             // Refresh while anything is in flight: a running sync OR a pending async
             // job the 30s poller is still advancing.
             if (runningRuns.Count == 0 && pendingJobs.Count == 0) return;
+            if (_isReloading) return; // a prior reload is still running — skip this tick.
             await InvokeAsync(ReloadAll);
         }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
 
     private async Task ReloadAll()
     {
+        if (_isReloading) return;
+        _isReloading = true;
         loading = true;
         loadError = string.Empty;
         try
@@ -418,6 +427,7 @@
         finally
         {
             loading = false;
+            _isReloading = false;
             StateHasChanged();
         }
     }
