@@ -12,11 +12,14 @@
 @inject ActiveSystemState ActiveSystem
 @inject GenerationService GenerationService
 @inject NavigationManager Navigation
+@inject ILogger<UserGeneration> Logger
 
 <PageTitle>User Generation - Conduit</PageTitle>
 
 <div class="container-fluid">
     <PageHeader Title="User Generation" Subtitle="Generate realistic test users with company organizational structures into the active Connected System." />
+
+    <CcActionBanner Message="@genError" IsSuccess="false" MessageChanged="@(v => genError = v ?? string.Empty)" />
 
     @if (generationStarted)
     {
@@ -204,6 +207,9 @@
     private UserGenerationOptions options = new();
     private bool isGenerating = false;
     private bool generationStarted = false;
+    // Operator-facing surface for generation-start failures that were previously
+    // swallowed to Console.WriteLine (no system in scope, or a start exception).
+    private string genError = string.Empty;
     private string specificEmailsText = "";
     private int activePercentage = 95;
     private bool populateGroupsWithRandomMembers = true;
@@ -237,9 +243,10 @@
 
     private Task HandleValidSubmit()
     {
+        genError = string.Empty;
         if (ActiveSystem.ActiveSystem is null)
         {
-            Console.WriteLine("No Connected System in scope — pick one in the sidebar before generating.");
+            genError = "No Connected System in scope — pick one in the sidebar before generating.";
             return Task.CompletedTask;
         }
         options.TenantId = ActiveSystem.ActiveSystem.Id;
@@ -271,11 +278,11 @@
         }
         catch (Exception ex)
         {
-            // In a real app, show error message
-            Console.WriteLine($"Error starting generation: {ex.Message}");
+            Logger.LogWarning(ex, "Error starting user generation");
+            genError = $"Could not start generation: {ex.Message}";
             isGenerating = false;
         }
-        
+
         return Task.CompletedTask;
     }
 

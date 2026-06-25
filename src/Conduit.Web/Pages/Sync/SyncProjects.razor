@@ -4302,7 +4302,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Most-recently-active IC lookup failed; falling back to first: {ex.Message}");
+                Logger.LogWarning(ex, "Most-recently-active IC lookup failed; falling back to first");
             }
             form.SinkTenantId = mostRecent ?? icTenants[0].Id;
         }

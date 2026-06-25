@@ -2251,7 +2251,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Audit write failed for ConnectionRenamed on {tenantId}: {ex.Message}");
+            Logger.LogWarning(ex, "Audit write failed for ConnectionRenamed on {TenantId}", tenantId);
         }
     }
 
@@ -2595,7 +2595,7 @@
             // Audit writes must never block the user-facing flow. Log to console
             // so we know the audit pipeline misbehaved, but don't surface to the
             // operator — the destructive action already succeeded.
-            Console.WriteLine($"Audit write failed for {action} on {target.Slug}: {ex.Message}");
+            Logger.LogWarning(ex, "Audit write failed for {Action} on {Slug}", action, target.Slug);
         }
     }
 
@@ -2677,7 +2677,7 @@
             try { snapshot = await Snapshots.BuildAsync(target.TenantId); }
             catch (Exception snapEx)
             {
-                Console.WriteLine($"Snapshot failed for {target.Slug}: {snapEx.Message}");
+                Logger.LogWarning(snapEx, "Snapshot failed for {Slug}", target.Slug);
                 // Best-effort. We still audit-log the action, just without the recovery JSON.
             }
 
@@ -3346,7 +3346,7 @@
             try { snapshot = await Snapshots.BuildAsync(target.TenantId); }
             catch (Exception snapEx)
             {
-                Console.WriteLine($"Snapshot failed for {target.Slug}: {snapEx.Message}");
+                Logger.LogWarning(snapEx, "Snapshot failed for {Slug}", target.Slug);
             }
 
             if (target.LegalHold)

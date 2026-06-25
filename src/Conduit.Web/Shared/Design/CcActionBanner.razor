@@ -1,0 +1,48 @@
+@*
+    CcActionBanner — ONE dismissible page-level success/failure banner for
+    create / edit / delete / test / run actions.
+
+    Conduit had every page rolling its own inline alert (or, worse, swallowing the
+    failure to Console.WriteLine so a failed action looked like a no-op). This is
+    the single shared surface for "the thing you just clicked succeeded — or here
+    is the actionable error." Modeled on the inline banner f03ce86 added to
+    Tokens.razor / IdentityProviders.razor.
+
+    Renders nothing when Message is null/empty. Two-way bind Message so the
+    operator (or the page) can dismiss it:
+
+      <CcActionBanner @bind-Message="actionMessage" IsSuccess="actionOk" />
+
+    Then in an action handler:
+      actionOk = true;  actionMessage = "Connection saved.";
+      // or
+      actionOk = false; actionMessage = $"Save failed: {ex.Message}";
+*@
+
+@if (!string.IsNullOrEmpty(Message))
+{
+    <div class="alert @(IsSuccess ? "alert-success" : "alert-danger") alert-dismissible d-flex align-items-center" role="alert">
+        <i class="oi @(IsSuccess ? "oi-check" : "oi-warning") me-2"></i>
+        <div>@Message</div>
+        <button type="button" class="btn-close ms-auto" aria-label="Dismiss" @onclick="Dismiss"></button>
+    </div>
+}
+
+@code {
+    /// <summary>The message to show. Null/empty hides the banner. Two-way bindable.</summary>
+    [Parameter] public string? Message { get; set; }
+
+    [Parameter] public EventCallback<string?> MessageChanged { get; set; }
+
+    /// <summary>True = success (green/check); false = failure (red/warning).</summary>
+    [Parameter] public bool IsSuccess { get; set; }
+
+    private async Task Dismiss()
+    {
+        Message = null;
+        if (MessageChanged.HasDelegate)
+        {
+            await MessageChanged.InvokeAsync(null);
+        }
+    }
+}

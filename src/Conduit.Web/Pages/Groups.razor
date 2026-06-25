@@ -9,6 +9,7 @@
 @inject ActiveSystemState ActiveSystem
 @inject DataChangeNotifier DataChange
 @inject NavigationManager Navigation
+@inject ILogger<Groups> Logger
 @implements IDisposable
 
 <PageTitle>Groups - Conduit</PageTitle>
@@ -31,13 +32,7 @@
         </Actions>
     </PageHeader>
 
-    @if (!string.IsNullOrEmpty(toastError))
-    {
-        <div class="alert alert-danger alert-dismissible">
-            <i class="fas fa-exclamation-circle me-2"></i>@toastError
-            <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
-        </div>
-    }
+    <CcActionBanner Message="@toastError" IsSuccess="false" MessageChanged="@(v => toastError = v ?? string.Empty)" />
 
     @if (loading)
     {
@@ -342,8 +337,8 @@
 }
 
 @code {
-    // Operator-facing surface for load/save failures that were previously
-    // swallowed to Console.WriteLine (save/delete group, load available users).
+    // Operator-facing surface (shared CcActionBanner) for load/save failures
+    // (save/delete group, open/load members) that were previously swallowed.
     private string toastError = string.Empty;
 
     private static string GroupInitials(ScimGroup g)
@@ -485,7 +480,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error saving group: {ex.Message}");
+            Logger.LogWarning(ex, "Error saving group");
             toastError = $"Could not save group: {ex.Message}";
         }
     }
@@ -504,7 +499,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error deleting group: {ex.Message}");
+            Logger.LogWarning(ex, "Error deleting group");
             toastError = $"Could not delete group: {ex.Message}";
         }
     }
@@ -623,8 +618,8 @@
         }
         catch (Exception ex)
         {
-            await JSRuntime.InvokeVoidAsync("alert", $"Error opening member management: {ex.Message}");
-            Console.WriteLine($"ShowMembersModal error: {ex}");
+            toastError = $"Could not open member management: {ex.Message}";
+            Logger.LogWarning(ex, "ShowMembersModal error");
         }
     }
     
@@ -638,7 +633,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading available users: {ex.Message}");
+            Logger.LogWarning(ex, "Error loading available users");
             toastError = $"Could not load available users to add: {ex.Message}";
             availableUsers = new List<ScimUser>();
         }
