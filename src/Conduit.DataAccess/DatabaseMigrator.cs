@@ -1380,6 +1380,29 @@ UPDATE [dbo].[Tenants]
 "
             });
 
+            // Migration 31: per-connection inbound TARGET TABLE. The V22 SourceTable/
+            // SinkTable on SyncProjects governs the SYNC path (one IC connection can be
+            // source=Identities AND sink=Objects in one project) and is UNTOUCHED here.
+            //
+            // The INBOUND PROXY path (SCIM/REST POST → a connection's sink) has no
+            // project to carry that per-side choice, so the table the proxy writes to is
+            // a CONNECTION-level setting: Tenants.TargetTable ('Objects'|'Identities').
+            // The proxy stamps IdentityCenterTableContext.Sink from this value before
+            // calling the sink. NULL = Objects (back-compat). The wizard REQUIRES the
+            // choice for IdentityCenter-typed connections; other types ignore it.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 31,
+                Name = "Tenants per-connection inbound TargetTable (Objects|Identities)",
+                Description = "Adds Tenants.TargetTable (nullable 'Objects'|'Identities'). Consumed ONLY on the inbound REST/SCIM proxy path to stamp IdentityCenterTableContext before the IC sink write. SyncProjects.SourceTable/SinkTable (V22) is unchanged and still governs the sync path. NULL = Objects (back-compat).",
+                SqlScript = @"
+IF COL_LENGTH('dbo.Tenants','TargetTable') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[Tenants] ADD [TargetTable] NVARCHAR(20) NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

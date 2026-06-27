@@ -26,6 +26,17 @@ namespace Conduit.Core.Models
         /// <summary>Optional domain hint, e.g. "it.demo.local".</summary>
         public string? Domain { get; set; }
 
+        /// <summary>
+        /// Inbound-proxy target table for IdentityCenter-typed connections:
+        /// "Objects" | "Identities". Consumed ONLY on the REST/SCIM proxy write
+        /// path (the connection's sink), where there is no Sync Project to carry
+        /// the V22 per-side SourceTable/SinkTable choice. The proxy stamps
+        /// IdentityCenterTableContext.Sink from this value before the IC sink
+        /// write. REQUIRED in the wizard for IdentityCenter connections; ignored
+        /// by every other connector type. NULL = Objects (back-compat).
+        /// </summary>
+        public string? TargetTable { get; set; }
+
         public bool IsActive { get; set; } = true;
 
         /// <summary>

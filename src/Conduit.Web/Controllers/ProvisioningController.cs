@@ -6,9 +6,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
+using Conduit.Core.Models;
 using Conduit.Core.Services;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
+using Conduit.Sync.Security;
 
 namespace Conduit.Web.Controllers
 {
@@ -129,7 +131,7 @@ namespace Conduit.Web.Controllers
             var auth = AuthorizeForTenant(body.ConnectionId);
             if (auth is not null) return auth;
 
-            var (adapter, errResult) = await ResolveAdapterAsync(body.ConnectionId);
+            var (adapter, tenant, errResult) = await ResolveAdapterAsync(body.ConnectionId);
             if (errResult is not null) return errResult;
 
             if (!adapter!.Capabilities.SupportsCreate)
@@ -141,6 +143,7 @@ namespace Conduit.Web.Controllers
                 });
             }
 
+            StampInboundTable(tenant!);
             var sink = adapter.CreateSink(body.ConnectionId);
             if (sink is null)
             {
@@ -187,7 +190,7 @@ namespace Conduit.Web.Controllers
             var auth = AuthorizeForTenant(body.ConnectionId);
             if (auth is not null) return auth;
 
-            var (adapter, errResult) = await ResolveAdapterAsync(body.ConnectionId);
+            var (adapter, tenant, errResult) = await ResolveAdapterAsync(body.ConnectionId);
             if (errResult is not null) return errResult;
 
             if (!adapter!.Capabilities.SupportsMove)
@@ -199,6 +202,7 @@ namespace Conduit.Web.Controllers
                 });
             }
 
+            StampInboundTable(tenant!);
             var sink = adapter.CreateSink(body.ConnectionId);
             if (sink is null)
             {
@@ -243,7 +247,7 @@ namespace Conduit.Web.Controllers
             var auth = AuthorizeForTenant(body.ConnectionId);
             if (auth is not null) return auth;
 
-            var (adapter, errResult) = await ResolveAdapterAsync(body.ConnectionId);
+            var (adapter, tenant, errResult) = await ResolveAdapterAsync(body.ConnectionId);
             if (errResult is not null) return errResult;
 
             if (!adapter!.Capabilities.SupportsResetPassword)
@@ -255,6 +259,7 @@ namespace Conduit.Web.Controllers
                 });
             }
 
+            StampInboundTable(tenant!);
             var sink = adapter.CreateSink(body.ConnectionId);
             if (sink is null)
             {
@@ -307,27 +312,47 @@ namespace Conduit.Web.Controllers
         }
 
         /// <summary>
-        /// Resolve the tenant + its adapter. Returns the adapter on success, or
-        /// an IActionResult to short-circuit (404 / NotSupported response).
+        /// Resolve the tenant + its adapter. Returns BOTH on success (the tenant is
+        /// needed to stamp the inbound IC target table), or an IActionResult to
+        /// short-circuit (404 / NotSupported response).
         /// </summary>
-        private async Task<(IConnectorAdapter? adapter, IActionResult? error)> ResolveAdapterAsync(Guid connectionId)
+        private async Task<(IConnectorAdapter? adapter, Tenant? tenant, IActionResult? error)> ResolveAdapterAsync(Guid connectionId)
         {
             var tenant = await _tenants.GetByIdAsync(connectionId);
             if (tenant is null)
-                return (null, NotFound(new { error = $"Connection {connectionId} not found." }));
+                return (null, null, NotFound(new { error = $"Connection {connectionId} not found." }));
             if (!tenant.IsActive)
-                return (null, BadRequest(new { error = $"Connection {connectionId} is not active." }));
+                return (null, null, BadRequest(new { error = $"Connection {connectionId} is not active." }));
 
             var adapter = _registry.Get(tenant.SystemType);
             if (adapter is null)
             {
-                return (null, Ok(new ProvisionResponse
+                return (null, null, Ok(new ProvisionResponse
                 {
                     Status = nameof(ProvisionOutcome.NotSupported),
                     ErrorMessage = $"No connector adapter registered for system type '{tenant.SystemType}'."
                 }));
             }
-            return (adapter, null);
+            return (adapter, tenant, null);
+        }
+
+        /// <summary>
+        /// INBOUND-PATH ambient table stamp. The IdentityCenter connector reads the
+        /// target table (Objects | Identities) from <see cref="IdentityCenterTableContext"/>.
+        /// On the SYNC path the orchestrator stamps it per side from the project's
+        /// V22 SourceTable/SinkTable. On THIS inbound proxy path there is no project,
+        /// so we stamp the SINK side from the connection's <see cref="Tenant.TargetTable"/>
+        /// (NULL → Objects, back-compat). No-op for non-IC connectors (they never read it).
+        /// </summary>
+        private static void StampInboundTable(Tenant tenant)
+        {
+            if (string.Equals(tenant.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+            {
+                IdentityCenterTableContext.Sink =
+                    string.Equals(tenant.TargetTable, "Identities", StringComparison.OrdinalIgnoreCase)
+                        ? "Identities"
+                        : "Objects";
+            }
         }
 
         private static ConnectorObject BuildConnectorObject(ProvisionRequest body)

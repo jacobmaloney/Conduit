@@ -657,8 +657,22 @@
                 }
                 @if (form.SystemType == "IdentityCenter")
                 {
-                    <div class="alert alert-info py-2">
-                        <small><strong>Objects vs Identities</strong> is chosen per sync project, not on the connection — one IdentityCenter connection can be source=Identities and sink=Objects in the same project. Pick the table on each side when you build the Sync Project.</small>
+                    <div class="conn-field">
+                        <label class="form-label">
+                            Target table <span class="text-danger">*</span>
+                        </label>
+                        <select class="form-control" @bind="form.TargetTable" @bind:after="InvalidateFormTest">
+                            <option value="">— choose Objects or Identities —</option>
+                            <option value="Objects">Objects (directory accounts)</option>
+                            <option value="Identities">Identities (people / golden records)</option>
+                        </select>
+                        <small class="form-text text-muted">
+                            <strong>Required for IdentityCenter.</strong> The table an inbound REST/SCIM write to this
+                            connection lands in: <strong>Objects</strong> (/api/objects) or <strong>Identities</strong>
+                            (/api/identities). This governs the connection's write endpoint only. Sync Projects still pick
+                            the table per side (source/sink) when you build them, so one connection can still
+                            source=Identities and sink=Objects in a project.
+                        </small>
                     </div>
                 }
 
@@ -2897,7 +2911,17 @@
     private bool CanTestForm =>
         !string.IsNullOrWhiteSpace(form.SystemType)
         && ConnectorRegistry.Get(form.SystemType) is not null
-        && GetMissingRequiredTenantFieldsForForm().Count == 0;
+        && GetMissingRequiredTenantFieldsForForm().Count == 0
+        && IcTargetTableSatisfied;
+
+    // Jacob's explicit requirement: an IdentityCenter connection CANNOT be created
+    // without choosing the inbound target table (Objects | Identities). Every other
+    // connector type ignores TargetTable, so the gate is a no-op for them.
+    private bool IcTargetTableSatisfied =>
+        !string.Equals(form.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
+        || (!string.IsNullOrWhiteSpace(form.TargetTable)
+            && (string.Equals(form.TargetTable, "Objects", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(form.TargetTable, "Identities", StringComparison.OrdinalIgnoreCase)));
 
     // The Test-before-Save gate only applies when the adapter declares credential
     // fields worth binding — i.e. there's something to test. Sink-only / credential-
@@ -2910,7 +2934,7 @@
     // current field state has a fresh successful test behind it. formTestSuccess is
     // invalidated by every credential/type/domain change, so a green here always
     // means "the values currently in the form are the ones that passed the bind".
-    private bool CanSaveForm => !RequiresTestBeforeSave || formTestSuccess;
+    private bool CanSaveForm => (!RequiresTestBeforeSave || formTestSuccess) && IcTargetTableSatisfied;
 
     // Live connectivity probe for the create/edit form. Reuses the same path as
     // the Credentials & test modal: resolve the adapter, build a source (sink

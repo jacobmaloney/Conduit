@@ -43,8 +43,8 @@ namespace Conduit.DataAccess.Repositories
             tenant.LastModified = tenant.Created;
 
             const string sql = @"
-                INSERT INTO Tenants (Id, Name, Slug, Description, SystemType, Domain, IsActive, LegalHold, Created, LastModified)
-                VALUES (@Id, @Name, @Slug, @Description, @SystemType, @Domain, @IsActive, @LegalHold, @Created, @LastModified);";
+                INSERT INTO Tenants (Id, Name, Slug, Description, SystemType, Domain, TargetTable, IsActive, LegalHold, Created, LastModified)
+                VALUES (@Id, @Name, @Slug, @Description, @SystemType, @Domain, @TargetTable, @IsActive, @LegalHold, @Created, @LastModified);";
             await ExecuteAsync(sql, tenant);
             return tenant;
         }
@@ -60,6 +60,7 @@ namespace Conduit.DataAccess.Repositories
                        Description = @Description,
                        SystemType = @SystemType,
                        Domain = @Domain,
+                       TargetTable = @TargetTable,
                        IsActive = @IsActive,
                        LegalHold = @LegalHold,
                        LastModified = @LastModified
