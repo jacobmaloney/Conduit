@@ -339,7 +339,7 @@
 
 <!-- Create / Edit modal — IC "New Connection" parity (Cc-styled, Test-gated) -->
 <div class="modal conn-editor-modal @(showModal ? "show d-block" : "")" tabindex="-1">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-lg conn-editor-wide">
         <div class="modal-content">
             <div class="modal-header conn-editor-head">
                 <div class="conn-editor-head-row">
@@ -442,22 +442,31 @@
                 }
                 @if (ShowStep2)
                 {
-                    // Phase 6: per-connector required-field enforcement. The adapter
-                    // for the currently-selected SystemType tells the form which
-                    // Tenant fields it cares about. AD requires Domain; most others
-                    // declare nothing (their requirements live in credentials).
+                    // Phase 6: per-connector required-field enforcement. Domain is only
+                    // meaningful for connectors whose own Tenant.Domain is consumed
+                    // (AD = LDAP host, ActiveRoles = AR service host) — they are the only
+                    // adapters that DECLARE a Domain requirement, so the field is gated on
+                    // that declaration. Everything else (IdentityCenter, Emulator, SCIM,
+                    // AWS, EntraID, GoogleWorkspace, …) never reads its own Domain, so the
+                    // field is hidden for them. The binding is untouched; only visibility
+                    // is gated.
                     var domainReq = GetTenantFieldRequirement(form.SystemType, "Domain");
                     var domainRequired = domainReq?.Required == true;
                     var domainPlaceholder = domainReq?.Placeholder ?? "e.g. it.demo.local (optional)";
                     var domainHelp = domainReq?.HelpText;
-                <div class="mb-3">
-                    <label class="form-label">
-                        Domain@(domainRequired ? " *" : string.Empty)
-                    </label>
-                    <input class="form-control" @bind="form.Domain" @bind:after="InvalidateFormTest" placeholder="@domainPlaceholder" />
-                    @if (!string.IsNullOrEmpty(domainHelp))
+                <div class="row g-3">
+                    @if (domainReq is not null)
                     {
-                        <small class="form-text text-muted">@domainHelp</small>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">
+                                Domain@(domainRequired ? " *" : string.Empty)
+                            </label>
+                            <input class="form-control" @bind="form.Domain" @bind:after="InvalidateFormTest" placeholder="@domainPlaceholder" />
+                            @if (!string.IsNullOrEmpty(domainHelp))
+                            {
+                                <small class="form-text text-muted">@domainHelp</small>
+                            }
+                        </div>
                     }
                 </div>
                     // Connector-shaped credential capture, folded into create/edit so a
@@ -575,10 +584,13 @@
                             {
                                 <small class="form-text text-muted d-block mb-2">@ctype.Description</small>
                             }
+                            <div class="row g-3">
                             @foreach (var field in ctype.Fields)
                             {
                                 var secretMasked = field.IsSecret && typeHasStored;
-                                <div class="@(field.IsBoolean ? "form-check mb-3" : "mb-3")">
+                                var fieldCol = (field.IsMultiline || field.IsBoolean) ? "col-12" : "col-md-6";
+                                var fieldInner = field.IsBoolean ? "form-check" : string.Empty;
+                                <div class="@fieldCol"><div class="@fieldInner">
                                     @if (field.IsBoolean)
                                     {
                                         <input class="form-check-input" type="checkbox" id="@($"create_{ctype.Name}_{field.Key}")"
@@ -637,8 +649,9 @@
                                             <small class="form-text text-muted">@field.Help</small>
                                         }
                                     }
-                                </div>
+                                </div></div>
                             }
+                            </div>
                         </div>
                     }
                 }

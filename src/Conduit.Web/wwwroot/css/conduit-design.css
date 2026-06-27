@@ -364,6 +364,12 @@
   border: 1px solid var(--accent-200, rgba(34,211,238,0.22));
 }
 
+/* Wide create/edit modal. modal-lg base, widened so step 2's fields lay out in a
+   clean two-column grid without crowding. */
+.conn-editor-modal .conn-editor-wide {
+  max-width: 860px;
+}
+
 /* New Connection 2-step wizard stepper. */
 .conn-wizard-steps {
   display: flex;
