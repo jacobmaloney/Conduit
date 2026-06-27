@@ -408,6 +408,9 @@ builder.Services.AddScoped<Conduit.DataAccess.Repositories.CredentialKeyringRepo
 builder.Services.AddScoped<Conduit.Sync.Security.CredentialProtector>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.ActiveDirectory.ActiveDirectoryAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Emulator.EmulatorAdapter>();
+// Local Directory: symmetric source+sink over THIS Conduit's own Users/Groups
+// store (sink reuses EmulatorSink; source reads via LocalDirectoryRepository).
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Emulator.LocalDirectoryAdapter>();
 // Phase 1.5 connectors
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.EntraID.EntraIDAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.Okta.OktaAdapter>();

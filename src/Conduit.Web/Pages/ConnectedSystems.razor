@@ -387,6 +387,7 @@
                     <label class="form-label">Connection Type *</label>
                     <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
                         <option value="Emulator">Emulator (test/demo target)</option>
+                        <option value="LocalDirectory">Local Directory (this Conduit)</option>
                         <option value="ActiveDirectory">Active Directory</option>
                         <option value="ActiveRoles">Active Roles</option>
                         <option value="EntraID">Entra ID (Microsoft 365)</option>
