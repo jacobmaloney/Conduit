@@ -265,8 +265,16 @@ namespace Conduit.Web.Controllers
         /// Deletes a group
         /// </summary>
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteGroup(string id)
+        public async Task<IActionResult> DeleteGroup(string id, CancellationToken ct)
         {
+            // Phase 2 inbound proxy: deprovision on a writable external target that
+            // supports delete; else fall through to the local store delete below.
+            var proxy = await _proxy.TryProxyDeleteAsync(id, "Group", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                return ScimFromProxyDelete(proxy);
+            }
+
             if (!Guid.TryParse(id, out var groupId))
             {
                 return ScimBadRequest("Invalid group ID format");
@@ -473,6 +481,28 @@ namespace Conduit.Web.Controllers
                 default: // Failed
                     return ScimError(502, null,
                         proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the update.");
+            }
+        }
+
+        /// <summary>
+        /// Translate a proxied Group DELETE outcome: 204 success, 501 NotSupported,
+        /// 502 Failed. Mirrors UsersController.ScimFromProxyDelete.
+        /// </summary>
+        private IActionResult ScimFromProxyDelete(InboundProxyService.ProxyResult proxy)
+        {
+            switch (proxy.Outcome)
+            {
+                case ProvisionOutcome.Success:
+                case ProvisionOutcome.Accepted:
+                    return NoContent();
+
+                case ProvisionOutcome.NotSupported:
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound delete.");
+
+                default: // Failed
+                    return ScimError(502, null,
+                        proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the delete.");
             }
         }
     }

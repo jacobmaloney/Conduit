@@ -48,6 +48,10 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
         // rather than clearing omitted columns (IC's bulk has no "replace-all-
         // attributes" mode). See IdentityCenterSink.UpdateAsync.
         SupportsUpdate = true,
+        // Phase 2 inbound proxy: IC implements DeleteAsync as a REVERSIBLE tombstone
+        // soft-delete (honors IC's 50% safety cap; Identities table returns Skipped
+        // as it has no tombstone endpoint). See IdentityCenterSink.DeleteAsync.
+        SupportsDelete = true,
         // Phase 8: IC has the dedicated bulk ingest endpoints for the deeper
         // governance data classes, and implements IGroupMembershipEmittingSink.
         // These are CAPABILITY facts, not a license flag — the IC-CONNECTION

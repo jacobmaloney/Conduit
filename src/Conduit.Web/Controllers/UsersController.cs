@@ -328,8 +328,19 @@ namespace Conduit.Web.Controllers
         /// Deletes a user
         /// </summary>
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteUser(string id)
+        public async Task<IActionResult> DeleteUser(string id, CancellationToken ct)
         {
+            // Phase 2 inbound proxy: for a writable external target that supports
+            // delete, deprovision the object on that target (IC: reversible
+            // tombstone). The path {id} is the resource id the caller addressed.
+            // NotSupported→501, Failed→502, Success→204; a non-target connection
+            // falls through to the local store delete below.
+            var proxy = await _proxy.TryProxyDeleteAsync(id, "User", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                return ScimFromProxyDelete(proxy);
+            }
+
             if (!Guid.TryParse(id, out var userId))
             {
                 return ScimBadRequest("Invalid user ID format");
@@ -714,6 +725,29 @@ namespace Conduit.Web.Controllers
                 default: // Failed
                     return ScimError(502, null,
                         proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the update.");
+            }
+        }
+
+        /// <summary>
+        /// Translate a proxied DELETE outcome into a SCIM response: 204 No Content on
+        /// success (incl. idempotent already-gone), 501 NotSupported, 502 Failed.
+        /// Shared by Users (and structurally identical for Groups).
+        /// </summary>
+        private IActionResult ScimFromProxyDelete(InboundProxyService.ProxyResult proxy)
+        {
+            switch (proxy.Outcome)
+            {
+                case ProvisionOutcome.Success:
+                case ProvisionOutcome.Accepted:
+                    return NoContent();
+
+                case ProvisionOutcome.NotSupported:
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound delete.");
+
+                default: // Failed
+                    return ScimError(502, null,
+                        proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the delete.");
             }
         }
     }

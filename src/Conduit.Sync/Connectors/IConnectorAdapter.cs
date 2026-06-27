@@ -525,6 +525,14 @@ public sealed class ConnectorCapabilities
     /// merge), ActiveDirectory (ModifyRequest), EntraID (Graph PATCH).
     /// </summary>
     public bool SupportsUpdate { get; init; }
+    /// <summary>
+    /// Sink genuinely implements <see cref="IConnectorSink.DeleteAsync"/> (vs the
+    /// interface default that returns Skipped). The inbound proxy gates DELETE on
+    /// this so a writable target that can't deprovision returns 501 rather than a
+    /// silent no-op. Today: IdentityCenter (reversible tombstone soft-delete),
+    /// ActiveDirectory (DeleteRequest), EntraID (Graph DELETE).
+    /// </summary>
+    public bool SupportsDelete { get; init; }
     /// <summary>Sink implements <see cref="IConnectorSink.MoveAsync"/>.</summary>
     public bool SupportsMove { get; init; }
     /// <summary>Sink implements <see cref="IConnectorSink.ResetPasswordAsync"/>.</summary>

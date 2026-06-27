@@ -39,6 +39,9 @@ public sealed class EntraIDAdapter : IConnectorAdapter
         // PATCH. Graph PATCH is natively PARTIAL, so PUT is honored as a partial
         // merge of the supplied attributes (omitted attributes are left untouched).
         SupportsUpdate = true,
+        // Phase 2 inbound proxy: Entra implements DeleteAsync (Graph DELETE on the
+        // user/group by id).
+        SupportsDelete = true,
         SupportsMove = false,
         SupportsResetPassword = true
     };

@@ -204,6 +204,77 @@ namespace Conduit.Web.Services
         return ProxyResult.Proxied(result.Outcome, tenant.SystemType, result.ExternalId, result.ErrorMessage);
     }
 
+    /// <summary>
+    /// Phase 2. Resolve the active connection and decide whether this DELETE
+    /// (SCIM DELETE /Users|/Groups/{id}) should proxy. Same scope guarantee as the
+    /// create/update paths. <paramref name="externalId"/> is the SCIM id the caller
+    /// addressed (for IC the target row GUID; the IC sink resolves it to the row's
+    /// SourceUniqueId and tombstone-deletes under the connection's source).
+    ///
+    /// Gates on <see cref="ConnectorCapabilities.SupportsDelete"/>. A create-capable
+    /// connection that can't delete → NotSupported (501), never a silent local
+    /// delete. A pure-local connection keeps the legacy local-store delete path.
+    /// </summary>
+    public async Task<ProxyResult> TryProxyDeleteAsync(
+        string externalId,
+        string resourceKindForAudit,
+        CancellationToken ct)
+    {
+        var tenantId = _tenantContext.TenantId;
+        if (tenantId is null) return ProxyResult.Local();
+
+        var tenant = await _tenants.GetByIdAsync(tenantId.Value);
+        if (tenant is null || !tenant.IsActive) return ProxyResult.Local();
+
+        var adapter = _registry.Get(tenant.SystemType);
+        if (adapter is null) return ProxyResult.Local();
+
+        if (!adapter.Capabilities.SupportsDelete)
+        {
+            if (!adapter.Capabilities.SupportsCreate)
+                return ProxyResult.Local();   // pure-local connection → local delete
+            return ProxyResult.Proxied(ProvisionOutcome.NotSupported, tenant.SystemType, null,
+                $"Connector '{tenant.SystemType}' does not support inbound delete.");
+        }
+
+        StampInboundTable(tenant);
+
+        var sink = adapter.CreateSink(tenant.Id);
+        if (sink is null)
+            return ProxyResult.Proxied(ProvisionOutcome.NotSupported, tenant.SystemType, null,
+                $"Connector '{tenant.SystemType}' exposes no sink for connection {tenant.Id}.");
+
+        SinkWriteResult writeResult;
+        try
+        {
+            writeResult = await sink.DeleteAsync(externalId, ct);
+        }
+        catch (NotSupportedException ex)
+        {
+            var nr = ProvisionResult.NotSupported(ex.Message);
+            await AuditAsync(tenant, resourceKindForAudit, externalId, nr, "DELETE");
+            return ProxyResult.Proxied(nr.Outcome, tenant.SystemType, null, nr.ErrorMessage);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Inbound proxy DELETE threw (connection={ConnId}, type={Type}, externalId={ExtId})",
+                tenant.Id, tenant.SystemType, externalId);
+            writeResult = SinkWriteResult.Fail($"Conduit-side exception: {ex.Message}");
+        }
+
+        // Map the sink's SinkWriteResult to a ProvisionResult. A successful soft/hard
+        // delete (Updated) and an idempotent no-op (Skipped — id already gone, or
+        // Identities table) both surface as Success so a re-issued DELETE is 204.
+        var result = writeResult.Outcome == SinkWriteOutcome.Failed
+            ? ProvisionResult.Failed(writeResult.ErrorMessage ?? "Sink rejected the delete.")
+            : ProvisionResult.Success(externalId);
+
+        await AuditAsync(tenant, resourceKindForAudit, externalId, result, "DELETE");
+
+        return ProxyResult.Proxied(result.Outcome, tenant.SystemType, result.ExternalId, result.ErrorMessage);
+    }
+
     private async Task AuditAsync(Tenant tenant, string resourceKind, string sourceId, ProvisionResult result, string verb = "CREATE")
         {
             var level = result.Outcome is ProvisionOutcome.Success or ProvisionOutcome.Accepted

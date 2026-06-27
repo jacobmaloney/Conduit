@@ -43,6 +43,9 @@ public sealed class ActiveDirectoryAdapter : IConnectorAdapter
         // a PARTIAL modify of the supplied attributes (PUT does not clear omitted
         // attributes — AD has no whole-object replace via this path).
         SupportsUpdate = true,
+        // Phase 2 inbound proxy: AD implements DeleteAsync (LDAP DeleteRequest by
+        // DN, resolving an objectGUID source id first).
+        SupportsDelete = true,
         SupportsMove = true,
         SupportsResetPassword = true
     };
