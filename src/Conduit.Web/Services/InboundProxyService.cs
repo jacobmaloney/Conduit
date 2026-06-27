@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Conduit.Core.Models;
 using Conduit.Core.Services;
+using Conduit.Core.SyncModels;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Security;
@@ -273,6 +275,124 @@ namespace Conduit.Web.Services
         await AuditAsync(tenant, resourceKindForAudit, externalId, result, "DELETE");
 
         return ProxyResult.Proxied(result.Outcome, tenant.SystemType, result.ExternalId, result.ErrorMessage);
+    }
+
+    // ─── Item 3: GET read-through ────────────────────────────────────────────
+
+    /// <summary>
+    /// Outcome of a read-through. Decision==Local → the controller serves from the
+    /// local store as before. Supported==false → the connection is an external
+    /// target with NO source-read capability (501). Otherwise Objects carries the
+    /// ConnectorObjects read from the connection's source adapter for the controller
+    /// to reverse-map to SCIM.
+    /// </summary>
+    public sealed class ProxyReadResult
+    {
+        public ProxyDecision Decision { get; init; }
+        public bool Supported { get; init; } = true;
+        public string SystemType { get; init; } = string.Empty;
+        public string? ErrorMessage { get; init; }
+        public IReadOnlyList<ConnectorObject> Objects { get; init; } = Array.Empty<ConnectorObject>();
+
+        public static ProxyReadResult Local() => new() { Decision = ProxyDecision.Local };
+        public static ProxyReadResult NotSupported(string systemType, string error) =>
+            new() { Decision = ProxyDecision.Proxied, Supported = false, SystemType = systemType, ErrorMessage = error };
+        public static ProxyReadResult Read(string systemType, IReadOnlyList<ConnectorObject> objects) =>
+            new() { Decision = ProxyDecision.Proxied, SystemType = systemType, Objects = objects };
+        public static ProxyReadResult Failed(string systemType, string error) =>
+            new() { Decision = ProxyDecision.Proxied, Supported = true, SystemType = systemType, ErrorMessage = error, Objects = Array.Empty<ConnectorObject>() };
+    }
+
+    /// <summary>
+    /// Read the object of <paramref name="objectClass"/> ("User"/"Group") whose
+    /// SourceId matches <paramref name="externalId"/> from the connection's SOURCE
+    /// adapter. Scoped to the token's tenant (the auth middleware bound it). A
+    /// pure-local connection → Local (serve the local store). A writable target
+    /// with no source → NotSupported (501).
+    /// </summary>
+    public Task<ProxyReadResult> TryProxyGetAsync(string objectClass, string externalId, CancellationToken ct) =>
+        ReadInternalAsync(objectClass, externalId, maxObjects: null, ct);
+
+    /// <summary>
+    /// List objects of <paramref name="objectClass"/> from the connection's source
+    /// adapter, bounded by <paramref name="count"/> (SCIM paging is applied by the
+    /// controller from the returned set — IC's source pages internally; we cap the
+    /// read with MaxObjects so a startIndex window is served without unbounded reads).
+    /// </summary>
+    public Task<ProxyReadResult> TryProxyListAsync(string objectClass, int maxObjects, CancellationToken ct) =>
+        ReadInternalAsync(objectClass, externalId: null, maxObjects, ct);
+
+    private async Task<ProxyReadResult> ReadInternalAsync(string objectClass, string? externalId, int? maxObjects, CancellationToken ct)
+    {
+        var tenantId = _tenantContext.TenantId;
+        if (tenantId is null) return ProxyReadResult.Local();
+
+        var tenant = await _tenants.GetByIdAsync(tenantId.Value);
+        if (tenant is null || !tenant.IsActive) return ProxyReadResult.Local();
+
+        var adapter = _registry.Get(tenant.SystemType);
+        if (adapter is null) return ProxyReadResult.Local();
+
+        // A connection that is NOT a writable external target (can't create) is a
+        // local-type connection — serve from the local store unchanged.
+        if (!adapter.Capabilities.SupportsCreate)
+            return ProxyReadResult.Local();
+
+        // It IS an external target. If it can't be read as a source, say so (501)
+        // rather than silently returning the local store for an external connection.
+        if (!adapter.SupportsSource)
+            return ProxyReadResult.NotSupported(tenant.SystemType,
+                $"Connector '{tenant.SystemType}' does not support inbound read (no source).");
+
+        // IC reads target the table the connection's TargetTable selects.
+        StampInboundTable(tenant);
+
+        var source = adapter.CreateSource(tenant.Id);
+        if (source is null)
+            return ProxyReadResult.NotSupported(tenant.SystemType,
+                $"Connector '{tenant.SystemType}' exposes no source for connection {tenant.Id}.");
+
+        var scope = new SyncProjectScope
+        {
+            // Single-id read: cap hard at a small window and match in-memory (sources
+            // page; there is no universal by-id source primitive on the contract).
+            // List read: cap at the requested window.
+            MaxObjects = externalId is not null ? 2000 : (maxObjects ?? 200),
+            PageSize = 200
+        };
+
+        var collected = new List<ConnectorObject>();
+        try
+        {
+            await foreach (var obj in source.ReadAsync(objectClass, scope, ct))
+            {
+                if (externalId is not null)
+                {
+                    if (string.Equals(obj.SourceId, externalId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        collected.Add(obj);
+                        break;   // found the one we wanted
+                    }
+                    continue;
+                }
+                collected.Add(obj);
+                if (maxObjects is int m && collected.Count >= m) break;
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (NotSupportedException ex)
+        {
+            return ProxyReadResult.NotSupported(tenant.SystemType, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Inbound proxy READ threw (connection={ConnId}, type={Type}, class={Class}, externalId={ExtId})",
+                tenant.Id, tenant.SystemType, objectClass, externalId);
+            return ProxyReadResult.Failed(tenant.SystemType, $"Conduit-side exception: {ex.Message}");
+        }
+
+        return ProxyReadResult.Read(tenant.SystemType, collected);
     }
 
     private async Task AuditAsync(Tenant tenant, string resourceKind, string sourceId, ProvisionResult result, string verb = "CREATE")

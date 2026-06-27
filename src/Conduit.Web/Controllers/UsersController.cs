@@ -46,12 +46,44 @@ namespace Conduit.Web.Controllers
         /// </summary>
         [HttpGet]
         public async Task<IActionResult> GetUsers(
+            CancellationToken ct,
             [FromQuery] string? filter = null,
             [FromQuery] string? sortBy = null,
             [FromQuery] string? sortOrder = null,
             [FromQuery] int startIndex = 1,
             [FromQuery] int count = 100)
         {
+            // Item 3 read-through: list from the connection's SOURCE adapter when it
+            // is an external target; SCIM paging is applied in-memory over the read.
+            // SCIM `filter` is NOT pushed down to a proxied source (no universal
+            // source filter primitive) — a filter on a proxied connection is rejected
+            // honestly rather than silently ignored. Local connections keep the full
+            // SQL filter path below.
+            var listRead = await _proxy.TryProxyListAsync("User", Math.Max(1, startIndex - 1) + count, ct);
+            if (listRead.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                if (!listRead.Supported)
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        listRead.ErrorMessage ?? $"Connector '{listRead.SystemType}' does not support inbound read.");
+                if (listRead.ErrorMessage is not null)
+                    return ScimError(502, null, listRead.ErrorMessage);
+                if (!string.IsNullOrWhiteSpace(filter))
+                    return ScimError(501, ScimErrorType.InvalidFilter,
+                        $"Filtering is not supported when listing from connector '{listRead.SystemType}'. Omit `filter`.");
+
+                var allMapped = listRead.Objects.Select(InboundScimMapper.ToScimUser).ToList();
+                var window = allMapped.Skip(Math.Max(0, startIndex - 1)).Take(count).ToList();
+                var baseUrlR = GetBaseUrl();
+                foreach (var u in window) u.Meta.Location = $"{baseUrlR}{ScimPrefix()}/Users/{u.Id}";
+                return Ok(new ScimListResponse<ScimUser>
+                {
+                    TotalResults = allMapped.Count,
+                    ItemsPerPage = window.Count,
+                    StartIndex = startIndex,
+                    Resources = window
+                });
+            }
+
             var options = new ScimQueryOptions
             {
                 Filter = filter,
@@ -101,8 +133,26 @@ namespace Conduit.Web.Controllers
         /// Gets a specific user by ID
         /// </summary>
         [HttpGet("{id}")]
-        public async Task<IActionResult> GetUser(string id)
+        public async Task<IActionResult> GetUser(string id, CancellationToken ct)
         {
+            // Item 3 read-through: when this connection is an external target, read
+            // the object from its SOURCE adapter and reverse-map to SCIM. A local-
+            // type connection falls through to the local store. No-source target → 501.
+            var read = await _proxy.TryProxyGetAsync("User", id, ct);
+            if (read.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                if (!read.Supported)
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        read.ErrorMessage ?? $"Connector '{read.SystemType}' does not support inbound read.");
+                if (read.ErrorMessage is not null)
+                    return ScimError(502, null, read.ErrorMessage);
+                if (read.Objects.Count == 0)
+                    return ScimNotFound("User", id);
+                var mapped = InboundScimMapper.ToScimUser(read.Objects[0]);
+                mapped.Meta.Location = $"{GetBaseUrl()}{ScimPrefix()}/Users/{mapped.Id}";
+                return Ok(mapped);
+            }
+
             if (!Guid.TryParse(id, out var userId))
             {
                 return ScimBadRequest("Invalid user ID format");

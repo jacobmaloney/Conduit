@@ -126,6 +126,97 @@ namespace Conduit.Web.Services
             };
         }
 
+        // ─── Reverse mapping (Item 3: GET read-through) ─────────────────────────
+        //
+        // Map a ConnectorObject read from a connection's SOURCE adapter back into a
+        // SCIM resource so the inbound proxy can serve GET /Users|/Groups from the
+        // external system. SINK-AGNOSTIC by the same principle as the forward map:
+        // read the union of well-known source attribute keys (AD givenName/sn/mail,
+        // IC displayName/userName/userPrincipalName/isActive, Entra-isms) case-
+        // insensitively, emitting whatever is present. The resource Id is the
+        // ConnectorObject.SourceId — for an IC Objects source this is the row's
+        // SourceUniqueId; the proxy is responsible for choosing what id the caller
+        // round-trips (see the controller). Membership is NOT resolved here (groups
+        // come back without expanded members on a list read).
+
+        public static ScimUser ToScimUser(ConnectorObject obj)
+        {
+            var u = new ScimUser
+            {
+                Id = obj.SourceId,
+                UserName = First(obj, "userName", "sAMAccountName", "username") ?? obj.SourceId,
+                DisplayName = First(obj, "displayName"),
+                Title = First(obj, "title", "jobTitle"),
+                UserType = First(obj, "userType"),
+            };
+
+            var given = First(obj, "givenName", "firstName");
+            var family = First(obj, "sn", "lastName", "familyName");
+            if (given is not null || family is not null)
+                u.Name = new ScimName { GivenName = given, FamilyName = family };
+
+            var mail = First(obj, "mail", "email", "primaryEmail", "userPrincipalName");
+            if (!string.IsNullOrEmpty(mail))
+                u.Emails = new System.Collections.Generic.List<ScimEmail> { new() { Value = mail, Type = "work", Primary = true } };
+
+            // active: prefer a typed bool attribute, else parse a string form.
+            u.Active = ReadBool(obj, true, "active", "isActive", "accountEnabled");
+
+            var dept = First(obj, "department");
+            var empId = First(obj, "employeeID", "employeeId", "employeeNumber");
+            var manager = First(obj, "manager");
+            if (dept is not null || empId is not null || manager is not null)
+            {
+                u.EnterpriseExtension = new ScimEnterpriseUser
+                {
+                    Department = dept,
+                    EmployeeNumber = empId,
+                    Manager = manager is null ? null : new ScimManager { Value = manager }
+                };
+                if (!u.Schemas.Contains("urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"))
+                    u.Schemas.Add("urn:ietf:params:scim:schemas:extension:enterprise:2.0:User");
+            }
+
+            return u;
+        }
+
+        public static ScimGroup ToScimGroup(ConnectorObject obj)
+        {
+            var g = new ScimGroup
+            {
+                Id = obj.SourceId,
+                DisplayName = First(obj, "displayName", "cn", "sAMAccountName") ?? obj.SourceId,
+                Description = First(obj, "description"),
+                Type = First(obj, "groupType", "type"),
+            };
+            return g;
+        }
+
+        /// <summary>First non-empty value across the given attribute keys (case-insensitive).</summary>
+        private static string? First(ConnectorObject obj, params string[] keys)
+        {
+            foreach (var k in keys)
+            {
+                if (obj.Attributes.TryGetValue(k, out var v) && v is not null)
+                {
+                    var s = v.ToString();
+                    if (!string.IsNullOrEmpty(s)) return s;
+                }
+            }
+            return null;
+        }
+
+        private static bool ReadBool(ConnectorObject obj, bool fallback, params string[] keys)
+        {
+            foreach (var k in keys)
+            {
+                if (!obj.Attributes.TryGetValue(k, out var v) || v is null) continue;
+                if (v is bool b) return b;
+                if (bool.TryParse(v.ToString(), out var parsed)) return parsed;
+            }
+            return fallback;
+        }
+
         private static void Put(Dictionary<string, object?> d, string key, string? value)
         {
             if (!string.IsNullOrEmpty(value)) d[key] = value;
