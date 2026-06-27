@@ -358,34 +358,30 @@
                 {
                     <div class="alert alert-danger py-2">@errorMessage</div>
                 }
+                @if (!editingId.HasValue)
+                {
+                    <div class="conn-wizard-steps mb-3">
+                        <div class="conn-wizard-step @(ShowStep1 ? "active" : (newConnStep > 1 ? "done" : ""))">
+                            <span class="conn-wizard-step-num">1</span>
+                            <span class="conn-wizard-step-label">Connection</span>
+                        </div>
+                        <div class="conn-wizard-step-sep"></div>
+                        <div class="conn-wizard-step @(ShowStep2 ? "active" : "")">
+                            <span class="conn-wizard-step-num">2</span>
+                            <span class="conn-wizard-step-label">Configuration</span>
+                        </div>
+                    </div>
+                }
+                @if (ShowStep1)
+                {
                 <div class="mb-3">
                     <label class="form-label">Name *</label>
                     <input class="form-control" @bind="form.Name" @bind:event="oninput" @bind:after="OnNameChanged" placeholder="e.g. IT Helpdesk Portal" />
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">Slug *</label>
-                    <input class="form-control" @bind="form.Slug" placeholder="it-helpdesk" />
+                    <label class="form-label">Slug</label>
+                    <input class="form-control form-control-sm" @bind="form.Slug" placeholder="it-helpdesk" />
                     <small class="form-text text-muted">URL-safe identifier. Auto-derived from the name; edit if needed. Unique across all systems.</small>
-                </div>
-                @{
-                    // Phase 6: per-connector required-field enforcement. The adapter
-                    // for the currently-selected SystemType tells the form which
-                    // Tenant fields it cares about. AD requires Domain; most others
-                    // declare nothing (their requirements live in credentials).
-                    var domainReq = GetTenantFieldRequirement(form.SystemType, "Domain");
-                    var domainRequired = domainReq?.Required == true;
-                    var domainPlaceholder = domainReq?.Placeholder ?? "e.g. it.demo.local (optional)";
-                    var domainHelp = domainReq?.HelpText;
-                }
-                <div class="mb-3">
-                    <label class="form-label">
-                        Domain@(domainRequired ? " *" : string.Empty)
-                    </label>
-                    <input class="form-control" @bind="form.Domain" @bind:after="InvalidateFormTest" placeholder="@domainPlaceholder" />
-                    @if (!string.IsNullOrEmpty(domainHelp))
-                    {
-                        <small class="form-text text-muted">@domainHelp</small>
-                    }
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Connection Type *</label>
@@ -439,7 +435,31 @@
                         }
                     </small>
                 </div>
-                @{
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" rows="3" @bind="form.Description"></textarea>
+                </div>
+                }
+                @if (ShowStep2)
+                {
+                    // Phase 6: per-connector required-field enforcement. The adapter
+                    // for the currently-selected SystemType tells the form which
+                    // Tenant fields it cares about. AD requires Domain; most others
+                    // declare nothing (their requirements live in credentials).
+                    var domainReq = GetTenantFieldRequirement(form.SystemType, "Domain");
+                    var domainRequired = domainReq?.Required == true;
+                    var domainPlaceholder = domainReq?.Placeholder ?? "e.g. it.demo.local (optional)";
+                    var domainHelp = domainReq?.HelpText;
+                <div class="mb-3">
+                    <label class="form-label">
+                        Domain@(domainRequired ? " *" : string.Empty)
+                    </label>
+                    <input class="form-control" @bind="form.Domain" @bind:after="InvalidateFormTest" placeholder="@domainPlaceholder" />
+                    @if (!string.IsNullOrEmpty(domainHelp))
+                    {
+                        <small class="form-text text-muted">@domainHelp</small>
+                    }
+                </div>
                     // Connector-shaped credential capture, folded into create/edit so a
                     // newly-connected system is immediately usable. The adapter for the
                     // selected SystemType declares its credential types + field specs;
@@ -449,7 +469,6 @@
                     // "leave blank to keep" placeholder and are never echoed to the DOM.
                     var createAdapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
                     var createCredTypes = createAdapter?.CredentialTypes;
-                }
                 @* Per-connector "what you need before you start" guidance. Renders for the
                    cloud connectors whose setup has prerequisites that aren't obvious from the
                    fields alone. Placeholders only — never echo real/secret values here. *@
@@ -623,10 +642,12 @@
                         </div>
                     }
                 }
-                <div class="mb-3">
-                    <label class="form-label">Description</label>
-                    <textarea class="form-control" rows="3" @bind="form.Description"></textarea>
-                </div>
+                @if (form.SystemType == "IdentityCenter")
+                {
+                    <div class="alert alert-info py-2">
+                        <small><strong>Objects vs Identities</strong> is chosen per sync project, not on the connection — one IdentityCenter connection can be source=Identities and sink=Objects in the same project. Pick the table on each side when you build the Sync Project.</small>
+                    </div>
+                }
 
                 @* Active + Authoritative toggles (IC "New Connection" parity). Active is
                    the real Tenant.IsActive flag. Authoritative has NO Tenant column today
@@ -722,17 +743,34 @@
                         }
                     </div>
                 }
+                }
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
-                <button class="btn btn-primary" @onclick="Save" disabled="@(saving || !CanSaveForm)"
-                        title="@(CanSaveForm ? null : (RequiresTestBeforeSave ? "Test the connection successfully before you can " + (editingId.HasValue ? "save." : "connect.") : null))">
-                    @if (saving)
-                    {
-                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
-                    }
-                    @(editingId.HasValue ? "Save changes" : "Connect")
-                </button>
+                @if (!editingId.HasValue && newConnStep == 2)
+                {
+                    <button class="btn btn-outline-secondary me-auto" type="button" @onclick="GoToStep1">
+                        <i class="oi oi-arrow-left me-1"></i> Back
+                    </button>
+                }
+                @if (editingId.HasValue || newConnStep == 2)
+                {
+                    <button class="btn btn-primary" @onclick="Save" disabled="@(saving || !CanSaveForm)"
+                            title="@(CanSaveForm ? null : (RequiresTestBeforeSave ? "Test the connection successfully before you can " + (editingId.HasValue ? "save." : "connect.") : null))">
+                        @if (saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        @(editingId.HasValue ? "Save changes" : "Connect")
+                    </button>
+                }
+                else
+                {
+                    <button class="btn btn-primary" type="button" @onclick="GoToStep2" disabled="@(!CanAdvanceToStep2)"
+                            title="@(CanAdvanceToStep2 ? null : "Enter a name and pick a connection type to continue.")">
+                        Next <i class="oi oi-arrow-right ms-1"></i>
+                    </button>
+                }
             </div>
         </div>
     </div>
@@ -1515,6 +1553,17 @@
     private Guid? editingId;
     private Tenant form = new();
     private string errorMessage = "";
+
+    // Create flow is a 2-step wizard: step 1 = generic fields (Name, Type,
+    // Description); step 2 = the type-specific block (Domain, credentials, test).
+    // Edit mode is single-page — both groups render together (no Next/Back).
+    private int newConnStep = 1;
+    private bool ShowStep1 => editingId.HasValue || newConnStep == 1;
+    private bool ShowStep2 => editingId.HasValue || newConnStep == 2;
+    private bool CanAdvanceToStep2 =>
+        !string.IsNullOrWhiteSpace(form.Name) && !string.IsNullOrWhiteSpace(form.SystemType);
+    private void GoToStep2() { if (CanAdvanceToStep2) newConnStep = 2; }
+    private void GoToStep1() => newConnStep = 1;
     // Operator-facing surface for non-modal load failures that were previously
     // swallowed to Console.WriteLine (e.g. the endpoints-view token load).
     private string toastError = string.Empty;
@@ -2097,6 +2146,7 @@
         editingId = null;
         form = new Tenant { SystemType = "Emulator", IsActive = true };
         errorMessage = "";
+        newConnStep = 1;
         ClearAutoRegStatus();
         ResetCreateCredentialState();
         showModal = true;
