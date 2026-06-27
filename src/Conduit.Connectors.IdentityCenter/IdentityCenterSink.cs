@@ -1386,6 +1386,58 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
 
+    /// <summary>
+    /// Phase 2 deprovision. Soft-deletes the object identified by <paramref name="sourceId"/>
+    /// on IC's side via the SAME tombstone endpoint the sync delete-detection uses
+    /// (<see cref="EmitTombstonesAsync"/>), so deprovision is reversible and honors IC's
+    /// 50% safety cap. The single id is resolved under the connection the upserts land
+    /// under (the tombstone path resolves Source → connection exactly like the bulk path).
+    ///
+    /// Idempotent: an id IC can't match is treated as success (already gone). Identities
+    /// has no tombstone endpoint, so a delete there returns Skipped rather than mis-routing.
+    /// </summary>
+    public async Task<SinkWriteResult> DeleteAsync(string sourceId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sourceId))
+            return SinkWriteResult.Fail("DeleteAsync requires a non-empty sourceId.");
+
+        try
+        {
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink);
+            if (creds is null)
+                return SinkWriteResult.Fail($"No 'identitycenter' credential for tenant {_tenantId}.");
+
+            // Identities table has no people-table tombstone endpoint — mirror
+            // EmitTombstonesAsync's guard rather than mis-route to the Objects endpoint.
+            if (creds.Table == IcTable.Identities)
+            {
+                _logger.LogInformation(
+                    "IC DeleteAsync skipped: sink table=Identities has no tombstone endpoint (tenant={TenantId}, id={Id}).",
+                    _tenantId, sourceId);
+                return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
+            }
+
+            // Source MUST match the value the upsert path stamps so IC resolves the
+            // SAME connection. The inbound proxy doesn't carry a per-record _source,
+            // so fall back to the canonical "Conduit" source the bulk path defaults to.
+            var result = await EmitTombstonesAsync("Conduit", new[] { sourceId }, cancellationToken);
+            if (!result.Succeeded)
+                return SinkWriteResult.Fail(result.ErrorMessage ?? "IC tombstone delete failed.");
+            if (result.Aborted)
+                return SinkWriteResult.Fail(result.AbortReason ?? "IC 50% safety cap tripped; delete not applied.");
+
+            // Matched==0 → the id wasn't a live IC row; idempotent success (already gone).
+            return SinkWriteResult.Ok(
+                result.SoftDeleted > 0 ? SinkWriteOutcome.Updated : SinkWriteOutcome.Skipped);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "IC DeleteAsync failed (tenant={TenantId}, id={Id})", _tenantId, sourceId);
+            return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
     // ── Resolver helpers ────────────────────────────────────────────────────
 
     private static async Task<Guid?> ResolveIdentityIdAsync(HttpClient client, IdentityCenterCredentials creds, string externalId, CancellationToken ct)
