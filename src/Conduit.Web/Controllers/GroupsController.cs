@@ -6,8 +6,11 @@ using Dapper;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Newtonsoft.Json.Linq;
+using System.Threading;
 using Conduit.Core.Models;
 using Conduit.DataAccess.Repositories;
+using Conduit.Sync.Connectors;
+using Conduit.Web.Services;
 
 namespace Conduit.Web.Controllers
 {
@@ -20,10 +23,12 @@ namespace Conduit.Web.Controllers
     public class GroupsController : BaseScimController
     {
         private readonly GroupRepository _groupRepository;
+        private readonly InboundProxyService _proxy;
 
-        public GroupsController(GroupRepository groupRepository)
+        public GroupsController(GroupRepository groupRepository, InboundProxyService proxy)
         {
             _groupRepository = groupRepository;
+            _proxy = proxy;
         }
 
         /// <summary>
@@ -106,7 +111,7 @@ namespace Conduit.Web.Controllers
         /// Creates a new group
         /// </summary>
         [HttpPost]
-        public async Task<IActionResult> CreateGroup([FromBody] ScimGroup group)
+        public async Task<IActionResult> CreateGroup([FromBody] ScimGroup group, CancellationToken ct)
         {
             if (group == null)
             {
@@ -116,6 +121,15 @@ namespace Conduit.Web.Controllers
             if (string.IsNullOrWhiteSpace(group.DisplayName))
             {
                 return ScimBadRequest("displayName is required", ScimErrorType.InvalidValue);
+            }
+
+            // Phase 1 inbound proxy: forward to a writable external target's sink when
+            // this connection supports create; else fall through to the local store.
+            var connectorObject = InboundScimMapper.FromScimGroup(group);
+            var proxy = await _proxy.TryProxyCreateAsync(connectorObject, "Group", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                return ScimFromProxyGroup(proxy, group);
             }
 
             try
@@ -382,6 +396,33 @@ namespace Conduit.Web.Controllers
                 return path.Substring(startQuote + 1, endQuote - startQuote - 1);
             }
             return null;
+        }
+
+        /// <summary>
+        /// Translate a proxied provision outcome into a SCIM-compliant Group response.
+        /// Mirrors UsersController.ScimFromProxy: Success → 201 with the target's
+        /// assigned id + round-trippable Location; NotSupported → 501; Failed → 502.
+        /// </summary>
+        private IActionResult ScimFromProxyGroup(InboundProxyService.ProxyResult proxy, ScimGroup group)
+        {
+            switch (proxy.Outcome)
+            {
+                case ProvisionOutcome.Success:
+                case ProvisionOutcome.Accepted:
+                    var targetId = string.IsNullOrEmpty(proxy.ExternalId) ? group.Id : proxy.ExternalId!;
+                    group.Id = targetId;
+                    group.Meta.Location = $"{GetBaseUrl()}{ScimPrefix()}/Groups/{targetId}";
+                    SetLocationHeader("Groups", targetId);
+                    return Created(group.Meta.Location, group);
+
+                case ProvisionOutcome.NotSupported:
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound create.");
+
+                default: // Failed
+                    return ScimError(502, null,
+                        proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the create.");
+            }
         }
     }
 }

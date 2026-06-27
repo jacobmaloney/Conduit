@@ -2,19 +2,24 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Conduit.Core.Models;
 using Conduit.DataAccess.Repositories;
+using Conduit.Sync.Connectors;
+using Conduit.Web.Services;
 
 namespace Conduit.Web.Controllers
 {
     /// <summary>
     /// Generic REST emulator at /api/v1/users. Deliberately *not* SCIM — gives ARS
     /// PowerShell workflows a simpler payload shape to demo "ARS can call any REST."
-    /// Persists into the same Users table SCIM uses; tenant scope is resolved from
-    /// the bearer token by ApiTokenAuthMiddleware → TenantContext → UserRepository.
+    /// When the active connection is a writable external target (its adapter
+    /// SupportsCreate) the create is PROXIED to that target's sink; otherwise it
+    /// persists into the same Users table SCIM uses. Tenant scope is resolved from
+    /// the bearer token by ApiTokenAuthMiddleware → TenantContext.
     /// </summary>
     [ApiController]
     [Route("api/v1/users")]
@@ -23,10 +28,12 @@ namespace Conduit.Web.Controllers
     public class ApiV1UsersController : ControllerBase
     {
         private readonly UserRepository _users;
+        private readonly InboundProxyService _proxy;
 
-        public ApiV1UsersController(UserRepository users)
+        public ApiV1UsersController(UserRepository users, InboundProxyService proxy)
         {
             _users = users;
+            _proxy = proxy;
         }
 
         public class ApiV1User
@@ -64,7 +71,7 @@ namespace Conduit.Web.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> Create([FromBody] ApiV1User body)
+        public async Task<IActionResult> Create([FromBody] ApiV1User body, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(body.Username))
             {
@@ -85,6 +92,25 @@ namespace Conduit.Web.Controllers
                 {
                     new() { Value = body.Email, Type = "work", Primary = true }
                 };
+            }
+            if (!string.IsNullOrWhiteSpace(body.Id)) scim.ExternalId = body.Id;
+
+            // Inbound proxy: forward to a writable external target's sink, else local.
+            var connectorObject = InboundScimMapper.FromScimUser(scim);
+            var proxy = await _proxy.TryProxyCreateAsync(connectorObject, "User", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                switch (proxy.Outcome)
+                {
+                    case ProvisionOutcome.Success:
+                    case ProvisionOutcome.Accepted:
+                        body.Id = string.IsNullOrEmpty(proxy.ExternalId) ? body.Id : proxy.ExternalId;
+                        return StatusCode(201, body);
+                    case ProvisionOutcome.NotSupported:
+                        return StatusCode(501, new { error = proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound create." });
+                    default:
+                        return StatusCode(502, new { error = proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the create." });
+                }
             }
 
             var created = await _users.CreateAsync(scim);

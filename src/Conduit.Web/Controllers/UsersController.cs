@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using Microsoft.AspNetCore.Mvc;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Newtonsoft.Json.Linq;
 using Conduit.Core.Models;
 using Conduit.DataAccess.Repositories;
+using Conduit.Sync.Connectors;
 using Conduit.Web.Authentication;
 using Conduit.Web.Services;
 
@@ -24,17 +26,19 @@ namespace Conduit.Web.Controllers
         private readonly UserRepository _userRepository;
         private readonly TokenService _tokenService;
         private readonly ApplicationLogService _appLog;
+        private readonly InboundProxyService _proxy;
 
         private const string EnterpriseExtensionPrefix = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:";
 
         /// <summary>
         /// Initializes a new instance of the UsersController class
         /// </summary>
-        public UsersController(UserRepository userRepository, TokenService tokenService, ApplicationLogService appLog)
+        public UsersController(UserRepository userRepository, TokenService tokenService, ApplicationLogService appLog, InboundProxyService proxy)
         {
             _userRepository = userRepository;
             _tokenService = tokenService;
             _appLog = appLog;
+            _proxy = proxy;
         }
 
         /// <summary>
@@ -118,7 +122,7 @@ namespace Conduit.Web.Controllers
         /// Creates a new user
         /// </summary>
         [HttpPost]
-        public async Task<IActionResult> CreateUser([FromBody] ScimUser user)
+        public async Task<IActionResult> CreateUser([FromBody] ScimUser user, CancellationToken ct)
         {
             if (user == null)
             {
@@ -128,6 +132,17 @@ namespace Conduit.Web.Controllers
             if (string.IsNullOrWhiteSpace(user.UserName))
             {
                 return ScimBadRequest("userName is required", ScimErrorType.InvalidValue);
+            }
+
+            // Phase 1 inbound proxy: when this connection is a writable external
+            // target (its adapter SupportsCreate), forward the create to that target's
+            // sink INSTEAD of writing the local store. Otherwise fall through to the
+            // legacy local-store path below (Emulator / slug-less default route).
+            var connectorObject = InboundScimMapper.FromScimUser(user);
+            var proxy = await _proxy.TryProxyCreateAsync(connectorObject, "User", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                return ScimFromProxy(proxy, user, "Users");
             }
 
             // Check if username already exists
@@ -609,6 +624,38 @@ namespace Conduit.Web.Controllers
                 return jv.Value?.ToString()?.ToLowerInvariant() == "true";
             }
             return value?.ToString()?.ToLowerInvariant() == "true";
+        }
+
+        /// <summary>
+        /// Translate a proxied provision outcome into a SCIM-compliant response:
+        ///   Success/Accepted → 201 Created, the resource echoed back with the TARGET's
+        ///                       assigned id + a round-trippable Meta.Location + Location header.
+        ///   NotSupported     → 501 (the target can't create) as a SCIM error.
+        ///   Failed           → 502 as a SCIM error (the downstream target rejected it),
+        ///                       preserving the target's message.
+        /// The 201 body is the SCIM resource the caller sent, re-stamped with the
+        /// target id so downstream SCIM clients can address the object by that id.
+        /// </summary>
+        private IActionResult ScimFromProxy(InboundProxyService.ProxyResult proxy, ScimUser user, string resourceType)
+        {
+            switch (proxy.Outcome)
+            {
+                case ProvisionOutcome.Success:
+                case ProvisionOutcome.Accepted:
+                    var targetId = string.IsNullOrEmpty(proxy.ExternalId) ? user.Id : proxy.ExternalId!;
+                    user.Id = targetId;
+                    user.Meta.Location = $"{GetBaseUrl()}{ScimPrefix()}/{resourceType}/{targetId}";
+                    SetLocationHeader(resourceType, targetId);
+                    return Created(user.Meta.Location, user);
+
+                case ProvisionOutcome.NotSupported:
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound create.");
+
+                default: // Failed
+                    return ScimError(502, null,
+                        proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the create.");
+            }
         }
     }
 }

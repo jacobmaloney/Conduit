@@ -431,6 +431,9 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 // via the ARG KQL endpoint over raw HTTP; surfaces Azure Hybrid Benefit markers).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.AzureResourceGraph.AzureResourceGraphAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
+// Phase 1 inbound proxy: resolves the active connection and forwards inbound
+// SCIM/REST creates to a sink-capable connection's sink (else falls back local).
+builder.Services.AddScoped<Conduit.Web.Services.InboundProxyService>();
 // Singleton: shared across the controller's fire-and-forget Run-Now task, the
 // scheduler, and every Blazor circuit so "Stop Sync" can trip the in-flight run.
 builder.Services.AddSingleton<Conduit.Sync.Orchestration.SyncCancellationRegistry>();
