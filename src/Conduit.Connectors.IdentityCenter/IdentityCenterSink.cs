@@ -1315,6 +1315,77 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         }
     }
 
+    // ── Phase 5 provisioning: explicit create path ──────────────────────────
+    //
+    // CreateAsync is the INBOUND-PROXY front door (SCIM/REST POST → this sink).
+    // Unlike UpsertBatchAsync (sync orchestrator path), it returns a rich
+    // ProvisionResult carrying IC's assigned target id so the SCIM layer can
+    // emit a real Location + id. It reuses the SAME single-item batch posters
+    // (PostObjectBatchAsync / PostIdentityBatchAsync) the sync path uses — they
+    // already honor the ambient IdentityCenterTableContext (V22 for sync; the
+    // inbound proxy stamps it from the connection's TargetTable) and parse IC's
+    // per-item outcome. After a Created/Updated outcome we resolve IC's actual
+    // row id with the existing resolver helpers (one extra GET) so ExternalId is
+    // IC's primary key, not the source id we sent — enabling GET/PUT/DELETE
+    // round-trip by that id in Phase 2.
+    public async Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink)
+                ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
+            var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+
+            var single = new[] { newObject };
+            var writeResults = creds.Table == IcTable.Identities
+                ? await PostIdentityBatchAsync(client, creds, single, cancellationToken)
+                : await PostObjectBatchAsync(client, creds, single, cancellationToken);
+
+            if (writeResults.Count == 0)
+                return ProvisionResult.Failed("IC sink returned no result for the create.");
+
+            var r = writeResults[0];
+            if (r.Outcome == SinkWriteOutcome.Failed)
+                return ProvisionResult.Failed(r.ErrorMessage ?? "IC rejected the create.");
+
+            // Resolve IC's assigned id so the caller gets IC's real primary key.
+            // Best-effort: a successful write with an unresolved id still succeeds
+            // (we fall back to the SourceUniqueId we sent). The inbound proxy
+            // supplies SourceId = the SCIM externalId / generated key.
+            string? externalId = null;
+            try
+            {
+                if (creds.Table == IcTable.Identities)
+                {
+                    var idGuid = await ResolveIdentityIdAsync(client, creds, newObject.SourceId, cancellationToken);
+                    externalId = idGuid?.ToString();
+                }
+                else
+                {
+                    var objClass = (newObject.ObjectClass ?? "user").ToLowerInvariant();
+                    var idGuid = await ResolveObjectIdAsync(client, creds, objClass, newObject.SourceId, cancellationToken);
+                    externalId = idGuid?.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "IC CreateAsync succeeded but id resolution failed (tenant={TenantId}, sourceId={Id}); returning source id.",
+                    _tenantId, newObject.SourceId);
+            }
+
+            return ProvisionResult.Success(externalId: externalId ?? NullIfEmpty(newObject.SourceId));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "IC CreateAsync failed (tenant={TenantId})", _tenantId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
+
     // ── Resolver helpers ────────────────────────────────────────────────────
 
     private static async Task<Guid?> ResolveIdentityIdAsync(HttpClient client, IdentityCenterCredentials creds, string externalId, CancellationToken ct)

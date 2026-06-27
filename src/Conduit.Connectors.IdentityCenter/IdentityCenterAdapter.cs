@@ -37,6 +37,10 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
         SupportsPersonCreate = true,
         SupportsAssignManager = true,
         SupportsAssignGroupOwner = true,
+        // Phase 1 inbound proxy: IC implements CreateAsync (single-item write via
+        // the bulk endpoints). This is what makes a SCIM/REST POST to an IC-typed
+        // connection actually create an Object (or Identity) in IC.
+        SupportsCreate = true,
         // Phase 8: IC has the dedicated bulk ingest endpoints for the deeper
         // governance data classes, and implements IGroupMembershipEmittingSink.
         // These are CAPABILITY facts, not a license flag — the IC-CONNECTION
