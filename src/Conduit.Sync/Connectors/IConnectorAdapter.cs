@@ -301,6 +301,58 @@ public interface IConnectorSink
         throw new NotSupportedException("This sink does not implement CreateAsync.");
 
     /// <summary>
+    /// Phase 2 inbound-proxy UPDATE front door (SCIM PUT/PATCH or /api/v1 PATCH →
+    /// this sink). Mirrors <see cref="CreateAsync"/>: a rich <see cref="ProvisionResult"/>
+    /// so the controller can map to a clean SCIM 200 / 501 / 502.
+    ///
+    /// <paramref name="externalId"/> is the sink-side identity of the row to update
+    /// (the SCIM resource id, which for IC IS the target row GUID; for AD a DN/GUID;
+    /// for Entra the object GUID). <paramref name="changes"/> carries the desired
+    /// attribute set; its SourceId is set to <paramref name="externalId"/> by the
+    /// proxy so a sink that keys upsert on SourceId addresses the right row.
+    ///
+    /// <paramref name="replace"/> = true for PUT (full replace where the sink can
+    /// express it), false for PATCH (partial merge). Most directory back-ends
+    /// (Graph PATCH, AD ModifyRequest with only the supplied attrs, IC bulk merge)
+    /// are natively PARTIAL — a sink that cannot express a true full replace should
+    /// document that PUT is honored as a partial merge of the supplied attributes
+    /// rather than silently clearing omitted ones.
+    ///
+    /// DEFAULT delegates to <see cref="UpsertAsync"/> (which every sink implements
+    /// as find-then-update-or-create) and maps the outcome. A sink whose adapter
+    /// advertises <see cref="ConnectorCapabilities.SupportsUpdate"/> may override
+    /// for richer semantics. A sink that advertises SupportsUpdate=false leaves
+    /// this default; the proxy short-circuits to 501 before ever calling it, so
+    /// the default is never reached for a non-update connection.
+    /// </summary>
+    Task<ProvisionResult> UpdateAsync(string externalId, ConnectorObject changes, bool replace, CancellationToken cancellationToken) =>
+        UpdateViaUpsertAsync(externalId, changes, cancellationToken);
+
+    /// <summary>
+    /// Default UPDATE implementation shared by sinks that have no dedicated update
+    /// API beyond their upsert: stamp the target id onto the object's SourceId and
+    /// route through <see cref="UpsertAsync"/>, then translate the SinkWriteResult
+    /// into a ProvisionResult. Created (the row didn't exist) and Updated both
+    /// surface as Success — an idempotent update that had to insert is still a
+    /// successful update from the caller's view; Skipped → Success (no-op), Failed
+    /// → Failed. Sealed as a sink helper so overrides can also call it.
+    /// </summary>
+    protected async Task<ProvisionResult> UpdateViaUpsertAsync(string externalId, ConnectorObject changes, CancellationToken cancellationToken)
+    {
+        var target = string.IsNullOrEmpty(externalId)
+            ? changes
+            : new ConnectorObject { SourceId = externalId, ObjectClass = changes.ObjectClass, Attributes = changes.Attributes };
+        var r = await UpsertAsync(target, cancellationToken);
+        return r.Outcome switch
+        {
+            SinkWriteOutcome.Created => ProvisionResult.Success(externalId),
+            SinkWriteOutcome.Updated => ProvisionResult.Success(externalId),
+            SinkWriteOutcome.Skipped => ProvisionResult.Success(externalId),
+            _ => ProvisionResult.Failed(r.ErrorMessage ?? "Sink rejected the update."),
+        };
+    }
+
+    /// <summary>
     /// Move an existing object to a new container. AD-shaped in practice but the
     /// contract is generic — Entra-style sinks that have no container concept
     /// throw NotSupported. <paramref name="externalId"/> may be a DN, GUID, UPN
@@ -465,6 +517,14 @@ public sealed class ConnectorCapabilities
     // ─── Phase 5 provisioning support ───────────────────────────────────────
     /// <summary>Sink implements <see cref="IConnectorSink.CreateAsync"/>.</summary>
     public bool SupportsCreate { get; init; }
+    /// <summary>
+    /// Sink can UPDATE an existing object by external id via the inbound proxy
+    /// (<see cref="IConnectorSink.UpdateAsync"/>). The proxy short-circuits PUT/PATCH
+    /// to 501 when this is false, so it never reaches the default upsert delegate for
+    /// a connection that has no genuine update primitive. Today: IdentityCenter (bulk
+    /// merge), ActiveDirectory (ModifyRequest), EntraID (Graph PATCH).
+    /// </summary>
+    public bool SupportsUpdate { get; init; }
     /// <summary>Sink implements <see cref="IConnectorSink.MoveAsync"/>.</summary>
     public bool SupportsMove { get; init; }
     /// <summary>Sink implements <see cref="IConnectorSink.ResetPasswordAsync"/>.</summary>

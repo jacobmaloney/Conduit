@@ -41,6 +41,13 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
         // the bulk endpoints). This is what makes a SCIM/REST POST to an IC-typed
         // connection actually create an Object (or Identity) in IC.
         SupportsCreate = true,
+        // Phase 2 inbound proxy: IC implements UpdateAsync via its /api/objects/bulk
+        // (or /api/identities/bulk) MERGE endpoint. The bulk upsert is natively a
+        // PARTIAL merge of the supplied attributes, so PATCH maps exactly; PUT is
+        // honored as a partial merge of the attributes the SCIM payload carried
+        // rather than clearing omitted columns (IC's bulk has no "replace-all-
+        // attributes" mode). See IdentityCenterSink.UpdateAsync.
+        SupportsUpdate = true,
         // Phase 8: IC has the dedicated bulk ingest endpoints for the deeper
         // governance data classes, and implements IGroupMembershipEmittingSink.
         // These are CAPABILITY facts, not a license flag — the IC-CONNECTION

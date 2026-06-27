@@ -131,15 +131,88 @@ namespace Conduit.Web.Services
             return ProxyResult.Proxied(result.Outcome, tenant.SystemType, result.ExternalId, result.ErrorMessage);
         }
 
-        private async Task AuditAsync(Tenant tenant, string resourceKind, string sourceId, ProvisionResult result)
+        /// <summary>
+    /// Phase 2. Resolve the active connection and decide whether this UPDATE
+    /// (SCIM PUT/PATCH, /api/v1 PATCH) should proxy. Same scope guarantee as
+    /// <see cref="TryProxyCreateAsync"/> (the token↔slug cross-check in
+    /// ApiTokenAuthMiddleware bounds which connection this can reach).
+    ///
+    /// Gates on the adapter's <see cref="ConnectorCapabilities.SupportsUpdate"/> —
+    /// NOT SupportsCreate — so a connection that can create but not update
+    /// short-circuits to a NotSupported (501) outcome rather than silently writing
+    /// the local store. <paramref name="externalId"/> is the SCIM resource id the
+    /// caller addressed; <paramref name="replace"/> is true for PUT, false for PATCH.
+    /// </summary>
+    public async Task<ProxyResult> TryProxyUpdateAsync(
+        string externalId,
+        ConnectorObject changes,
+        bool replace,
+        string resourceKindForAudit,
+        CancellationToken ct)
+    {
+        var tenantId = _tenantContext.TenantId;
+        if (tenantId is null) return ProxyResult.Local();
+
+        var tenant = await _tenants.GetByIdAsync(tenantId.Value);
+        if (tenant is null || !tenant.IsActive) return ProxyResult.Local();
+
+        var adapter = _registry.Get(tenant.SystemType);
+        if (adapter is null) return ProxyResult.Local();
+
+        // This connection is a writable external target. If the adapter can't
+        // UPDATE, surface NotSupported (501) rather than falling through to the
+        // local store — falling through would write Conduit's local Users/Groups
+        // for a connection the caller believes is the external target, which is the
+        // exact silent-misroute the create path guards against.
+        if (!adapter.Capabilities.SupportsUpdate)
+        {
+            // Only short-circuit for connections that ARE external targets at all
+            // (they can create). A pure-local connection (Emulator / no create)
+            // keeps the legacy local-store update path.
+            if (!adapter.Capabilities.SupportsCreate)
+                return ProxyResult.Local();
+            return ProxyResult.Proxied(ProvisionOutcome.NotSupported, tenant.SystemType, null,
+                $"Connector '{tenant.SystemType}' does not support inbound update.");
+        }
+
+        StampInboundTable(tenant);
+
+        var sink = adapter.CreateSink(tenant.Id);
+        if (sink is null)
+            return ProxyResult.Proxied(ProvisionOutcome.NotSupported, tenant.SystemType, null,
+                $"Connector '{tenant.SystemType}' exposes no sink for connection {tenant.Id}.");
+
+        ProvisionResult result;
+        try
+        {
+            result = await sink.UpdateAsync(externalId, changes, replace, ct);
+        }
+        catch (NotSupportedException ex)
+        {
+            result = ProvisionResult.NotSupported(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Inbound proxy UPDATE threw (connection={ConnId}, type={Type}, externalId={ExtId})",
+                tenant.Id, tenant.SystemType, externalId);
+            result = ProvisionResult.Failed($"Conduit-side exception: {ex.Message}");
+        }
+
+        await AuditAsync(tenant, resourceKindForAudit, externalId, result, "UPDATE");
+
+        return ProxyResult.Proxied(result.Outcome, tenant.SystemType, result.ExternalId, result.ErrorMessage);
+    }
+
+    private async Task AuditAsync(Tenant tenant, string resourceKind, string sourceId, ProvisionResult result, string verb = "CREATE")
         {
             var level = result.Outcome is ProvisionOutcome.Success or ProvisionOutcome.Accepted
                 ? ApplicationLogService.LogLevel.Info
                 : ApplicationLogService.LogLevel.Warning;
             try
             {
-                await _appLog.LogAsync(level, "InboundProxy/CREATE",
-                    $"Proxied {resourceKind} create -> {tenant.SystemType} '{tenant.Name}' ({tenant.Slug}): {result.Outcome}",
+                await _appLog.LogAsync(level, $"InboundProxy/{verb}",
+                    $"Proxied {resourceKind} {verb.ToLowerInvariant()} -> {tenant.SystemType} '{tenant.Name}' ({tenant.Slug}): {result.Outcome}",
                     details: $"connectionId={tenant.Id} sourceId={sourceId} externalId={result.ExternalId} table={tenant.TargetTable ?? "Objects"} error={result.ErrorMessage}");
             }
             catch (Exception ex)

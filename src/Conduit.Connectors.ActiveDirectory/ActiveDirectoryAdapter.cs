@@ -37,6 +37,12 @@ public sealed class ActiveDirectoryAdapter : IConnectorAdapter
         // Phase 5: AD supports the full provisioning trifecta (Add / ModifyDN /
         // unicodePwd over LDAPS).
         SupportsCreate = true,
+        // Phase 2 inbound proxy: AD's UpsertAsync already finds an existing object
+        // (DN → GUID → sAMAccountName → UPN) and issues a ModifyRequest, so the
+        // default UpdateViaUpsert delegate is a genuine in-place modify. Honored as
+        // a PARTIAL modify of the supplied attributes (PUT does not clear omitted
+        // attributes — AD has no whole-object replace via this path).
+        SupportsUpdate = true,
         SupportsMove = true,
         SupportsResetPassword = true
     };

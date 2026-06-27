@@ -118,8 +118,36 @@ namespace Conduit.Web.Controllers
         }
 
         [HttpPatch("{id}")]
-        public async Task<IActionResult> Patch(Guid id, [FromBody] ApiV1UserPatch body)
+        public async Task<IActionResult> Patch(Guid id, [FromBody] ApiV1UserPatch body, CancellationToken ct)
         {
+            // Inbound proxy: forward a partial update to a writable external target
+            // that supports update; else fall through to the local store. The path
+            // {id} is the resource id the caller addressed. Only the fields the patch
+            // set are mapped, so omitted fields are untouched on the target.
+            var patchScim = new ScimUser { Id = id.ToString() };
+            if (body.Active.HasValue) patchScim.Active = body.Active.Value;
+            if (!string.IsNullOrWhiteSpace(body.Username)) patchScim.UserName = body.Username!;
+            if (body.FirstName != null || body.LastName != null)
+                patchScim.Name = new ScimName { GivenName = body.FirstName, FamilyName = body.LastName };
+            if (!string.IsNullOrWhiteSpace(body.Email))
+                patchScim.Emails = new List<ScimEmail> { new() { Value = body.Email, Type = "work", Primary = true } };
+
+            var connectorObject = InboundScimMapper.FromScimUser(patchScim);
+            var proxy = await _proxy.TryProxyUpdateAsync(id.ToString(), connectorObject, replace: false, "User", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                switch (proxy.Outcome)
+                {
+                    case ProvisionOutcome.Success:
+                    case ProvisionOutcome.Accepted:
+                        return Ok(new { id = string.IsNullOrEmpty(proxy.ExternalId) ? id.ToString() : proxy.ExternalId });
+                    case ProvisionOutcome.NotSupported:
+                        return StatusCode(501, new { error = proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound update." });
+                    default:
+                        return StatusCode(502, new { error = proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the update." });
+                }
+            }
+
             var existing = await _users.GetByIdAsync(id);
             if (existing == null) return NotFound(new { error = "User not found" });
 

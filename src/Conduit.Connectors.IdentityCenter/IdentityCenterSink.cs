@@ -1386,6 +1386,116 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
 
+    // ── Phase 2 provisioning: explicit update path ──────────────────────────
+    //
+    // UpdateAsync is the INBOUND-PROXY update front door (SCIM PUT/PATCH or
+    // /api/v1 PATCH → this sink). IC's /api/objects/bulk (and /api/identities/bulk)
+    // is a MERGE upsert keyed on SourceUniqueId, so an update is the same POST as a
+    // create with the externalId stamped as the SourceId — IC merges the supplied
+    // attributes into the existing row.
+    //
+    // SEMANTICS: IC's bulk endpoint is natively PARTIAL (it merges the attributes
+    // present in the payload; it does not delete columns absent from it). There is
+    // no whole-object replace mode on the bulk endpoint, so we honor BOTH PUT
+    // (<paramref name="replace"/>=true) and PATCH as a partial merge of the supplied
+    // attributes. This is stated on the IC adapter's SupportsUpdate doc and surfaced
+    // to the caller honestly (a PUT will not clear omitted attributes).
+    //
+    // The externalId arriving here is IC's row GUID (the id CreateAsync resolved and
+    // the SCIM layer round-trips). IC's bulk keys on SourceUniqueId, NOT its GUID —
+    // so when the caller's externalId is a GUID we first resolve it back to the row's
+    // SourceUniqueId via the query endpoint, then merge by that. When externalId is
+    // already a SourceUniqueId (e.g. a generic-REST caller that supplied externalId
+    // on create), the resolve is a no-op miss and we merge by it directly.
+    public async Task<ProvisionResult> UpdateAsync(string externalId, ConnectorObject changes, bool replace, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(externalId))
+            return ProvisionResult.Failed("UpdateAsync requires a non-empty externalId.");
+
+        try
+        {
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink)
+                ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
+            var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+
+            // Resolve the externalId (IC's GUID) back to the row's SourceUniqueId so
+            // the bulk MERGE addresses the right row. If it's not a resolvable GUID,
+            // treat the externalId itself AS the SourceUniqueId (generic-REST case).
+            var sourceUniqueId = await ResolveSourceUniqueIdAsync(client, creds, changes.ObjectClass, externalId, cancellationToken)
+                                 ?? externalId;
+
+            // Stamp the resolved key as the object's SourceId so PostObjectBatch /
+            // PostIdentityBatch merge the existing row rather than minting a new one.
+            var merged = new ConnectorObject
+            {
+                SourceId = sourceUniqueId,
+                ObjectClass = changes.ObjectClass,
+                Attributes = changes.Attributes
+            };
+
+            var single = new[] { merged };
+            var writeResults = creds.Table == IcTable.Identities
+                ? await PostIdentityBatchAsync(client, creds, single, cancellationToken)
+                : await PostObjectBatchAsync(client, creds, single, cancellationToken);
+
+            if (writeResults.Count == 0)
+                return ProvisionResult.Failed("IC sink returned no result for the update.");
+
+            var r = writeResults[0];
+            if (r.Outcome == SinkWriteOutcome.Failed)
+                return ProvisionResult.Failed(r.ErrorMessage ?? "IC rejected the update.");
+
+            // Return IC's row GUID as the external id so the SCIM layer round-trips
+            // the SAME id the caller addressed. Best-effort re-resolve; fall back to
+            // the externalId we were handed.
+            string? resolvedGuid = null;
+            try
+            {
+                if (creds.Table == IcTable.Identities)
+                    resolvedGuid = (await ResolveIdentityIdAsync(client, creds, sourceUniqueId, cancellationToken))?.ToString();
+                else
+                    resolvedGuid = (await ResolveObjectIdAsync(client, creds, (changes.ObjectClass ?? "user").ToLowerInvariant(), sourceUniqueId, cancellationToken))?.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "IC UpdateAsync succeeded but id re-resolution failed (tenant={TenantId}, key={Key}); returning caller id.",
+                    _tenantId, sourceUniqueId);
+            }
+
+            return ProvisionResult.Success(externalId: resolvedGuid ?? NullIfEmpty(externalId));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "IC UpdateAsync failed (tenant={TenantId}, externalId={Id})", _tenantId, externalId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Resolve an IC row GUID back to its SourceUniqueId via the query endpoint, so
+    /// the bulk MERGE (which keys on SourceUniqueId) addresses the right row. Returns
+    /// null when the input isn't a GUID that resolves to a live row — the caller then
+    /// treats the input as the SourceUniqueId directly. Objects-table only; Identities
+    /// merge by keyValue, which the caller already supplies as externalId.
+    /// </summary>
+    private static async Task<string?> ResolveSourceUniqueIdAsync(
+        HttpClient client, IdentityCenterCredentials creds, string? objectClass, string externalId, CancellationToken ct)
+    {
+        if (creds.Table == IcTable.Identities) return null;          // identities key on keyValue, not GUID
+        if (!Guid.TryParse(externalId, out _)) return null;          // not a GUID → already a SourceUniqueId
+        var cls = (objectClass ?? "user").ToLowerInvariant();
+        var url = $"{creds.BaseUrl}/api/objects/query?objectClass={Uri.EscapeDataString(cls)}&id={Uri.EscapeDataString(externalId)}&page=1&pageSize=1";
+        using var resp = await client.GetAsync(url, ct);
+        if (!resp.IsSuccessStatusCode) return null;
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+        if (!doc.RootElement.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array) return null;
+        var e = itemsEl.EnumerateArray();
+        if (!e.MoveNext()) return null;
+        return e.Current.TryGetProperty("sourceUniqueId", out var sEl) ? sEl.GetString() : null;
+    }
+
     /// <summary>
     /// Phase 2 deprovision. Soft-deletes the object identified by <paramref name="sourceId"/>
     /// on IC's side via the SAME tombstone endpoint the sync delete-detection uses

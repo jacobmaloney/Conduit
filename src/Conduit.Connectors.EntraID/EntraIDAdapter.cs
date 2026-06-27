@@ -34,6 +34,11 @@ public sealed class EntraIDAdapter : IConnectorAdapter
         // Phase 5: Entra supports user create (Users.PostAsync) and password reset
         // (PATCH with PasswordProfile). Move stays unsupported — no OU concept.
         SupportsCreate = true,
+        // Phase 2 inbound proxy: Entra's UpsertAsync PATCHes against the existing
+        // object id/UPN, so the default UpdateViaUpsert delegate is a genuine Graph
+        // PATCH. Graph PATCH is natively PARTIAL, so PUT is honored as a partial
+        // merge of the supplied attributes (omitted attributes are left untouched).
+        SupportsUpdate = true,
         SupportsMove = false,
         SupportsResetPassword = true
     };

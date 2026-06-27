@@ -154,13 +154,8 @@ namespace Conduit.Web.Controllers
         /// Updates an existing group (full replace)
         /// </summary>
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateGroup(string id, [FromBody] ScimGroup group)
+        public async Task<IActionResult> UpdateGroup(string id, [FromBody] ScimGroup group, CancellationToken ct)
         {
-            if (!Guid.TryParse(id, out var groupId))
-            {
-                return ScimBadRequest("Invalid group ID format");
-            }
-
             if (group == null)
             {
                 return ScimBadRequest("Group data is required");
@@ -169,6 +164,20 @@ namespace Conduit.Web.Controllers
             if (string.IsNullOrWhiteSpace(group.DisplayName))
             {
                 return ScimBadRequest("displayName is required", ScimErrorType.InvalidValue);
+            }
+
+            // Phase 2 inbound proxy: forward the PUT to a writable external target's
+            // sink when it supports update; else fall through to the local store.
+            var connectorObject = InboundScimMapper.FromScimGroup(group);
+            var proxy = await _proxy.TryProxyUpdateAsync(id, connectorObject, replace: true, "Group", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                return ScimFromProxyGroupUpdate(proxy, group);
+            }
+
+            if (!Guid.TryParse(id, out var groupId))
+            {
+                return ScimBadRequest("Invalid group ID format");
             }
 
             try
@@ -197,16 +206,32 @@ namespace Conduit.Web.Controllers
         /// Partially updates a group
         /// </summary>
         [HttpPatch("{id}")]
-        public async Task<IActionResult> PatchGroup(string id, [FromBody] ScimPatchRequest patchRequest)
+        public async Task<IActionResult> PatchGroup(string id, [FromBody] ScimPatchRequest patchRequest, CancellationToken ct)
         {
-            if (!Guid.TryParse(id, out var groupId))
-            {
-                return ScimBadRequest("Invalid group ID format");
-            }
-
             if (patchRequest == null || patchRequest.Operations.Count == 0)
             {
                 return ScimBadRequest("Patch operations are required");
+            }
+
+            // Phase 2 inbound proxy: apply the patch ops onto a fresh ScimGroup and
+            // forward as a PARTIAL merge to a writable external target; else local.
+            {
+                var patched = new ScimGroup { Id = id };
+                foreach (var operation in patchRequest.Operations)
+                {
+                    ApplyGroupPatchOperation(patched, operation);
+                }
+                var connectorObject = InboundScimMapper.FromScimGroup(patched);
+                var proxy = await _proxy.TryProxyUpdateAsync(id, connectorObject, replace: false, "Group", ct);
+                if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+                {
+                    return ScimFromProxyGroupUpdate(proxy, patched);
+                }
+            }
+
+            if (!Guid.TryParse(id, out var groupId))
+            {
+                return ScimBadRequest("Invalid group ID format");
             }
 
             var group = await _groupRepository.GetByIdAsync(groupId);
@@ -422,6 +447,32 @@ namespace Conduit.Web.Controllers
                 default: // Failed
                     return ScimError(502, null,
                         proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the create.");
+            }
+        }
+
+        /// <summary>
+        /// Translate a proxied Group UPDATE outcome into a SCIM response: 200 OK on
+        /// success (re-stamped with the target id + Location), 501 NotSupported, 502
+        /// Failed. Mirrors UsersController.ScimFromProxyUpdate.
+        /// </summary>
+        private IActionResult ScimFromProxyGroupUpdate(InboundProxyService.ProxyResult proxy, ScimGroup group)
+        {
+            switch (proxy.Outcome)
+            {
+                case ProvisionOutcome.Success:
+                case ProvisionOutcome.Accepted:
+                    var targetId = string.IsNullOrEmpty(proxy.ExternalId) ? group.Id : proxy.ExternalId!;
+                    group.Id = targetId;
+                    group.Meta.Location = $"{GetBaseUrl()}{ScimPrefix()}/Groups/{targetId}";
+                    return Ok(group);
+
+                case ProvisionOutcome.NotSupported:
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound update.");
+
+                default: // Failed
+                    return ScimError(502, null,
+                        proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the update.");
             }
         }
     }

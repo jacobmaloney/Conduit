@@ -185,13 +185,8 @@ namespace Conduit.Web.Controllers
         /// Updates an existing user (full update)
         /// </summary>
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateUser(string id, [FromBody] ScimUser user)
+        public async Task<IActionResult> UpdateUser(string id, [FromBody] ScimUser user, CancellationToken ct)
         {
-            if (!Guid.TryParse(id, out var userId))
-            {
-                return ScimBadRequest("Invalid user ID format");
-            }
-
             if (user == null)
             {
                 return ScimBadRequest("User data is required");
@@ -200,6 +195,23 @@ namespace Conduit.Web.Controllers
             if (string.IsNullOrWhiteSpace(user.UserName))
             {
                 return ScimBadRequest("userName is required", ScimErrorType.InvalidValue);
+            }
+
+            // Phase 2 inbound proxy: when this connection is a writable external
+            // target that supports update, forward the PUT (full replace) to that
+            // target's sink. The path {id} IS the resource id the caller addressed
+            // (for IC the target row GUID). NotSupported / Failed surface honestly;
+            // a non-target connection falls through to the local store below.
+            var connectorObject = InboundScimMapper.FromScimUser(user);
+            var proxy = await _proxy.TryProxyUpdateAsync(id, connectorObject, replace: true, "User", ct);
+            if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+            {
+                return ScimFromProxyUpdate(proxy, user, "Users");
+            }
+
+            if (!Guid.TryParse(id, out var userId))
+            {
+                return ScimBadRequest("Invalid user ID format");
             }
 
             // Check if changing username to one that already exists
@@ -240,16 +252,36 @@ namespace Conduit.Web.Controllers
         /// Partially updates a user
         /// </summary>
         [HttpPatch("{id}")]
-        public async Task<IActionResult> PatchUser(string id, [FromBody] ScimPatchRequest patchRequest)
+        public async Task<IActionResult> PatchUser(string id, [FromBody] ScimPatchRequest patchRequest, CancellationToken ct)
         {
-            if (!Guid.TryParse(id, out var userId))
-            {
-                return ScimBadRequest("Invalid user ID format");
-            }
-
             if (patchRequest == null || patchRequest.Operations.Count == 0)
             {
                 return ScimBadRequest("Patch operations are required");
+            }
+
+            // Phase 2 inbound proxy: for a writable external target, apply the patch
+            // ops onto a fresh ScimUser (we cannot read the external row into our
+            // local model) and forward it as a PARTIAL merge (replace=false). Only
+            // the attributes the patch touched are sent, so omitted attributes are
+            // left untouched on the target — true PATCH semantics. A non-target
+            // connection falls through to the local read-modify-write path below.
+            {
+                var patched = new ScimUser { Id = id };
+                foreach (var operation in patchRequest.Operations)
+                {
+                    ApplyPatchOperation(patched, operation);
+                }
+                var connectorObject = InboundScimMapper.FromScimUser(patched);
+                var proxy = await _proxy.TryProxyUpdateAsync(id, connectorObject, replace: false, "User", ct);
+                if (proxy.Decision == InboundProxyService.ProxyDecision.Proxied)
+                {
+                    return ScimFromProxyUpdate(proxy, patched, "Users");
+                }
+            }
+
+            if (!Guid.TryParse(id, out var userId))
+            {
+                return ScimBadRequest("Invalid user ID format");
             }
 
             // Get existing user
@@ -655,6 +687,33 @@ namespace Conduit.Web.Controllers
                 default: // Failed
                     return ScimError(502, null,
                         proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the create.");
+            }
+        }
+
+        /// <summary>
+        /// Translate a proxied UPDATE outcome into a SCIM response. Mirrors
+        /// <see cref="ScimFromProxy"/> but returns 200 OK (not 201 Created) for a
+        /// successful update, re-stamping the resource with the target's id +
+        /// round-trippable Location. NotSupported → 501; Failed → 502.
+        /// </summary>
+        private IActionResult ScimFromProxyUpdate(InboundProxyService.ProxyResult proxy, ScimUser user, string resourceType)
+        {
+            switch (proxy.Outcome)
+            {
+                case ProvisionOutcome.Success:
+                case ProvisionOutcome.Accepted:
+                    var targetId = string.IsNullOrEmpty(proxy.ExternalId) ? user.Id : proxy.ExternalId!;
+                    user.Id = targetId;
+                    user.Meta.Location = $"{GetBaseUrl()}{ScimPrefix()}/{resourceType}/{targetId}";
+                    return Ok(user);
+
+                case ProvisionOutcome.NotSupported:
+                    return ScimError(501, ScimErrorType.InvalidValue,
+                        proxy.ErrorMessage ?? $"Connector '{proxy.SystemType}' does not support inbound update.");
+
+                default: // Failed
+                    return ScimError(502, null,
+                        proxy.ErrorMessage ?? $"Target connector '{proxy.SystemType}' rejected the update.");
             }
         }
     }
