@@ -836,6 +836,30 @@
                         a token that's scoped to a <em>different</em> system is rejected with 403.
                     </p>
 
+                    @if (EndpointsConnectionIsWritableTarget)
+                    {
+                        <div class="alert alert-success py-2">
+                            <i class="fas fa-bolt me-1"></i>
+                            <strong>This connection is a writable target.</strong>
+                            A POST to the URLs below does <strong>not</strong> write Conduit's local store —
+                            it is forwarded to <strong>@endpointsFor.SystemType</strong> ("@endpointsFor.Name").
+                            @if (string.Equals(endpointsFor.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <text> Writes land in the <strong>@(string.IsNullOrWhiteSpace(endpointsFor.TargetTable) ? "Objects" : endpointsFor.TargetTable)</strong> table (set on this connection).</text>
+                            }
+                            The 201 response carries the target's assigned id and a <code>Location</code> that
+                            resolves back to the created object.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-secondary py-2">
+                            <i class="fas fa-database me-1"></i>
+                            This connection has no external write target, so a POST here persists into
+                            Conduit's local Users/Groups store (emulator behavior).
+                        </div>
+                    }
+
                     <div class="section-eyebrow">URLs</div>
                     <div class="table-responsive">
                         <table class="endpoints-table">
@@ -1635,6 +1659,20 @@
     // Endpoints, Legal Hold, Clear Data — renders only in Development. The
     // primary directory-bind connection view stays clean in production.
     private bool ShowDevChrome => Environment.IsDevelopment();
+
+    // True when the connection shown in the Endpoints modal is a writable external
+    // target — its adapter advertises SupportsCreate, so an inbound SCIM/REST POST
+    // is PROXIED to the target rather than written to Conduit's local store. Drives
+    // the modal banner copy (Phase 1 "connection = writable target").
+    private bool EndpointsConnectionIsWritableTarget
+    {
+        get
+        {
+            if (endpointsFor is null) return false;
+            var adapter = ConnectorRegistry.Get(endpointsFor.SystemType);
+            return adapter is not null && adapter.Capabilities.SupportsCreate;
+        }
+    }
 
     // True when a connector adapter is registered for this system type, i.e. a
     // real Test Connection bind is possible. Drives the per-card Test button.

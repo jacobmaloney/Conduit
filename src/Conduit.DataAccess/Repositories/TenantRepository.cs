@@ -388,6 +388,7 @@ namespace Conduit.DataAccess.Repositories
                        t.Slug AS Slug,
                        t.SystemType AS SystemType,
                        t.Domain AS Domain,
+                       t.TargetTable AS TargetTable,
                        t.IsActive AS IsActive,
                        ISNULL(t.LegalHold, 0) AS LegalHold,
                        (SELECT COUNT(*) FROM Users  WHERE TenantId = t.Id) AS UserCount,
@@ -410,6 +411,8 @@ namespace Conduit.DataAccess.Repositories
         public string Slug { get; set; } = string.Empty;
         public string SystemType { get; set; } = "Emulator";
         public string? Domain { get; set; }
+        /// <summary>Inbound-proxy target table for IC connections (Objects|Identities); NULL = Objects.</summary>
+        public string? TargetTable { get; set; }
         public bool IsActive { get; set; }
         public bool LegalHold { get; set; }
         public int UserCount { get; set; }
