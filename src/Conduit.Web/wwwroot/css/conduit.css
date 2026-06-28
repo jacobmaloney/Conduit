@@ -3801,6 +3801,20 @@ details summary::-webkit-details-marker { color: var(--accent); }
         unset/transparent. Scoped to .ops-section so Conduit's own pages
         (Dashboard/Users/Groups/API/Config) keep their normal cyan accent.
    ========================================================================== */
+/* Locked, read-only connection-type field shown on Edit Connection. A native
+   disabled/readonly input renders white/illegible in the dark theme, so this
+   is a dark-styled static field instead. */
+.conn-type-locked {
+    display: flex;
+    align-items: center;
+    background: var(--panel, #0F1B2F);
+    color: var(--text, #E4EDFB);
+    border: 1px solid var(--border, rgba(120, 160, 220, 0.18));
+    opacity: 0.9;
+    cursor: not-allowed;
+}
+.conn-type-locked .fa-lock { color: var(--text-3, #6B809E); }
+
 .ops-section {
     /* ---- Operations-orange accent (single-sourced from the shared token) ---- */
     --accent:            var(--sec-operations, #F97316);

@@ -384,9 +384,11 @@
                     <label class="form-label">Connection Type *</label>
                     @if (editingId.HasValue)
                     {
-                        @* Type is locked after creation. Show it as a readable read-only field —
-                           a disabled <select> renders white/illegible in the dark theme. *@
-                        <input type="text" class="form-control" value="@ConnectionTypeLabel(form.SystemType)" readonly />
+                        @* Type is locked after creation. Render a dark-styled static field —
+                           a disabled/readonly <input>/<select> renders white/illegible in the dark theme. *@
+                        <div class="form-control conn-type-locked" title="Connection type is locked after creation">
+                            <i class="fas fa-lock me-2"></i>@ConnectionTypeLabel(form.SystemType)
+                        </div>
                     }
                     else
                     {
