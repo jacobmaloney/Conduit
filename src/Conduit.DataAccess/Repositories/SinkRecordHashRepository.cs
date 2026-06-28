@@ -92,6 +92,21 @@ SELECT ExternalId, ContentHash, UpdatedAt FROM SinkRecordHashes
     {
         if (hashes.Count == 0) return;
 
+        // Collapse duplicate ExternalIds (last-write-wins) BEFORE the MERGE. A single
+        // run can surface the same SourceId across two flush batches (paging overlap,
+        // or two object classes routed to the same sink/ExternalId scope), so the
+        // accumulated set may contain the same key twice. MERGE treats duplicate source
+        // keys that are both NOT MATCHED as two INSERTs of the same row and trips
+        // UX_SinkRecordHashes_Scope ("Cannot insert duplicate key"). De-duping here
+        // keeps the upsert idempotent regardless of the caller's batch shape.
+        var deduped = new Dictionary<string, string>(hashes.Count, StringComparer.Ordinal);
+        foreach (var kv in hashes)
+        {
+            if (string.IsNullOrEmpty(kv.Key)) continue;
+            deduped[kv.Key] = kv.Value;
+        }
+        if (deduped.Count == 0) return;
+
         const string sql = @"
 SET QUOTED_IDENTIFIER ON;
 MERGE SinkRecordHashes AS t
@@ -117,7 +132,7 @@ WHEN NOT MATCHED THEN
         using var tx = db.BeginTransaction();
         try
         {
-            foreach (var chunk in Chunk(hashes, 1000))
+            foreach (var chunk in Chunk(deduped, 1000))
             {
                 var json = System.Text.Json.JsonSerializer.Serialize(
                     chunk.Select(p => new HashRow { e = p.Key, h = p.Value }));

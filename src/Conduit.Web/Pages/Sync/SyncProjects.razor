@@ -4020,12 +4020,33 @@
                 ? Conduit.Sync.Templates.GenerationMode.Core
                 : (modes.Count > 0 ? modes[0] : Conduit.Sync.Templates.GenerationMode.Core);
         }
+        // The connection's Target Table is the single source of truth for which IC
+        // table this side hits — seed the picker from it when an IC source is chosen.
+        autoGenSourceTable = IcTableForTenant(autoGenSourceId);
         RefreshAutoGenDefaultName();
     }
 
     private void OnAutoGenSinkChanged()
     {
+        autoGenSinkTable = IcTableForTenant(autoGenSinkId);
         RefreshAutoGenDefaultName();
+    }
+
+    /// <summary>
+    /// The IC table a connection targets, read from its TargetTable column — the
+    /// single source of truth. "Objects" for non-IC connections or an IC connection
+    /// with no explicit TargetTable (back-compat default).
+    /// </summary>
+    private string IcTableForTenant(Guid tenantId)
+    {
+        if (tenantId != Guid.Empty
+            && tenantById.TryGetValue(tenantId, out var t)
+            && string.Equals(t.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(t.TargetTable))
+        {
+            return t.TargetTable.Trim();
+        }
+        return "Objects";
     }
 
     private void SetAutoGenMode(Conduit.Sync.Templates.GenerationMode mode)
@@ -4362,10 +4383,11 @@
             form.SinkTenantId = Guid.Empty;
         }
 
-        // V22: seed the IC table defaults to match whatever sides defaulted to an
-        // IC connection above (back-compat: AD → IC/Objects). Non-IC sides stay null.
-        form.SourceTable = SourceIsIdentityCenter ? "Objects" : null;
-        form.SinkTable = SinkIsIdentityCenter ? "Objects" : null;
+        // V22: seed the IC table from each side's connection TargetTable (the single
+        // source of truth) for whatever sides defaulted to an IC connection above.
+        // Non-IC sides stay null.
+        form.SourceTable = SourceIsIdentityCenter ? IcTableForTenant(form.SourceTenantId) : null;
+        form.SinkTable = SinkIsIdentityCenter ? IcTableForTenant(form.SinkTenantId) : null;
 
         scopeForm = new SyncProjectScope { PageSize = 1000 };
         mappingForm = new List<AttributeMapping>();
@@ -4692,31 +4714,17 @@
     private async Task OnSourceTenantChanged()
     {
         showSourceValidation = false;
-        // V22: default the IC table to Objects when an IC source is picked and the
-        // operator hasn't chosen yet (back-compat). Clear it when the source is no
-        // longer IC so a stale table value never persists on a non-IC endpoint.
-        if (SourceIsIdentityCenter)
-        {
-            if (string.IsNullOrEmpty(form.SourceTable)) form.SourceTable = "Objects";
-        }
-        else
-        {
-            form.SourceTable = null;
-        }
+        // V22: seed the IC table from the connection's TargetTable (the single source
+        // of truth) when an IC source is picked. Clear it when the source is no longer
+        // IC so a stale table value never persists on a non-IC endpoint.
+        form.SourceTable = SourceIsIdentityCenter ? IcTableForTenant(form.SourceTenantId) : null;
         await LoadCredentialsForFormAsync();
     }
 
     private async Task OnSinkTenantChanged()
     {
         showSinkValidation = false;
-        if (SinkIsIdentityCenter)
-        {
-            if (string.IsNullOrEmpty(form.SinkTable)) form.SinkTable = "Objects";
-        }
-        else
-        {
-            form.SinkTable = null;
-        }
+        form.SinkTable = SinkIsIdentityCenter ? IcTableForTenant(form.SinkTenantId) : null;
         await LoadCredentialsForFormAsync();
     }
 
@@ -5781,9 +5789,11 @@
                 return;
             }
 
-            // V22: stamp the per-endpoint IC table. Sink is always IdentityCenter here.
+            // V22: stamp the per-endpoint IC table from the connection's TargetTable
+            // (the single source of truth). Sink is always IdentityCenter here, so this
+            // honors an Identities-targeted IC connection instead of forcing Objects.
             var sinkTable = string.Equals(sink.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
-                ? "Objects"
+                ? IcTableForTenant(sink.Id)
                 : null;
 
             // IDENTITIES RULE: same single source of truth — if the IC target lands in the

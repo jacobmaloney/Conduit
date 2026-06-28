@@ -334,6 +334,13 @@ namespace Conduit.Sync.Templates
                 // fallback; the authoritative per-class data lives on each step. Stamp
                 // the first class so legacy readers and the fallback path stay sane.
                 ObjectClass = objectClasses[0],
+                // V22 single-source-of-truth: which IC table each side hits is the
+                // connection's TargetTable. Derive it here so EVERY build path (Auto-
+                // Generate, Blueprint) carries the correct SourceTable/SinkTable. For
+                // an IdentityCenter side, TargetTable ("Objects"|"Identities", default
+                // "Objects" when null/empty) is the authority; non-IC sides stay null.
+                SourceTable = DeriveIcTable(sourceType, sourceTenant.TargetTable),
+                SinkTable = DeriveIcTable(sinkType, sinkTenant.TargetTable),
                 CronSchedule = cron,
                 IsEnabled = false,
                 // Default ON: re-syncs of the same directory skip rows whose content
@@ -662,6 +669,21 @@ namespace Conduit.Sync.Templates
                 },
                 Mappings = new List<AttributeMapping>()
             };
+        }
+
+        /// <summary>
+        /// Resolves the per-side IC table for a project from the connection's
+        /// TargetTable. For an IdentityCenter connector the connection's TargetTable is
+        /// authoritative — "Objects" or "Identities" — defaulting to "Objects" when
+        /// null/empty (back-compat). Every other connector type returns null (the column
+        /// is meaningless off IC). This is the single source of truth that ties a
+        /// connection's Target Table to which IC table the sync hits.
+        /// </summary>
+        private static string? DeriveIcTable(string systemType, string? targetTable)
+        {
+            if (!string.Equals(systemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
+                return null;
+            return string.IsNullOrWhiteSpace(targetTable) ? "Objects" : targetTable.Trim();
         }
 
         private static string ModeLabel(GenerationMode mode) => mode switch
