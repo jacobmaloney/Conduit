@@ -3358,6 +3358,76 @@ details summary::-webkit-details-marker { color: var(--accent); }
     background: var(--accent-50, rgba(34, 211, 238, 0.06));
 }
 
+/* ── "Fastest" chooser card: highlighted + corner badge ── */
+.autogen-tpl-card--recommended {
+    position: relative;
+    border-color: var(--accent, #22D3EE);
+    background: var(--accent-50, rgba(34, 211, 238, 0.06));
+}
+.autogen-tpl-badge--corner {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+}
+
+/* ── Auto-Generate modal: source → target flow row ── */
+.autogen-flow-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+.autogen-flow-col {
+    flex: 1 1 0;
+    min-width: 0;
+}
+.autogen-flow-arrow {
+    align-self: center;
+    margin-top: 18px;
+    color: var(--text-3, #6B809E);
+    font-size: 18px;
+    flex: 0 0 auto;
+}
+
+/* ── Auto-Generate modal: object-class preview panel ── */
+.autogen-preview-panel {
+    padding: 10px 12px;
+    border: 1px solid var(--accent, #22D3EE);
+    border-radius: var(--radius-sm, 7px);
+    background: var(--accent-50, rgba(34, 211, 238, 0.06));
+}
+.autogen-preview-head {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text, #E4EDFB);
+    margin-bottom: 8px;
+}
+.autogen-preview-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.autogen-preview-chip {
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    color: var(--text, #E4EDFB);
+    background: var(--accent-100, rgba(34, 211, 238, 0.14));
+    border: 1px solid var(--accent, #22D3EE);
+}
+
+/* ── Auto-Generate modal: collapsed advanced (name + schedule) ── */
+.autogen-advanced > summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-2, #9DB0CC);
+    padding: 6px 0;
+    list-style: revert;
+}
+.autogen-advanced > summary:hover {
+    color: var(--text, #E4EDFB);
+}
+
 .workflow-bulk-builder {
     margin-bottom: 12px;
     padding: 12px;
