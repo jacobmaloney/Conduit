@@ -331,8 +331,8 @@
 @* ───────── Auto-Generate Modal — IC-shape (template / connection / schedule) ───────── *@
 @if (showAutoGenerateModal)
 {
-    <div class="modal show d-block sync-form-modal" tabindex="-1">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal show d-block sync-form-modal conn-editor-modal" tabindex="-1">
+        <div class="modal-dialog modal-lg conn-editor-wide modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header sync-modal-header-success">
                     <h5 class="modal-title">
@@ -340,7 +340,7 @@
                     </h5>
                     <button type="button" class="btn-close" @onclick="CloseAutoGenerateModal"></button>
                 </div>
-                <div class="modal-body">
+                <div class="modal-body conn-wizard-body">
                     @if (!string.IsNullOrEmpty(autoGenError))
                     {
                         <div class="alert alert-danger">
@@ -348,108 +348,121 @@
                         </div>
                     }
 
-                    <p class="text-muted mb-3">
-                        Pick two connections. We build one sync project with a workflow
-                        per object class, each with its attribute mappings auto-filled.
-                    </p>
-
-                    @* ── Step 1: the two connections, side by side with a flow arrow ── *@
-                    <div class="autogen-flow-row">
-                        <div class="autogen-flow-col">
-                            <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source</label>
-                            <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
-                                <option value="@Guid.Empty">-- Read from --</option>
-                                @foreach (var t in AutoGenSourceTenants)
-                                {
-                                    <option value="@t.Id">@t.Name (@t.SystemType)</option>
-                                }
-                            </select>
-                            @if (AutoGenSourceIsIdentityCenter)
-                            {
-                                <select class="form-select form-select-sm mt-2" @bind="autoGenSourceTable">
-                                    <option value="Objects">Objects (directory accounts)</option>
-                                    <option value="Identities">Identities (people)</option>
-                                </select>
-                            }
+                    <div class="conn-wizard-steps mb-3">
+                        <div class="conn-wizard-step @(autoGenStep == 1 ? "active" : "done")">
+                            <span class="conn-wizard-step-num">1</span>
+                            <span class="conn-wizard-step-label">Connections</span>
                         </div>
-                        <div class="autogen-flow-arrow"><i class="fas fa-arrow-right-long"></i></div>
-                        <div class="autogen-flow-col">
-                            <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target</label>
-                            <select class="form-select" @bind="autoGenSinkId" @bind:after="OnAutoGenSinkChanged">
-                                <option value="@Guid.Empty">-- Write to --</option>
-                                @foreach (var t in AutoGenSinkTenants)
-                                {
-                                    <option value="@t.Id">@t.Name (@t.SystemType)</option>
-                                }
-                            </select>
-                            @if (AutoGenSinkIsIdentityCenter)
-                            {
-                                <select class="form-select form-select-sm mt-2" @bind="autoGenSinkTable">
-                                    <option value="Objects">Objects (directory accounts)</option>
-                                    <option value="Identities">Identities (people)</option>
-                                </select>
-                            }
+                        <div class="conn-wizard-step-sep"></div>
+                        <div class="conn-wizard-step @(autoGenStep == 2 ? "active" : "")">
+                            <span class="conn-wizard-step-num">2</span>
+                            <span class="conn-wizard-step-label">Review</span>
                         </div>
                     </div>
 
-                    @if (AutoGenIsSelfSync)
+                    @if (autoGenStep == 1)
                     {
-                        <div class="alert alert-danger py-2 mt-2">
-                            <i class="fas fa-triangle-exclamation me-1"></i>
-                            <strong>Source and target must be different connections.</strong>
-                        </div>
-                    }
+                        <p class="text-muted mb-3">
+                            Pick two connections and a scope. We build one project with a
+                            workflow per object class, mappings auto-filled.
+                        </p>
 
-                    @* ── Step 2: live preview of exactly what will be generated ── *@
-                    @if (AutoGenSource is not null && !AutoGenIsSelfSync)
-                    {
-                        var previewClasses = AutoGenPreviewClasses;
-                        <div class="autogen-preview-panel mt-3">
-                            <div class="autogen-preview-head">
-                                <i class="fas fa-wand-magic-sparkles me-1"></i>
-                                We'll generate @previewClasses.Count workflow@(previewClasses.Count == 1 ? "" : "s") — one per object class, mappings included:
-                            </div>
-                            <div class="autogen-preview-chips">
-                                @foreach (var oc in previewClasses)
+                        @* ── The two connections, side by side with a flow arrow ── *@
+                        <div class="autogen-flow-row">
+                            <div class="autogen-flow-col">
+                                <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source</label>
+                                <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
+                                    <option value="@Guid.Empty">-- Read from --</option>
+                                    @foreach (var t in AutoGenSourceTenants)
+                                    {
+                                        <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                    }
+                                </select>
+                                @if (AutoGenSourceIsIdentityCenter)
                                 {
-                                    <span class="autogen-preview-chip">@oc</span>
+                                    <select class="form-select form-select-sm mt-2" @bind="autoGenSourceTable">
+                                        <option value="Objects">Objects (directory accounts)</option>
+                                        <option value="Identities">Identities (people)</option>
+                                    </select>
+                                }
+                            </div>
+                            <div class="autogen-flow-arrow"><i class="fas fa-arrow-right-long"></i></div>
+                            <div class="autogen-flow-col">
+                                <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target</label>
+                                <select class="form-select" @bind="autoGenSinkId" @bind:after="OnAutoGenSinkChanged">
+                                    <option value="@Guid.Empty">-- Write to --</option>
+                                    @foreach (var t in AutoGenSinkTenants)
+                                    {
+                                        <option value="@t.Id">@t.Name (@t.SystemType)</option>
+                                    }
+                                </select>
+                                @if (AutoGenSinkIsIdentityCenter)
+                                {
+                                    <select class="form-select form-select-sm mt-2" @bind="autoGenSinkTable">
+                                        <option value="Objects">Objects (directory accounts)</option>
+                                        <option value="Identities">Identities (people)</option>
+                                    </select>
                                 }
                             </div>
                         </div>
-                    }
 
-                    @* ── Optional: template scope. Defaults to the recommended set. ── *@
-                    @if (AvailableModes.Count > 1)
-                    {
-                        <div class="mb-2 mt-3">
-                            <label class="form-label fw-bold">Scope</label>
-                            <div class="autogen-tpl-grid">
-                                @foreach (var m in AvailableModes)
-                                {
-                                    var mRef = m;
-                                    var classes = AutoGenConstrainedClassesForMode(mRef);
-                                    var isSel = autoGenMode == mRef;
-                                    var isRecommended = mRef == Conduit.Sync.Templates.GenerationMode.Core;
-                                    <div class="autogen-tpl-card @(isSel ? "selected" : "")"
-                                         @onclick="() => SetAutoGenMode(mRef)">
-                                        <div class="autogen-tpl-card-head">
-                                            <span class="autogen-tpl-card-name">@ModeLabel(mRef)</span>
-                                            @if (isRecommended)
-                                            {
-                                                <span class="autogen-tpl-badge">Recommended</span>
-                                            }
+                        @if (AutoGenIsSelfSync)
+                        {
+                            <div class="alert alert-danger py-2 mt-2">
+                                <i class="fas fa-triangle-exclamation me-1"></i>
+                                <strong>Source and target must be different connections.</strong>
+                            </div>
+                        }
+
+                        @* ── Template scope. Defaults to the recommended set. ── *@
+                        @if (AvailableModes.Count > 1)
+                        {
+                            <div class="mb-2 mt-3">
+                                <label class="form-label fw-bold">Scope</label>
+                                <div class="autogen-tpl-grid">
+                                    @foreach (var m in AvailableModes)
+                                    {
+                                        var mRef = m;
+                                        var classes = AutoGenConstrainedClassesForMode(mRef);
+                                        var isSel = autoGenMode == mRef;
+                                        var isRecommended = mRef == Conduit.Sync.Templates.GenerationMode.Core;
+                                        <div class="autogen-tpl-card @(isSel ? "selected" : "")"
+                                             @onclick="() => SetAutoGenMode(mRef)">
+                                            <div class="autogen-tpl-card-head">
+                                                <span class="autogen-tpl-card-name">@ModeLabel(mRef)</span>
+                                                @if (isRecommended)
+                                                {
+                                                    <span class="autogen-tpl-badge">Recommended</span>
+                                                }
+                                            </div>
+                                            <div class="autogen-tpl-card-count">@classes.Count class@(classes.Count == 1 ? "" : "es")</div>
                                         </div>
-                                        <div class="autogen-tpl-card-count">@classes.Count class@(classes.Count == 1 ? "" : "es")</div>
-                                    </div>
-                                }
+                                    }
+                                </div>
                             </div>
-                        </div>
+                        }
                     }
+                    else
+                    {
+                        @* ── Review: what will be generated + name & schedule ── *@
+                        @if (AutoGenSource is not null && !AutoGenIsSelfSync)
+                        {
+                            var previewClasses = AutoGenPreviewClasses;
+                            <div class="autogen-preview-panel">
+                                <div class="autogen-preview-head">
+                                    <i class="fas fa-wand-magic-sparkles me-1"></i>
+                                    We'll generate @previewClasses.Count workflow@(previewClasses.Count == 1 ? "" : "s") — one per object class, mappings included:
+                                </div>
+                                <div class="autogen-preview-chips">
+                                    @foreach (var oc in previewClasses)
+                                    {
+                                        <span class="badge autogen-preview-chip">@oc</span>
+                                    }
+                                </div>
+                            </div>
+                        }
 
-                    @* ── Advanced: auto-named + manual schedule, tucked away. ── *@
-                    <details class="autogen-advanced mt-3">
-                        <summary>Name &amp; schedule</summary>
-                        <div class="mb-3 mt-2">
+                        <div class="mb-3 mt-3">
                             <label class="form-label fw-bold">Project Name</label>
                             <input class="form-control" maxlength="200" @bind="autoGenProjectName" @bind:after="OnAutoGenNameEdited" />
                             <small class="form-text text-muted">Auto-filled from source → target. Edit to override.</small>
@@ -468,23 +481,37 @@
                             <input class="form-check-input" type="checkbox" id="autoGenEnabled" @bind="autoGenEnable" />
                             <label class="form-check-label" for="autoGenEnabled">Enable project on create</label>
                         </div>
-                    </details>
+                    }
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseAutoGenerateModal">Cancel</button>
-                    <button type="button" class="btn btn-success"
-                            @onclick="GenerateAutoSyncProject"
-                            disabled="@(autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty || AutoGenIsSelfSync || autoGenInProgress)">
-                        @if (autoGenInProgress)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
-                        }
-                        else
-                        {
-                            <i class="fas fa-magic me-1"></i>
-                        }
-                        Create Sync Project
-                    </button>
+                    @if (autoGenStep == 1)
+                    {
+                        <button type="button" class="btn btn-secondary" @onclick="CloseAutoGenerateModal">Cancel</button>
+                        <button type="button" class="btn btn-success"
+                                @onclick="AutoGenNext"
+                                disabled="@(!AutoGenStep1Ready)">
+                            Next<i class="fas fa-arrow-right-long ms-1"></i>
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn btn-secondary" @onclick="AutoGenBack" disabled="@autoGenInProgress">
+                            <i class="fas fa-arrow-left-long me-1"></i>Back
+                        </button>
+                        <button type="button" class="btn btn-success"
+                                @onclick="GenerateAutoSyncProject"
+                                disabled="@(autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty || AutoGenIsSelfSync || autoGenInProgress)">
+                            @if (autoGenInProgress)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-magic me-1"></i>
+                            }
+                            Create Sync Project
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -3828,6 +3855,7 @@
 
     // Auto-generate modal state
     private bool showAutoGenerateModal;
+    private int autoGenStep = 1;
     private Conduit.Sync.Templates.GenerationMode autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
     private Guid autoGenSourceId = Guid.Empty;
     private Guid autoGenSinkId = Guid.Empty;
@@ -5448,6 +5476,7 @@
 
     private void ShowAutoGenerateModal()
     {
+        autoGenStep = 1;
         autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
         autoGenSourceId = Guid.Empty;
         autoGenSinkId = Guid.Empty;
@@ -5466,6 +5495,17 @@
         if (autoGenInProgress) return;
         showAutoGenerateModal = false;
     }
+
+    // Step 1 is satisfied once both ends are chosen and they are distinct.
+    private bool AutoGenStep1Ready =>
+        autoGenSourceId != Guid.Empty && autoGenSinkId != Guid.Empty && !AutoGenIsSelfSync;
+
+    private void AutoGenNext()
+    {
+        if (AutoGenStep1Ready) autoGenStep = 2;
+    }
+
+    private void AutoGenBack() => autoGenStep = 1;
 
     /// <summary>
     /// In-wizard handoff: the operator is mid manual-create but wants the full
