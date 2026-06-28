@@ -2791,6 +2791,24 @@ details summary::-webkit-details-marker { color: var(--accent); }
     --center-accent:         #059669;
 }
 
+/* Locked fields on Edit's Setup tab (Source/Target connection are disabled after
+   creation) inherit Bootstrap's light disabled background and render as white
+   boxes with invisible text — only legible on focus. Re-skin disabled/readonly
+   controls inside the edit modal with the dark theme so the operator can always
+   read which source/target the project uses. !important beats Bootstrap's own
+   .form-select:disabled / .form-control:disabled background. */
+.sync-edit-modal select:disabled,
+.sync-edit-modal .form-select:disabled,
+.sync-edit-modal input:disabled,
+.sync-edit-modal input[readonly],
+.sync-edit-modal textarea[readonly] {
+    background-color: var(--panel, #0F1B2F) !important;
+    color: var(--text, #E4EDFB) !important;
+    border: 1px solid var(--border, rgba(120, 160, 220, 0.18)) !important;
+    opacity: 0.9;
+    cursor: not-allowed;
+}
+
 /* Active nav-tab: DELIBERATE divergence from IC — all-green modal. IC keeps its
    cyan accent here; we paint the active tab the modal's hero green instead
    (still scoped so the orange list page + rest of Conduit are untouched). */
