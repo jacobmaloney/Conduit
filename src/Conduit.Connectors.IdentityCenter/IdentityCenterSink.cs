@@ -599,17 +599,32 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             Put(attrs, "JobTitle",          Attr("jobTitle") ?? Attr("title"));
             Put(attrs, "MobilePhone",       Attr("mobilePhone") ?? Attr("mobile"));
             Put(attrs, "Status",            Attr("status"));
+
+            // "_tags" carries the per-step tag NAMES (comma-separated) — stamped by the
+            // orchestrator from this step's Configuration, OR carried from the source
+            // object's own tags by the IC source (Phase 2). Lift it into the typed
+            // Tags[] on the bulk item — like the Objects sink path. It must NEVER be
+            // written as an Identities column. IC applies ASSIGN-EXISTING-ONLY: unknown
+            // names are skipped server-side, never created.
+            string[]? tags = null;
+            var rawTags = Attr("_tags");
+            if (!string.IsNullOrWhiteSpace(rawTags))
+            {
+                var split = rawTags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (split.Length > 0) tags = split;
+            }
+
             // Pass through any attribute that is already a literal Identities column
             // name (the IC Identities source emits these), without clobbering the
             // normalised values above.
             foreach (var (k, v) in o.Attributes)
             {
-                if (k.StartsWith("_", StringComparison.Ordinal)) continue;  // _source etc.
+                if (k.StartsWith("_", StringComparison.Ordinal)) continue;  // _source, _tags etc.
                 Put(attrs, k, v?.ToString());
             }
 
             keyOf.Add(key);
-            items.Add(new { KeyValue = key, Attributes = attrs });
+            items.Add(new { KeyValue = key, Attributes = attrs, Tags = tags });
         }
 
         var body = new { BatchId = batchId, KeyField = "employeeId", Items = items };

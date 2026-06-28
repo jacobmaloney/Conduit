@@ -189,6 +189,13 @@ public sealed class IdentityCenterSource : IConnectorSource
             }
         }
 
+        // Carry the object's own tag NAMES (Phase 2 tag carry-through). IC's
+        // /api/objects/query surfaces these as a "tags" string array. We fold them into
+        // the internal "_tags" pseudo-attribute (comma-joined) so an Objects→Identities
+        // sync lands them on IdentityTags via the IC sink — ASSIGN-EXISTING-ONLY.
+        var tagsCsv = JoinTags(item);
+        if (tagsCsv is not null) attrs["_tags"] = tagsCsv;
+
         // Conduit's ConnectorObject uses ObjectClass casing "User"/"Group" — match
         // what the rest of the sink ecosystem expects.
         var canonical = icClass switch
@@ -271,12 +278,37 @@ public sealed class IdentityCenterSource : IConnectorSource
             }
         }
 
+        // Carry tag NAMES if the Identities query surfaces them (Phase 2 — forward-
+        // compatible; the IC Identities /query does not emit "tags" today, the Objects
+        // /query does). Folded into "_tags" so the IC sink lands them on IdentityTags.
+        var tagsCsv = JoinTags(item);
+        if (tagsCsv is not null) attrs["_tags"] = tagsCsv;
+
         return new ConnectorObject
         {
             SourceId = sourceId!,
             ObjectClass = "User",
             Attributes = attrs
         };
+    }
+
+    /// <summary>
+    /// Read IC's "tags" string-array property off a query item and join the non-empty
+    /// names with commas. Returns null when absent/empty so the caller can skip the
+    /// "_tags" stamp entirely. Names flow as data only — never interpreted as SQL.
+    /// </summary>
+    private static string? JoinTags(JsonElement item)
+    {
+        if (!item.TryGetProperty("tags", out var tagsEl) || tagsEl.ValueKind != JsonValueKind.Array)
+            return null;
+        var names = new List<string>();
+        foreach (var t in tagsEl.EnumerateArray())
+        {
+            if (t.ValueKind != JsonValueKind.String) continue;
+            var s = t.GetString();
+            if (!string.IsNullOrWhiteSpace(s)) names.Add(s.Trim());
+        }
+        return names.Count > 0 ? string.Join(",", names) : null;
     }
 
     private static string? Str(JsonElement el, string name) =>
