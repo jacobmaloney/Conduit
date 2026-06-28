@@ -925,13 +925,25 @@ public sealed class SyncProjectOrchestrator
     ///   only the IdentityCenter sink does. A non-IC sink clean-skips (no crash, truthful
     ///   Skipped count). Same-source=target is harmless: the references are just pushed.
     ///
-    /// HONEST DEGRADATION (verified against IC's contract): IC's
-    ///   <c>PATCH /api/identities/{id}/manager</c> resolves the manager external id
-    ///   against <c>Identities.PrimaryEmail</c> (UPN/email), NOT a DN. AD's <c>manager</c>
-    ///   attribute is a DN, so an AD-sourced manager reference will come back unresolved
-    ///   on IC and is counted as SKIPPED here (never a fake success). Entra/cloud sources
-    ///   whose manager maps to a UPN/email resolve fully. Group owner is stored as-is by
-    ///   IC (no resolution gate), so it resolves for any source.
+    /// IC OBJECTS-TABLE SINK (the common AD→IC case): SKIP the per-object calls entirely.
+    ///   IdentityCenter resolves manager/managedBy/owner references ITSELF during bulk
+    ///   ingest — its <c>/api/objects/bulk</c> path enqueues
+    ///   <c>SyncRelationshipRepository.ResolveManagerRelationshipsAsync</c>, which resolves
+    ///   each AD DN → ObjectId across the whole batch. The Conduit per-object calls would
+    ///   target IC's PEOPLE endpoint (<c>PATCH /api/identities/{id}/manager</c>), which
+    ///   resolves against <c>Identities.PrimaryEmail</c> and correctly REFUSES an AD DN —
+    ///   so every call came back Skipped, making the step lie ("resolved=0 skipped=ALL"
+    ///   while IC had really resolved them) and burning IC's 100/min rate budget. For this
+    ///   sink the step is now a truthful MARKER (mirrors the GroupMembership marker): it
+    ///   reports the count of objects carrying a manager/owner reference as the delegated
+    ///   "resolved" number, skipped/failed = 0, and makes no IC calls.
+    ///
+    /// IC IDENTITIES-TABLE SINK + NON-IC SINKS: KEEP the real per-object resolution below.
+    ///   For an IC Identities (people) sink, <c>PATCH /api/identities/{id}/manager</c> is
+    ///   the correct endpoint and a UPN/email-keyed manager resolves fully. AD's DN-keyed
+    ///   manager still comes back unresolved on IC and is counted as SKIPPED (never a fake
+    ///   success). Group owner is stored as-is by IC (no resolution gate). Non-IC sinks
+    ///   that advertise the capability run their own real resolution with honest counts.
     /// </summary>
     private async Task<StepResult> ExecuteLookupStepAsync(
         RunContext ctx, WorkflowStep step,
@@ -969,6 +981,56 @@ public sealed class SyncProjectOrchestrator
         var refKeys = isGroupClass
             ? new[] { "managedBy", "owner", "Owner", "ownerId", "ownerDN", "ownerUpn" }
             : new[] { "manager", "Manager", "managerId", "managerDN", "managerUpn" };
+
+        // IC Objects-table sink: relationship resolution (manager / managedBy / owner)
+        // is performed by IdentityCenter ITSELF during bulk ingest — its /api/objects/bulk
+        // path enqueues SyncRelationshipRepository.ResolveManagerRelationshipsAsync, which
+        // resolves each AD manager/owner DN → ObjectId across the whole batch. The Conduit
+        // per-object resolution calls hit IC's PEOPLE endpoint (/api/identities/{id}/manager),
+        // which correctly refuses an AD DN → every call comes back Skipped. That made the
+        // step report "resolved=0 skipped=ALL" while IC had in fact resolved the references,
+        // AND burned the IC API's 100/min rate budget on calls that can never succeed.
+        // So for an Objects-table IC sink this is a truthful MARKER (mirroring the
+        // GroupMembership marker): no per-object calls, and we report the meaningful number
+        // — how many objects in the batch actually carry a manager/managedBy/owner reference
+        // for IC to resolve — as a delegated count, with skipped/failed = 0.
+        var sinkIsIdentityCenter =
+            string.Equals(ctx.SinkAdapter.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase);
+        var sinkTableIsObjects =
+            string.IsNullOrWhiteSpace(ctx.Project.SinkTable)
+            || string.Equals(ctx.Project.SinkTable, "Objects", StringComparison.OrdinalIgnoreCase);
+        if (sinkIsIdentityCenter && sinkTableIsObjects)
+        {
+            int delegatedRefs = 0;
+            foreach (var obj in lastBatch)
+            {
+                ct.ThrowIfCancellationRequested();
+                foreach (var key in refKeys)
+                {
+                    if (obj.Attributes.TryGetValue(key, out var v) && v is not null
+                        && !string.IsNullOrWhiteSpace(v.ToString()))
+                    {
+                        delegatedRefs++;
+                        break;
+                    }
+                }
+            }
+
+            var relationshipLabel = isGroupClass ? "owner" : "manager";
+            await Log(ctx.RunId, "Info",
+                $"    Lookup step '{step.Name}': {relationshipLabel} resolution for Objects-table IdentityCenter syncs " +
+                $"is performed by IdentityCenter during bulk ingest (DN → ObjectId) — marker step delegated (no-op). " +
+                $"{delegatedRefs} object(s) carried a {relationshipLabel} reference for IC to resolve.");
+
+            // Surface the delegated references as the meaningful "resolved" number so the
+            // run never again shows "resolved=0 skipped=ALL" for relationships IC really
+            // resolved. No per-object IC calls were made → skipped/failed = 0.
+            return new StepResult
+            {
+                Delta = new RunDelta(0, 0, delegatedRefs, 0, 0, 0),
+                EmittedBatch = lastBatch
+            };
+        }
 
         int resolved = 0, skipped = 0, failed = 0;
         foreach (var obj in lastBatch)
