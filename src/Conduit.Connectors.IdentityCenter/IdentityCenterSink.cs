@@ -197,8 +197,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                     Override = false   // never override the IC 50% cap from Conduit
                 };
 
-                using var resp = await client.PostAsJsonAsync(
-                    $"{creds.BaseUrl}/api/objects/tombstones", body, cancellationToken);
+                using var resp = await PostJsonWithRetryAsync(
+                    client, $"{creds.BaseUrl}/api/objects/tombstones", body, cancellationToken);
 
                 if (!resp.IsSuccessStatusCode)
                 {
@@ -329,8 +329,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             };
             try
             {
-                using var resp = await client.PostAsJsonAsync(
-                    $"{creds.BaseUrl}/api/objects/group-memberships/bulk", body, cancellationToken);
+                using var resp = await PostJsonWithRetryAsync(
+                    client, $"{creds.BaseUrl}/api/objects/group-memberships/bulk", body, cancellationToken);
                 if (!resp.IsSuccessStatusCode)
                 {
                     var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
@@ -412,7 +412,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             var probeUrl = creds.Table == IcTable.Identities
                 ? $"{creds.BaseUrl}/api/identities/query?keyField=employeeId&page=1&pageSize=1"
                 : $"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1";
-            var resp = await client.GetAsync(probeUrl, cancellationToken);
+            var resp = await GetWithRetryAsync(client, probeUrl, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return new ConnectorTestResult { IsSuccessful = false, Message = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}" };
             return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl} (table={creds.Table})." };
@@ -502,7 +502,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             Items = items
         };
 
-        using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/objects/bulk", body, cancellationToken);
+        using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/objects/bulk", body, cancellationToken);
         if (!resp.IsSuccessStatusCode)
         {
             var msg = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
@@ -594,7 +594,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
 
         var body = new { BatchId = batchId, KeyField = "employeeId", Items = items };
 
-        using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/identities/bulk", body, cancellationToken);
+        using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/identities/bulk", body, cancellationToken);
         if (!resp.IsSuccessStatusCode)
         {
             var msg = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}";
@@ -692,8 +692,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             string? error = null;
             try
             {
-                using var resp = await client.PostAsJsonAsync(
-                    $"{creds.BaseUrl}/api/objects/signin-logs/bulk", body, cancellationToken);
+                using var resp = await PostJsonWithRetryAsync(
+                    client, $"{creds.BaseUrl}/api/objects/signin-logs/bulk", body, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
                     outcome = SinkWriteOutcome.Updated;
@@ -815,8 +815,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             string? error = null;
             try
             {
-                using var resp = await client.PostAsJsonAsync(
-                    $"{creds.BaseUrl}/api/objects/m365-usage/bulk", body, cancellationToken);
+                using var resp = await PostJsonWithRetryAsync(
+                    client, $"{creds.BaseUrl}/api/objects/m365-usage/bulk", body, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
                     outcome = SinkWriteOutcome.Updated;
@@ -941,8 +941,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             string? error = null;
             try
             {
-                using var resp = await client.PostAsJsonAsync(
-                    $"{creds.BaseUrl}/api/objects/licenses/bulk", body, cancellationToken);
+                using var resp = await PostJsonWithRetryAsync(
+                    client, $"{creds.BaseUrl}/api/objects/licenses/bulk", body, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
                     outcome = SinkWriteOutcome.Updated;
@@ -1052,8 +1052,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             string? error = null;
             try
             {
-                using var resp = await client.PostAsJsonAsync(
-                    $"{creds.BaseUrl}/api/objects/app-role-assignments/bulk", body, cancellationToken);
+                using var resp = await PostJsonWithRetryAsync(
+                    client, $"{creds.BaseUrl}/api/objects/app-role-assignments/bulk", body, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
                     outcome = SinkWriteOutcome.Updated;
@@ -1195,7 +1195,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 }
             };
 
-            using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/identities/match", body, cancellationToken);
+            using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/identities/match", body, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return PersonMatchResult.Fail($"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}");
 
@@ -1238,7 +1238,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 employeeId = LookupAttr(obj, "employeeID") ?? LookupAttr(obj, "employeeId")
             };
 
-            using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/identities", body, cancellationToken);
+            using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/identities", body, cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
                 var detail = await resp.Content.ReadAsStringAsync(cancellationToken);
@@ -1272,7 +1272,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             if (targetId is null)
                 return SinkWriteResult.Fail($"No IC Identity matches external id '{objectExternalId}'.");
 
-            using var resp = await client.PatchAsJsonAsync(
+            using var resp = await PatchJsonWithRetryAsync(
+                client,
                 $"{creds.BaseUrl}/api/identities/{targetId}/manager",
                 new { managerExternalId },
                 cancellationToken);
@@ -1300,7 +1301,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             if (groupId is null)
                 return SinkWriteResult.Fail($"No IC group Object matches external id '{groupExternalId}'.");
 
-            using var resp = await client.PatchAsJsonAsync(
+            using var resp = await PatchJsonWithRetryAsync(
+                client,
                 $"{creds.BaseUrl}/api/objects/groups/{groupId}/owner",
                 new { ownerExternalId },
                 cancellationToken);
@@ -1480,14 +1482,14 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     /// treats the input as the SourceUniqueId directly. Objects-table only; Identities
     /// merge by keyValue, which the caller already supplies as externalId.
     /// </summary>
-    private static async Task<string?> ResolveSourceUniqueIdAsync(
+    private async Task<string?> ResolveSourceUniqueIdAsync(
         HttpClient client, IdentityCenterCredentials creds, string? objectClass, string externalId, CancellationToken ct)
     {
         if (creds.Table == IcTable.Identities) return null;          // identities key on keyValue, not GUID
         if (!Guid.TryParse(externalId, out _)) return null;          // not a GUID → already a SourceUniqueId
         var cls = (objectClass ?? "user").ToLowerInvariant();
         var url = $"{creds.BaseUrl}/api/objects/query?objectClass={Uri.EscapeDataString(cls)}&id={Uri.EscapeDataString(externalId)}&page=1&pageSize=1";
-        using var resp = await client.GetAsync(url, ct);
+        using var resp = await GetWithRetryAsync(client, url, ct);
         if (!resp.IsSuccessStatusCode) return null;
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         if (!doc.RootElement.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array) return null;
@@ -1550,10 +1552,10 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
 
     // ── Resolver helpers ────────────────────────────────────────────────────
 
-    private static async Task<Guid?> ResolveIdentityIdAsync(HttpClient client, IdentityCenterCredentials creds, string externalId, CancellationToken ct)
+    private async Task<Guid?> ResolveIdentityIdAsync(HttpClient client, IdentityCenterCredentials creds, string externalId, CancellationToken ct)
     {
         var body = new { sourceUniqueId = externalId, candidateKeys = new { upn = externalId, email = externalId } };
-        using var resp = await client.PostAsJsonAsync($"{creds.BaseUrl}/api/identities/match", body, ct);
+        using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/identities/match", body, ct);
         if (!resp.IsSuccessStatusCode) return null;
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         if (!doc.RootElement.TryGetProperty("matched", out var mEl) || !mEl.GetBoolean()) return null;
@@ -1561,11 +1563,11 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         return Guid.TryParse(iEl.GetString(), out var g) ? g : null;
     }
 
-    private static async Task<Guid?> ResolveObjectIdAsync(HttpClient client, IdentityCenterCredentials creds, string objectClass, string externalId, CancellationToken ct)
+    private async Task<Guid?> ResolveObjectIdAsync(HttpClient client, IdentityCenterCredentials creds, string objectClass, string externalId, CancellationToken ct)
     {
         // /api/objects/query supports objectClass + a free-form sourceUniqueId filter.
         var url = $"{creds.BaseUrl}/api/objects/query?objectClass={Uri.EscapeDataString(objectClass)}&sourceUniqueId={Uri.EscapeDataString(externalId)}&page=1&pageSize=1";
-        using var resp = await client.GetAsync(url, ct);
+        using var resp = await GetWithRetryAsync(client, url, ct);
         if (!resp.IsSuccessStatusCode) return null;
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
         if (!doc.RootElement.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array) return null;
@@ -1618,4 +1620,114 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 return val?.ToString();
         return null;
     }
+
+    // ── 429 / throttle resilience ────────────────────────────────────────────
+    //
+    // IC's RateLimitingMiddleware caps an authenticated agent key at 100 req/min and
+    // returns HTTP 429 with a Retry-After header when the rolling window is full. A
+    // multi-class sync (user batches + per-object MatchPerson/AssignManager round-trips
+    // + group/computer/contact batches + membership pushes) can easily burst past 100
+    // requests inside one minute, and a single throttled call used to DROP its whole
+    // slice (a 429 on one group batch failed all 293 groups). These helpers wrap every
+    // IC call so a throttle PAUSES and RESUMES instead of dropping objects.
+    //
+    // SAFETY (Worf): bounded — MaxRetryAttempts hard-caps the loop so it can NEVER spin
+    // forever; each wait is clamped to RetryWaitCapSeconds so a hostile/garbage
+    // Retry-After can't park a run for hours; the API key lives only in the client's
+    // default headers and is NEVER read, formatted, or logged here. We retry ONLY on
+    // 429 and 503 (transient throttle/unavailable); every other non-success status is
+    // returned to the caller unchanged so real errors still surface immediately.
+    private const int MaxRetryAttempts = 6;
+    private const int RetryWaitCapSeconds = 60;
+    private static readonly Random _jitter = new();
+
+    /// <summary>
+    /// Send an HTTP request to IC, transparently retrying on 429/503 with backoff that
+    /// honors the server's <c>Retry-After</c> header. The caller supplies a request
+    /// FACTORY (not a single message) because an <see cref="HttpRequestMessage"/> cannot
+    /// be re-sent — each attempt builds a fresh request. Returns the final response
+    /// (success, or the last non-retryable / retries-exhausted response) for the caller
+    /// to interpret exactly as before. The API key is carried on the client's default
+    /// headers and is never touched here.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        HttpClient client,
+        Func<HttpRequestMessage> requestFactory,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var resp = await client.SendAsync(
+                requestFactory(), HttpCompletionOption.ResponseContentRead, cancellationToken);
+
+            var status = (int)resp.StatusCode;
+            var retryable = status == 429 || status == 503;
+            if (!retryable || attempt >= MaxRetryAttempts)
+                return resp;
+
+            // Compute the wait: prefer the server's Retry-After, else exponential
+            // backoff (1s, 2s, 4s, 8s, 16s, 32s) — both clamped to the cap — plus a
+            // small jitter so concurrent pumps don't re-collide on the same tick.
+            var wait = ResolveRetryWait(resp, attempt);
+            resp.Dispose();   // discard the throttled response before sleeping/retrying
+
+            _logger.LogWarning(
+                "IC throttled (HTTP {Status}); backing off {Wait:n1}s then retrying (attempt {Attempt}/{Max}, tenant={TenantId}).",
+                status, wait.TotalSeconds, attempt + 1, MaxRetryAttempts, _tenantId);
+
+            await Task.Delay(wait, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Backoff duration for a throttled response: the <c>Retry-After</c> header when
+    /// present and sane, otherwise exponential (2^attempt seconds). Always clamped to
+    /// [1s, <see cref="RetryWaitCapSeconds"/>] with added jitter so a malformed or
+    /// hostile header can never park the run.
+    /// </summary>
+    private static TimeSpan ResolveRetryWait(HttpResponseMessage resp, int attempt)
+    {
+        double seconds = 0;
+
+        var ra = resp.Headers.RetryAfter;
+        if (ra is not null)
+        {
+            if (ra.Delta is { } delta && delta > TimeSpan.Zero)
+                seconds = delta.TotalSeconds;
+            else if (ra.Date is { } date)
+                seconds = Math.Max(0, (date - DateTimeOffset.UtcNow).TotalSeconds);
+        }
+
+        // Fall back to exponential backoff when the header is absent/unparsable.
+        if (seconds <= 0)
+            seconds = Math.Pow(2, Math.Min(attempt, 5));   // 1,2,4,8,16,32
+
+        // Clamp to a sane floor/ceiling, then add up to 500ms jitter.
+        seconds = Math.Clamp(seconds, 1, RetryWaitCapSeconds);
+        seconds += _jitter.NextDouble() * 0.5;
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    /// <summary>Retry-aware POST-JSON. Drop-in for <c>client.PostAsJsonAsync(url, body, ct)</c>.</summary>
+    private Task<HttpResponseMessage> PostJsonWithRetryAsync(
+        HttpClient client, string url, object body, CancellationToken ct) =>
+        SendWithRetryAsync(client, () => new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = JsonContent.Create(body)
+        }, ct);
+
+    /// <summary>Retry-aware PATCH-JSON. Drop-in for <c>client.PatchAsJsonAsync(url, body, ct)</c>.</summary>
+    private Task<HttpResponseMessage> PatchJsonWithRetryAsync(
+        HttpClient client, string url, object body, CancellationToken ct) =>
+        SendWithRetryAsync(client, () => new HttpRequestMessage(HttpMethod.Patch, url)
+        {
+            Content = JsonContent.Create(body)
+        }, ct);
+
+    /// <summary>Retry-aware GET. Drop-in for <c>client.GetAsync(url, ct)</c>.</summary>
+    private Task<HttpResponseMessage> GetWithRetryAsync(
+        HttpClient client, string url, CancellationToken ct) =>
+        SendWithRetryAsync(client, () => new HttpRequestMessage(HttpMethod.Get, url), ct);
 }
