@@ -353,7 +353,7 @@
                 </div>
                 <button type="button" class="btn-close" @onclick="CloseModal"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body conn-wizard-body">
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
                     <div class="alert alert-danger py-2">@errorMessage</div>
@@ -364,9 +364,14 @@
                         <span class="conn-wizard-step-label">Connection</span>
                     </div>
                     <div class="conn-wizard-step-sep"></div>
-                    <div class="conn-wizard-step @(ShowStep2 ? "active" : "")">
+                    <div class="conn-wizard-step @(ShowStep2 ? "active" : (newConnStep > 2 ? "done" : ""))">
                         <span class="conn-wizard-step-num">2</span>
                         <span class="conn-wizard-step-label">Configuration</span>
+                    </div>
+                    <div class="conn-wizard-step-sep"></div>
+                    <div class="conn-wizard-step @(ShowStep3 ? "active" : "")">
+                        <span class="conn-wizard-step-num">3</span>
+                        <span class="conn-wizard-step-label">Activate &amp; Test</span>
                     </div>
                 </div>
                 @if (ShowStep1)
@@ -668,6 +673,9 @@
                         </div>
                     }
                 }
+                }
+                @if (ShowStep3)
+                {
                 @if (form.SystemType == "IdentityCenter")
                 {
                     <div class="conn-field">
@@ -793,7 +801,27 @@
                         <i class="oi oi-arrow-left me-1"></i> Back
                     </button>
                 }
-                @if (newConnStep == 2)
+                else if (newConnStep == 3)
+                {
+                    <button class="btn btn-outline-secondary me-auto" type="button" @onclick="GoToStep2">
+                        <i class="oi oi-arrow-left me-1"></i> Back
+                    </button>
+                }
+                @if (newConnStep == 1)
+                {
+                    <button class="btn btn-primary" type="button" @onclick="GoToStep2" disabled="@(!CanAdvanceToStep2)"
+                            title="@(CanAdvanceToStep2 ? null : "Enter a name and pick a connection type to continue.")">
+                        Next <i class="oi oi-arrow-right ms-1"></i>
+                    </button>
+                }
+                else if (newConnStep == 2)
+                {
+                    <button class="btn btn-primary" type="button" @onclick="GoToStep3" disabled="@(!CanAdvanceToStep3)"
+                            title="@(CanAdvanceToStep3 ? null : "Enter a name and pick a connection type to continue.")">
+                        Next <i class="oi oi-arrow-right ms-1"></i>
+                    </button>
+                }
+                else
                 {
                     <button class="btn btn-primary" @onclick="Save" disabled="@(saving || !CanSaveForm)"
                             title="@(CanSaveForm ? null : (RequiresTestBeforeSave ? "Test the connection successfully before you can " + (editingId.HasValue ? "save." : "connect.") : null))">
@@ -802,13 +830,6 @@
                             <span class="spinner-border spinner-border-sm me-2" role="status"></span>
                         }
                         @(editingId.HasValue ? "Save changes" : "Connect")
-                    </button>
-                }
-                else
-                {
-                    <button class="btn btn-primary" type="button" @onclick="GoToStep2" disabled="@(!CanAdvanceToStep2)"
-                            title="@(CanAdvanceToStep2 ? null : "Enter a name and pick a connection type to continue.")">
-                        Next <i class="oi oi-arrow-right ms-1"></i>
                     </button>
                 }
             </div>
@@ -1618,16 +1639,20 @@
     private Tenant form = new();
     private string errorMessage = "";
 
-    // Both create and edit use the same 2-step wizard: step 1 = generic fields
-    // (Name, Type, Description); step 2 = the type-specific block (Domain,
-    // credentials, test). Edit pre-populates the form, starts on step 1, and the
-    // operator clicks Next → step 2 exactly like create.
+    // Both create and edit use the same 3-step wizard: step 1 = generic fields
+    // (Name, Slug, Type, Description); step 2 = the type-specific credential block
+    // (Domain, credentials, guidance); step 3 = activate/test (IC Target table,
+    // Active/Authoritative toggles, Test Connection gate). Edit pre-populates the
+    // form, starts on step 1, and the operator clicks Next exactly like create.
     private int newConnStep = 1;
     private bool ShowStep1 => newConnStep == 1;
     private bool ShowStep2 => newConnStep == 2;
+    private bool ShowStep3 => newConnStep == 3;
     private bool CanAdvanceToStep2 =>
         !string.IsNullOrWhiteSpace(form.Name) && !string.IsNullOrWhiteSpace(form.SystemType);
+    private bool CanAdvanceToStep3 => CanAdvanceToStep2;
     private void GoToStep2() { if (CanAdvanceToStep2) newConnStep = 2; }
+    private void GoToStep3() { if (CanAdvanceToStep3) newConnStep = 3; }
     private void GoToStep1() => newConnStep = 1;
     // Friendly label for the (locked) connection type shown read-only on edit.
     // Mirrors the create <select> option text so edit reads identically.

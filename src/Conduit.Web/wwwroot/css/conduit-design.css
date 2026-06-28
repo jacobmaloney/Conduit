@@ -368,9 +368,20 @@
    clean two-column grid without crowding. */
 .conn-editor-modal .conn-editor-wide {
   max-width: 860px;
+  width: 860px;
 }
 
-/* New Connection 2-step wizard stepper. */
+/* Fixed step-body box so all 3 wizard steps occupy an identical area — no
+   resize/jump between steps. Sized to fit the tallest step (step 2 with the
+   credential block) comfortably; taller content scrolls within the box,
+   shorter steps just show whitespace. */
+.conn-wizard-body {
+  min-height: 540px;
+  max-height: 540px;
+  overflow-y: auto;
+}
+
+/* New Connection 3-step wizard stepper. */
 .conn-wizard-steps {
   display: flex;
   align-items: center;
