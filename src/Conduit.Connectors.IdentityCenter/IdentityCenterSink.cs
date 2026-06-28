@@ -447,8 +447,25 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             var attrs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             string? originalSource = null;
             string? sourceConnection = null;
+            string[]? tags = null;
             foreach (var (k, v) in o.Attributes)
             {
+                // "_tags" carries the per-step tag NAMES (comma-separated) the
+                // orchestrator stamped from the Mapping step's Configuration. Lift it
+                // out of the attribute bag into the typed Tags[] — like "_source" /
+                // "_sourceConnection", this internal "_"-key is plumbing and must NEVER
+                // be written into IC's ObjectAttributes table. IC applies ASSIGN-EXISTING-
+                // ONLY: unknown names are skipped server-side, never created.
+                if (string.Equals(k, "_tags", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = v?.ToString();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        var split = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        if (split.Length > 0) tags = split;
+                    }
+                    continue;
+                }
                 // SyncProjectOrchestrator stamps "_source" onto every inbound
                 // ConnectorObject so the IC sink can preserve the upstream
                 // origin (ActiveDirectory / EntraID / Okta / ...). Lift it out
@@ -486,6 +503,9 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 // auto-seeded SourceConnectionId for upserts and tombstones.
                 Source = SanitizeSource(sourceConnection),
                 OriginalSource = originalSource ?? string.Empty,
+                // ASSIGN-EXISTING-ONLY tag names for this object (null when the step set
+                // none). IC resolves these to existing Tag rows and skips unknown names.
+                Tags = tags,
                 Attributes = attrs
             });
         }

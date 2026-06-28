@@ -1170,6 +1170,15 @@ public sealed class SyncProjectOrchestrator
         var sinkAdapter = ctx.SinkAdapter;
         var sinkTenant = ctx.SinkTenant;
 
+        // Per-step tag names (ASSIGN-EXISTING-ONLY). Parsed once from THIS step's
+        // free-form Configuration JSON. When set, each emitted object is stamped with a
+        // "_tags" pseudo-attribute (comma-joined) that the IC sink lifts into the typed
+        // Tags[] on the bulk-upsert item. IC then resolves the names to EXISTING Tag
+        // rows and applies ObjectTags — unknown names are skipped server-side, never
+        // created. Empty/missing config = no tagging (back-compat).
+        var stepTagNames = ParseStepTagNames(step?.Configuration);
+        var stepTagsCsv = stepTagNames.Count > 0 ? string.Join(",", stepTagNames) : null;
+
         // Recover the prior incremental cursor if the source supports it.
         //
         // V25 per-STEP cursor: each per-class Mapping step owns its OWN high-water
@@ -1421,6 +1430,13 @@ public sealed class SyncProjectOrchestrator
             // doesn't carry "_"-prefixed keys, so stamp it on sinkObj here.
             if (!string.IsNullOrWhiteSpace(ctx.SourceTenant.Name) && !sinkObj.Attributes.ContainsKey("_sourceConnection"))
                 sinkObj.Attributes["_sourceConnection"] = ctx.SourceTenant.Name;
+
+            // Stamp this step's tag names so the IC sink can apply them as ObjectTags.
+            // Mirrors "_sourceConnection": an internal "_"-key the sink lifts out and
+            // never writes as a real ObjectAttribute. ApplyMappings returns a fresh
+            // object without "_"-keys, so stamp on sinkObj here.
+            if (stepTagsCsv is not null && !sinkObj.Attributes.ContainsKey("_tags"))
+                sinkObj.Attributes["_tags"] = stepTagsCsv;
 
             if (!string.IsNullOrWhiteSpace(scope.BaseDN) && !sinkObj.Attributes.ContainsKey("targetOU"))
                 sinkObj.Attributes["targetOU"] = scope.BaseDN;
@@ -1944,6 +1960,54 @@ public sealed class SyncProjectOrchestrator
 
         var scalar = value.ToString();
         if (!string.IsNullOrWhiteSpace(scalar)) result.Add(scalar!);
+        return result;
+    }
+
+    /// <summary>
+    /// Parse a Mapping step's per-step tag NAMES from its free-form Configuration JSON.
+    /// Accepts a "tags" property that is EITHER a JSON array of strings
+    /// (<c>{"tags":["Contractor","SOX"]}</c>) OR a comma-separated string
+    /// (<c>{"tags":"Contractor, SOX"}</c>). Names are trimmed, de-duplicated
+    /// (case-insensitive), and empty entries dropped. Any parse failure or absent
+    /// property yields an empty list (no tagging) — never throws into the run.
+    /// ASSIGN-EXISTING-ONLY is enforced downstream by IC, not here.
+    /// </summary>
+    private static List<string> ParseStepTagNames(string? configurationJson)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(configurationJson)) return result;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return;
+            var t = s.Trim();
+            if (t.Length > 0 && seen.Add(t)) result.Add(t);
+        }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(configurationJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return result;
+            if (!doc.RootElement.TryGetProperty("tags", out var tagsEl)) return result;
+
+            switch (tagsEl.ValueKind)
+            {
+                case System.Text.Json.JsonValueKind.Array:
+                    foreach (var el in tagsEl.EnumerateArray())
+                        if (el.ValueKind == System.Text.Json.JsonValueKind.String) Add(el.GetString());
+                    break;
+                case System.Text.Json.JsonValueKind.String:
+                    foreach (var part in (tagsEl.GetString() ?? string.Empty)
+                             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        Add(part);
+                    break;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Malformed config is not fatal — treat as "no tags".
+        }
         return result;
     }
 

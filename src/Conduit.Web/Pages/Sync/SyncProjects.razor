@@ -1966,6 +1966,14 @@
                                                                                 <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
                                                                             </button>
                                                                         </div>
+                                                                        <div class="col-md-12">
+                                                                            <label class="form-label fw-semibold">Tags <CcHelpHint Text="Comma-separated tag names to apply to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." /></label>
+                                                                            <input class="form-control form-control-sm"
+                                                                                   value="@GetStepTagsCsv(stepRef)"
+                                                                                   @onchange="@(e => SetStepTagsCsv(stepRef, e.Value?.ToString()))"
+                                                                                   placeholder="Contractor, SOX — blank for none" />
+                                                                            <small class="form-text text-muted">Assign-existing-only: IC applies tags that already exist; unknown names are skipped.</small>
+                                                                        </div>
                                                                     }
                                                                     <div class="col-md-12">
                                                                         <div class="form-check form-switch">
@@ -2583,6 +2591,72 @@
         mappingModalStepId is { } id ? StepById(id) : null;
 
     private void MarkWorkflowsDirty() => workflowsDirty = true;
+
+    // ── Per-step tag names (stored in WorkflowStep.Configuration JSON) ──────────
+    // The "tags" property of the step's free-form Configuration holds a JSON array of
+    // tag NAMES. The orchestrator parses the same property at run time and stamps the
+    // names onto every emitted object so the IC sink can apply them as ObjectTags
+    // (assign-existing-only). These two helpers (de)serialize that property as a
+    // comma-separated string for the text input, preserving any other config keys.
+
+    private string GetStepTagsCsv(WorkflowStep step)
+    {
+        if (string.IsNullOrWhiteSpace(step.Configuration)) return string.Empty;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(step.Configuration);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return string.Empty;
+            if (!doc.RootElement.TryGetProperty("tags", out var tagsEl)) return string.Empty;
+            if (tagsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                var names = new List<string>();
+                foreach (var el in tagsEl.EnumerateArray())
+                    if (el.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var s = el.GetString();
+                        if (!string.IsNullOrWhiteSpace(s)) names.Add(s!.Trim());
+                    }
+                return string.Join(", ", names);
+            }
+            if (tagsEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                return tagsEl.GetString() ?? string.Empty;
+        }
+        catch (System.Text.Json.JsonException) { }
+        return string.Empty;
+    }
+
+    private void SetStepTagsCsv(WorkflowStep step, string? csv)
+    {
+        // Parse the input into a clean, de-duplicated name list.
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in (csv ?? string.Empty)
+                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (seen.Add(part)) names.Add(part);
+
+        // Preserve any other keys already in Configuration; only replace "tags".
+        var bag = new Dictionary<string, object?>();
+        if (!string.IsNullOrWhiteSpace(step.Configuration))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(step.Configuration);
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                        if (!string.Equals(prop.Name, "tags", StringComparison.OrdinalIgnoreCase))
+                            bag[prop.Name] = prop.Value.Clone();
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+
+        if (names.Count > 0)
+            bag["tags"] = names;
+
+        step.Configuration = bag.Count > 0
+            ? System.Text.Json.JsonSerializer.Serialize(bag)
+            : null;
+        MarkWorkflowsDirty();
+    }
 
     private void ToggleWorkflowExpanded(Guid id)
     {
