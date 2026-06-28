@@ -382,25 +382,34 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Connection Type *</label>
-                    <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged" disabled="@editingId.HasValue">
-                        <option value="Emulator">Emulator (test/demo target)</option>
-                        <option value="LocalDirectory">Local Directory (this Conduit)</option>
-                        <option value="ActiveDirectory">Active Directory</option>
-                        <option value="ActiveRoles">Active Roles</option>
-                        <option value="EntraID">Entra ID (Microsoft 365)</option>
-                        <option value="AzureResourceGraph">Azure Resource Graph</option>
-                        <option value="Okta">Okta</option>
-                        <option value="GoogleWorkspace">Google Workspace</option>
-                        <option value="GenericLdap">Generic LDAP</option>
-                        <option value="Scim">SCIM 2.0</option>
-                        <option value="Database">Database (SQL)</option>
-                        <option value="SqlDiscovery">SQL Server Discovery</option>
-                        <option value="CSV">CSV File</option>
-                        <option value="AWS">AWS IAM</option>
-                        <option value="SharePoint">SharePoint Online</option>
-                        <option value="IdentityCenter">IdentityCenter</option>
-                        <option value="Real">Real (legacy / generic)</option>
-                    </select>
+                    @if (editingId.HasValue)
+                    {
+                        @* Type is locked after creation. Show it as a readable read-only field —
+                           a disabled <select> renders white/illegible in the dark theme. *@
+                        <input type="text" class="form-control" value="@ConnectionTypeLabel(form.SystemType)" readonly />
+                    }
+                    else
+                    {
+                        <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
+                            <option value="Emulator">Emulator (test/demo target)</option>
+                            <option value="LocalDirectory">Local Directory (this Conduit)</option>
+                            <option value="ActiveDirectory">Active Directory</option>
+                            <option value="ActiveRoles">Active Roles</option>
+                            <option value="EntraID">Entra ID (Microsoft 365)</option>
+                            <option value="AzureResourceGraph">Azure Resource Graph</option>
+                            <option value="Okta">Okta</option>
+                            <option value="GoogleWorkspace">Google Workspace</option>
+                            <option value="GenericLdap">Generic LDAP</option>
+                            <option value="Scim">SCIM 2.0</option>
+                            <option value="Database">Database (SQL)</option>
+                            <option value="SqlDiscovery">SQL Server Discovery</option>
+                            <option value="CSV">CSV File</option>
+                            <option value="AWS">AWS IAM</option>
+                            <option value="SharePoint">SharePoint Online</option>
+                            <option value="IdentityCenter">IdentityCenter</option>
+                            <option value="Real">Real (legacy / generic)</option>
+                        </select>
+                    }
                     @{
                         var typeAdapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
                         var typeCaps = typeAdapter?.Capabilities;
@@ -1618,6 +1627,29 @@
         !string.IsNullOrWhiteSpace(form.Name) && !string.IsNullOrWhiteSpace(form.SystemType);
     private void GoToStep2() { if (CanAdvanceToStep2) newConnStep = 2; }
     private void GoToStep1() => newConnStep = 1;
+    // Friendly label for the (locked) connection type shown read-only on edit.
+    // Mirrors the create <select> option text so edit reads identically.
+    private static string ConnectionTypeLabel(string? systemType) => systemType switch
+    {
+        "Emulator" => "Emulator (test/demo target)",
+        "LocalDirectory" => "Local Directory (this Conduit)",
+        "ActiveDirectory" => "Active Directory",
+        "ActiveRoles" => "Active Roles",
+        "EntraID" => "Entra ID (Microsoft 365)",
+        "AzureResourceGraph" => "Azure Resource Graph",
+        "Okta" => "Okta",
+        "GoogleWorkspace" => "Google Workspace",
+        "GenericLdap" => "Generic LDAP",
+        "Scim" => "SCIM 2.0",
+        "Database" => "Database (SQL)",
+        "SqlDiscovery" => "SQL Server Discovery",
+        "CSV" => "CSV File",
+        "AWS" => "AWS IAM",
+        "SharePoint" => "SharePoint Online",
+        "IdentityCenter" => "IdentityCenter",
+        "Real" => "Real (legacy / generic)",
+        _ => systemType ?? string.Empty
+    };
     // Operator-facing surface for non-modal load failures that were previously
     // swallowed to Console.WriteLine (e.g. the endpoints-view token load).
     private string toastError = string.Empty;
