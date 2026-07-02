@@ -378,7 +378,7 @@ namespace Conduit.Sync.Templates
                 {
                     Id = stepId,
                     WorkflowId = workflowId,
-                    Name = $"{objectClass} mapping",
+                    Name = $"{objectClass} upsert",
                     StepType = WorkflowStepTypes.Mapping,
                     ObjectClass = objectClass,
                     Ordinal = 0,

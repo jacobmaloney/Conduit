@@ -1913,6 +1913,10 @@
                                                                         @onclick="() => ToggleStepSettings(stepRef.Id)" title="Edit settings">
                                                                     <i class="fas fa-cog"></i>
                                                                 </button>
+                                                                <button type="button" class="btn btn-sm btn-outline-success"
+                                                                        @onclick="() => CopyStepById(stepRef.Id)" title="Copy Step">
+                                                                    <i class="fas fa-copy fa-sm"></i>
+                                                                </button>
                                                                 <button type="button" class="btn btn-sm btn-outline-danger"
                                                                         @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">
                                                                     <i class="fas fa-trash fa-sm"></i>
@@ -2822,6 +2826,100 @@
         workflowsDirty = true;
     }
 
+    // IC-parity per-step COPY. Deep-copies a single step (into a NEW id) within
+    // the SAME workflow, cloning any loaded Mapping step's per-step attribute
+    // mappings + scope so the copy is fully independent. The clone is inserted
+    // immediately after the source and ordinals are renumbered; new step ids are
+    // registered in the *Loaded / *Inherit maps so PersistWorkflowsAsync flushes
+    // the cloned mappings/scope on Save (it only writes loaded steps).
+    private void CopyStepById(Guid stepId)
+    {
+        WorkflowStep? src = null;
+        List<WorkflowStep>? list = null;
+        foreach (var kv in stepsByWorkflow)
+        {
+            var found = kv.Value.FirstOrDefault(s => s.Id == stepId);
+            if (found is not null) { src = found; list = kv.Value; break; }
+        }
+        if (src is null || list is null) return;
+
+        var newStep = new WorkflowStep
+        {
+            Id = Guid.NewGuid(),
+            WorkflowId = src.WorkflowId,
+            Name = src.Name + " (Copy)",
+            StepType = src.StepType,
+            Ordinal = src.Ordinal + 1,
+            ObjectClass = src.ObjectClass,
+            Enabled = src.Enabled,
+            Configuration = src.Configuration,
+            // A copy starts fresh — never inherit the source step's incremental
+            // high-water mark (next run does a full enumeration).
+            IncrementalCursor = null,
+            CursorUpdatedAt = null
+        };
+
+        // Deep-copy per-step mappings + scope ONLY for Mapping steps the operator
+        // had loaded into the editor (others stay project-inherited; the source
+        // step never had per-step rows to clone).
+        var isMapping = string.Equals(src.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase);
+        if (isMapping && stepMappingsLoaded.Contains(src.Id))
+        {
+            var clonedMappings = GetStepMappings(src.Id)
+                .Select(m => new AttributeMapping
+                {
+                    Id = Guid.NewGuid(),
+                    SyncProjectId = m.SyncProjectId,
+                    WorkflowStepId = newStep.Id,
+                    SourceAttribute = m.SourceAttribute,
+                    SinkAttribute = m.SinkAttribute,
+                    TransformExpr = m.TransformExpr,
+                    IsRequired = m.IsRequired,
+                    SortOrder = m.SortOrder
+                })
+                .ToList();
+            stepMappings[newStep.Id] = clonedMappings;
+            stepMappingsLoaded.Add(newStep.Id);
+            stepMappingsInherit[newStep.Id] =
+                !stepMappingsInherit.TryGetValue(src.Id, out var inhM) || inhM;
+        }
+
+        if (isMapping && stepScopesLoaded.Contains(src.Id))
+        {
+            var inhS = !stepScopeInherit.TryGetValue(src.Id, out var sInh) || sInh;
+            SyncProjectScope? clonedScope = null;
+            if (stepScopes.TryGetValue(src.Id, out var srcScope) && srcScope is not null)
+            {
+                clonedScope = new SyncProjectScope
+                {
+                    Id = Guid.NewGuid(),
+                    SyncProjectId = srcScope.SyncProjectId,
+                    WorkflowStepId = newStep.Id,
+                    BaseDN = srcScope.BaseDN,
+                    IncludedBaseDNs = srcScope.IncludedBaseDNs,
+                    ExcludedBaseDNs = srcScope.ExcludedBaseDNs,
+                    LdapFilter = srcScope.LdapFilter,
+                    QueryExpression = srcScope.QueryExpression,
+                    PageSize = srcScope.PageSize,
+                    MaxObjects = srcScope.MaxObjects,
+                    IncludeDeleted = srcScope.IncludeDeleted
+                };
+            }
+            stepScopes[newStep.Id] = clonedScope;
+            stepScopesLoaded.Add(newStep.Id);
+            stepScopeInherit[newStep.Id] = inhS;
+        }
+
+        var idx = list.IndexOf(src);
+        list.Insert(idx + 1, newStep);
+        for (int i = 0; i < list.Count; i++) list[i].Ordinal = i;
+
+        expandedWorkflows.Add(src.WorkflowId);
+        selectedWorkflowId = src.WorkflowId;
+        selectedStepId = newStep.Id;
+        workflowsDirty = true;
+    }
+
     private void MoveStepUpById(Guid id)   { selectedStepId = id; MoveStepUp(); }
     private void MoveStepDownById(Guid id) { selectedStepId = id; MoveStepDown(); }
     private void DeleteStepById(Guid id)
@@ -3133,7 +3231,7 @@
             {
                 Id = Guid.NewGuid(),
                 WorkflowId = workflow.Id,
-                Name = $"{objectClass} mapping",
+                Name = $"{objectClass} upsert",
                 StepType = WorkflowStepTypes.Mapping,
                 ObjectClass = objectClass, // lowercase native name — matches generator + option set
                 Ordinal = 0,
@@ -4588,7 +4686,7 @@
             {
                 Id = Guid.NewGuid(),
                 WorkflowId = workflow.Id,
-                Name = $"{objectClass} mapping",
+                Name = $"{objectClass} upsert",
                 StepType = WorkflowStepTypes.Mapping,
                 ObjectClass = objectClass, // lowercase native name — matches generator + option set
                 Ordinal = i,
