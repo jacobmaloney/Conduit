@@ -377,6 +377,24 @@ namespace Conduit.DataAccess.Repositories
         }
 
         /// <summary>
+        /// Stamps the V30 entitlement columns after a successful agent enrollment
+        /// handshake. The entitlement GATE itself was removed at 35f0a19 — this stamp
+        /// is defensive future-proofing only, so a re-enabled gate would treat
+        /// enrolled connections as already validated.
+        /// </summary>
+        public async Task<bool> StampIcEntitlementAsync(Guid id, string baseUrl)
+        {
+            var rows = await ExecuteAsync(@"
+                UPDATE Tenants
+                   SET IcEntitlementValidatedAt = SYSUTCDATETIME(),
+                       IcEntitlementBaseUrl = @BaseUrl,
+                       LastModified = SYSUTCDATETIME()
+                 WHERE Id = @Id;",
+                new { Id = id, BaseUrl = baseUrl });
+            return rows > 0;
+        }
+
+        /// <summary>
         /// Returns user + group + active-token counts for each tenant.
         /// Used by the Connected Systems dashboard.
         /// </summary>

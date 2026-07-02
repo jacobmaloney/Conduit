@@ -509,10 +509,23 @@ builder.Services.AddScoped<Conduit.Web.Services.AwsAgentWriteExecutor>();
 // Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
 builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
 builder.Services.AddHostedService<Conduit.Web.Services.IcAgentCommandPollerService>();
+// One-shot startup enrollment against an IC tenant portal (--enroll-url/--enroll-code).
+// Runs once after the setup gate + DatabaseInitializer below; no-ops when unconfigured.
+// Same redirect hardening as the poller: the response carries API keys, so a 3xx must
+// never re-route the exchange to another host.
+builder.Services.AddHttpClient("Enrollment")
+    .ConfigureHttpClient(c =>
+    {
+        c.Timeout = TimeSpan.FromSeconds(30);
+        c.MaxResponseContentBufferSize = 1024 * 1024;
+    })
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<Conduit.Web.Services.EnrollmentService>();
 
 var app = builder.Build();
 
 // Check if setup is required before initializing database
+var databaseReadyForEnrollment = false;
 using (var scope = app.Services.CreateScope())
 {
     var setupService = scope.ServiceProvider.GetRequiredService<SetupService>();
@@ -559,6 +572,7 @@ using (var scope = app.Services.CreateScope())
         // when the DB is unreachable (the self-heal service warms it on success instead).
         if (initResult == StartupInitResult.Initialized)
         {
+            databaseReadyForEnrollment = true;
             try { await app.Services.GetRequiredService<OpenAccessState>().InitializeAsync(); }
             catch (Exception ex)
             {
@@ -567,6 +581,12 @@ using (var scope = app.Services.CreateScope())
         }
     }
 }
+
+// One-shot IC enrollment (--enroll-url/--enroll-code). Must run AFTER the setup gate +
+// DatabaseInitializer above (it writes Tenants + a credential). No-ops silently when no
+// enroll code is configured; never throws.
+await app.Services.GetRequiredService<Conduit.Web.Services.EnrollmentService>()
+    .RunAtStartupAsync(databaseReadyForEnrollment);
 
 // Configure the HTTP request pipeline.
 //

@@ -9,6 +9,7 @@
 @inject NavigationManager Navigation
 @inject OpenAccessState OpenAccess
 @inject IcAgentStatusService IcAgentStatus
+@inject EnrollmentService Enrollment
 
 <PageTitle>Configuration - Conduit</PageTitle>
 
@@ -93,6 +94,11 @@
                                 <strong>Conduit instance ID</strong> field on IC's Agents page so the minted
                                 key is bound to the same id this agent stamps on synced objects.
                             </div>
+                        </dd>
+
+                        <dt class="col-sm-4">Auto-enrollment:</dt>
+                        <dd class="col-sm-8">
+                            <span class="small">@Enrollment.StateDescription</span>
                         </dd>
                     </dl>
 
