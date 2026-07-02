@@ -1368,7 +1368,7 @@ IF COL_LENGTH('dbo.Tenants','IcEntitlementBaseUrl') IS NULL
 BEGIN
     ALTER TABLE [dbo].[Tenants] ADD [IcEntitlementBaseUrl] NVARCHAR(500) NULL;
 END;
-
+GO
 -- Grandfather pre-existing IdentityCenter connections: mark them validated so
 -- enabling enforcement does not break a live install / the parity demo. Only
 -- touches rows that are IC-typed AND not already validated; never overwrites a
