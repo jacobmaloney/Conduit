@@ -220,7 +220,7 @@ namespace Conduit.Installer
         /// <summary>
         /// Gets or sets the service name
         /// </summary>
-        public string ServiceName { get; set; } = "Conduit";
+        public string ServiceName { get; set; } = "IdentityCenterConduit";
 
         /// <summary>
         /// Gets or sets whether to start the service after installation

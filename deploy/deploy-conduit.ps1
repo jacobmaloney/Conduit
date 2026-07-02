@@ -75,7 +75,12 @@
 [CmdletBinding()]
 param(
     [string]$Server      = "192.168.1.56",
-    [string]$ServiceName = "Conduit",
+    # Canonical name matches the other IC services (IdentityCenterWebPortal, IdentityCenterApi).
+    [string]$ServiceName = "IdentityCenterConduit",
+    # Pre-rename name still present on boxes deployed before 2026-07. Stopped alongside
+    # $ServiceName so /MIR never runs under a live legacy service; started as a fallback
+    # if $ServiceName does not exist yet.
+    [string]$LegacyServiceName = "Conduit",
     [string]$PublishDir  = "C:\Users\jacob\source\repos\_deploy-conduit\publish",
     [string]$RemotePath  = "\\192.168.1.56\C$\Software\Conduit\publish",
     [int]$Port           = 5500,
@@ -183,22 +188,28 @@ foreach ($p in $xdPaths) {
 
 # -- 4. Stop the service (skipped on dry run; tolerant of a not-yet-created service) -
 if (-not $DryRun) {
-    Write-Step "Stopping service '$ServiceName' on $Server (tolerant if not yet created)"
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    & sc.exe "\\$Server" stop $ServiceName 2>$null | Out-Null
-    $ErrorActionPreference = $prevEAP
-    # Poll until STOPPED or the service does not exist (first deploy). sc.exe query of a
-    # missing service returns a 'does not exist' line -- treat that as 'safe to copy'.
-    $stopped = $false
-    for ($i = 0; $i -lt 30; $i++) {
-        Start-Sleep -Seconds 1
-        $q = & sc.exe "\\$Server" query $ServiceName 2>$null
-        if ($q -match "STOPPED") { $stopped = $true; break }
-        if ($q -match "1060" -or $q -match "does not exist") { $stopped = $true; Write-Ok "Service not yet created (first deploy)."; break }
+    # Stop BOTH the canonical and the legacy service name: a box deployed before the
+    # 2026-07 rename still runs 'Conduit', and mirroring under a live service = locked files.
+    $namesToStop = @($ServiceName)
+    if ($LegacyServiceName -and $LegacyServiceName -ne $ServiceName) { $namesToStop += $LegacyServiceName }
+    foreach ($svc in $namesToStop) {
+        Write-Step "Stopping service '$svc' on $Server (tolerant if not yet created)"
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & sc.exe "\\$Server" stop $svc 2>$null | Out-Null
+        $ErrorActionPreference = $prevEAP
+        # Poll until STOPPED or the service does not exist (first deploy). sc.exe query of a
+        # missing service returns a 'does not exist' line -- treat that as 'safe to copy'.
+        $stopped = $false
+        for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            $q = & sc.exe "\\$Server" query $svc 2>$null
+            if ($q -match "STOPPED") { $stopped = $true; break }
+            if ($q -match "1060" -or $q -match "does not exist") { $stopped = $true; Write-Ok "Service '$svc' not created on this box."; break }
+        }
+        if ($stopped) { Write-Ok "Service '$svc' stopped (or absent)." }
+        else { Write-Warn2 "Service '$svc' did not report STOPPED within 30s; continuing (file locks may cause robocopy retries)." }
     }
-    if ($stopped) { Write-Ok "Service stopped (or absent)." }
-    else { Write-Warn2 "Service did not report STOPPED within 30s; continuing (file locks may cause robocopy retries)." }
 }
 else {
     Write-Warn2 "DryRun: NOT stopping the service."
@@ -220,6 +231,9 @@ if ($roExit -ge 8) {
     if (-not $DryRun) {
         Write-Warn2 "Attempting to restart the service before exiting."
         & sc.exe "\\$Server" start $ServiceName 2>$null | Out-Null
+        if ($LegacyServiceName -and $LegacyServiceName -ne $ServiceName) {
+            & sc.exe "\\$Server" start $LegacyServiceName 2>$null | Out-Null
+        }
     }
     exit 1
 }
@@ -240,9 +254,27 @@ $ErrorActionPreference = "Continue"
 $startOut = & sc.exe "\\$Server" start $ServiceName 2>$null
 $ErrorActionPreference = $prevEAP
 if ($startOut -match "1060" -or $startOut -match "does not exist") {
-    Write-Warn2 "Service '$ServiceName' does not exist on $Server yet. Files are mirrored; create the service with sc.exe, set its Environment, then re-run or start manually."
-    Write-Warn2 "Skipping health check (no service to start)."
-    exit 0
+    # Canonical name absent -- fall back to the legacy pre-rename service if the box has one,
+    # so a deploy to an un-renamed box still comes back up.
+    $legacyStarted = $false
+    if ($LegacyServiceName -and $LegacyServiceName -ne $ServiceName) {
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $legacyOut = & sc.exe "\\$Server" start $LegacyServiceName 2>$null
+        $ErrorActionPreference = $prevEAP
+        if (-not ($legacyOut -match "1060" -or $legacyOut -match "does not exist")) {
+            $legacyStarted = $true
+            Write-Warn2 "Started LEGACY service '$LegacyServiceName' ('$ServiceName' does not exist on $Server yet)."
+            Write-Warn2 "Rename when convenient (as admin on ${Server}; preserves the exe path, recreate any Environment config):"
+            Write-Warn2 "  sc.exe stop $LegacyServiceName; sc.exe delete $LegacyServiceName"
+            Write-Warn2 "  sc.exe create $ServiceName binPath= `"<same binPath>`" start= auto"
+        }
+    }
+    if (-not $legacyStarted) {
+        Write-Warn2 "Service '$ServiceName' does not exist on $Server yet. Files are mirrored; create the service with sc.exe, set its Environment, then re-run or start manually."
+        Write-Warn2 "Skipping health check (no service to start)."
+        exit 0
+    }
 }
 Write-Ok "Start command issued."
 
