@@ -218,6 +218,24 @@ The Setup wizard writes everything — you don't normally edit JSON. The keys it
 
 If `Cors:AllowedOrigins` is empty (the default) nothing cross-origin is allowed — the right default for an identity service. Add origins to permit specific SCIM clients.
 
+### Enrolling against IdentityCenter
+
+One-shot, single-use-code enrollment wires this Conduit instance to an IdentityCenter tenant at startup:
+
+```
+Conduit.Web.exe --enroll-url=https://api.example.com --enroll-code=XXXX-XXXX-XXXX-XXXX
+```
+
+Running as a Windows service, append the same arguments to the service `binPath`:
+
+```
+sc.exe config IdentityCenterConduit binPath= "\"C:\path\Conduit.Web.exe\" --enroll-url=https://api.example.com --enroll-code=XXXX-XXXX-XXXX-XXXX"
+```
+
+(Also readable from appsettings as `Enroll:Url` / `Enroll:Code`; command line wins.)
+
+What it persists on success: a Connected System (`Tenants` row, `SystemType=IdentityCenter`, named `IdentityCenter-{tenantSlug}`) plus the encrypted `identitycenter` credential `{ BaseUrl, ApiKey, AgentApiKey }` — the shared sync key and the per-agent key. The IC agent poller picks the connection up on its next tick, so heartbeat/claim and sync start with no further configuration. Enrollment is idempotent: if a connection already points at the enroll URL's origin, the (single-use) code is not re-sent on restart. A 403 means the code is invalid/expired/used — generate a new one in the tenant portal. Failures never block startup; the outcome is shown read-only on the Configuration page's IC Agent panel.
+
 ---
 
 ## Database migrations
