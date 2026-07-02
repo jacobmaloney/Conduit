@@ -97,6 +97,10 @@ public sealed class EnrollmentService
             _logger.LogError("Enroll URL '{EnrollUrl}' is not a valid absolute http(s) URL — skipping enrollment.", enrollUrl);
             return;
         }
+        if (targetOrigin.StartsWith("http://", StringComparison.Ordinal))
+        {
+            _logger.LogWarning("Enroll URL {Origin} is plain http — the enroll code and the returned API keys cross the wire in cleartext. Use https outside a lab.", targetOrigin);
+        }
 
         using var scope = _scopeFactory.CreateScope();
         var tenants = scope.ServiceProvider.GetRequiredService<TenantRepository>();
@@ -137,22 +141,64 @@ public sealed class EnrollmentService
         if (await tenants.NameOrSlugInUseByOtherAsync(name, Guid.Empty))
             name = IdentityCenterSourceName.Sanitize($"{name}-{response.AgentId.ToString("N")[..8]}");
 
-        var created = await tenants.CreateAsync(new Tenant
+        // Past this point the single-use code is consumed server-side, so a
+        // persistence failure cannot be retried with the same code. Fail with a
+        // message that says exactly that (NOT "code invalid"), and never leave a
+        // keyless Tenants row behind — the idempotency scan skips credential-less
+        // rows, so an orphan would cause the next boot to re-send the dead code.
+        Tenant created;
+        try
         {
-            Name = name,
-            Slug = name,
-            SystemType = "IdentityCenter",
-            IsActive = true,
-            Description = $"Auto-enrolled against {response.BaseUrl}"
-        });
+            created = await tenants.CreateAsync(new Tenant
+            {
+                Name = name,
+                Slug = name,
+                SystemType = "IdentityCenter",
+                IsActive = true,
+                Description = $"Auto-enrolled against {response.BaseUrl}"
+            });
+        }
+        catch (Exception ex)
+        {
+            ReportPersistenceFailure(targetOrigin, ex);
+            return;
+        }
 
-        await protector.StoreAsync(created.Id, IcCredentialName, EnrollmentClient.ComposeCredentialBlob(response));
-        await tenants.StampIcEntitlementAsync(created.Id, response.BaseUrl);
+        try
+        {
+            await protector.StoreAsync(created.Id, IcCredentialName, EnrollmentClient.ComposeCredentialBlob(response, enrollUrl));
+        }
+        catch (Exception ex)
+        {
+            try { await tenants.DeleteAsync(created.Id); }
+            catch { /* best effort; the row has no credential so nothing can use it */ }
+            ReportPersistenceFailure(targetOrigin, ex);
+            return;
+        }
+
+        try
+        {
+            await tenants.StampIcEntitlementAsync(created.Id, response.BaseUrl);
+        }
+        catch (Exception ex)
+        {
+            // The stamp is defensive future-proofing only (gate removed at 35f0a19);
+            // the enrollment itself is complete and usable.
+            _logger.LogWarning(ex, "Entitlement stamp failed for connection '{Name}'; enrollment is still valid.", name);
+        }
 
         StateDescription = $"Enrolled against {response.BaseUrl} as agent {response.AgentId} (connection '{name}').";
         _logger.LogInformation(
             "Enrolled against {BaseUrl}: tenant slug '{Slug}', agent id {AgentId}, connection '{Name}'. The IC agent poller picks it up on its next tick.",
             response.BaseUrl, response.TenantSlug, response.AgentId, name);
+    }
+
+    private void ReportPersistenceFailure(string targetOrigin, Exception ex)
+    {
+        StateDescription = "Enrollment succeeded but saving the connection failed — the single-use code is consumed; generate a new one in the tenant portal and re-enroll.";
+        _logger.LogError(ex,
+            "Enrollment against {Origin} succeeded but persisting the connection failed. The single-use code is consumed server-side — generate a new one in the tenant portal and re-enroll.",
+            targetOrigin);
     }
 }
 
@@ -258,9 +304,13 @@ public sealed class EnrollmentClient
             var syncApiKey = GetString(doc.RootElement, "syncApiKey");
             var agentIdRaw = GetString(doc.RootElement, "agentId");
 
+            // A baseUrl that is not a valid absolute http(s) URL would poison the
+            // stored blob: NormalizeOrigin on it stays null forever, the idempotency
+            // scan could never match it, and the poller could not use it either.
             if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(tenantSlug)
                 || string.IsNullOrWhiteSpace(agentApiKey) || string.IsNullOrWhiteSpace(syncApiKey)
-                || !Guid.TryParse(agentIdRaw, out var agentId))
+                || !Guid.TryParse(agentIdRaw, out var agentId)
+                || NormalizeOrigin(baseUrl) is null)
                 return null;
 
             return new EnrollmentResponse(baseUrl!, tenantSlug!, agentId, agentApiKey!, syncApiKey!);
@@ -275,13 +325,17 @@ public sealed class EnrollmentClient
     /// Composes the "identitycenter" credential blob. Field names are LOAD-BEARING:
     /// IcAgentCommandPollerService and IdentityCenterCredentialReader parse exactly
     /// BaseUrl (server), ApiKey (shared sync key), AgentApiKey (per-agent key).
+    /// EnrollUrl is additive (ignored by both readers): it records the origin the
+    /// code was redeemed against so restart idempotency still holds when IC's
+    /// baseUrl legitimately lives on a different host than the enroll endpoint.
     /// </summary>
-    public static string ComposeCredentialBlob(EnrollmentResponse response) =>
+    public static string ComposeCredentialBlob(EnrollmentResponse response, string? enrollUrl = null) =>
         JsonSerializer.Serialize(new
         {
             BaseUrl = response.BaseUrl,
             ApiKey = response.SyncApiKey,
-            AgentApiKey = response.AgentApiKey
+            AgentApiKey = response.AgentApiKey,
+            EnrollUrl = enrollUrl
         });
 
     /// <summary>Connected System name for the enrolled IC, kept Source-regex-safe.</summary>
@@ -300,16 +354,21 @@ public sealed class EnrollmentClient
         return $"{uri.Scheme}://{uri.Host}:{uri.Port}".ToLowerInvariant();
     }
 
-    /// <summary>True when the stored credential blob's BaseUrl points at the given normalized origin.</summary>
+    /// <summary>
+    /// True when the stored credential blob's BaseUrl OR EnrollUrl points at the
+    /// given normalized origin. Matching either keeps restart idempotency intact
+    /// when IC's baseUrl is a different host than the enroll endpoint.
+    /// </summary>
     public static bool CredentialMatchesOrigin(string credentialJson, string normalizedOrigin)
     {
         try
         {
             using var doc = JsonDocument.Parse(credentialJson);
             if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
-            var baseUrl = GetString(doc.RootElement, "BaseUrl");
-            var origin = NormalizeOrigin(baseUrl);
-            return origin is not null && string.Equals(origin, normalizedOrigin, StringComparison.OrdinalIgnoreCase);
+            var baseUrlOrigin = NormalizeOrigin(GetString(doc.RootElement, "BaseUrl"));
+            var enrollUrlOrigin = NormalizeOrigin(GetString(doc.RootElement, "EnrollUrl"));
+            return string.Equals(baseUrlOrigin, normalizedOrigin, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(enrollUrlOrigin, normalizedOrigin, StringComparison.OrdinalIgnoreCase);
         }
         catch (JsonException)
         {

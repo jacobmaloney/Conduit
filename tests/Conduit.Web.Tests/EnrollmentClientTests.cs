@@ -73,9 +73,11 @@ public class EnrollmentClientTests
     [InlineData("""{"baseUrl":"https://x","tenantSlug":"s","agentId":"not-a-guid","agentApiKey":"a","syncApiKey":"b"}""")]
     [InlineData("""{"tenantSlug":"s","agentId":"6f9619ff-8b86-d011-b42d-00cf4fc964ff","agentApiKey":"a","syncApiKey":"b"}""")]
     [InlineData("""{"baseUrl":"https://x","tenantSlug":"s","agentId":"6f9619ff-8b86-d011-b42d-00cf4fc964ff","agentApiKey":"","syncApiKey":"b"}""")]
+    [InlineData("""{"baseUrl":"not a url","tenantSlug":"s","agentId":"6f9619ff-8b86-d011-b42d-00cf4fc964ff","agentApiKey":"a","syncApiKey":"b"}""")]
+    [InlineData("""{"baseUrl":"ftp://x/file","tenantSlug":"s","agentId":"6f9619ff-8b86-d011-b42d-00cf4fc964ff","agentApiKey":"a","syncApiKey":"b"}""")]
     [InlineData("not json at all")]
     [InlineData("[]")]
-    public void ParseResponse_rejects_missing_or_malformed_fields(string json)
+    public void ParseResponse_rejects_missing_malformed_or_invalid_baseUrl(string json)
     {
         Assert.Null(EnrollmentClient.ParseResponse(json));
     }
@@ -208,23 +210,39 @@ public class EnrollmentClientTests
         Assert.False(EnrollmentClient.CredentialMatchesOrigin("{}", origin));
     }
 
+    [Fact]
+    public void CredentialMatchesOrigin_also_matches_the_recorded_EnrollUrl()
+    {
+        // IC's baseUrl may legitimately live on a different host than the enroll
+        // endpoint; the recorded EnrollUrl must keep restart idempotency intact so
+        // the consumed single-use code is never re-sent.
+        var enrollOrigin = EnrollmentClient.NormalizeOrigin("https://portal.example.com")!;
+        var blob = """{"BaseUrl":"https://api.example.com","ApiKey":"k","AgentApiKey":"a","EnrollUrl":"https://PORTAL.example.com:443/"}""";
+
+        Assert.True(EnrollmentClient.CredentialMatchesOrigin(blob, enrollOrigin));
+        Assert.True(EnrollmentClient.CredentialMatchesOrigin(blob, EnrollmentClient.NormalizeOrigin("https://api.example.com")!));
+        Assert.False(EnrollmentClient.CredentialMatchesOrigin(blob, EnrollmentClient.NormalizeOrigin("https://elsewhere.example.com")!));
+    }
+
     // ── Credential blob (LOAD-BEARING field names) ───────────────────────────
 
     [Fact]
-    public void ComposeCredentialBlob_uses_exactly_BaseUrl_ApiKey_AgentApiKey()
+    public void ComposeCredentialBlob_uses_exactly_the_load_bearing_field_names()
     {
         var response = EnrollmentClient.ParseResponse(SuccessJson)!;
-        var blob = EnrollmentClient.ComposeCredentialBlob(response);
+        var blob = EnrollmentClient.ComposeCredentialBlob(response, "https://portal.example.com/");
 
         using var doc = JsonDocument.Parse(blob);
         var names = doc.RootElement.EnumerateObject().Select(p => p.Name).ToList();
-        Assert.Equal(new[] { "BaseUrl", "ApiKey", "AgentApiKey" }, names);
+        Assert.Equal(new[] { "BaseUrl", "ApiKey", "AgentApiKey", "EnrollUrl" }, names);
 
         // ApiKey is the SHARED sync key (drives /api/objects/bulk); AgentApiKey is
         // the per-agent key (drives claim + heartbeat). Swapping them breaks both channels.
+        // EnrollUrl is additive and ignored by both existing readers.
         Assert.Equal("https://ic.example.com:8443", doc.RootElement.GetProperty("BaseUrl").GetString());
         Assert.Equal("sync-key-456", doc.RootElement.GetProperty("ApiKey").GetString());
         Assert.Equal("agent-key-123", doc.RootElement.GetProperty("AgentApiKey").GetString());
+        Assert.Equal("https://portal.example.com/", doc.RootElement.GetProperty("EnrollUrl").GetString());
     }
 
     // ── Tenant name sanitization ─────────────────────────────────────────────
