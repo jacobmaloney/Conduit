@@ -111,6 +111,7 @@ public class EnrollmentClientTests
         Assert.Null(outcome.Response);
         Assert.Equal(1, handler.Calls);
         Assert.Contains("invalid or expired", outcome.Error);
+        Assert.Equal("invalid_or_expired_code", outcome.ErrorCategory);
     }
 
     [Theory]
@@ -150,6 +151,7 @@ public class EnrollmentClientTests
         Assert.Null(outcome.Response);
         Assert.Equal(2, handler.Calls);
         Assert.Contains("could not reach", outcome.Error);
+        Assert.Equal("network_unreachable", outcome.ErrorCategory);
     }
 
     [Fact]

@@ -63,8 +63,13 @@ public sealed class EnrollmentService
         {
             StateDescription = $"Enrollment failed: {ex.Message}";
             _logger.LogError(ex, "Startup enrollment failed; the host continues without it.");
+            Report(EnrollmentStatusReporter.OutcomeFailed, "unexpected_error");
         }
     }
+
+    /// <summary>Status-file + event-log visibility for this attempt. Never throws.</summary>
+    private void Report(string outcome, string? errorCategory = null) =>
+        EnrollmentStatusReporter.Report(outcome, errorCategory, StateDescription, _logger);
 
     private async Task RunCoreAsync(bool databaseReady, CancellationToken ct)
     {
@@ -74,12 +79,16 @@ public sealed class EnrollmentService
         var enrollCode = _config["enroll-code"] ?? _config["Enroll:Code"];
 
         if (string.IsNullOrWhiteSpace(enrollCode) && string.IsNullOrWhiteSpace(enrollUrl))
+        {
+            Report(EnrollmentStatusReporter.OutcomeSkippedUnconfigured);
             return; // not configured — silent no-op
+        }
 
         if (string.IsNullOrWhiteSpace(enrollCode) || string.IsNullOrWhiteSpace(enrollUrl))
         {
             StateDescription = "Enrollment skipped: both --enroll-url and --enroll-code are required.";
             _logger.LogWarning("Enrollment needs BOTH --enroll-url and --enroll-code; only one was supplied — skipping.");
+            Report(EnrollmentStatusReporter.OutcomeFailed, "incomplete_configuration");
             return;
         }
 
@@ -87,6 +96,7 @@ public sealed class EnrollmentService
         {
             StateDescription = "Enrollment skipped: database not initialized (complete /setup, then restart with the enroll arguments).";
             _logger.LogWarning("Enroll code is configured but the database is not initialized (setup incomplete or unreachable) — skipping enrollment this boot.");
+            Report(EnrollmentStatusReporter.OutcomeFailed, "database_not_ready");
             return;
         }
 
@@ -95,6 +105,7 @@ public sealed class EnrollmentService
         {
             StateDescription = $"Enrollment skipped: '{enrollUrl}' is not a valid absolute URL.";
             _logger.LogError("Enroll URL '{EnrollUrl}' is not a valid absolute http(s) URL — skipping enrollment.", enrollUrl);
+            Report(EnrollmentStatusReporter.OutcomeFailed, "invalid_enroll_url");
             return;
         }
         if (targetOrigin.StartsWith("http://", StringComparison.Ordinal))
@@ -120,6 +131,7 @@ public sealed class EnrollmentService
             {
                 StateDescription = $"Enrolled against {targetOrigin} (connection '{tenant.Name}').";
                 _logger.LogInformation("Already enrolled against {Origin} (connection '{Tenant}'), skipping.", targetOrigin, tenant.Name);
+                Report(EnrollmentStatusReporter.OutcomeSkippedAlreadyEnrolled);
                 return;
             }
         }
@@ -133,6 +145,7 @@ public sealed class EnrollmentService
         {
             StateDescription = $"Enrollment failed: {outcome.Error}";
             _logger.LogError("Enrollment against {Origin} failed: {Error}", targetOrigin, outcome.Error);
+            Report(EnrollmentStatusReporter.OutcomeFailed, outcome.ErrorCategory ?? "unknown");
             return;
         }
 
@@ -191,6 +204,7 @@ public sealed class EnrollmentService
         _logger.LogInformation(
             "Enrolled against {BaseUrl}: tenant slug '{Slug}', agent id {AgentId}, connection '{Name}'. The IC agent poller picks it up on its next tick.",
             response.BaseUrl, response.TenantSlug, response.AgentId, name);
+        Report(EnrollmentStatusReporter.OutcomeSuccess);
     }
 
     private void ReportPersistenceFailure(string targetOrigin, Exception ex)
@@ -199,6 +213,7 @@ public sealed class EnrollmentService
         _logger.LogError(ex,
             "Enrollment against {Origin} succeeded but persisting the connection failed. The single-use code is consumed server-side — generate a new one in the tenant portal and re-enroll.",
             targetOrigin);
+        Report(EnrollmentStatusReporter.OutcomeFailed, "persistence_failed");
     }
 }
 
@@ -220,7 +235,12 @@ public sealed class EnrollmentClient
 
     public sealed record EnrollmentResponse(string BaseUrl, string TenantSlug, Guid AgentId, string AgentApiKey, string SyncApiKey);
 
-    public sealed record EnrollmentOutcome(EnrollmentResponse? Response, string? Error, int Attempts);
+    /// <summary>
+    /// ErrorCategory is a stable machine-readable failure class for the status file
+    /// (e.g. invalid_or_expired_code, network_unreachable, http_502); Error stays the
+    /// human-readable line. Null category on success.
+    /// </summary>
+    public sealed record EnrollmentOutcome(EnrollmentResponse? Response, string? Error, int Attempts, string? ErrorCategory = null);
 
     /// <summary>
     /// POST {enrollUrl}/api/agent/enroll. One retry on transient (network / 5xx)
@@ -237,6 +257,7 @@ public sealed class EnrollmentClient
         for (var attempt = 1; ; attempt++)
         {
             string? transientError;
+            string? transientCategory;
             try
             {
                 using var content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -247,38 +268,40 @@ public sealed class EnrollmentClient
                     var json = await resp.Content.ReadAsStringAsync(ct);
                     var parsed = ParseResponse(json);
                     return parsed is null
-                        ? new EnrollmentOutcome(null, "Enrollment returned 200 but the response payload was missing required fields.", attempt)
+                        ? new EnrollmentOutcome(null, "Enrollment returned 200 but the response payload was missing required fields.", attempt, "response_malformed")
                         : new EnrollmentOutcome(parsed, null, attempt);
                 }
 
                 var status = (int)resp.StatusCode;
                 if (status == 403)
-                    return new EnrollmentOutcome(null, "enroll code invalid or expired — generate a new one in the tenant portal.", attempt);
+                    return new EnrollmentOutcome(null, "enroll code invalid or expired — generate a new one in the tenant portal.", attempt, "invalid_or_expired_code");
                 if (status == 400)
-                    return new EnrollmentOutcome(null, "enrollment request rejected as malformed (HTTP 400).", attempt);
+                    return new EnrollmentOutcome(null, "enrollment request rejected as malformed (HTTP 400).", attempt, "http_400");
                 if (status == 429)
-                    return new EnrollmentOutcome(null, "enrollment rate limited (HTTP 429) — restart the service to retry.", attempt);
+                    return new EnrollmentOutcome(null, "enrollment rate limited (HTTP 429) — restart the service to retry.", attempt, "http_429");
                 if (status < 500)
-                    return new EnrollmentOutcome(null, $"enrollment failed with HTTP {status}.", attempt);
+                    return new EnrollmentOutcome(null, $"enrollment failed with HTTP {status}.", attempt, $"http_{status}");
 
                 transientError = $"enrollment failed with HTTP {status}.";
+                transientCategory = $"http_{status}";
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                return new EnrollmentOutcome(null, "enrollment cancelled (host shutting down).", attempt);
+                return new EnrollmentOutcome(null, "enrollment cancelled (host shutting down).", attempt, "cancelled");
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
                 transientError = $"could not reach {url} ({ex.Message}).";
+                transientCategory = "network_unreachable";
             }
 
             if (attempt >= 2)
-                return new EnrollmentOutcome(null, transientError, attempt);
+                return new EnrollmentOutcome(null, transientError, attempt, transientCategory);
 
             try { await Task.Delay(_retryDelay, ct); }
             catch (OperationCanceledException)
             {
-                return new EnrollmentOutcome(null, "enrollment cancelled (host shutting down).", attempt);
+                return new EnrollmentOutcome(null, "enrollment cancelled (host shutting down).", attempt, "cancelled");
             }
         }
     }

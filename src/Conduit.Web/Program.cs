@@ -236,6 +236,8 @@ builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<ApiTokenService>();
 builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<SetupService>();
+// Unattended first-run setup from a Provision: config section (installer-stamped).
+builder.Services.AddScoped<ProvisioningService>();
 builder.Services.AddScoped<SystemConfigurationService>();
 builder.Services.AddScoped<DemoSeedService>();
 builder.Services.AddScoped<ParityDemoSeedService>();
@@ -539,6 +541,23 @@ using (var scope = app.Services.CreateScope())
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         logger.LogWarning(ex, "Could not check setup status, assuming setup required");
         setupRequired = true;
+    }
+
+    // PROVISIONED-CONFIG BOOT: when first-run setup is pending and a Provision:
+    // section is present (stamped into appsettings by an installer/operator), apply
+    // setup unattended via SetupService.ApplySetupAsync and continue THIS boot
+    // straight into normal startup — the block below re-verifies DB init (idempotent)
+    // and sets databaseReadyForEnrollment, so enrollment fires in the same boot.
+    // Once setup is complete, setupRequired is false on every later boot and this
+    // never runs again — a second boot with the same provision config is a clean no-op.
+    if (setupRequired)
+    {
+        var provisioner = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.ProvisioningService>();
+        if (await provisioner.TryApplyAtStartupAsync())
+        {
+            setupRequired = false;
+            SetupMiddleware.ClearCache();
+        }
     }
 
     // Only initialize database if setup is complete. If this fails (e.g. the server
