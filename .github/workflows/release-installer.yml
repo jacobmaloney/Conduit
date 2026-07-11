@@ -1,0 +1,245 @@
+# Builds and publishes the self-serve Conduit installer package.
+#
+# TRIGGER: tags matching installer/v* ONLY (e.g. installer/v1.0.0). Mirrors the
+# IdentityCenter deploy/azure/* convention — a plain push to master never
+# produces a distributable artifact; releasing is always an explicit, auditable
+# act. The installer/ namespace keeps app-release tags (v*) free for later use,
+# and the version suffix flows into the artifact names.
+#
+# PIPELINE CONTRACT (enforced inside Build-ConduitInstaller.ps1, from the
+# Installer repo — see its docs/ReleasePipeline.md):
+#   publish -> package/embed -> sign -> verify
+# The verify stage fails the build if the payload trailer is not covered by the
+# signature (signed mode) or if the artifact state does not match the mode.
+#
+# SECRETS / VARIABLES (needs Jacob — the workflow degrades loudly, not silently):
+#   INSTALLER_REPO_TOKEN               PAT (or fine-grained token) with read access to
+#                                      jacobmaloney/Installer. Without it the cross-repo
+#                                      checkout fails and the run stops.
+#   INSTALLER_BLOB_CONNECTION_STRING   Azure Storage connection string for the release
+#                                      container. Missing -> upload step is SKIPPED with
+#                                      a warning; artifacts still attach to the run.
+#   AZURE_TRUSTED_SIGNING_ENDPOINT     \
+#   AZURE_TRUSTED_SIGNING_ACCOUNT       > Azure Trusted Signing (BLOCKED on identity
+#   AZURE_TRUSTED_SIGNING_PROFILE      /  validation). All three missing -> UNSIGNED
+#                                      dev build with -UNSIGNED artifact naming.
+#                                      When set, also uncomment the azure/login step
+#                                      below (dlib auth uses DefaultAzureCredential).
+#   vars.SQLEXPR_URL                   Direct download URL for SQLEXPR_x64_ENU.exe
+#   vars.SQLEXPR_SHA256                Pinned SHA-256 of that file (Get-FileHash).
+#                                      Both unset -> build proceeds WITHOUT the SQL
+#                                      Express redist in the package (valid for
+#                                      environments with existing SQL); set both to
+#                                      ship the full self-serve package.
+#
+# The blob container (suggested: "installer-releases") must be created by Jacob —
+# this workflow never creates Azure resources.
+
+name: release-installer
+
+on:
+  push:
+    tags:
+      - 'installer/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'            # installer/v1.2.3
+          $version = $tag -replace '^installer/v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+') {
+            Write-Host "::error::Tag '$tag' does not match installer/v<semver>."
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout Conduit
+        uses: actions/checkout@v4
+        with:
+          path: conduit
+
+      # Packager acquisition: build the Installer repo from source at release
+      # time (no committed binaries to drift stale; the packager is a fast
+      # build). Cross-repo checkout requires INSTALLER_REPO_TOKEN.
+      - name: Checkout Installer repo (packager)
+        uses: actions/checkout@v4
+        with:
+          repository: jacobmaloney/Installer
+          token: ${{ secrets.INSTALLER_REPO_TOKEN }}
+          path: installer
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Installer unit tests (gate)
+        shell: pwsh
+        run: dotnet test installer/Installer.Core.Tests/Installer.Core.Tests.csproj -c Release --nologo
+
+      # ── SQL Express redist (side-by-side, pinned download) ──────────────
+      - name: Restore SQL Express redist from cache
+        if: ${{ vars.SQLEXPR_SHA256 != '' }}
+        id: sqlexpr-cache
+        uses: actions/cache@v4
+        with:
+          path: redist-cache/SQLEXPR_x64_ENU.exe
+          key: sqlexpr-${{ vars.SQLEXPR_SHA256 }}
+
+      - name: Download SQL Express redist (cache miss)
+        if: ${{ vars.SQLEXPR_SHA256 != '' && steps.sqlexpr-cache.outputs.cache-hit != 'true' }}
+        shell: pwsh
+        run: |
+          if ('${{ vars.SQLEXPR_URL }}' -eq '') {
+            Write-Host "::error::vars.SQLEXPR_SHA256 is set but vars.SQLEXPR_URL is not."
+            exit 1
+          }
+          New-Item -ItemType Directory -Path redist-cache -Force | Out-Null
+          Invoke-WebRequest -Uri '${{ vars.SQLEXPR_URL }}' -OutFile redist-cache/SQLEXPR_x64_ENU.exe
+
+      - name: Verify redist against pinned SHA-256
+        if: ${{ vars.SQLEXPR_SHA256 != '' }}
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash redist-cache/SQLEXPR_x64_ENU.exe -Algorithm SHA256).Hash
+          $expected = '${{ vars.SQLEXPR_SHA256 }}'
+          if ($actual -ne $expected.ToUpperInvariant()) {
+            Write-Host "::error::SQL Express redist hash mismatch. Expected $expected, got $actual. Refusing to package it."
+            exit 1
+          }
+          Write-Host "Redist SHA-256 verified: $actual"
+
+      - name: Warn when redist is not configured
+        if: ${{ vars.SQLEXPR_SHA256 == '' }}
+        shell: pwsh
+        run: Write-Host "::warning::vars.SQLEXPR_URL / vars.SQLEXPR_SHA256 not set - package will ship WITHOUT the SQL Express redist (needs Jacob, one-time capture)."
+
+      # ── Signing mode ────────────────────────────────────────────────────
+      - name: Determine signing mode
+        id: signing
+        shell: pwsh
+        env:
+          TS_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          TS_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          if ($env:TS_ENDPOINT -and $env:TS_ACCOUNT -and $env:TS_PROFILE) {
+            "mode=TrustedSigning" >> $env:GITHUB_OUTPUT
+            "suffix=" >> $env:GITHUB_OUTPUT
+            Write-Host "Signing mode: TrustedSigning"
+          } else {
+            "mode=Unsigned" >> $env:GITHUB_OUTPUT
+            "suffix=-UNSIGNED" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::Azure Trusted Signing secrets not configured - producing an UNSIGNED build. Do NOT distribute. (Blocked on Jacob's Trusted Signing identity validation.)"
+          }
+
+      # Trusted Signing prerequisites — only when signing is live. The dlib
+      # authenticates via DefaultAzureCredential, so azure/login (federated
+      # credentials) must be configured too. Uncomment when Jacob's Trusted
+      # Signing account exists:
+      #
+      # - name: Azure login (federated)
+      #   if: ${{ steps.signing.outputs.mode == 'TrustedSigning' }}
+      #   uses: azure/login@v2
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch Trusted Signing dlib
+        if: ${{ steps.signing.outputs.mode == 'TrustedSigning' }}
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory ts-client -NonInteractive
+          $dlib = Get-ChildItem ts-client -Recurse -Filter 'Azure.CodeSigning.Dlib.dll' |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $dlib) { Write-Host "::error::Azure.CodeSigning.Dlib.dll not found in Microsoft.Trusted.Signing.Client package."; exit 1 }
+          "TS_DLIB=$($dlib.FullName)" >> $env:GITHUB_ENV
+
+      # ── Build the package (publish -> embed -> sign -> verify) ─────────
+      - name: Build installer package
+        shell: pwsh
+        env:
+          TS_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          TS_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          $params = @{
+            ConduitRepo = "$env:GITHUB_WORKSPACE\conduit"
+            OutputPath  = "$env:GITHUB_WORKSPACE\publish"
+            SigningMode = '${{ steps.signing.outputs.mode }}'
+          }
+          if (Test-Path redist-cache/SQLEXPR_x64_ENU.exe) {
+            $params.SqlExpressSetup = "$env:GITHUB_WORKSPACE\redist-cache\SQLEXPR_x64_ENU.exe"
+          }
+          if ('${{ steps.signing.outputs.mode }}' -eq 'TrustedSigning') {
+            $params.TrustedSigningEndpoint    = $env:TS_ENDPOINT
+            $params.TrustedSigningAccount     = $env:TS_ACCOUNT
+            $params.TrustedSigningCertProfile = $env:TS_PROFILE
+            $params.TrustedSigningDlib        = $env:TS_DLIB
+          }
+          & installer/Build-ConduitInstaller.ps1 @params
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Zip package and compute SHA-256
+        id: package
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $suffix = '${{ steps.signing.outputs.suffix }}'
+          $zipName = "ConduitInstaller-v$version$suffix.zip"
+          Compress-Archive -Path "$env:GITHUB_WORKSPACE\publish\ConduitInstaller\*" -DestinationPath $zipName -CompressionLevel Optimal
+          $hash = (Get-FileHash $zipName -Algorithm SHA256).Hash
+          "$hash  $zipName" | Out-File "$zipName.sha256" -Encoding ascii
+          "zip=$zipName" >> $env:GITHUB_OUTPUT
+          Write-Host "Package: $zipName ($('{0:N1} MB' -f ((Get-Item $zipName).Length / 1MB)))"
+          Write-Host "SHA-256: $hash"
+
+      # ── Publish ─────────────────────────────────────────────────────────
+      # Unsigned builds NEVER reach the release container: dev artifacts stay
+      # on the workflow run only. (Worf gate condition.)
+      - name: Note unsigned build exclusion
+        if: ${{ steps.signing.outputs.mode == 'Unsigned' }}
+        shell: pwsh
+        run: Write-Host "::warning::UNSIGNED build - blob upload skipped. Artifact is attached to this workflow run only; do not distribute."
+
+      - name: Upload to Azure Blob Storage
+        if: ${{ steps.signing.outputs.mode != 'Unsigned' }}
+        shell: pwsh
+        env:
+          BLOB_CONNECTION: ${{ secrets.INSTALLER_BLOB_CONNECTION_STRING }}
+        run: |
+          if (-not $env:BLOB_CONNECTION) {
+            Write-Host "::warning::INSTALLER_BLOB_CONNECTION_STRING not configured - skipping blob upload (needs Jacob). Artifacts are still attached to this run."
+            exit 0
+          }
+          $zip = '${{ steps.package.outputs.zip }}'
+          foreach ($file in @($zip, "$zip.sha256")) {
+            az storage blob upload `
+              --connection-string $env:BLOB_CONNECTION `
+              --container-name installer-releases `
+              --name "conduit/${{ steps.version.outputs.version }}/$file" `
+              --file $file `
+              --overwrite false
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::Blob upload failed for $file."; exit 1 }
+          }
+
+      - name: Attach workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConduitInstaller-v${{ steps.version.outputs.version }}${{ steps.signing.outputs.suffix }}
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.zip }}.sha256
+          if-no-files-found: error
+          retention-days: 30
