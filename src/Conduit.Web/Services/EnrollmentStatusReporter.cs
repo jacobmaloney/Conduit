@@ -27,11 +27,17 @@ public static class EnrollmentStatusReporter
 
     public static string StatusFilePath => ConduitDataPaths.FilePath("enroll-status.json");
 
-    public static void Report(string outcome, string? errorCategory, string? detail, ILogger logger)
+    /// <summary>
+    /// <paramref name="statusFilePath"/> and <paramref name="writeEventLog"/>
+    /// exist for tests (redirect the status file, keep the machine event log
+    /// clean); production callers use the defaults.
+    /// </summary>
+    public static void Report(string outcome, string? errorCategory, string? detail, ILogger logger,
+        string? statusFilePath = null, bool writeEventLog = true)
     {
         try
         {
-            var path = StatusFilePath;
+            var path = statusFilePath ?? StatusFilePath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, BuildStatusJson(outcome, DateTime.UtcNow, errorCategory, detail));
         }
@@ -40,7 +46,7 @@ public static class EnrollmentStatusReporter
             logger.LogDebug(ex, "Could not write enroll-status.json; continuing.");
         }
 
-        if (outcome is OutcomeSuccess or OutcomeFailed)
+        if (writeEventLog && outcome is OutcomeSuccess or OutcomeFailed)
             WriteEventLogEntry(outcome == OutcomeSuccess, detail, logger);
     }
 

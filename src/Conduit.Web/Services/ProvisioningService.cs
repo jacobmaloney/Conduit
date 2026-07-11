@@ -31,6 +31,9 @@ public sealed class ProvisioningService
         _logger = logger;
     }
 
+    /// <summary>Test seam: redirect the secrets.json scrub away from the real data dir. Null in production.</summary>
+    public string? SecretsPathOverride { get; set; }
+
     /// <summary>
     /// Applies provisioned setup if a provision config is present. Returns true only
     /// when setup completed successfully; false means "no provision config" or
@@ -74,6 +77,9 @@ public sealed class ProvisioningService
         {
             _logger.LogInformation("Provision config present but setup is already complete — nothing to do.");
             DeleteQuietly(passwordFile);
+            // The lingering Provision section is dead config (setup can never run
+            // again) and still carries the connection string — remove it.
+            ScrubProvisionSection(_logger, SecretsPathOverride);
             return false;
         }
 
@@ -90,7 +96,35 @@ public sealed class ProvisioningService
                 passwordFile);
 
         _logger.LogInformation("Provisioned setup complete: database initialized, portal admin '{Admin}' created.", setup.AdminUsername);
+
+        // The Provision section is consumed: its values now live where they belong
+        // (connection string + JWT in secrets.json proper, admin in the DB). Remove
+        // it from secrets.json so the one-shot input does not linger.
+        ScrubProvisionSection(_logger, SecretsPathOverride);
         return true;
+    }
+
+    /// <summary>
+    /// Removes the consumed Provision section from secrets.json (read-merge-rewrite,
+    /// ACL-first). Best-effort: a failure is logged, never fatal. Static with an
+    /// explicit path override for tests.
+    /// </summary>
+    public static void ScrubProvisionSection(ILogger logger, string? secretsPath = null)
+    {
+        try
+        {
+            if (!SecretsFile.Exists(secretsPath))
+                return;
+            if (SecretsFile.Read(secretsPath)["Provision"] is null)
+                return;
+
+            SecretsFile.Update(root => root.Remove("Provision"), secretsPath);
+            logger.LogInformation("Removed the consumed Provision section from secrets.json.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not remove the Provision section from secrets.json; it can be removed manually.");
+        }
     }
 
     /// <summary>

@@ -14,7 +14,22 @@ using Conduit.Web.Authentication;
 using Conduit.Web.Services;
 using Conduit.Web.Middleware;
 
+// FIRST: relocate any secrets still sitting in the Program Files appsettings files
+// into the ACL-restricted secrets.json, BEFORE configuration is built, so this same
+// boot reads the migrated values. Self-healing no-op once clean; skipped in
+// Development; any failure leaves the originals untouched and boot continues.
+SecretsRelocator.Run();
+
 var builder = WebApplication.CreateBuilder(args);
+
+// Machine-local secret store (ConnectionStrings / Jwt / Provision / Enroll):
+// %PROGRAMDATA%\Conduit\secrets.json, ACL-restricted. Appended LAST so it outranks
+// the world-readable appsettings*.json. Missing file is fine — the per-process JWT
+// key warning and the /setup path below handle the unconfigured case. The
+// --enroll-url/--enroll-code CLI overrides are unaffected: they arrive as the
+// distinct top-level keys "enroll-url"/"enroll-code", which EnrollmentService
+// checks before Enroll:Url/Enroll:Code.
+builder.Configuration.AddJsonFile(SecretsFile.DefaultPath, optional: true, reloadOnChange: false);
 
 // Run as a Windows Service when hosted by the SCM (no-op for console/dev runs).
 builder.Host.UseWindowsService();

@@ -37,6 +37,10 @@ public sealed class EnrollmentService
     /// <summary>Read-only outcome of this boot's auto-enrollment, for the Configuration page.</summary>
     public string StateDescription { get; private set; } = "Not configured (start with --enroll-url and --enroll-code to enroll automatically).";
 
+    /// <summary>Test seams: redirect the secrets.json scrub / status file away from the real data dir. Null in production.</summary>
+    public string? SecretsPathOverride { get; set; }
+    public string? StatusFilePathOverride { get; set; }
+
     public EnrollmentService(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpFactory,
@@ -69,14 +73,12 @@ public sealed class EnrollmentService
 
     /// <summary>Status-file + event-log visibility for this attempt. Never throws.</summary>
     private void Report(string outcome, string? errorCategory = null) =>
-        EnrollmentStatusReporter.Report(outcome, errorCategory, StateDescription, _logger);
+        EnrollmentStatusReporter.Report(outcome, errorCategory, StateDescription, _logger,
+            StatusFilePathOverride, writeEventLog: StatusFilePathOverride is null);
 
     private async Task RunCoreAsync(bool databaseReady, CancellationToken ct)
     {
-        // Command line (--enroll-url=/--enroll-code= arrive as the top-level keys
-        // "enroll-url"/"enroll-code" via CreateBuilder(args)) wins over appsettings.
-        var enrollUrl = _config["enroll-url"] ?? _config["Enroll:Url"];
-        var enrollCode = _config["enroll-code"] ?? _config["Enroll:Code"];
+        var (enrollUrl, enrollCode) = ResolveEnrollmentConfig(_config);
 
         if (string.IsNullOrWhiteSpace(enrollCode) && string.IsNullOrWhiteSpace(enrollUrl))
         {
@@ -146,6 +148,11 @@ public sealed class EnrollmentService
             StateDescription = $"Enrollment failed: {outcome.Error}";
             _logger.LogError("Enrollment against {Origin} failed: {Error}", targetOrigin, outcome.Error);
             Report(EnrollmentStatusReporter.OutcomeFailed, outcome.ErrorCategory ?? "unknown");
+            // A definitive 403 means the code is consumed/expired server-side and can
+            // never work again — remove it from secrets.json so it stops riding along
+            // on every boot. Transient failures keep the code for the next restart.
+            if (outcome.ErrorCategory == EnrollmentClient.CategoryInvalidOrExpiredCode)
+                ScrubEnrollCode(_logger, reason: "the code was definitively rejected (403)", SecretsPathOverride);
             return;
         }
 
@@ -205,6 +212,51 @@ public sealed class EnrollmentService
             "Enrolled against {BaseUrl}: tenant slug '{Slug}', agent id {AgentId}, connection '{Name}'. The IC agent poller picks it up on its next tick.",
             response.BaseUrl, response.TenantSlug, response.AgentId, name);
         Report(EnrollmentStatusReporter.OutcomeSuccess);
+
+        // The single-use code is consumed — remove it from secrets.json. Restart
+        // idempotency does not depend on this (the credential-origin scan above
+        // already prevents a re-send); this just stops a dead secret lingering.
+        ScrubEnrollCode(_logger, reason: "enrollment succeeded", SecretsPathOverride);
+    }
+
+    /// <summary>
+    /// Command line (--enroll-url=/--enroll-code= arrive as the top-level keys
+    /// "enroll-url"/"enroll-code" via CreateBuilder(args)) wins over the Enroll
+    /// section (secrets.json / appsettings). Static so the precedence is testable.
+    /// </summary>
+    public static (string? Url, string? Code) ResolveEnrollmentConfig(IConfiguration config) =>
+        (config["enroll-url"] ?? config["Enroll:Url"], config["enroll-code"] ?? config["Enroll:Code"]);
+
+    /// <summary>
+    /// Removes Enroll:Code from secrets.json (Enroll:Url may remain — it is not a
+    /// secret and keeps the Configuration page informative). Read-merge-rewrite,
+    /// ACL-first, best-effort. Static with an explicit path override for tests.
+    /// </summary>
+    public static void ScrubEnrollCode(ILogger logger, string reason, string? secretsPath = null)
+    {
+        try
+        {
+            if (!SecretsFile.Exists(secretsPath))
+                return;
+            if (SecretsFile.Read(secretsPath)["Enroll"] is not System.Text.Json.Nodes.JsonObject existing
+                || existing["Code"] is null)
+                return;
+
+            SecretsFile.Update(root =>
+            {
+                if (root["Enroll"] is System.Text.Json.Nodes.JsonObject enroll)
+                {
+                    enroll.Remove("Code");
+                    if (enroll.Count == 0)
+                        root.Remove("Enroll");
+                }
+            }, secretsPath);
+            logger.LogInformation("Removed the consumed enroll code from secrets.json ({Reason}).", reason);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not remove Enroll:Code from secrets.json; it can be removed manually.");
+        }
     }
 
     private void ReportPersistenceFailure(string targetOrigin, Exception ex)
@@ -232,6 +284,9 @@ public sealed class EnrollmentClient
         _http = http;
         _retryDelay = retryDelay ?? TimeSpan.FromSeconds(3);
     }
+
+    /// <summary>Definitive 403 outcome: the code is consumed/expired server-side and can never work again.</summary>
+    public const string CategoryInvalidOrExpiredCode = "invalid_or_expired_code";
 
     public sealed record EnrollmentResponse(string BaseUrl, string TenantSlug, Guid AgentId, string AgentApiKey, string SyncApiKey);
 
@@ -274,7 +329,7 @@ public sealed class EnrollmentClient
 
                 var status = (int)resp.StatusCode;
                 if (status == 403)
-                    return new EnrollmentOutcome(null, "enroll code invalid or expired — generate a new one in the tenant portal.", attempt, "invalid_or_expired_code");
+                    return new EnrollmentOutcome(null, "enroll code invalid or expired — generate a new one in the tenant portal.", attempt, CategoryInvalidOrExpiredCode);
                 if (status == 400)
                     return new EnrollmentOutcome(null, "enrollment request rejected as malformed (HTTP 400).", attempt, "http_400");
                 if (status == 429)

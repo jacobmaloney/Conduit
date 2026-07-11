@@ -267,54 +267,36 @@ namespace Conduit.Web.Services
         }
 
         /// <summary>
-        /// Updates only the database connection string in appsettings.{Environment}.json
-        /// while preserving other sections. Also updates the live DatabaseConfig singleton.
+        /// Updates the database connection string in the ACL-restricted secrets.json
+        /// (read-merge-rewrite; never the world-readable appsettings files). Also
+        /// updates the live DatabaseConfig singleton.
         /// </summary>
-        public async Task<(bool Success, string Message)> UpdateConnectionStringAsync(string connectionString)
+        public Task<(bool Success, string Message)> UpdateConnectionStringAsync(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                return (false, "Connection string is empty.");
+                return Task.FromResult((false, "Connection string is empty."));
             }
-
-            var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
-            var configFileName = environment == "Development"
-                ? "appsettings.Development.json"
-                : "appsettings.Production.json";
-            var configPath = Path.Combine(Directory.GetCurrentDirectory(), configFileName);
 
             try
             {
-                System.Text.Json.Nodes.JsonObject root;
-                if (File.Exists(configPath))
+                SecretsFile.Update(root =>
                 {
-                    var existing = await File.ReadAllTextAsync(configPath);
-                    root = string.IsNullOrWhiteSpace(existing)
-                        ? new System.Text.Json.Nodes.JsonObject()
-                        : System.Text.Json.Nodes.JsonNode.Parse(existing)?.AsObject() ?? new System.Text.Json.Nodes.JsonObject();
-                }
-                else
-                {
-                    root = new System.Text.Json.Nodes.JsonObject();
-                }
-
-                if (root["ConnectionStrings"] is not System.Text.Json.Nodes.JsonObject conn)
-                {
-                    conn = new System.Text.Json.Nodes.JsonObject();
-                    root["ConnectionStrings"] = conn;
-                }
-                conn["DefaultConnection"] = connectionString;
-
-                var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-                await File.WriteAllTextAsync(configPath, root.ToJsonString(opts));
+                    if (root["ConnectionStrings"] is not System.Text.Json.Nodes.JsonObject conn)
+                    {
+                        conn = new System.Text.Json.Nodes.JsonObject();
+                        root["ConnectionStrings"] = conn;
+                    }
+                    conn["DefaultConnection"] = connectionString;
+                });
 
                 _databaseConfig.SetConnectionString(connectionString);
-                return (true, $"Connection string saved to {configFileName}.");
+                return Task.FromResult((true, "Connection string saved to the restricted secrets store (secrets.json)."));
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to update connection string in {ConfigPath}", configPath);
-                return (false, $"Failed to save: {ex.Message}");
+                _logger.LogError(ex, "Failed to update the connection string in secrets.json");
+                return Task.FromResult((false, $"Failed to save: {ex.Message}"));
             }
         }
 
@@ -492,9 +474,11 @@ namespace Conduit.Web.Services
             => SqlConnectivity.IsTransient(ex);
 
         /// <summary>
-        /// Checks if a connection string is a placeholder/template value
+        /// Checks if a connection string is a placeholder/template value.
+        /// Public: SecretsRelocator applies the same test when deciding whether a
+        /// ConnectionStrings:DefaultConnection value is worth migrating.
         /// </summary>
-        private static bool IsPlaceholderConnectionString(string connectionString)
+        public static bool IsPlaceholderConnectionString(string connectionString)
         {
             var upper = connectionString.ToUpperInvariant();
             return upper.Contains("YOUR_SERVER") ||
@@ -545,7 +529,7 @@ namespace Conduit.Web.Services
         /// <summary>
         /// Applies the setup configuration
         /// </summary>
-        public async Task<bool> ApplySetupAsync(SetupConfiguration config)
+        public virtual async Task<bool> ApplySetupAsync(SetupConfiguration config)
         {
             // SECURITY: server-side first-run gate. The /setup route is intentionally
             // anonymous (first-run) and only client-side redirects away once complete.
@@ -609,50 +593,87 @@ namespace Conduit.Web.Services
         }
 
         /// <summary>
-        /// Updates the application configuration
+        /// Persists the setup configuration. Secrets (connection string + JWT) go to
+        /// the ACL-restricted secrets.json; the non-secret Kestrel/port block goes to
+        /// the environment config file. Both writes are read-merge-rewrite — never a
+        /// whole-file replacement — and the environment file is anchored to
+        /// ContentRootPath, NEVER Directory.GetCurrentDirectory(): under the SCM the
+        /// process cwd is System32 and a cwd-anchored write lands the file there.
         /// </summary>
         private async Task UpdateConfigurationAsync(SetupConfiguration config)
         {
-            // Get the current environment
-            var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
-            
-            // Update the environment-specific config file
-            var configFileName = environment == "Development" 
-                ? "appsettings.Development.json" 
-                : "appsettings.Production.json";
-                
-            var configPath = Path.Combine(Directory.GetCurrentDirectory(), configFileName);
-            
-            var settings = new
+            SecretsFile.Update(root => ApplySecrets(root, config));
+
+            var configPath = BuildEnvironmentConfigPath(
+                _env.ContentRootPath, Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"));
+
+            System.Text.Json.Nodes.JsonObject envRoot;
+            if (File.Exists(configPath))
             {
-                ConnectionStrings = new
-                {
-                    DefaultConnection = config.ConnectionString
-                },
-                Jwt = new
-                {
-                    SecretKey = config.JwtSecretKey,
-                    Issuer = config.JwtIssuer ?? "Conduit",
-                    Audience = config.JwtAudience ?? "ConduitAPI"
-                },
-                Kestrel = new
-                {
-                    Endpoints = new
-                    {
-                        Http = new
-                        {
-                            Url = $"http://localhost:{config.ServerPort}"
-                        }
-                    }
-                }
-            };
+                var existing = await File.ReadAllTextAsync(configPath);
+                envRoot = string.IsNullOrWhiteSpace(existing)
+                    ? new System.Text.Json.Nodes.JsonObject()
+                    : System.Text.Json.Nodes.JsonNode.Parse(existing)?.AsObject() ?? new System.Text.Json.Nodes.JsonObject();
+            }
+            else
+            {
+                envRoot = new System.Text.Json.Nodes.JsonObject();
+            }
 
-            var json = System.Text.Json.JsonSerializer.Serialize(settings, new System.Text.Json.JsonSerializerOptions 
-            { 
-                WriteIndented = true 
-            });
+            ApplyKestrelPort(envRoot, config.ServerPort);
 
-            await File.WriteAllTextAsync(configPath, json);
+            await File.WriteAllTextAsync(configPath,
+                envRoot.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+
+        /// <summary>The environment config file for the Kestrel block, anchored to the content root.</summary>
+        public static string BuildEnvironmentConfigPath(string contentRootPath, string? environment)
+        {
+            var configFileName = string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase)
+                ? "appsettings.Development.json"
+                : "appsettings.Production.json";
+            return Path.Combine(contentRootPath, configFileName);
+        }
+
+        /// <summary>Merges the secret parts of setup into a secrets.json root (other content preserved).</summary>
+        public static void ApplySecrets(System.Text.Json.Nodes.JsonObject root, SetupConfiguration config)
+        {
+            if (root["ConnectionStrings"] is not System.Text.Json.Nodes.JsonObject conn)
+            {
+                conn = new System.Text.Json.Nodes.JsonObject();
+                root["ConnectionStrings"] = conn;
+            }
+            conn["DefaultConnection"] = config.ConnectionString;
+
+            if (root["Jwt"] is not System.Text.Json.Nodes.JsonObject jwt)
+            {
+                jwt = new System.Text.Json.Nodes.JsonObject();
+                root["Jwt"] = jwt;
+            }
+            jwt["SecretKey"] = config.JwtSecretKey;
+            jwt["Issuer"] = config.JwtIssuer ?? "Conduit";
+            jwt["Audience"] = config.JwtAudience ?? "ConduitAPI";
+        }
+
+        /// <summary>Merges the non-secret Kestrel endpoint into an environment config root (other content preserved).</summary>
+        public static void ApplyKestrelPort(System.Text.Json.Nodes.JsonObject root, int serverPort)
+        {
+            if (root["Kestrel"] is not System.Text.Json.Nodes.JsonObject kestrel)
+            {
+                kestrel = new System.Text.Json.Nodes.JsonObject();
+                root["Kestrel"] = kestrel;
+            }
+            if (kestrel["Endpoints"] is not System.Text.Json.Nodes.JsonObject endpoints)
+            {
+                endpoints = new System.Text.Json.Nodes.JsonObject();
+                kestrel["Endpoints"] = endpoints;
+            }
+            if (endpoints["Http"] is not System.Text.Json.Nodes.JsonObject http)
+            {
+                http = new System.Text.Json.Nodes.JsonObject();
+                endpoints["Http"] = http;
+            }
+            http["Url"] = $"http://localhost:{serverPort}";
         }
 
         /// <summary>

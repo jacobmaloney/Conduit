@@ -44,7 +44,7 @@ namespace Conduit.Sync.Security;
 ///
 /// Portable across Win/Linux/containers per the symmetric-router decision.
 /// </summary>
-public sealed class CredentialProtector
+public class CredentialProtector
 {
     private readonly IConfiguration _config;
     private readonly ConnectionCredentialRepository _repo;
@@ -237,87 +237,11 @@ public sealed class CredentialProtector
     /// <summary>
     /// Writes the base64 key to disk and locks it down so only the owner, SYSTEM, and
     /// the local Administrators group can read it (Windows) or 0600 (POSIX). The key is
-    /// never logged.
-    ///
-    /// IMPORTANT: the restrictive permissions are applied BEFORE any key bytes are
-    /// written. ProgramData grants BUILTIN\Users read by inheritance, so writing first
-    /// and tightening after would leave a brief window in which the secret is readable
-    /// by every local user. We create the (empty) file under the locked-down descriptor,
-    /// then write into it.
+    /// never logged. ACL-first semantics live in <see cref="RestrictedFileWriter"/>
+    /// (shared with the secrets.json writes).
     /// </summary>
-    private static void WriteKeyFileRestricted(string keyPath, string keyB64)
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            try
-            {
-                var security = new FileSecurity();
-
-                // Disable inheritance and drop any inherited ACEs — start from a clean slate.
-                security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-
-                var owner = WindowsIdentity.GetCurrent().User;
-                if (owner is not null)
-                {
-                    security.AddAccessRule(new FileSystemAccessRule(
-                        owner, FileSystemRights.FullControl, AccessControlType.Allow));
-                }
-
-                var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    system, FileSystemRights.FullControl, AccessControlType.Allow));
-
-                var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    admins, FileSystemRights.FullControl, AccessControlType.Allow));
-
-                // Create the file with the locked-down ACL already in force, THEN write the key.
-                using (var fs = new FileInfo(keyPath).Create(
-                    FileMode.Create, FileSystemRights.WriteData | FileSystemRights.ReadData,
-                    FileShare.None, 4096, FileOptions.None, security))
-                {
-                    var bytes = Encoding.UTF8.GetBytes(keyB64);
-                    fs.Write(bytes, 0, bytes.Length);
-                }
-            }
-            catch (Exception ex)
-            {
-                // If we cannot lock down the file, do not leave a readable secret on disk.
-                TryDelete(keyPath);
-                throw new InvalidOperationException(
-                    $"Failed to create the credential key file with restrictive ACLs at '{keyPath}'. " +
-                    "Any partial file was removed to avoid leaving an unprotected secret on disk.",
-                    ex);
-            }
-        }
-        else
-        {
-            try
-            {
-                // Create the empty file 0600 BEFORE writing the secret, so the key bytes
-                // are never present under a group/world-readable mode.
-                using (var fs = new FileStream(keyPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                {
-                    File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                    var bytes = Encoding.UTF8.GetBytes(keyB64);
-                    fs.Write(bytes, 0, bytes.Length);
-                }
-            }
-            catch (Exception ex)
-            {
-                TryDelete(keyPath);
-                throw new InvalidOperationException(
-                    $"Failed to apply 0600 permissions to the credential key file at '{keyPath}'. " +
-                    "The file was removed to avoid leaving an unprotected secret on disk.",
-                    ex);
-            }
-        }
-    }
-
-    private static void TryDelete(string path)
-    {
-        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
-    }
+    private static void WriteKeyFileRestricted(string keyPath, string keyB64) =>
+        RestrictedFileWriter.Write(keyPath, keyB64);
 
     private static byte[] RandomBytes(int n)
     {
@@ -326,7 +250,7 @@ public sealed class CredentialProtector
         return buf;
     }
 
-    public async Task StoreAsync(Guid tenantId, string credentialName, string plaintext)
+    public virtual async Task StoreAsync(Guid tenantId, string credentialName, string plaintext)
     {
         var key = await GetKeyAsync().ConfigureAwait(false);
         var ptBytes = Encoding.UTF8.GetBytes(plaintext);
@@ -348,7 +272,7 @@ public sealed class CredentialProtector
         });
     }
 
-    public async Task<string?> RetrieveAsync(Guid tenantId, string credentialName)
+    public virtual async Task<string?> RetrieveAsync(Guid tenantId, string credentialName)
     {
         var row = await _repo.GetAsync(tenantId, credentialName);
         if (row is null) return null;

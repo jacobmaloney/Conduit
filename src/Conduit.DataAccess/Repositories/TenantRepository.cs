@@ -17,7 +17,7 @@ namespace Conduit.DataAccess.Repositories
 
         public TenantRepository(DatabaseConfig config) : base(config) { }
 
-        public async Task<List<Tenant>> GetAllAsync(bool includeInactive = false)
+        public virtual async Task<List<Tenant>> GetAllAsync(bool includeInactive = false)
         {
             var sql = includeInactive
                 ? "SELECT * FROM Tenants ORDER BY Name"
@@ -36,7 +36,7 @@ namespace Conduit.DataAccess.Repositories
                 "SELECT * FROM Tenants WHERE Slug = @Slug",
                 new { Slug = slug });
 
-        public async Task<Tenant> CreateAsync(Tenant tenant)
+        public virtual async Task<Tenant> CreateAsync(Tenant tenant)
         {
             if (tenant.Id == Guid.Empty) tenant.Id = Guid.NewGuid();
             tenant.Created = DateTime.UtcNow;
@@ -71,7 +71,7 @@ namespace Conduit.DataAccess.Repositories
         }
 
         /// <summary>
-        /// Sets the LegalHold flag in isolation — does NOT touch any other column.
+        /// Sets the LegalHold flag in isolation â€” does NOT touch any other column.
         /// Called by the toggle on the Connected Systems card. The caller is expected
         /// to audit-log the change since the repo doesn't see the operator context.
         /// </summary>
@@ -97,7 +97,7 @@ namespace Conduit.DataAccess.Repositories
         }
 
         /// <summary>
-        /// Soft-delete by default — flips IsActive=0 so existing FKs stay valid.
+        /// Soft-delete by default â€” flips IsActive=0 so existing FKs stay valid.
         /// The Default tenant cannot be deleted.
         /// </summary>
         public async Task<bool> DeactivateAsync(Guid id)
@@ -111,7 +111,7 @@ namespace Conduit.DataAccess.Repositories
 
         /// <summary>
         /// Per-tenant data wipe: removes all Users and Groups (with every FK
-        /// dependent — memberships, role assignments, emails, phones, addresses)
+        /// dependent â€” memberships, role assignments, emails, phones, addresses)
         /// scoped to the supplied tenant. The Connected System row itself stays
         /// alive, as do its ApiTokens and SqlAccounts. Single transaction;
         /// rolls back cleanly on failure. The Default tenant is exempt only
@@ -172,7 +172,7 @@ namespace Conduit.DataAccess.Repositories
 
         /// <summary>
         /// Hard delete with full cascade. Removes the Connected System and every row
-        /// that references it — users, groups, group memberships, user emails / phone
+        /// that references it â€” users, groups, group memberships, user emails / phone
         /// numbers / addresses / role assignments, API tokens, and SqlAccounts. Refuses
         /// to delete the seed Default tenant. The whole operation runs in a single
         /// transaction so a mid-step failure rolls back cleanly.
@@ -181,7 +181,7 @@ namespace Conduit.DataAccess.Repositories
         /// to a user being deleted in tenant A; a group in B owned by a user in A) are
         /// nulled first so the cascade doesn't trip self-FKs.
         /// </summary>
-        public async Task<bool> DeleteAsync(Guid id)
+        public virtual async Task<bool> DeleteAsync(Guid id)
         {
             if (id == DefaultTenantId) return false;
             if (await IsOnLegalHoldAsync(id)) return false;
@@ -189,13 +189,13 @@ namespace Conduit.DataAccess.Repositories
             var p = new DynamicParameters();
             p.Add("Id", id);
 
-            // CreateConnection() already opens the connection — don't call Open() again
+            // CreateConnection() already opens the connection â€” don't call Open() again
             // or SqlConnection throws "connection's current state is open."
             using var connection = CreateConnection();
             using var tx = connection.BeginTransaction();
             try
             {
-                // Cross-tenant FK cleanup first — null out references pointing AT this
+                // Cross-tenant FK cleanup first â€” null out references pointing AT this
                 // tenant's users/groups from rows that live elsewhere.
                 await connection.ExecuteAsync(@"
                     UPDATE Users
@@ -247,7 +247,7 @@ namespace Conduit.DataAccess.Repositories
         /// match SQL Server's default collation; the SinkConnectionCredentialMap key
         /// collision is checked separately by the caller against the sanitized form.
         /// </summary>
-        public async Task<bool> NameOrSlugInUseByOtherAsync(string newName, Guid excludeTenantId)
+        public virtual async Task<bool> NameOrSlugInUseByOtherAsync(string newName, Guid excludeTenantId)
         {
             var count = await ExecuteScalarAsync<int>(@"
                 SELECT COUNT(*)
@@ -260,10 +260,10 @@ namespace Conduit.DataAccess.Repositories
 
         /// <summary>
         /// Self-service connection rename. ONE Conduit-local transaction that, atomically:
-        ///   1. Tenants.Name + Tenants.Slug → new name (Slug == Name convention).
-        ///   2. SinkConnectionCredentialMap.SourceConnectionName → the new sanitized key,
+        ///   1. Tenants.Name + Tenants.Slug â†’ new name (Slug == Name convention).
+        ///   2. SinkConnectionCredentialMap.SourceConnectionName â†’ the new sanitized key,
         ///      migrating the OLD key row in place (UPDATE, never delete).
-        ///   3. SyncProjects.Name / .Description → exact-substring replace of the old
+        ///   3. SyncProjects.Name / .Description â†’ exact-substring replace of the old
         ///      display name, preserving suffixes, scoped to this tenant.
         /// Tenants.Domain and SyncRunLogs history are deliberately untouched.
         ///
@@ -290,7 +290,7 @@ namespace Conduit.DataAccess.Repositories
             try
             {
                 // Optimistic-concurrency: the row's CURRENT Name is the authoritative
-                // scope predicate. If the supplied old name no longer matches, abort —
+                // scope predicate. If the supplied old name no longer matches, abort â€”
                 // the connection was renamed/changed out from under this operator.
                 var current = await connection.QuerySingleOrDefaultAsync<Tenant>(
                     "SELECT * FROM Tenants WHERE Id = @Id",
@@ -301,7 +301,7 @@ namespace Conduit.DataAccess.Repositories
                     throw new InvalidOperationException(
                         "Connection name changed since this rename was started; refresh and retry.");
 
-                // 1) Tenants — scoped by Id AND exact old Name. Must touch exactly 1 row.
+                // 1) Tenants â€” scoped by Id AND exact old Name. Must touch exactly 1 row.
                 var tenantRows = await connection.ExecuteAsync(@"
                     UPDATE Tenants
                        SET Name = @NewName,
@@ -314,7 +314,7 @@ namespace Conduit.DataAccess.Repositories
                     throw new InvalidOperationException(
                         $"Tenant rename affected {tenantRows} rows (expected 1); rolled back.");
 
-                // 2) SinkConnectionCredentialMap — migrate the old key in place. Only act
+                // 2) SinkConnectionCredentialMap â€” migrate the old key in place. Only act
                 //    when the key actually changes and the new key isn't already present
                 //    for THIS tenant (idempotent). Cross-tenant collision is pre-checked
                 //    by the caller; we additionally guard here against re-pointing another
@@ -346,7 +346,7 @@ namespace Conduit.DataAccess.Repositories
                         }, tx);
                 }
 
-                // 3) SyncProjects — exact-substring replace of the old display name in
+                // 3) SyncProjects â€” exact-substring replace of the old display name in
                 //    Name and Description, scoped to this tenant. REPLACE only rewrites
                 //    rows that actually contain the substring, so suffixes are preserved.
                 var projectRows = 0;
@@ -378,11 +378,11 @@ namespace Conduit.DataAccess.Repositories
 
         /// <summary>
         /// Stamps the V30 entitlement columns after a successful agent enrollment
-        /// handshake. The entitlement GATE itself was removed at 35f0a19 — this stamp
+        /// handshake. The entitlement GATE itself was removed at 35f0a19 â€” this stamp
         /// is defensive future-proofing only, so a re-enabled gate would treat
         /// enrolled connections as already validated.
         /// </summary>
-        public async Task<bool> StampIcEntitlementAsync(Guid id, string baseUrl)
+        public virtual async Task<bool> StampIcEntitlementAsync(Guid id, string baseUrl)
         {
             var rows = await ExecuteAsync(@"
                 UPDATE Tenants
