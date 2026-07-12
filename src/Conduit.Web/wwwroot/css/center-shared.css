@@ -2358,3 +2358,290 @@
 .card-header-accent-success {
     border-left: 4px solid var(--color-success, #22c55e);
 }
+
+/* ==========================================================================
+   CENTURYCITY.DESIGN - WARM-PAPER CONVERSION (scoped to .cc-site)
+   --------------------------------------------------------------------------
+   This shared sheet is loaded globally (dark) AND per-page. Everything above
+   stays dark for consumers that are NOT scoped. A page opts into warm paper by
+   carrying .cc-site (+ HeadContent load of centurycity.css / -ic-scope.css),
+   exactly like the shipped Governance / login / landing surfaces. The scope
+   guard (centurycity-ic-scope.css) already re-points --color-surface-card,
+   --color-text-primary/secondary, --color-border, --panel, --surface-inset,
+   --border and the status tokens under .cc-site, so every token-driven rule
+   above auto-converts by inheritance. The blocks below finish the job:
+     1. remap the remaining IC tokens this sheet consumes (primary/accent/
+        gradient/tertiary/card-bg/table-header/category-card/*-subtle), and
+     2. override the rules that paint HARDCODED literals (unreachable by a
+        token remap).
+   Off-palette collapses to the nearest editorial token, no new hues:
+     indigo/blue -> --color-info,  purple -> --color-gold,  teal/cyan ->
+     --color-cyan-deep (+ alpha tints),  amber/orange -> --color-warning,
+     green -> --color-success,  red -> --color-danger,  neutral -> ink/panel.
+   Single-sourced in the brand repo; IC (and Conduit) copy this at build time.
+   Because everything is .cc-site-scoped, Conduit + unscoped IC pages are
+   visually unchanged; only pages that opt in via .cc-site go warm paper.
+   ========================================================================== */
+
+.cc-site {
+    --center-accent:          var(--color-cyan-deep);
+    --center-gradient-start:  var(--color-cyan-deep);
+    --center-gradient-end:    #0b5f75;
+
+    --color-primary:      var(--color-cyan-deep);
+    --color-primary-50:   rgba(14, 116, 144, 0.06);
+    --color-primary-100:  rgba(14, 116, 144, 0.12);
+
+    --color-text-tertiary: var(--color-ink-3);
+    --text-tertiary:       var(--color-ink-3);
+    --color-surface-hover: var(--color-panel);
+    --color-surface-inset: var(--color-panel);
+    --card-bg:             var(--color-surface);
+    --color-border-default: var(--color-line);
+    --table-header-bg:     var(--color-panel);
+
+    --category-card-selected-bg:     rgba(14, 116, 144, 0.08);
+    --category-card-selected-border: var(--color-cyan-deep);
+    --category-card-icon-bg:         rgba(14, 116, 144, 0.10);
+
+    --danger-subtle:  rgba(180, 35, 24, 0.07);
+    --warning-subtle: rgba(180, 83, 9, 0.09);
+}
+
+/* Per-center hue: keep each center's identity on-palette (compliance/roles/
+   communication carried indigo/purple -> gold; system -> success; config ->
+   info; organization/processing -> warning; intelligence/process/catalog stay
+   teal). Adjacent centers never share a surface, so a single hue each is safe. */
+.cc-site.center-theme-system      { --center-accent: var(--color-success);   --center-gradient-start: var(--color-success);   --center-gradient-end: #0a5c40; }
+.cc-site.center-theme-config      { --center-accent: var(--color-info);      --center-gradient-start: var(--color-info);      --center-gradient-end: #16457c; }
+.cc-site.center-theme-compliance,
+.cc-site.center-theme-roles       { --center-accent: var(--color-gold-deep); --center-gradient-start: var(--color-gold);      --center-gradient-end: var(--color-gold-deep); }
+.cc-site.center-theme-communication { --center-accent: var(--color-gold-deep); --center-gradient-start: var(--color-gold);    --center-gradient-end: var(--color-gold-deep); }
+.cc-site.center-theme-organization,
+.cc-site.center-theme-processing  { --center-accent: var(--color-warning);   --center-gradient-start: var(--color-warning);   --center-gradient-end: #8a5a08; }
+
+/* ---- Stat cards ---------------------------------------------------------- */
+.cc-site .stat-card-info    { border-color: rgba(29, 93, 168, 0.30);  border-left-color: var(--color-info);    background: linear-gradient(135deg, rgba(29, 93, 168, 0.06) 0%, var(--color-surface) 100%); }
+.cc-site .stat-card-info .stat-number    { color: var(--color-info); }
+.cc-site .stat-card-danger  { border-color: rgba(180, 35, 24, 0.30);  border-left-color: var(--color-danger);  background: linear-gradient(135deg, rgba(180, 35, 24, 0.06) 0%, var(--color-surface) 100%); }
+.cc-site .stat-card-danger .stat-number  { color: var(--color-danger); }
+.cc-site .stat-card-warning { border-color: rgba(180, 83, 9, 0.30);   border-left-color: var(--color-warning); background: linear-gradient(135deg, rgba(180, 83, 9, 0.06) 0%, var(--color-surface) 100%); }
+.cc-site .stat-card-warning .stat-number { color: var(--color-warning); }
+.cc-site .stat-card-success { border-color: rgba(14, 124, 86, 0.30);  border-left-color: var(--color-success); background: linear-gradient(135deg, rgba(14, 124, 86, 0.06) 0%, var(--color-surface) 100%); }
+.cc-site .stat-card-success .stat-number { color: var(--color-success); }
+
+/* ---- Edit-mode panels (amber -> warning) --------------------------------- */
+.cc-site .expandable-panel.editing { box-shadow: 0 0 0 2px var(--color-warning), 0 4px 20px rgba(180, 83, 9, 0.18); }
+.cc-site .expandable-panel.editing .panel-header { background: rgba(180, 83, 9, 0.08); border-color: var(--color-warning); }
+.cc-site .expandable-panel.editing .card-tab.active { color: var(--color-warning); border-bottom-color: var(--color-warning) !important; }
+.cc-site .expandable-panel.editing .card-tab:hover  { color: var(--color-warning); }
+
+/* ---- Score circles ------------------------------------------------------- */
+.cc-site .score-circle.score-high   { background: linear-gradient(135deg, #159168 0%, var(--color-success) 100%); }
+.cc-site .score-circle.score-medium { background: linear-gradient(135deg, #c9700f 0%, var(--color-warning) 100%); }
+.cc-site .score-circle.score-low    { background: linear-gradient(135deg, #c93a2c 0%, var(--color-danger) 100%); }
+
+/* ---- Feature-card hover glow --------------------------------------------- */
+.cc-site .feature-card:hover { box-shadow: 0 5px 20px rgba(14, 116, 144, 0.15); }
+
+/* ---- Member-type avatars (user/info, computer/success, group/gold, other/muted) */
+.cc-site .member-avatar.user     { background: linear-gradient(135deg, #2f76c4 0%, var(--color-info) 100%); }
+.cc-site .member-avatar.computer { background: linear-gradient(135deg, #159168 0%, var(--color-success) 100%); }
+.cc-site .member-avatar.group    { background: linear-gradient(135deg, var(--color-gold-hi) 0%, var(--color-gold) 100%); }
+.cc-site .member-avatar.other    { background: linear-gradient(135deg, var(--color-muted) 0%, var(--color-slate) 100%); }
+.cc-site .member-card:hover { box-shadow: 0 4px 12px rgba(11, 20, 36, 0.08); }
+
+/* ---- Member-card status accents ------------------------------------------ */
+.cc-site .member-card.status-pending   { border-left-color: var(--color-warning); }
+.cc-site .member-card.status-approved  { border-left-color: var(--color-success); }
+.cc-site .member-card.status-denied    { border-left-color: var(--color-danger); }
+.cc-site .member-card.status-cancelled { border-left-color: var(--color-muted); }
+.cc-site .member-card.status-expired   { border-left-color: var(--color-gold); }
+
+/* ---- Tabs / attributes viewer ------------------------------------------- */
+.cc-site .card-tabs { border-bottom-color: rgba(14, 116, 144, 0.20); }
+.cc-site .attribute-item { background: var(--color-panel); }
+.cc-site .attribute-value code { background: rgba(14, 116, 144, 0.08); border-color: rgba(14, 116, 144, 0.18); color: var(--color-cyan-deep); }
+
+/* ---- Center-list scrollbar ---------------------------------------------- */
+.cc-site .center-list-scrollable::-webkit-scrollbar-track { background: var(--color-panel); }
+.cc-site .center-list-scrollable::-webkit-scrollbar-thumb { background: rgba(14, 116, 144, 0.25); }
+.cc-site .center-list-scrollable::-webkit-scrollbar-thumb:hover { background: rgba(14, 116, 144, 0.40); }
+
+/* ---- Object header border ----------------------------------------------- */
+.cc-site .object-header-border-view { border-bottom-color: rgba(14, 116, 144, 0.28); }
+.cc-site .object-header-border-edit { border-bottom-color: rgba(180, 83, 9, 0.35); }
+
+/* ---- Sync-project / workflow cards -------------------------------------- */
+.cc-site .sync-project-card { border-color: rgba(14, 116, 144, 0.18); }
+.cc-site .sync-project-card:hover { box-shadow: 0 4px 12px rgba(11, 20, 36, 0.08); border-color: rgba(14, 116, 144, 0.30); }
+.cc-site .workflow-step-card { border-color: rgba(14, 116, 144, 0.22); }
+.cc-site .workflow-step-card:hover { box-shadow: 0 2px 8px rgba(11, 20, 36, 0.08); border-color: rgba(14, 116, 144, 0.38); }
+.cc-site .workflow-step-card .step-details code { background: rgba(14, 116, 144, 0.08); color: var(--color-cyan-deep); }
+.cc-site .workflow-step-card .btn-outline-secondary { background-color: var(--color-panel); border-color: rgba(14, 116, 144, 0.18); }
+.cc-site .workflow-step-card .btn-outline-secondary:hover { background-color: rgba(14, 116, 144, 0.08); border-color: rgba(14, 116, 144, 0.32); }
+.cc-site .workflow-step-card .btn-outline-danger { background-color: rgba(180, 35, 24, 0.06); border-color: var(--color-danger); color: var(--color-danger); }
+.cc-site .workflow-step-card .btn-outline-danger:hover { background-color: rgba(180, 35, 24, 0.14); border-color: var(--color-danger); color: #8a1a12; }
+.cc-site .workflow-step-card .btn-success { background-color: var(--color-success); border-color: #0a5c40; }
+.cc-site .workflow-step-card .btn-success:hover { background-color: #0a5c40; border-color: #084a34; }
+.cc-site .workflow-step-card .btn-primary { background-color: var(--color-info); border-color: #16457c; }
+.cc-site .workflow-step-card .btn-primary:hover { background-color: #16457c; border-color: #113863; }
+.cc-site .workflow-step-card .btn-outline-primary { background-color: rgba(14, 116, 144, 0.04); border-color: var(--color-info); color: var(--color-info); }
+.cc-site .workflow-step-card .btn-outline-primary:hover { background-color: var(--color-info); border-color: #16457c; color: #fff; }
+.cc-site .workflow-step-card .btn-warning,
+.cc-site .workflow-step-card .btn-outline-warning { background-color: rgba(180, 83, 9, 0.14); border-color: var(--color-warning); color: var(--color-warning); }
+.cc-site .workflow-step-card .btn-warning:hover,
+.cc-site .workflow-step-card .btn-outline-warning:hover { background-color: rgba(180, 83, 9, 0.24); border-color: #8a5a08; color: #6d4606; }
+.cc-site .workflow-step-card .btn-info,
+.cc-site .workflow-step-card .btn-outline-info { background-color: rgba(14, 116, 144, 0.14); border-color: var(--color-cyan-deep); color: var(--color-cyan-deep); }
+.cc-site .workflow-step-card .btn-info:hover,
+.cc-site .workflow-step-card .btn-outline-info:hover { background-color: rgba(14, 116, 144, 0.24); border-color: #0b5f75; color: #0b5f75; }
+
+/* ---- Add-step / add-workflow cards (amber -> warning) -------------------- */
+.cc-site .add-step-card { background: rgba(180, 83, 9, 0.06); border-color: var(--color-warning); }
+.cc-site .add-step-card:hover { border-color: #8a5a08; box-shadow: 0 2px 8px rgba(180, 83, 9, 0.15); }
+.cc-site .add-step-title { color: var(--color-warning); }
+.cc-site .add-step-title i { color: var(--color-warning); }
+.cc-site .add-step-card .form-label { color: var(--color-ink-2); }
+.cc-site .add-step-card .btn-primary { background: linear-gradient(135deg, var(--color-warning) 0%, #8a5a08 100%); }
+.cc-site .add-step-card .btn-primary:hover { background: linear-gradient(135deg, #8a5a08 0%, #6d4606 100%); }
+.cc-site .add-workflow-card { background: rgba(180, 83, 9, 0.06); border-color: var(--color-warning); }
+.cc-site .add-workflow-card:hover { border-color: #8a5a08; box-shadow: 0 4px 12px rgba(180, 83, 9, 0.18); }
+.cc-site .add-workflow-title { color: var(--color-warning); }
+
+/* ---- Workflow-section card ---------------------------------------------- */
+.cc-site .workflow-section-card { border-color: rgba(14, 116, 144, 0.30); }
+.cc-site .workflow-section-card:hover { border-color: var(--color-cyan-deep); box-shadow: 0 2px 8px rgba(14, 116, 144, 0.15); }
+.cc-site .workflow-section-card .workflow-header { background: linear-gradient(135deg, rgba(14, 116, 144, 0.08) 0%, rgba(14, 116, 144, 0.03) 100%); border-bottom-color: rgba(14, 116, 144, 0.14); }
+.cc-site .workflow-section-card .workflow-body { background: var(--color-panel); }
+
+/* ---- Sync badges (semantic pills) --------------------------------------- */
+.cc-site .sync-project-badges { border-top-color: rgba(14, 116, 144, 0.10); border-bottom-color: rgba(14, 116, 144, 0.10); }
+.cc-site .sync-badge-connection { background: rgba(29, 93, 168, 0.14); color: var(--color-info); }
+.cc-site .sync-badge-workflows  { background: rgba(29, 93, 168, 0.14); color: var(--color-info); }
+.cc-site .sync-badge-enabled    { background: rgba(14, 124, 86, 0.14); color: var(--color-success); }
+.cc-site .sync-badge-disabled   { background: rgba(143, 156, 179, 0.18); color: var(--color-slate); }
+.cc-site .sync-badge-scheduled,
+.cc-site .sync-badge-running    { background: rgba(180, 83, 9, 0.14); color: var(--color-warning); }
+
+/* ---- Action buttons ------------------------------------------------------ */
+.cc-site .btn-run { background: linear-gradient(135deg, var(--color-success) 0%, #0a5c40 100%); }
+.cc-site .btn-run:hover:not(:disabled) { background: linear-gradient(135deg, #0a5c40 0%, #084a34 100%); box-shadow: 0 2px 8px rgba(14, 124, 86, 0.35); }
+.cc-site .btn-run:disabled { background: var(--color-panel); }
+.cc-site .btn-schedule { background: var(--color-panel); border-color: rgba(14, 116, 144, 0.14); }
+.cc-site .btn-schedule:hover { background: rgba(14, 116, 144, 0.06); border-color: rgba(14, 116, 144, 0.28); }
+.cc-site .btn-history { background: linear-gradient(135deg, var(--color-info) 0%, #16457c 100%); }
+.cc-site .btn-history:hover { background: linear-gradient(135deg, #16457c 0%, #113863 100%); box-shadow: 0 2px 8px rgba(29, 93, 168, 0.35); }
+.cc-site .btn-manage { background: var(--color-panel); border-color: rgba(14, 116, 144, 0.14); }
+.cc-site .btn-delete { background: rgba(180, 35, 24, 0.08); border-color: rgba(180, 35, 24, 0.24); color: var(--color-danger); }
+.cc-site .btn-delete:hover:not(:disabled) { background: rgba(180, 35, 24, 0.15); border-color: var(--color-danger); }
+.cc-site .sync-project-actions .btn-info { background: linear-gradient(135deg, var(--color-cyan-deep) 0%, #0b5f75 100%); }
+.cc-site .sync-project-actions .btn-info:hover { background: linear-gradient(135deg, #0b5f75 0%, #094e60 100%); box-shadow: 0 2px 8px rgba(14, 116, 144, 0.35); }
+
+/* ---- Sync stat pills / summary icons ------------------------------------ */
+.cc-site .sync-stat-total   { background: rgba(14, 116, 144, 0.14); color: var(--color-cyan-deep); }
+.cc-site .sync-stat-success { background: rgba(14, 124, 86, 0.14); color: var(--color-success); }
+.cc-site .sync-stat-failed  { background: rgba(180, 35, 24, 0.14); color: var(--color-danger); }
+.cc-site .sync-summary-card { border-color: rgba(14, 116, 144, 0.18); }
+.cc-site .sync-summary-icon.blue   { background: rgba(29, 93, 168, 0.14); color: var(--color-info); }
+.cc-site .sync-summary-icon.green  { background: rgba(14, 124, 86, 0.14); color: var(--color-success); }
+.cc-site .sync-summary-icon.yellow { background: rgba(180, 83, 9, 0.14); color: var(--color-warning); }
+.cc-site .sync-summary-icon.purple { background: rgba(201, 162, 39, 0.16); color: var(--color-gold-deep); }
+.cc-site .sync-summary-icon.red    { background: rgba(180, 35, 24, 0.14); color: var(--color-danger); }
+
+/* ---- Compact list / step boxes ------------------------------------------ */
+.cc-site .compact-list-item { background: var(--color-panel); border-color: rgba(14, 116, 144, 0.18); }
+.cc-site .compact-list-item:hover { border-color: rgba(14, 116, 144, 0.30); box-shadow: 0 1px 3px rgba(11, 20, 36, 0.06); }
+.cc-site .step-box-tags { background: var(--color-panel); border-color: rgba(14, 116, 144, 0.18); }
+
+/* ---- Person-matching progress (amber -> warning, states) ---------------- */
+.cc-site .step-matching-container { background: rgba(180, 83, 9, 0.06); border-color: rgba(180, 83, 9, 0.18); }
+.cc-site .step-matching-label   { color: var(--color-warning); }
+.cc-site .step-matching-label i { color: var(--color-warning); }
+.cc-site .step-matching-progress { background: rgba(180, 83, 9, 0.12); border-color: rgba(180, 83, 9, 0.30); }
+.cc-site .step-matching-progress-bar { background: linear-gradient(135deg, var(--color-warning) 0%, #8a5a08 100%); }
+.cc-site .step-matching-progress-bar.pending { background: repeating-linear-gradient(-45deg, rgba(180,83,9,0.30), rgba(180,83,9,0.30) 8px, rgba(180,83,9,0.12) 8px, rgba(180,83,9,0.12) 16px); }
+.cc-site .step-matching-progress-bar.completed { background: linear-gradient(135deg, #159168 0%, var(--color-success) 100%); }
+.cc-site .step-matching-progress-bar.failed    { background: linear-gradient(135deg, #c93a2c 0%, var(--color-danger) 100%); }
+.cc-site .step-box-matching { background: rgba(180, 83, 9, 0.06); border-color: rgba(180, 83, 9, 0.18); color: var(--color-warning); }
+.cc-site .step-box-matching i { color: var(--color-warning); }
+
+/* ---- Governance step badge (purple -> gold) ----------------------------- */
+.cc-site .step-badge-governance { background-color: var(--color-gold-deep); color: #fff; }
+
+/* ---- Bulk-selection toolbar (dark bar -> editorial surface) -------------- */
+.cc-site .bulk-selection-toolbar { background: var(--color-panel-2); color: var(--color-ink); border: 1px solid var(--color-line); box-shadow: 0 4px 20px rgba(11, 20, 36, 0.10); }
+.cc-site .bulk-selection-toolbar .selection-count strong { color: var(--color-cyan-deep); }
+
+/* ---- Data-quality badges ------------------------------------------------- */
+.cc-site .data-quality-badge.quality-excellent { background: rgba(14, 124, 86, 0.14); color: var(--color-success); }
+.cc-site .data-quality-badge.quality-good      { background: rgba(29, 93, 168, 0.14); color: var(--color-info); }
+.cc-site .data-quality-badge.quality-fair      { background: rgba(180, 83, 9, 0.14); color: var(--color-warning); }
+.cc-site .data-quality-badge.quality-poor      { background: rgba(180, 35, 24, 0.14); color: var(--color-danger); }
+
+/* ---- Last-sync badge ----------------------------------------------------- */
+.cc-site .last-sync-badge { background: var(--color-panel); }
+.cc-site .last-sync-badge.sync-recent { color: var(--color-success); background: rgba(14, 124, 86, 0.14); }
+.cc-site .last-sync-badge.sync-stale  { color: var(--color-warning); background: rgba(180, 83, 9, 0.14); }
+
+/* ---- Sign-in / license tab shared --------------------------------------- */
+.cc-site .tab-badge-warning { background-color: var(--color-warning); color: #fff; }
+.cc-site .tab-badge-danger  { background-color: var(--color-danger); color: #fff; }
+
+/* ---- Analytics bar chart / outliers / usage bar ------------------------- */
+.cc-site .bar-track { background: rgba(11, 20, 36, 0.08); }
+.cc-site .outlier-badge { background: rgba(180, 35, 24, 0.16); color: var(--color-danger); }
+.cc-site .usage-bar-fill.bg-warning { background-color: rgba(180, 83, 9, 0.30) !important; color: var(--color-warning); }
+.cc-site .usage-bar-fill.bg-danger  { background-color: rgba(180, 35, 24, 0.40) !important; color: #fff; }
+.cc-site .usage-bar-fill.bg-success { background-color: rgba(14, 124, 86, 0.35) !important; color: #fff; }
+
+/* ==========================================================================
+   GOVERNANCE-V2 SURFACES (ComplianceCenter / ViolationsDashboard /
+   Certifications / GovernanceHome). These pages also load governance-v2.css,
+   whose bespoke --gv-* namespace + hardcoded literals are unreachable by the
+   token remap above. Same warm-paper conversion shipped page-scoped on
+   GovernanceHome (48429437), promoted here so every governance-v2 consumer
+   converts coherently once it carries .cc-site. Scoped to .cc-site.governance-v2.
+   ========================================================================== */
+.cc-site.governance-v2 {
+    --gv-bg:       var(--color-bg);
+    --gv-panel:    var(--color-panel);
+    --gv-panel-2:  var(--color-panel-2);
+    --gv-panel-hi: var(--color-surface);
+    --gv-border:   var(--color-line);
+    --gv-border-2: var(--color-line-2);
+    --gv-text:     var(--color-ink);
+    --gv-text-2:   var(--color-ink-2);
+    --gv-text-3:   var(--color-ink-3);
+    --gv-muted:    var(--color-muted);
+    --gv-sec:      var(--color-cyan-deep);
+    --gv-sec-soft: rgba(14, 116, 144, 0.10);
+    --gv-success:  var(--color-success);
+    --gv-warning:  var(--color-warning);
+    --gv-danger:   var(--color-danger);
+    --gv-info:     var(--color-cyan-deep);
+}
+.cc-site.governance-v2 .role-tab.on .num { border-color: rgba(14, 116, 144, 0.30); }
+.cc-site.governance-v2 .ai-ribbon {
+    border-color: rgba(14, 116, 144, 0.28);
+    background: linear-gradient(90deg, rgba(14, 116, 144, 0.10), rgba(14, 116, 144, 0.02) 60%, transparent);
+}
+.cc-site.governance-v2 .stage-chip.on { border-color: rgba(14, 116, 144, 0.30); }
+.cc-site.governance-v2 .ai-suggest { border-color: rgba(14, 116, 144, 0.28); }
+.cc-site.governance-v2 .cat-item.active { border-color: rgba(14, 116, 144, 0.30); }
+.cc-site.governance-v2 .cat-item.active .cat-sub { color: var(--color-cyan-deep); }
+.cc-site.governance-v2 .gv-chip.tone-indigo  { color: var(--color-info);    background: rgba(29, 93, 168, 0.10); border-color: rgba(29, 93, 168, 0.30); }
+.cc-site.governance-v2 .gv-chip.tone-success { color: var(--color-success); background: rgba(14, 124, 86, 0.10); border-color: rgba(14, 124, 86, 0.30); }
+.cc-site.governance-v2 .gv-chip.tone-warning { color: var(--color-warning); background: rgba(180, 83, 9, 0.10);  border-color: rgba(180, 83, 9, 0.30); }
+.cc-site.governance-v2 .gv-chip.tone-danger  { color: var(--color-danger);  background: rgba(180, 35, 24, 0.10); border-color: rgba(180, 35, 24, 0.30); }
+.cc-site.governance-v2 .stage-pill.launch  { color: var(--color-info);      background: rgba(29, 93, 168, 0.10); border-color: rgba(29, 93, 168, 0.28); }
+.cc-site.governance-v2 .stage-pill.active  { color: var(--color-success);   background: rgba(14, 124, 86, 0.10); border-color: rgba(14, 124, 86, 0.28); }
+.cc-site.governance-v2 .stage-pill.review  { color: var(--color-warning);   background: rgba(180, 83, 9, 0.10);  border-color: rgba(180, 83, 9, 0.28); }
+.cc-site.governance-v2 .stage-pill.closing { color: var(--color-gold-deep); background: rgba(201, 162, 39, 0.12); border-color: rgba(201, 162, 39, 0.35); }
+.cc-site.governance-v2 .roster .rnm.late { color: var(--color-danger); }
+.cc-site.governance-v2 .kpi-row .kpi .kpi-num.danger { color: var(--color-danger); }
+.cc-site.governance-v2 .heat-cell.l1 { background: rgba(14, 116, 144, 0.12); }
+.cc-site.governance-v2 .heat-cell.l2 { background: rgba(14, 116, 144, 0.28); }
+.cc-site.governance-v2 .heat-cell.l3 { background: rgba(14, 116, 144, 0.45); }
+.cc-site.governance-v2 .heat-cell.l4 { background: rgba(14, 116, 144, 0.68); }
+.cc-site.governance-v2 .heat-cell.l5 { background: rgba(14, 116, 144, 0.90); }
