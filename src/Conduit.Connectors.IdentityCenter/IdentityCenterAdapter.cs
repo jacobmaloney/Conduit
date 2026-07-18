@@ -74,7 +74,11 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
             Description = "IdentityCenter base URL + admin-scoped API key.",
             Fields = new[]
             {
-                new CredentialFieldSpec { Key = "BaseUrl", Label = "Base URL", Placeholder = "https://identitycenter.local:7048", IsRequired = true },
+                new CredentialFieldSpec
+                {
+                    Key = "BaseUrl", Label = "Base URL", Placeholder = "https://identitycenter.local:7048", IsRequired = true,
+                    Help = "On-prem: https://host:7048. Cloud/SaaS: your tenant API URL (e.g. https://api.certification-center.com). Tip: enroll with a code (--enroll-url/--enroll-code) and this is filled in automatically."
+                },
                 new CredentialFieldSpec
                 {
                     Key = "ApiKey", Label = "API Key (required)", IsRequired = true, IsSecret = true,
