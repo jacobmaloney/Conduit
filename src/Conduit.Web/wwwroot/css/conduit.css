@@ -4048,3 +4048,19 @@ details summary::-webkit-details-marker { color: var(--accent); }
 .ic-content .sync-badge-scheduled,
 .ic-content .sync-badge-running   { background: rgba(180, 83, 9, 0.12); color: #b45309; }
 .ic-content .sync-dir-tag { background: rgba(11, 20, 36, 0.07); color: #475569; }
+
+/* Data-table header: ic-design-system.css paints thead th dark navy
+   (rgba(18,32,56,0.9)) — correct for IC's dark default, wrong on Conduit's
+   paper pages (SCIM Endpoints table, etc.). Flip to a light paper header;
+   the header text stays --text-tertiary slate, readable on the light band. */
+.ic-content table thead th,
+.ic-content .table thead th,
+.ic-content table th,
+.ic-content .card table th,
+.ic-content .card-body table th {
+  background: #f0ede6 !important;
+}
+
+/* Give pages breathing room at the bottom so action buttons (Save / Test
+   Connection, etc.) aren't flush against the very bottom of the viewport. */
+.ic-content main { padding-bottom: 2.5rem; }
