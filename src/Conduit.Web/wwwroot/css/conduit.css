@@ -3941,3 +3941,56 @@ details summary::-webkit-details-marker { color: var(--accent); }
 .ops-section .btn-schedule:hover {
     border-color: rgba(249, 115, 22, 0.25);
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   WARM-PAPER THEME for Conduit page content — matches IdentityCenter.
+   Conduit adopted IC's design system but not IC's paper retint layer, so the
+   dark-first palette tokens (Conduit's --panel/--bg/--text AND the IC --color-*
+   vocabulary used by the shared components) stayed dark on the warm-paper
+   canvas — that is why cards, KPI tiles, and secondary buttons rendered navy.
+
+   This scopes IdentityCenter's own light-theme + centurycity paper VALUES to
+   .ic-content (the page-content wrapper only — the sidebar and topbar shell are
+   already light and live OUTSIDE this element, so they are untouched). It is a
+   themed override, NOT the token source, so the single-source model is intact:
+   change --brand-primary in brand-tokens and the accent still moves everywhere.
+   Loaded from conduit.css (the last stylesheet) so it wins the cascade. */
+.ic-content {
+  /* Conduit vocabulary → paper */
+  --bg:        #faf9f6;
+  --bg-2:      #ffffff;
+  --panel:     #ffffff;
+  --panel-2:   #f4f2ec;
+  --panel-hi:  #ece9e0;
+  --surface:   #ffffff;
+  --surface-2: #f4f2ec;
+  --text:      #0f172a;
+  --text-2:    #475569;
+  --text-3:    #6b7e99;
+  --ink:       #0f172a;
+  --ink-2:     #475569;
+  --muted:     #6b7e99;
+  --muted-2:   #94a3b8;
+  --border:    rgba(11, 20, 36, 0.10);
+  --border-2:  rgba(11, 20, 36, 0.16);
+  --line:      rgba(11, 20, 36, 0.08);
+  --line-2:    rgba(11, 20, 36, 0.10);
+  --line-3:    rgba(11, 20, 36, 0.06);
+
+  /* IdentityCenter vocabulary (shared components: sync-summary-card, tables…) → paper */
+  --color-surface:        #ffffff;
+  --color-surface-card:   #ffffff;
+  --color-panel:          #f4f2ec;
+  --color-surface-inset:  #f4f2ec;
+  --color-surface-hover:  #f4f2ec;
+  --color-text-primary:   #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-tertiary:  #6b7e99;
+  --color-ink:            #0f172a;
+  --color-ink-2:          #3a4a63;
+  --color-ink-3:          #6b7e99;
+  --color-border:         #e2e8f0;
+  --color-border-default: #e2e8f0;
+  --color-line:           rgba(11, 20, 36, 0.08);
+  --color-cyan-deep:      #0e7490;
+}
