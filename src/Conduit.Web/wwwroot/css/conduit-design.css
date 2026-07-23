@@ -498,3 +498,20 @@
   color: var(--text-tertiary, #6B809E);
   padding-left: 0.85rem;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   IDENTITY — Conduit fully adopts the IdentityCenter primary (no more cyan).
+   Conduit's accent is re-pointed from its own cyan to the shared brand primary
+   (--brand-primary in brand-tokens.css, IC's #0284c7). This is an accent-only
+   override, NOT a token-source block: --accent still resolves THROUGH the
+   shared token, so editing --brand-primary in the brand repo moves both apps'
+   primary together. Placed here (loaded after brand-tokens, before conduit.css)
+   so every var(--accent) usage becomes IC's primary. IdentityCenter never loads
+   this file, so its look is unaffected. */
+:root {
+  --accent:     var(--brand-primary, #0284c7);
+  --accent-on:  #ffffff;
+  --accent-50:  rgba(2, 132, 199, 0.06);
+  --accent-100: rgba(2, 132, 199, 0.14);
+  --accent-200: rgba(2, 132, 199, 0.22);
+}
