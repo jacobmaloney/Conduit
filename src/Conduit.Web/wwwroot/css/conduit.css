@@ -1415,22 +1415,10 @@ hr { border-color: var(--border); }
   color: var(--text-3);
 }
 
-/* The Dashboard feature cards now use IC's own .surface-card + .ic-qa-icon
-   classes (see Index.razor), so they inherit the warm-paper treatment from
-   ic-design-system.css directly — no Conduit .feature-card system to keep in
-   sync. Only .feature-link (the "Manage connections ->" action link) remains
-   Conduit-owned; IC has no shared equivalent. */
-.feature-link {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 13px;
-  transition: gap .15s;
-}
-.feature-link:hover { color: var(--conduit-300); gap: 0.5rem; }
+/* The Dashboard feature cards use the brand design-system classes directly
+   (.surface-card / .surface-card-body / .ic-qa-icon / .ic-card-hdr-action from
+   ic-design-system.css) with the brand palette vars — identical to IC. No
+   Conduit-owned card or link CSS. */
 
 .stats-section {
   background: var(--bg-2);
