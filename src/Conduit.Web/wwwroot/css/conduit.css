@@ -4036,3 +4036,15 @@ details summary::-webkit-details-marker { color: var(--accent); }
   background: rgba(2, 132, 199, 0.12);
   color: #0284c7;
 }
+
+/* Sync-project flow-row badges (FROM/TO, Enabled, Scheduled, runs). The dark-
+   theme base uses light text (#60a5fa / #4ade80 / #94a3b8) that washes out on
+   paper; the readable paper variant lives under .cc-site, which Conduit doesn't
+   carry — so flip these to deep, legible colors directly. */
+.ic-content .sync-badge-connection,
+.ic-content .sync-badge-workflows { background: rgba(29, 93, 168, 0.12); color: #1d5da8; }
+.ic-content .sync-badge-enabled   { background: rgba(14, 124, 86, 0.12); color: #0e7c56; }
+.ic-content .sync-badge-disabled  { background: rgba(100, 116, 139, 0.14); color: #475569; }
+.ic-content .sync-badge-scheduled,
+.ic-content .sync-badge-running   { background: rgba(180, 83, 9, 0.12); color: #b45309; }
+.ic-content .sync-dir-tag { background: rgba(11, 20, 36, 0.07); color: #475569; }
