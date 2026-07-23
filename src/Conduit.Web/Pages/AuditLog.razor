@@ -8,20 +8,19 @@
 <PageTitle>Audit Log - Conduit</PageTitle>
 
 <div class="container-fluid">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h1>Audit Log</h1>
-            <p class="text-muted">Track all system activities and changes</p>
-        </div>
-        <div>
+    <Template1 Title="Audit Log"
+               Subtitle="Track all system activities and changes"
+               Icon="fas fa-history"
+               IconAccent="amber">
+        <PrimaryAction>
             <button class="btn btn-outline-secondary" @onclick="ToggleFilters">
                 <i class="oi oi-filter"></i> @(showFilters ? "Hide" : "Show") Filters
             </button>
             <button class="btn btn-outline-primary" @onclick="ExportLogs">
                 <i class="oi oi-data-transfer-download"></i> Export
             </button>
-        </div>
-    </div>
+        </PrimaryAction>
+    </Template1>
 
     <!-- Filters -->
     @if (showFilters)

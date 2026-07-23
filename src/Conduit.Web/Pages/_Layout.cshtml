@@ -8,6 +8,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="~/" />
+    @* Default to the adopted IdentityCenter warm-paper (light) theme unless the
+       user has explicitly stored a dark preference. Mirrors IC's _Layout so the
+       unconditional paper shell chrome (.ic-topbar / .ic-content) renders with
+       coherent dark-ink typography. Runs synchronously before first paint. *@
+    <script>if(localStorage.getItem('theme')!=='dark')document.documentElement.classList.add('light-theme');</script>
     <title>Conduit</title>
     @* Favicon stack — SVG primary (per Conduit Handoff §6.1), legacy .ico
        fallback for browsers that don't accept image/svg+xml. PNG sizes are
@@ -15,7 +20,7 @@
     <link rel="icon" type="image/svg+xml" href="~/assets/brand/conduit-mark.svg" />
     <link rel="alternate icon" href="~/favicon.ico" />
     <link rel="apple-touch-icon" href="~/assets/brand/conduit-mark-reverse.svg" />
-    <meta name="theme-color" content="#22D3EE" />
+    <meta name="theme-color" content="#FAFAF7" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -40,6 +45,11 @@
        system so its component rules layer on the cc-* base, and BEFORE
        conduit.css so Conduit-owned overrides still win where they overlap. *@
     <link href="css/center-shared.css" rel="stylesheet" />
+    @* IdentityCenter design system (ic-* shell + components). Single-sourced
+       from the brand repo at build. Loaded AFTER center-shared.css so it governs
+       the canvas + typography, and BEFORE conduit.css so Conduit component
+       overrides (.cc-*, .nav-*, .card, .btn) still win where they overlap. *@
+    <link href="css/ic-design-system.css" rel="stylesheet" />
     <link href="css/conduit.css" rel="stylesheet" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />

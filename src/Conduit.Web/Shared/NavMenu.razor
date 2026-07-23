@@ -12,22 +12,7 @@
 @inject IWebHostEnvironment Environment
 @implements IDisposable
 
-<div class="nav-wrapper">
-    <div class="nav-header">
-        <div class="nav-brand-block">
-            @* Conduit lockup — kept at the larger 72px size the user
-               explicitly upsized to earlier this session. The design source
-               shows 38px, but the user has been clear they want the mark big. *@
-            <a class="nav-brand" href="">
-                <ConduitMark Size="72" Color="var(--accent)" HubFill="var(--bg-2)" />
-                <span><b>Conduit</b></span>
-            </a>
-        </div>
-        <button class="nav-toggle" @onclick="ToggleNavMenu">
-            <span class="nav-toggle-icon"></span>
-        </button>
-    </div>
-
+<div class="ic-sidebar">
     @* SCIM-origin chrome (Open-access pill + connected-system switcher) gated to
        Development only for the directory-sync product. IC has no parallel; this
        moves it off the primary sync nav without deleting it (item 6 decision,
@@ -35,7 +20,7 @@
     @if (ShowDevChrome && OpenAccess.IsEnabled)
     {
         <a class="open-access-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
-            <i class="oi oi-warning"></i>
+            <i class="fas fa-triangle-exclamation"></i>
             <span>Open access</span>
         </a>
     }
@@ -51,7 +36,7 @@
                         <span class="ss-name">@(ActiveSystem.ActiveSystem?.Name ?? "All connections")</span>
                         <span class="ss-domain">@SubtitleFor(ActiveSystem.ActiveSystem)</span>
                     </span>
-                    <i class="oi oi-chevron-bottom ss-chev"></i>
+                    <i class="fas fa-chevron-down ss-chev"></i>
                 </button>
                 @if (switcherOpen)
                 {
@@ -81,7 +66,7 @@
                         }
                         <div class="ss-menu-divider"></div>
                         <a class="ss-menu-add" href="connected-systems" @onclick="CloseSwitcher">
-                            <i class="oi oi-plus"></i> Connect a system
+                            <i class="fas fa-plus"></i> Connect a system
                         </a>
                     </div>
                 }
@@ -90,33 +75,33 @@
         </Authorized>
     </AuthorizeView>
 
-    <nav class="nav-menu @NavMenuCssClass">
+    <nav>
         @* SYNC is the primary experience for a directory-sync pump. Dashboard is
            the landing; everything else about MOVING identities lives under the
            Synchronization Center hub (which hosts Projects / History / Schedules /
            Processing / Connections as tabs — see SynchronizationCenter.razor).
            We deliberately surface ONE Sync front door instead of five nav links
            that all open tabs of the same hub (dedup decision 2026-06-20). *@
-        <div class="nav-section nav-section-main">
-            <div class="nav-section-title">Main</div>
-            <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
-                <i class="oi oi-dashboard"></i>
+        <div class="ic-nav-group section-identity">
+            <div class="ic-nav-group-label">Main</div>
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="" Match="NavLinkMatch.All">
+                <i class="fas fa-gauge-high"></i>
                 <span>Dashboard</span>
             </NavLink>
         </div>
 
-        <div class="nav-section nav-section-sync">
-            <div class="nav-section-title">Sync</div>
+        <div class="ic-nav-group section-operations">
+            <div class="ic-nav-group-label">Sync</div>
             @* Canonical home. The hub's tabs replace the old standalone
                Sync Projects / Sync History / Schedule Manager / Processing Center
                links — those routes still resolve for deep links, they're just no
                longer a second front door (dedup, 2026-06-20). *@
-            <NavLink class="nav-item" href="synchronization-center">
-                <i class="oi oi-loop-circular"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-operations" href="synchronization-center">
+                <i class="fas fa-arrows-rotate"></i>
                 <span>Synchronization Center</span>
             </NavLink>
-            <NavLink class="nav-item" href="connected-systems">
-                <i class="oi oi-globe"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-operations" href="connected-systems">
+                <i class="fas fa-globe"></i>
                 <span>Connections</span>
             </NavLink>
         </div>
@@ -126,41 +111,41 @@
            top "Main" block into their own clearly-secondary section so the Sync
            experience reads as primary (declutter decision 2026-06-20). Still one
            click away; counts preserved. *@
-        <div class="nav-section nav-section-directory">
-            <div class="nav-section-title">Directory</div>
-            <NavLink class="nav-item" href="users">
-                <i class="oi oi-people"></i>
+        <div class="ic-nav-group section-identity">
+            <div class="ic-nav-group-label">Directory</div>
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="users">
+                <i class="fas fa-users"></i>
                 <span>Users</span>
                 @if (userCount is { } uc)
                 {
-                    <span class="nav-count" title="@CountTooltip">@uc.ToString("N0")</span>
+                    <span class="ic-nav-badge info" title="@CountTooltip">@uc.ToString("N0")</span>
                 }
             </NavLink>
-            <NavLink class="nav-item" href="groups">
-                <i class="oi oi-badge"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="groups">
+                <i class="fas fa-user-group"></i>
                 <span>Groups</span>
                 @if (groupCount is { } gc)
                 {
-                    <span class="nav-count" title="@CountTooltip">@gc.ToString("N0")</span>
+                    <span class="ic-nav-badge info" title="@CountTooltip">@gc.ToString("N0")</span>
                 }
             </NavLink>
         </div>
 
-        <div class="nav-section nav-section-tools">
-            <div class="nav-section-title">Tools</div>
+        <div class="ic-nav-group section-analytics">
+            <div class="ic-nav-group-label">Tools</div>
             @if (ActiveSystem.ActiveSystem is not null)
             {
-                <NavLink class="nav-item" href="user-generation">
-                    <i class="oi oi-people"></i>
+                <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="user-generation">
+                    <i class="fas fa-users"></i>
                     <span>Generate Users</span>
                 </NavLink>
-                <NavLink class="nav-item" href="group-generation">
-                    <i class="oi oi-layers"></i>
+                <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="group-generation">
+                    <i class="fas fa-layer-group"></i>
                     <span>Generate Groups</span>
                 </NavLink>
             }
-            <NavLink class="nav-item" href="quick-connect">
-                <i class="oi oi-link-intact"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="quick-connect">
+                <i class="fas fa-link"></i>
                 <span>Quick Connect</span>
             </NavLink>
             @* API Explorer + API Tokens are SCIM-origin chrome — kept (not
@@ -168,50 +153,50 @@
                primary directory-sync nav (item 6 decision, 2026-05-31). *@
             @if (ShowDevChrome)
             {
-                <NavLink class="nav-item" href="api-explorer">
-                    <i class="oi oi-code"></i>
+                <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="api-explorer">
+                    <i class="fas fa-code"></i>
                     <span>API Explorer</span>
                 </NavLink>
-                <NavLink class="nav-item" href="tokens">
-                    <i class="oi oi-key"></i>
+                <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="tokens">
+                    <i class="fas fa-key"></i>
                     <span>API Tokens</span>
                 </NavLink>
             }
         </div>
 
-        <div class="nav-section nav-section-settings">
-            <div class="nav-section-title">Settings</div>
+        <div class="ic-nav-group section-configure">
+            <div class="ic-nav-group-label">Settings</div>
             @* Connections moved up to the Sync section (it's core to the pump,
                not a setting). Not duplicated here to avoid a second front door. *@
-            <NavLink class="nav-item" href="configuration">
-                <i class="oi oi-cog"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="configuration">
+                <i class="fas fa-gear"></i>
                 <span>Configuration</span>
             </NavLink>
-            <NavLink class="nav-item" href="admin/identity-providers">
-                <i class="oi oi-key"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="admin/identity-providers">
+                <i class="fas fa-id-card"></i>
                 <span>Identity Providers</span>
             </NavLink>
-            <NavLink class="nav-item" href="database-settings">
-                <i class="oi oi-hard-drive"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="database-settings">
+                <i class="fas fa-database"></i>
                 <span>Database</span>
             </NavLink>
-            <NavLink class="nav-item" href="audit-log">
-                <i class="oi oi-list-rich"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="audit-log">
+                <i class="fas fa-list"></i>
                 <span>Audit Log</span>
             </NavLink>
-            <NavLink class="nav-item" href="logs">
-                <i class="oi oi-bug"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="logs">
+                <i class="fas fa-bug"></i>
                 <span>Debug Logs</span>
             </NavLink>
         </div>
     </nav>
 
-    <div class="nav-footer">
+    <div class="ic-sidebar-scope">
         <AuthorizeView>
             <Authorized>
                 <div class="mb-2">
-                    <small class="text-muted d-block">Signed in as</small>
-                    <strong>@context.User.Identity?.Name</strong>
+                    <strong>Signed in as</strong>
+                    @context.User.Identity?.Name
                 </div>
                 <a class="btn btn-sm btn-outline-secondary w-100" href="/logout">Sign out</a>
             </Authorized>
@@ -219,9 +204,9 @@
                 <a class="btn btn-sm btn-outline-primary w-100" href="/login">Sign in</a>
             </NotAuthorized>
         </AuthorizeView>
-        <div class="nav-footer-info mt-2">
-            <small>Identity synchronization</small>
-            <small>Version 1.0.0</small>
+        <div class="mt-2">
+            <div>Identity synchronization</div>
+            <div>Version 1.0.0</div>
         </div>
     </div>
 </div>

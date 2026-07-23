@@ -29,8 +29,8 @@
     /// <summary>Width in pixels. Height is computed from the 180:160 viewBox aspect.</summary>
     [Parameter] public int Size { get; set; } = 32;
 
-    /// <summary>Cyan stroke colour. Defaults to brand cyan; pass a CSS variable for theme-aware use.</summary>
-    [Parameter] public string Color { get; set; } = "#22D3EE";
+    /// <summary>Stroke colour. Defaults to IdentityCenter's editorial cyan-deep (no neon cyan); pass a CSS variable for theme-aware use.</summary>
+    [Parameter] public string Color { get; set; } = "var(--conduit-700, #0E7490)";
 
     /// <summary>Fill of the hub interior (knockout). Defaults to dark app background.</summary>
     [Parameter] public string HubFill { get; set; } = "#0B1424";

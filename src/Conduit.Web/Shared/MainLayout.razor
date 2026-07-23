@@ -2,32 +2,34 @@
 
 <PageTitle>Conduit</PageTitle>
 
-<div class="page">
-    <div class="sidebar">
-        <NavMenu />
-    </div>
+<div class="ic-shell">
+    <nav class="ic-topbar">
+        @* Brand lockup (IC .ic-logo idiom). Base-relative href so it stays inside
+           any tenant base path. Retires the old cyan ConduitMark from the shell. *@
+        <a href="" class="ic-logo">
+            <i class="fas fa-shield-alt"></i>
+            <span class="ic-logo-text">Con<span>duit</span></span>
+        </a>
 
-    <main>
-        <div class="top-bar">
-            <div class="top-bar-content">
-                <div class="breadcrumb"></div>
-                <div class="top-bar-actions">
-                    @* Mono-uppercase right-aligned utility links, per design.
-                       .health adds the green dot affordance with the ring. *@
-                    <a href="/api-explorer" class="top-bar-link mono">
-                        <i class="oi oi-code"></i> API Docs
-                    </a>
-                    <a href="/health" target="_blank" class="top-bar-link mono health">
-                        Health
-                    </a>
-                </div>
-            </div>
+        <div class="ic-topbar-right ms-auto">
+            <a href="/api-explorer" class="top-bar-link mono">
+                <i class="fas fa-code"></i> API Docs
+            </a>
+            <a href="/health" target="_blank" class="top-bar-link mono health">
+                Health
+            </a>
         </div>
+    </nav>
 
-        <article class="content">
-            @Body
-        </article>
-    </main>
+    <div class="ic-body">
+        <NavMenu />
+
+        <div class="ic-content">
+            <main>
+                @Body
+            </main>
+        </div>
+    </div>
 </div>
 
 <GenerationStatusIndicator />

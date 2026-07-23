@@ -7,20 +7,19 @@
 <PageTitle>Application Logs - Conduit</PageTitle>
 
 <div class="container-fluid">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h1>Application Logs</h1>
-            <p class="text-muted">Monitor system activities and debug issues</p>
-        </div>
-        <div>
+    <Template1 Title="Application Logs"
+               Subtitle="Monitor system activities and debug issues"
+               Icon="fas fa-bug"
+               IconAccent="amber">
+        <PrimaryAction>
             <button class="btn btn-outline-secondary me-2" @onclick="RefreshLogs">
                 <i class="oi oi-loop-circular"></i> Refresh
             </button>
             <button class="btn btn-outline-danger" @onclick="ClearLogs">
                 <i class="oi oi-trash"></i> Clear
             </button>
-        </div>
-    </div>
+        </PrimaryAction>
+    </Template1>
 
     <!-- Filters -->
     <div class="card mb-4">

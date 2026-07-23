@@ -57,6 +57,12 @@
          FAIL-SAFE: copy only runs if the shared file exists; absent brand repo
          → committed copy stays, build succeeds. -->
     <SharedCenterCss>$(MSBuildProjectDirectory)\..\..\..\brand\css\components\center-shared.css</SharedCenterCss>
+    <!-- Shared IdentityCenter design system (the full ic-* shell + component
+         system Conduit is adopting). Single-sourced in the brand repo, copied
+         into wwwroot\css and linked in _Layout.cshtml AFTER center-shared.css and
+         BEFORE conduit.css. FAIL-SAFE: copy only runs if the shared file exists;
+         absent brand repo → committed copy stays, build succeeds. -->
+    <SharedIcDesignSystem>$(MSBuildProjectDirectory)\..\..\..\brand\css\ic-design-system.css</SharedIcDesignSystem>
   </PropertyGroup>
   <Target Name="SyncSharedBrandTokens" BeforeTargets="BeforeBuild"
           Condition="Exists('$(SharedBrandTokens)')">
@@ -71,6 +77,13 @@
           DestinationFiles="$(MSBuildProjectDirectory)\wwwroot\css\center-shared.css"
           SkipUnchangedFiles="true" OverwriteReadOnlyFiles="true" />
     <Message Importance="high" Text="Brand: synced center-shared.css from shared source $(SharedCenterCss)" />
+  </Target>
+  <Target Name="SyncSharedIcDesignSystem" BeforeTargets="BeforeBuild"
+          Condition="Exists('$(SharedIcDesignSystem)')">
+    <Copy SourceFiles="$(SharedIcDesignSystem)"
+          DestinationFiles="$(MSBuildProjectDirectory)\wwwroot\css\ic-design-system.css"
+          SkipUnchangedFiles="true" OverwriteReadOnlyFiles="true" />
+    <Message Importance="high" Text="Brand: synced ic-design-system.css from shared source $(SharedIcDesignSystem)" />
   </Target>
 
 </Project>

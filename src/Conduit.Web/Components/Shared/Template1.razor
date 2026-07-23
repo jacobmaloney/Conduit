@@ -1,0 +1,87 @@
+@namespace Conduit.Web.Components.Shared
+
+@* Template1 — STANDARD SECONDARY PAGE HEADER (ported from IdentityCenter).
+   Use this on every new or refactored page so the visual language stays consistent.
+
+   Layout:
+     [Icon tile] [Title + Subtitle]   [Stat chips...]                    [Primary action]
+
+   Usage:
+     <Template1 Icon="fas fa-user"
+                Title="Identities"
+                Subtitle="@($"{count:N0} people across all sources")">
+         <Stats>...</Stats>
+         <PrimaryAction>
+             <button class="btn btn-primary btn-sm">+ New</button>
+         </PrimaryAction>
+     </Template1>
+
+   Accent presets (use one):
+     - Identity   (cyan, default) → IconAccent="cyan"
+     - Governance (teal)          → IconAccent="teal"
+     - Analytics  (violet)        → IconAccent="violet"
+     - Operations (amber)         → IconAccent="amber"
+     - Configure  (slate)         → IconAccent="slate"
+*@
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+        <div class="template1-icon-tile" style="background: linear-gradient(135deg, @TileGradient.start, @TileGradient.end); color: @TileGradient.fg;">
+            <i class="@Icon"></i>
+        </div>
+        <div>
+            <h2 class="mb-0 template1-title">@Title</h2>
+            @if (!string.IsNullOrEmpty(Subtitle))
+            {
+                <div class="template1-subtitle">@Subtitle</div>
+            }
+        </div>
+        @Stats
+    </div>
+    <div>
+        @PrimaryAction
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string Icon { get; set; } = "fas fa-cube";
+    /// <summary>cyan | teal | violet | amber | slate. Defaults to cyan (Identity).</summary>
+    [Parameter] public string IconAccent { get; set; } = "cyan";
+    [Parameter] public RenderFragment? Stats { get; set; }
+    [Parameter] public RenderFragment? PrimaryAction { get; set; }
+
+    private (string start, string end, string fg) TileGradient => IconAccent switch
+    {
+        "teal"   => ("rgba(29,93,168,0.16)",  "rgba(29,93,168,0.05)",  "var(--sec-governance, #1D5DA8)"),
+        "violet" => ("rgba(14,124,86,0.16)",  "rgba(14,124,86,0.05)",  "var(--sec-analytics, #0E7C56)"),
+        "amber"  => ("rgba(201,162,39,0.18)", "rgba(201,162,39,0.06)", "var(--sec-operations, #C9A227)"),
+        "slate"  => ("rgba(58,74,102,0.14)",  "rgba(58,74,102,0.05)",  "var(--sec-configure, #3A4A66)"),
+        _        => ("rgba(14,116,144,0.16)", "rgba(14,116,144,0.05)", "var(--sec-identity, #0E7490)"),
+    };
+}
+
+<style>
+    .template1-icon-tile {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+    }
+
+    .template1-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.015em;
+    }
+
+    .template1-subtitle {
+        color: var(--text-tertiary, #6B7E99);
+        font-size: 13px;
+        margin-top: 2px;
+    }
+</style>
