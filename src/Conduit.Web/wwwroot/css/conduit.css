@@ -1406,7 +1406,7 @@ hr { border-color: var(--border); }
   font-family: var(--font-display);
   font-size: 1.875rem;
   font-weight: 600;
-  color: var(--text);
+  color: #0f172a;              /* dark ink — Conduit runs on warm paper (was --text near-white) */
   margin-bottom: 0.5rem;
   letter-spacing: -0.015em;
 }
@@ -1421,15 +1421,15 @@ hr { border-color: var(--border); }
    Conduit-owned card or link CSS. */
 
 .stats-section {
-  background: var(--bg-2);
+  background: transparent;      /* was --bg-2 dark navy — let the warm-paper page show through */
   padding: 2.5rem 1.5rem;
   margin: 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid #e6e8ec;
+  border-bottom: 1px solid #e6e8ec;
 }
 .stat-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: #ffffff;          /* was --panel dark — white paper card like the feature cards above */
+  border: 1px solid #e2e8f0;
   border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
   display: flex;
@@ -1453,7 +1453,7 @@ hr { border-color: var(--border); }
   font-size: 1.75rem;
   font-weight: 700;
   margin: 0;
-  color: var(--text);
+  color: #0f172a;              /* dark ink on the white stat card (was --text near-white) */
   letter-spacing: -0.02em;
 }
 .stat-content p {
