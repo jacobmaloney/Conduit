@@ -1477,6 +1477,21 @@ hr { border-color: var(--border); }
 }
 .feature-link:hover { color: var(--conduit-300); gap: 0.5rem; }
 
+/* Feature cards adopt the IC surface-card treatment (warm paper) so the
+   Dashboard content cards match the stat cards, which already flip via
+   .ic-content .stat-card. The base .feature-card uses --panel/--text, which
+   are NOT retinted under html.light-theme (they stay dark navy); scoping to
+   .ic-content wins on specificity and is global across every content page
+   while leaving the sidebar/topbar (outside .ic-content) dark. */
+.ic-content .feature-card {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+.ic-content .feature-card h3 { color: var(--text-primary); }
+.ic-content .feature-card p  { color: var(--text-secondary); }
+.ic-content .feature-card .bg-purple-gradient { color: #7C3AED; }
+
 .stats-section {
   background: var(--bg-2);
   padding: 2.5rem 1.5rem;
