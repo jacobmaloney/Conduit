@@ -3993,4 +3993,46 @@ details summary::-webkit-details-marker { color: var(--accent); }
   --color-border-default: #e2e8f0;
   --color-line:           rgba(11, 20, 36, 0.08);
   --color-cyan-deep:      #0e7490;
+
+  /* Accent = IC primary blue. ic-design-system.css re-declares --accent at :root
+     AFTER conduit-design.css, so the earlier override lost; pin it here in the
+     last stylesheet's .ic-content layer so it actually wins. No more cyan. */
+  --accent:     var(--brand-primary, #0284c7);
+  --accent-on:  #ffffff;
+  --accent-50:  rgba(2, 132, 199, 0.06);
+  --accent-100: rgba(2, 132, 199, 0.14);
+  --accent-200: rgba(2, 132, 199, 0.22);
+}
+
+/* Dark secondary buttons (.btn-manage — Credentials/Rename/Quick Sync/Endpoints/
+   Copy/Manage/Active) → paper. center-shared has a .cc-site paper variant but
+   Conduit doesn't carry .cc-site, so the dark base won; override it directly. */
+.ic-content .btn-manage {
+  background: #f4f2ec;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+}
+.ic-content .btn-manage:hover {
+  background: #ece9e0;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+/* The "All connections" scope card in the sidebar sits OUTSIDE .ic-content, so
+   the page-content paper retint above never reached it — flip it here. */
+.system-switcher .ss-button {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  color: #0f172a;
+}
+.system-switcher .ss-button:hover {
+  background: #f4f2ec;
+  border-color: #cbd5e1;
+}
+.system-switcher .ss-name { color: #0f172a; }
+.system-switcher .ss-domain,
+.system-switcher .ss-chev { color: #64748b; }
+.system-switcher .ss-glyph {
+  background: rgba(2, 132, 199, 0.12);
+  color: #0284c7;
 }
