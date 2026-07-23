@@ -4064,3 +4064,7 @@ details summary::-webkit-details-marker { color: var(--accent); }
 /* Give pages breathing room at the bottom so action buttons (Save / Test
    Connection, etc.) aren't flush against the very bottom of the viewport. */
 .ic-content main { padding-bottom: 2.5rem; }
+
+/* Empty-state headings ("No Groups Found", "No Users Found", "No Logs Found") —
+   the .alert-heading tint is too light on the pale box; darken for contrast. */
+.ic-content .alert-heading { color: #1e293b; }
