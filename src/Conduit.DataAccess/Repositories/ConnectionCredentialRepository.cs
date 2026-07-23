@@ -25,13 +25,13 @@ public class ConnectionCredentialRepository : BaseRepository
         public DateTime LastModified { get; set; }
     }
 
-    public Task<CredentialRow?> GetAsync(Guid tenantId, string credentialName) =>
+    public virtual Task<CredentialRow?> GetAsync(Guid tenantId, string credentialName) =>
         QuerySingleOrDefaultAsync<CredentialRow>(@"
             SELECT * FROM ConnectionCredentials
              WHERE TenantId = @TenantId AND CredentialName = @Name",
             new { TenantId = tenantId, Name = credentialName });
 
-    public async Task UpsertAsync(CredentialRow row)
+    public virtual async Task UpsertAsync(CredentialRow row)
     {
         if (row.Id == Guid.Empty) row.Id = Guid.NewGuid();
         row.LastModified = DateTime.UtcNow;

@@ -414,6 +414,7 @@
                             <option value="AWS">AWS IAM</option>
                             <option value="SharePoint">SharePoint Online</option>
                             <option value="IdentityCenter">IdentityCenter</option>
+                            <option value="CertificationCenterSaaS">Certification Center</option>
                             <option value="Real">Real (legacy / generic)</option>
                         </select>
                     }
@@ -693,6 +694,30 @@
                             (/api/identities). This governs the connection's write endpoint only. Sync Projects still pick
                             the table per side (source/sink) when you build them, so one connection can still
                             source=Identities and sink=Objects in a project.
+                        </small>
+                    </div>
+                }
+                @* Certification Center: the ONE bespoke choice, framed as an outcome, not a
+                   table name. Persists to Tenant.TargetTable exactly like the IC block above —
+                   the inbound/proxy path stamps IdentityCenterTableContext from it. "People" →
+                   Identities, "Systems" → Objects. A Sync Project's per-side SinkTable overrides
+                   this for the sync path (expected). *@
+                @if (form.SystemType == "CertificationCenterSaaS")
+                {
+                    <div class="conn-field">
+                        <label class="form-label">
+                            What are you bringing in? <span class="text-danger">*</span>
+                        </label>
+                        <select class="form-control" @bind="form.TargetTable" @bind:after="InvalidateFormTest">
+                            <option value="">— choose one —</option>
+                            <option value="Identities">People to review &amp; certify</option>
+                            <option value="Objects">Systems &amp; accounts to inventory</option>
+                        </select>
+                        <small class="form-text text-muted">
+                            Pick <strong>People</strong> if you're bringing in the folks whose access gets
+                            reviewed. Pick <strong>Systems &amp; accounts</strong> if you're bringing in the
+                            applications and accounts you want an inventory of. You can add a second connection
+                            later for the other one.
                         </small>
                     </div>
                 }

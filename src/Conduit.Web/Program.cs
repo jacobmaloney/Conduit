@@ -441,6 +441,10 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SharePoint.SharePointAdapter>();
 // Phase 2 — IdentityCenter as a Conduit connector (paired with IC's /api/objects/{query,bulk}).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.IdentityCenterAdapter>();
+// Certification Center (SaaS) — the customer-facing skin over the IC connector. Reuses
+// the SAME sink/source internals (byte-identical credential keyring + dispatch); differs
+// only in SystemType, friendly name, and a minimal paste-key-and-go credential.
+builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.CertificationCenterSaaSAdapter>();
 // SQL Discovery — source-only license-inventory scanner (SPN/instance-list enumeration → IC sink).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SqlDiscovery.SqlDiscoveryAdapter>();
 // Active Roles — writes route THROUGH the AR Administration Service (EDMS://) so
