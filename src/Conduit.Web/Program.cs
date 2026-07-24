@@ -259,7 +259,6 @@ builder.Services.AddScoped<ParityDemoSeedService>();
 // IC↔Conduit parity PROOF + REMEDY: migrate pre-7d7e034 flat projects to per-class
 // workflows (Task 1) and import a real IC sync project's graph into Conduit (Task 2).
 builder.Services.AddScoped<IcParityImportService>();
-builder.Services.AddScoped<ActiveSystemState>();
 builder.Services.AddScoped<LoginService>();
 builder.Services.AddSingleton<ApplicationLogService>();
 builder.Services.AddSingleton<DataChangeNotifier>();

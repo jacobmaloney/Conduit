@@ -1,12 +1,10 @@
 @page "/quick-connect"
 @attribute [Authorize]
-@implements IDisposable
 @using Microsoft.AspNetCore.Hosting
 @using Conduit.Web.Services
 @inject IWebHostEnvironment Environment
 @inject NavigationManager Navigation
 @inject IConfiguration Configuration
-@inject ActiveSystemState ActiveSystem
 
 <PageTitle>Quick Connect - Conduit</PageTitle>
 
@@ -19,14 +17,7 @@
         auth, and copy-paste examples.
     </p>
     <p class="text-muted">
-        @if (ActiveSystem.ActiveSystem is { } current)
-        {
-            <span>Examples below target <strong>@current.Name</strong> — URL slug <code>@current.Slug</code>. Switch in the sidebar to point at a different Connected System.</span>
-        }
-        else
-        {
-            <span>Pick a Connected System in the sidebar — the examples below will switch to point at it.</span>
-        }
+        Endpoints below use the unscoped SCIM 2.0 base path. Authenticate with an API token (see API Tokens).
     </p>
 
     <div class="row">
@@ -290,12 +281,6 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
                         <a href="/api-explorer" class="btn btn-outline-primary">
                             <i class="oi oi-code"></i> API Explorer
                         </a>
-                        <a href="/users" class="btn btn-outline-primary">
-                            <i class="oi oi-people"></i> View Users
-                        </a>
-                        <a href="/groups" class="btn btn-outline-primary">
-                            <i class="oi oi-layers"></i> View Groups
-                        </a>
                     </div>
                 </div>
             </div>
@@ -368,24 +353,10 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
         // Get the base URL
         var uri = new Uri(Navigation.Uri);
         baseUrl = $"{uri.Scheme}://{uri.Authority}";
-        ActiveSystem.OnChangeAsync += HandleActiveChangedAsync;
     }
 
-    private Task HandleActiveChangedAsync() => InvokeAsync(StateHasChanged);
-
-    public void Dispose()
-    {
-        ActiveSystem.OnChangeAsync -= HandleActiveChangedAsync;
-    }
-
-    // Returns the SCIM v2 path prefix for the currently active Connected System.
-    // Falls back to the legacy unscoped form when no system is selected, so examples
-    // remain useful before the user picks one in the sidebar.
-    private string ScimPath()
-    {
-        var slug = ActiveSystem.ActiveSystem?.Slug;
-        return string.IsNullOrEmpty(slug) ? "/scim/v2" : $"/scim/v2/t/{slug}";
-    }
+    // Unscoped SCIM 2.0 base path.
+    private string ScimPath() => "/scim/v2";
 
     private async Task TestConnection()
     {

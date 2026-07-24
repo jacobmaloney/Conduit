@@ -9,7 +9,6 @@
 @inject TenantRepository TenantRepo
 @inject ApiTokenService Tokens
 @inject DemoSeedService DemoSeed
-@inject ActiveSystemState ActiveSystem
 @inject DataChangeNotifier DataChange
 @inject AuditLogService Audit
 @inject TenantSnapshotService Snapshots
@@ -3578,13 +3577,6 @@
             await AuditDestructiveAsync("ConnectedSystem.DeleteForever", target,
                 details: $"Hard delete of Connected System and ALL referencing rows: {target.UserCount} users, {target.GroupCount} groups, {target.TokenCount} tokens, plus the Tenant row itself. Irreversible.",
                 snapshotJson: snapshot);
-
-            // If the active sidebar selection was the one we just nuked, drop it
-            // so the rest of the app doesn't keep pointing at a dead Connected System.
-            if (ActiveSystem.ActiveSystem?.Id == target.TenantId)
-            {
-                await ActiveSystem.SetAsync(null);
-            }
 
             deletingFor = null;
             deleteConfirmText = "";

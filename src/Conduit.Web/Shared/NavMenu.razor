@@ -2,21 +2,12 @@
 @using Conduit.Core.Services
 @using Conduit.DataAccess.Repositories
 @using Conduit.Web.Services
-@inject TenantRepository TenantRepo
-@inject UserRepository UserRepo
-@inject GroupRepository GroupRepo
-@inject ActiveSystemState ActiveSystem
-@inject DataChangeNotifier DataChange
 @inject OpenAccessState OpenAccess
 @inject NavigationManager NavigationManager
 @inject IWebHostEnvironment Environment
-@implements IDisposable
 
 <div class="ic-sidebar">
-    @* SCIM-origin chrome (Open-access pill + connected-system switcher) gated to
-       Development only for the directory-sync product. IC has no parallel; this
-       moves it off the primary sync nav without deleting it (item 6 decision,
-       2026-05-31). Re-surface later behind a proper emulator/dev-tools flag. *@
+    @* Open-access warning pill (portal authentication is OFF), Development-gated. *@
     @if (ShowDevChrome && OpenAccess.IsEnabled)
     {
         <a class="open-access-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
@@ -25,63 +16,10 @@
         </a>
     }
 
-    <AuthorizeView>
-        <Authorized>
-            @if (ShowDevChrome)
-            {
-            <div class="system-switcher">
-                <button class="ss-button" @onclick="ToggleSwitcher" @onclick:stopPropagation="true">
-                    <span class="ss-glyph">@GlyphFor(ActiveSystem.ActiveSystem)</span>
-                    <span class="ss-meta">
-                        <span class="ss-name">@(ActiveSystem.ActiveSystem?.Name ?? "All connections")</span>
-                        <span class="ss-domain">@SubtitleFor(ActiveSystem.ActiveSystem)</span>
-                    </span>
-                    <i class="fas fa-chevron-down ss-chev"></i>
-                </button>
-                @if (switcherOpen)
-                {
-                    <div class="ss-menu" @onclick:stopPropagation="true">
-                        <div class="ss-menu-label">Connections</div>
-                        <button class="ss-menu-item @(ActiveSystem.ActiveSystem == null ? "active" : "")"
-                                @onclick="() => SelectSystemAsync(null)">
-                            <span class="ss-glyph ss-glyph-sm">★</span>
-                            <span class="ss-menu-meta">
-                                <span>All connections</span>
-                                <span class="ss-menu-domain">admin · cross-system</span>
-                            </span>
-                            <span class="kind-pill">Admin</span>
-                        </button>
-                        @foreach (var sys in tenants)
-                        {
-                            <button class="ss-menu-item @(ActiveSystem.ActiveSystem?.Id == sys.Id ? "active" : "")"
-                                    title="@sys.Name"
-                                    @onclick="() => SelectSystemAsync(sys)">
-                                <span class="ss-glyph ss-glyph-sm">@GlyphFor(sys)</span>
-                                <span class="ss-menu-meta">
-                                    <span>@sys.Name</span>
-                                    <span class="ss-menu-domain">@(sys.Domain ?? sys.Slug)</span>
-                                </span>
-                                <span class="kind-pill @(sys.SystemType == "Real" ? "kind-real" : "kind-emulator")">@sys.SystemType</span>
-                            </button>
-                        }
-                        <div class="ss-menu-divider"></div>
-                        <a class="ss-menu-add" href="connected-systems" @onclick="CloseSwitcher">
-                            <i class="fas fa-plus"></i> Connect a system
-                        </a>
-                    </div>
-                }
-            </div>
-            }
-        </Authorized>
-    </AuthorizeView>
-
     <nav>
-        @* SYNC is the primary experience for a directory-sync pump. Dashboard is
-           the landing; everything else about MOVING identities lives under the
-           Synchronization Center hub (which hosts Projects / History / Schedules /
-           Processing / Connections as tabs — see SynchronizationCenter.razor).
-           We deliberately surface ONE Sync front door instead of five nav links
-           that all open tabs of the same hub (dedup decision 2026-06-20). *@
+        @* Conduit is a directory-sync engine: Connections + Sync Projects are the
+           whole experience. The Synchronization Center hub hosts Projects /
+           History / Schedules / Processing as tabs (see SynchronizationCenter.razor). *@
         <div class="ic-nav-group section-identity">
             <div class="ic-nav-group-label">Main</div>
             <NavLink class="ic-nav-item" ActiveClass="on-identity" href="" Match="NavLinkMatch.All">
@@ -92,10 +30,6 @@
 
         <div class="ic-nav-group section-operations">
             <div class="ic-nav-group-label">Sync</div>
-            @* Canonical home. The hub's tabs replace the old standalone
-               Sync Projects / Sync History / Schedule Manager / Processing Center
-               links — those routes still resolve for deep links, they're just no
-               longer a second front door (dedup, 2026-06-20). *@
             <NavLink class="ic-nav-item" ActiveClass="on-operations" href="synchronization-center">
                 <i class="fas fa-arrows-rotate"></i>
                 <span>Synchronization Center</span>
@@ -106,40 +40,14 @@
             </NavLink>
         </div>
 
-        @* Directory browse pages are SCIM-server DNA (a sync PUMP doesn't lead
-           with "Users / Groups" the way a SCIM server does). Demoted out of the
-           top "Main" block into their own clearly-secondary section so the Sync
-           experience reads as primary (declutter decision 2026-06-20). Still one
-           click away; counts preserved. *@
-        <div class="ic-nav-group section-identity">
-            <div class="ic-nav-group-label">Directory</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="users">
-                <i class="fas fa-users"></i>
-                <span>Users</span>
-                @if (userCount is { } uc)
-                {
-                    <span class="ic-nav-badge info" title="@CountTooltip">@uc.ToString("N0")</span>
-                }
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="groups">
-                <i class="fas fa-user-group"></i>
-                <span>Groups</span>
-                @if (groupCount is { } gc)
-                {
-                    <span class="ic-nav-badge info" title="@CountTooltip">@gc.ToString("N0")</span>
-                }
-            </NavLink>
-        </div>
-
         <div class="ic-nav-group section-analytics">
             <div class="ic-nav-group-label">Tools</div>
             <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="quick-connect">
                 <i class="fas fa-link"></i>
                 <span>Quick Connect</span>
             </NavLink>
-            @* API Explorer + API Tokens are SCIM-origin chrome — kept (not
-               deleted) but gated to Development so they don't clutter the
-               primary directory-sync nav (item 6 decision, 2026-05-31). *@
+            @* API Explorer + API Tokens are SCIM-origin chrome — kept but gated to
+               Development so they don't clutter the primary directory-sync nav. *@
             @if (ShowDevChrome)
             {
                 <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="api-explorer">
@@ -155,8 +63,6 @@
 
         <div class="ic-nav-group section-configure">
             <div class="ic-nav-group-label">Settings</div>
-            @* Connections moved up to the Sync section (it's core to the pump,
-               not a setting). Not duplicated here to avoid a second front door. *@
             <NavLink class="ic-nav-item" ActiveClass="on-configure" href="configuration">
                 <i class="fas fa-gear"></i>
                 <span>Configuration</span>
@@ -201,115 +107,7 @@
 </div>
 
 @code {
-    private bool collapseNavMenu = true;
-    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
-    private void ToggleNavMenu() => collapseNavMenu = !collapseNavMenu;
-
-    // SCIM-origin chrome (system switcher, Open-access pill, API Explorer,
-    // API Tokens) is gated to Development for the directory-sync product.
-    // Not deleted — just kept off the production sync nav (item 6, 2026-05-31).
+    // SCIM-origin chrome (Open-access pill, API Explorer, API Tokens) is gated to
+    // Development for the directory-sync product — kept off the production nav.
     private bool ShowDevChrome => Environment.IsDevelopment();
-
-    // System switcher state. The selected system is held in the scoped
-    // ActiveSystemState service so the Users / Groups pages can read it.
-    private bool switcherOpen;
-    private List<Tenant> tenants = new();
-    private int? userCount;
-    private int? groupCount;
-
-    private string CountTooltip => ActiveSystem.ActiveSystem is { } s
-        ? $"Total in {s.Name}"
-        : "Total across all connections";
-
-    protected override void OnInitialized()
-    {
-        ActiveSystem.OnChangeAsync += HandleActiveChangedAsync;
-        DataChange.OnChangedAsync += HandleDataChangedAsync;
-    }
-
-    private async Task HandleDataChangedAsync(DataChangeKind kind)
-    {
-        if (kind == DataChangeKind.Tenants)
-        {
-            try { tenants = await TenantRepo.GetAllAsync(); }
-            catch (Exception ex) { Console.WriteLine($"NavMenu: tenant refresh failed — {ex.Message}"); }
-        }
-        await LoadCountsAsync();
-        await InvokeAsync(StateHasChanged);
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-        try
-        {
-            tenants = await TenantRepo.GetAllAsync();
-            await LoadCountsAsync();
-            StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            // Sidebar must never crash the layout if the DB is unreachable —
-            // e.g. before setup wizard completes. Log and render the empty state.
-            Console.WriteLine($"NavMenu: failed to load tenants — {ex.Message}");
-        }
-    }
-
-    public void Dispose()
-    {
-        ActiveSystem.OnChangeAsync -= HandleActiveChangedAsync;
-        DataChange.OnChangedAsync -= HandleDataChangedAsync;
-    }
-
-    private async Task HandleActiveChangedAsync()
-    {
-        await LoadCountsAsync();
-        await InvokeAsync(StateHasChanged);
-    }
-
-    // Fetches a count-only page (Count=1 keeps the SELECT cheap, totalCount comes
-    // from the COUNT(*) in the same multi-result query). Scope honors the sidebar
-    // selection so the badges reflect "this connector".
-    private async Task LoadCountsAsync()
-    {
-        try
-        {
-            var scope = ActiveSystem.ActiveSystem?.Id;
-            var (_, uTotal) = await UserRepo.GetAllAsync(
-                new ScimQueryOptions { StartIndex = 1, Count = 1 }, tenantIdOverride: scope);
-            var (_, gTotal) = await GroupRepo.GetAllAsync(
-                new ScimQueryOptions { StartIndex = 1, Count = 1 }, tenantIdOverride: scope);
-            userCount = uTotal;
-            groupCount = gTotal;
-        }
-        catch
-        {
-            userCount = null;
-            groupCount = null;
-        }
-    }
-
-    private void ToggleSwitcher() => switcherOpen = !switcherOpen;
-    private void CloseSwitcher() => switcherOpen = false;
-
-    private async Task SelectSystemAsync(Tenant? sys)
-    {
-        switcherOpen = false;
-        await ActiveSystem.SetAsync(sys);
-    }
-
-    private static string GlyphFor(Tenant? t)
-    {
-        if (t == null) return "★";
-        var name = t.Name?.Trim();
-        if (string.IsNullOrEmpty(name)) return "?";
-        return char.ToUpperInvariant(name[0]).ToString();
-    }
-
-    private static string SubtitleFor(Tenant? t)
-    {
-        if (t == null) return "admin · view all";
-        if (!string.IsNullOrWhiteSpace(t.Domain)) return t.Domain!;
-        return t.Slug;
-    }
 }
