@@ -76,6 +76,16 @@
   --accent-100: rgba(34, 211, 238, 0.14);
   --accent-200: rgba(34, 211, 238, 0.22);
 
+  /* ── Canonical brand PRIMARY — the single knob ──────────────────────────
+     The product family's primary color, in the ONE place both apps read.
+     IdentityCenter's light theme and Conduit both resolve their primary from
+     here, so changing this one value restyles both apps. Values are IC's
+     current light-mode primary (#0284c7), so adopting this token is
+     pixel-identical — IC looks exactly as it does today. */
+  --brand-primary:       #0284c7;
+  --brand-primary-dark:  #0369a1;
+  --brand-primary-hover: #0369a1;
+
   /* ── Section-accent ramp ─────────────────────────────────────────────
      One per top-level nav section. Canonical values; exposed under both the
      IC --sec-* names and the Conduit --cc-sec-* aliases. */
