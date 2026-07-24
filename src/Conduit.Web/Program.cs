@@ -261,9 +261,7 @@ builder.Services.AddScoped<ParityDemoSeedService>();
 builder.Services.AddScoped<IcParityImportService>();
 builder.Services.AddScoped<ActiveSystemState>();
 builder.Services.AddScoped<LoginService>();
-builder.Services.AddScoped<Conduit.Core.Services.UserGenerationService>();
 builder.Services.AddSingleton<ApplicationLogService>();
-builder.Services.AddSingleton<GenerationService>();
 builder.Services.AddSingleton<DataChangeNotifier>();
 // LoginThrottle reads/writes the DB on every check — Scoped so it can take the
 // DatabaseConfig the rest of the data layer uses. Pruner is a hosted background
