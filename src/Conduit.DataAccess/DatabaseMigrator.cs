@@ -1403,6 +1403,23 @@ END;
 "
             });
 
+            migrations.Add(new SchemaMigration
+            {
+                Version = 32,
+                Name = "Widen Tenants.SystemType to NVARCHAR(64)",
+                Description = "The CertificationCenterSaaS connector's SystemType ('CertificationCenterSaaS', 23 chars) overflowed the original NVARCHAR(20) SystemType column, so creating that connection failed with a String-or-binary-data-would-be-truncated error. Widen to NVARCHAR(64) to fit current and future connector type names. Idempotent — only alters if currently narrower than 64 chars.",
+                SqlScript = @"
+IF EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID('dbo.Tenants') AND name = 'SystemType'
+      AND max_length >= 0 AND max_length < 128  -- NVARCHAR max_length is bytes; 64 chars = 128 bytes
+)
+BEGIN
+    ALTER TABLE [dbo].[Tenants] ALTER COLUMN [SystemType] NVARCHAR(64) NOT NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }
