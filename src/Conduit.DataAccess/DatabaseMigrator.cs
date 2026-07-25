@@ -1420,6 +1420,31 @@ END;
 "
             });
 
+            // Migration 33: per-connection permitted AD CREATION base DNs — the persistence side of the
+            // deny-all containment control (design §8). Customer-owned, on the AGENT host. One row per
+            // permitted base DN, keyed by the IC source-connection name. BaseDn is too long for a UNIQUE
+            // index key (900-byte limit), so duplicates are prevented in the repository, not by a constraint.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 33,
+                Name = "ProvisioningCreationBaseDns (creation containment allow-list)",
+                Description = "Per-connection permitted AD creation base DNs — the persistence side of the deny-all containment control. Customer-owned on the agent host; authored via the Conduit settings UI, never pushed from IdentityCenter. Empty for a connection = deny-all for that connection.",
+                SqlScript = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ProvisioningCreationBaseDns')
+BEGIN
+    CREATE TABLE [dbo].[ProvisioningCreationBaseDns] (
+        [Id]                   UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_ProvBaseDns_Id] DEFAULT NEWID(),
+        [SourceConnectionName] NVARCHAR(100)    NOT NULL,
+        [BaseDn]               NVARCHAR(1024)   NOT NULL,
+        [CreatedAt]            DATETIME2        NOT NULL CONSTRAINT [DF_ProvBaseDns_CreatedAt] DEFAULT SYSUTCDATETIME(),
+        [CreatedBy]            NVARCHAR(256)    NULL,
+        CONSTRAINT [PK_ProvisioningCreationBaseDns] PRIMARY KEY CLUSTERED ([Id])
+    );
+    CREATE INDEX [IX_ProvBaseDns_Name] ON [dbo].[ProvisioningCreationBaseDns] ([SourceConnectionName]);
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

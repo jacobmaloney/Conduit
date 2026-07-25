@@ -18,6 +18,13 @@ namespace Conduit.Web.Services;
 /// </summary>
 public static class BaseDnContainment
 {
+    /// <summary>
+    /// True when <paramref name="dn"/> parses as a well-formed DN (component-wise, honouring escapes).
+    /// Used by the settings UI to reject a malformed base DN at save time, reusing the exact same parser
+    /// the containment check uses so the two can never diverge.
+    /// </summary>
+    public static bool IsWellFormedDn(string? dn) => ParseRdns(dn) is { Count: > 0 };
+
     public static bool IsContained(string? targetOu, IEnumerable<string>? permittedBaseDns)
     {
         var target = ParseRdns(targetOu);

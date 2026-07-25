@@ -3,7 +3,6 @@ using Conduit.DataAccess;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 using Conduit.Web.Services;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -23,22 +22,32 @@ public class AdAgentCreateExecutorTests
 {
     private const string Conn = "corp-local";
 
+    // The permitted base-DN SOURCE is now the injectable policy; a fake supplies a fixed list so the
+    // executor's containment behaviour is tested independently of the DB (the policy's own DB→config→
+    // deny resolution is tested in CreationBaseDnPolicyTests). Credential resolution still hits a bogus,
+    // never-openable DB — reached only after containment passes.
+    private sealed class FakePolicy : ICreationBaseDnPolicy
+    {
+        private readonly IReadOnlyList<string> _dns;
+        public FakePolicy(IReadOnlyList<string> dns) => _dns = dns;
+        public Task<IReadOnlyList<string>> GetPermittedBaseDnsAsync(string sourceConnectionName) => Task.FromResult(_dns);
+        public Task<(IReadOnlyList<string> Enforced, BaseDnSource Source)> GetEffectiveAsync(string sourceConnectionName)
+            => Task.FromResult((_dns, _dns.Count > 0 ? BaseDnSource.Database : BaseDnSource.None));
+        public IReadOnlyList<string> GetConfigBaseDns(string sourceConnectionName) => System.Array.Empty<string>();
+        public IReadOnlyList<string> GetConfiguredConnectionNames() => System.Array.Empty<string>();
+    }
+
     private static AdAgentCreateExecutor Build(params string[] permittedBaseDns)
     {
         var dbConfig = new DatabaseConfig
         {
             ConnectionString = "Server=(local);Database=__none__;Trusted_Connection=False;Connect Timeout=1;"
         };
-        var dict = new Dictionary<string, string?>();
-        for (var i = 0; i < permittedBaseDns.Length; i++)
-            dict[$"AdProvisioning:CreationBaseDns:{Conn}:{i}"] = permittedBaseDns[i];
-        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
-
         return new AdAgentCreateExecutor(
             Array.Empty<IConnectorAdapter>(),
             new SinkConnectionCredentialMapRepository(dbConfig),
             new TenantRepository(dbConfig),
-            config,
+            new FakePolicy(permittedBaseDns),
             NullLogger<AdAgentCreateExecutor>.Instance);
     }
 

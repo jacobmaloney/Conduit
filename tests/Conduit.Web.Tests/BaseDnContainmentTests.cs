@@ -92,4 +92,22 @@ public class BaseDnContainmentTests
         Assert.True(BaseDnContainment.IsContained("CN=x,OU=Staff,DC=corp,DC=local", permitted));
         Assert.False(BaseDnContainment.IsContained("CN=x,OU=Admins,DC=corp,DC=local", permitted));
     }
+
+    // ── IsWellFormedDn (used by the settings UI to reject a malformed base DN at save) ──
+
+    [Theory]
+    [InlineData("OU=Staff,OU=Users,DC=corp,DC=local")]
+    [InlineData("DC=corp,DC=local")]
+    [InlineData("OU=A\\,B,DC=corp,DC=local")]   // escaped comma
+    [InlineData("ou=staff,dc=corp,dc=local")]   // lower-case
+    public void Well_formed_dns_are_accepted(string dn) => Assert.True(BaseDnContainment.IsWellFormedDn(dn));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not a dn")]           // no '='
+    [InlineData("OU=,DC=corp")]        // empty value
+    [InlineData("OU=Staff,,DC=corp")]  // doubled comma
+    public void Malformed_dns_are_rejected(string? dn) => Assert.False(BaseDnContainment.IsWellFormedDn(dn));
 }

@@ -417,6 +417,11 @@ builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunAsyncJobReposi
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.WorkflowRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkRecordHashRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository>();
+// Creation base-DN allow-list (V33): customer-owned persistence of the containment control's permitted
+// base DNs. The policy resolves DB-authoritative → config fallback → fail-closed deny-all for the executor.
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.ICreationBaseDnAllowListRepository, Conduit.DataAccess.Repositories.CreationBaseDnAllowListRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.CreationBaseDnAllowListRepository>();
+builder.Services.AddScoped<Conduit.Web.Services.ICreationBaseDnPolicy, Conduit.Web.Services.CreationBaseDnPolicy>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.ConnectionCredentialRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.CredentialKeyringRepository>();
 builder.Services.AddScoped<Conduit.Sync.Security.CredentialProtector>();

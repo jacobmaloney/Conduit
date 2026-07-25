@@ -4,7 +4,6 @@ using System.Text.Json.Serialization;
 using Conduit.Connectors.ActiveDirectory;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
-using Microsoft.Extensions.Configuration;
 
 namespace Conduit.Web.Services;
 
@@ -61,27 +60,25 @@ public sealed class AdAgentCreateExecutor
     private static bool IsRejectedAttributeKey(string key) =>
         ForbiddenAttributeKeys.Contains(key) || ReservedStructuralKeys.Contains(key);
 
-    // Config section holding the customer-owned permitted creation base DNs, keyed by connection name:
-    //   "AdProvisioning:CreationBaseDns:<sourceConnectionName>": [ "OU=Staff,DC=corp,DC=local", ... ]
-    private const string CreationBaseDnsSection = "AdProvisioning:CreationBaseDns";
-
     private readonly IEnumerable<IConnectorAdapter> _adapters;
     private readonly SinkConnectionCredentialMapRepository _credentialMap;
     private readonly TenantRepository _tenants;
-    private readonly IConfiguration _configuration;
+    // The permitted creation base DNs come through the policy: DB-authoritative, config fallback,
+    // fail-closed deny-all. This executor does not read config directly.
+    private readonly ICreationBaseDnPolicy _baseDnPolicy;
     private readonly ILogger<AdAgentCreateExecutor> _logger;
 
     public AdAgentCreateExecutor(
         IEnumerable<IConnectorAdapter> adapters,
         SinkConnectionCredentialMapRepository credentialMap,
         TenantRepository tenants,
-        IConfiguration configuration,
+        ICreationBaseDnPolicy baseDnPolicy,
         ILogger<AdAgentCreateExecutor> logger)
     {
         _adapters = adapters;
         _credentialMap = credentialMap;
         _tenants = tenants;
-        _configuration = configuration;
+        _baseDnPolicy = baseDnPolicy;
         _logger = logger;
     }
 
@@ -142,8 +139,9 @@ public sealed class AdAgentCreateExecutor
             }
         }
 
-        // ── (4) ★ Containment — the deny-all base-DN allow-list, BEFORE any LDAP call ──
-        var permitted = LoadPermittedBaseDns(sourceConnectionName);
+        // ── (4) ★ Containment — the deny-all base-DN allow-list, BEFORE any LDAP call. The policy is
+        //        DB-authoritative with a config fallback and FAILS CLOSED (deny-all) on any read error. ──
+        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
         if (!BaseDnContainment.IsContained(targetOu, permitted))
         {
             _logger.LogWarning("CreateAdAccount {CommandId}: targetOu refused by the creation base-DN allow-list.", commandId);
@@ -271,24 +269,6 @@ public sealed class AdAgentCreateExecutor
     {
         var sanitized = SanitizeLdapError(message);
         return (false, sanitized, BuildFailureResultJson(sanitized));
-    }
-
-    private List<string> LoadPermittedBaseDns(string sourceConnectionName)
-    {
-        // FAIL-CLOSED: any missing/unreadable/exception path yields an empty list (deny-all).
-        try
-        {
-            var section = _configuration.GetSection($"{CreationBaseDnsSection}:{sourceConnectionName}");
-            var values = section.Get<string[]>();
-            if (values is null || values.Length == 0)
-                return new List<string>();
-            return values.Where(v => !string.IsNullOrWhiteSpace(v)).ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "CreateAdAccount: failed to read the creation base-DN allow-list; denying by default.");
-            return new List<string>();
-        }
     }
 
     private static string? JsonValueToString(JsonElement? el)

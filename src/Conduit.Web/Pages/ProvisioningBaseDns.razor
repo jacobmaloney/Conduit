@@ -1,0 +1,325 @@
+@page "/provisioning-base-dns"
+@attribute [Authorize]
+@using Conduit.DataAccess.Repositories
+@using Conduit.Web.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ICreationBaseDnAllowListRepository Repo
+@inject ICreationBaseDnPolicy Policy
+@inject AuditLogService Audit
+@inject AuthenticationStateProvider AuthState
+@inject IHttpContextAccessor HttpCtx
+@inject ILogger<ProvisioningBaseDns> Logger
+
+<PageTitle>AD Creation Base DNs - Conduit</PageTitle>
+
+<div class="container-fluid">
+    <h1>AD Creation Base DNs</h1>
+    <p class="lead">The containment allow-list for AD account creation — customer-owned, on this agent.</p>
+
+    <div class="alert alert-warning">
+        <strong>This is the creation containment control.</strong> An AD account create is only permitted when its
+        target OU is <em>contained within</em> one of the base DNs configured here for its connection.
+        A connection with <strong>no</strong> permitted base DN <strong>denies every create</strong> (deny-all by default).
+        Grant only the OUs where creation is intended — and delegate the bind account "Create User objects" only there.
+        These values live on this agent and are never set from IdentityCenter.
+    </div>
+
+    @if (!string.IsNullOrEmpty(message))
+    {
+        <div class="alert @(messageIsError ? "alert-danger" : "alert-success") alert-dismissible">
+            @message
+            <button type="button" class="btn-close" @onclick="ClearMessage"></button>
+        </div>
+    }
+
+    <div class="card mb-4">
+        <div class="card-header"><h5 class="mb-0">Add a permitted base DN</h5></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label">Connection name</label>
+                    <input class="form-control" @bind="newConnectionName" placeholder="e.g. corp-local" list="known-connections" />
+                    <datalist id="known-connections">
+                        @foreach (var name in knownConnectionNames)
+                        {
+                            <option value="@name" />
+                        }
+                    </datalist>
+                    <div class="form-text">The IdentityCenter connection name (its DirectoryConnections.Name).</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Permitted base DN</label>
+                    <input class="form-control" @bind="newBaseDn" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-primary w-100" @onclick="AddAsync" disabled="@saving">Add</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (loading)
+    {
+        <p><em>Loading…</em></p>
+    }
+    else if (!anyEffective)
+    {
+        <div class="alert alert-secondary">No permitted base DNs are in effect on this agent (database or host config) — every AD create is denied.</div>
+    }
+    else
+    {
+        @foreach (var conn in connections)
+        {
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><strong>@conn.Name</strong></span>
+                    @if (conn.EnforcedSource == BaseDnSource.Database)
+                    {
+                        <span class="badge bg-success">@conn.DbEntries.Count enforced (database)</span>
+                    }
+                    else if (conn.EnforcedSource == BaseDnSource.Config)
+                    {
+                        <span class="badge bg-info text-dark">@conn.ConfigDns.Count enforced (host config)</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-danger">denied — no permitted base DN</span>
+                    }
+                </div>
+                <div class="card-body p-0">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr><th>Base DN</th><th>Source</th><th>Added</th><th>By</th><th class="text-end">Action</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var entry in conn.DbEntries)
+                            {
+                                <tr>
+                                    <td><code>@entry.BaseDn</code></td>
+                                    <td><span class="badge bg-success">database (enforced)</span></td>
+                                    <td>@entry.CreatedAt.ToString("u")</td>
+                                    <td>@(entry.CreatedBy ?? "—")</td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(entry.Id)" disabled="@saving">Remove</button>
+                                    </td>
+                                </tr>
+                            }
+                            @foreach (var dn in conn.ConfigDns)
+                            {
+                                <tr class="table-light">
+                                    <td><code>@dn</code></td>
+                                    <td>
+                                        @if (conn.EnforcedSource == BaseDnSource.Config)
+                                        {
+                                            <span class="badge bg-info text-dark" title="Edit in the agent's appsettings">host config (enforced) — read-only</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-secondary" title="Database entries take precedence; this is not currently enforced">host config — OVERRIDDEN by database, not enforced</span>
+                                        }
+                                    </td>
+                                    <td colspan="2"><em class="text-muted">from agent host config — edit in appsettings</em></td>
+                                    <td class="text-end"><span class="text-muted">—</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private bool loading = true;
+    private bool saving = false;
+    private string? message;
+    private bool messageIsError;
+
+    private string newConnectionName = string.Empty;
+    private string newBaseDn = string.Empty;
+
+    private sealed class ConnDisplay
+    {
+        public string Name { get; set; } = string.Empty;
+        public BaseDnSource EnforcedSource { get; set; }
+        public List<CreationBaseDnEntry> DbEntries { get; set; } = new();  // editable/removable
+        public List<string> ConfigDns { get; set; } = new();              // read-only (host config)
+    }
+
+    private List<ConnDisplay> connections = new();
+    private List<string> knownConnectionNames = new();
+    private bool anyEffective;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            // DB entries (editable) grouped by connection.
+            var dbAll = await Repo.GetAllAsync();
+            var dbByConn = dbAll
+                .GroupBy(e => e.SourceConnectionName)
+                .ToDictionary(g => g.Key, g => g.OrderBy(e => e.BaseDn).ToList());
+
+            // Every connection with EITHER DB entries OR a host-config allow-list, so a config-only
+            // connection is not invisible (the display honesty fix).
+            var names = dbByConn.Keys
+                .Concat(Policy.GetConfiguredConnectionNames())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n)
+                .ToList();
+
+            connections = new List<ConnDisplay>();
+            foreach (var name in names)
+            {
+                // The ENFORCED source is resolved by the SAME policy the create path uses — displayed == enforced.
+                var effective = await Policy.GetEffectiveAsync(name);
+                connections.Add(new ConnDisplay
+                {
+                    Name = name,
+                    EnforcedSource = effective.Source,
+                    DbEntries = dbByConn.TryGetValue(name, out var e) ? e : new List<CreationBaseDnEntry>(),
+                    ConfigDns = Policy.GetConfigBaseDns(name).ToList()
+                });
+            }
+
+            // Deny-all globally only when NOTHING is in effect anywhere (DB ∪ config empty).
+            anyEffective = connections.Any(c => c.EnforcedSource != BaseDnSource.None);
+            knownConnectionNames = names;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load creation base-DN allow-list.");
+            SetError("Failed to load the allow-list. Check the database connection.");
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task AddAsync()
+    {
+        var connName = newConnectionName?.Trim() ?? string.Empty;
+        var baseDn = newBaseDn?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrEmpty(connName))
+        {
+            SetError("A connection name is required.");
+            return;
+        }
+        if (string.IsNullOrEmpty(baseDn))
+        {
+            SetError("A base DN is required.");
+            return;
+        }
+        // Reject a malformed DN at save time — same component-wise parser the containment check uses.
+        if (!BaseDnContainment.IsWellFormedDn(baseDn))
+        {
+            SetError(string.Concat("'", baseDn, "' is not a well-formed distinguished name. Example: OU=Staff,OU=Users,DC=corp,DC=local"));
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            var userName = await GetUserNameAsync();
+            var inserted = await Repo.AddAsync(connName, baseDn, userName);
+            if (!inserted)
+            {
+                SetError(string.Concat("'", baseDn, "' is already permitted for connection '", connName, "'."));
+                return;
+            }
+
+            await AuditAsync("CreationBaseDnAdded", connName, userName,
+                details: string.Concat("Permitted AD creation base DN added for connection '", connName, "'."),
+                oldValue: null, newValue: baseDn);
+
+            newBaseDn = string.Empty;
+            SetSuccess(string.Concat("Added permitted base DN for '", connName, "'."));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to add creation base DN.");
+            SetError("Failed to add the base DN. Check the database connection.");
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        saving = true;
+        try
+        {
+            var entry = await Repo.GetByIdAsync(id);
+            var deleted = await Repo.DeleteAsync(id);
+            if (deleted && entry is not null)
+            {
+                var userName = await GetUserNameAsync();
+                await AuditAsync("CreationBaseDnRemoved", entry.SourceConnectionName, userName,
+                    details: string.Concat("Permitted AD creation base DN removed from connection '", entry.SourceConnectionName, "'."),
+                    oldValue: entry.BaseDn, newValue: null);
+                SetSuccess("Removed permitted base DN.");
+            }
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to remove creation base DN.");
+            SetError("Failed to remove the base DN. Check the database connection.");
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task<string> GetUserNameAsync()
+    {
+        try
+        {
+            var auth = await AuthState.GetAuthenticationStateAsync();
+            return auth.User?.Identity?.Name ?? "unknown";
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+
+    private async Task AuditAsync(string action, string connName, string userName, string details, string? oldValue, string? newValue)
+    {
+        try
+        {
+            var ip = HttpCtx.HttpContext?.Connection.RemoteIpAddress?.ToString();
+            var ua = HttpCtx.HttpContext?.Request.Headers["User-Agent"].ToString();
+            await Audit.LogAsync(
+                action: action,
+                resourceType: "CreationBaseDnAllowList",
+                resourceId: connName,
+                userName: userName,
+                ipAddress: ip,
+                userAgent: ua,
+                statusCode: 200,
+                details: details,
+                oldValue: oldValue,
+                newValue: newValue);
+        }
+        catch (Exception ex)
+        {
+            // Audit is best-effort — never block the containment change on an audit-write failure.
+            Logger.LogWarning(ex, "Failed to write audit for {Action} on the creation base-DN allow-list.", action);
+        }
+    }
+
+    private void SetError(string m) { message = m; messageIsError = true; }
+    private void SetSuccess(string m) { message = m; messageIsError = false; }
+    private void ClearMessage() => message = null;
+}
