@@ -35,7 +35,7 @@
     <div class="card mb-4">
         <div class="card-header"><h5 class="mb-0">Add a permitted base DN</h5></div>
         <div class="card-body">
-            <div class="row g-2 align-items-end">
+            <div class="row g-2 align-items-start">
                 <div class="col-md-4">
                     <label class="form-label">Connection name</label>
                     <input class="form-control" @bind="newConnectionName" placeholder="e.g. corp-local" list="known-connections" />
@@ -52,6 +52,7 @@
                     <input class="form-control" @bind="newBaseDn" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
                 </div>
                 <div class="col-md-2">
+                    <label class="form-label d-none d-md-block">&nbsp;</label>
                     <button class="btn btn-primary w-100" @onclick="AddAsync" disabled="@saving">Add</button>
                 </div>
             </div>
