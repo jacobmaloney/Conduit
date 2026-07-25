@@ -45,6 +45,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandApplyObjectWrite = "ApplyObjectWrite";
     private const string CommandApplySqlWrite = "ApplySqlWrite";
     private const string CommandApplyAwsWrite = "ApplyAwsWrite";
+    private const string CommandCreateAdAccount = "CreateAdAccount";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
     private const string IcCredentialName = "identitycenter";
 
@@ -440,6 +441,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
 
         bool success;
         string message;
+        string? resultJson = null;   // structured result — currently only CreateAdAccount reports one
         if (string.Equals(command.CommandType, CommandRunSqlDiscovery, StringComparison.OrdinalIgnoreCase))
         {
             (success, message) = await RunSqlDiscoveryAsync(command.PayloadJson, ct);
@@ -456,6 +458,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message) = await ApplyAwsWriteAsync(command.Id, command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandCreateAdAccount, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message, resultJson) = await CreateAdAccountAsync(command.Id, command.PayloadJson, ct);
+        }
         else
         {
             success = false;
@@ -463,7 +469,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
             _logger.LogWarning("IC agent command {Id}: unsupported commandType '{Type}'.", command.Id, command.CommandType);
         }
 
-        var completeBody = JsonSerializer.Serialize(new { success, message });
+        // resultJson is optional on the wire (backward-compatible): only sent when the verb produced one.
+        var completeBody = resultJson is null
+            ? JsonSerializer.Serialize(new { success, message })
+            : JsonSerializer.Serialize(new { success, message, resultJson });
         if (!await PostAsync(client, $"{baseUrl}/api/agent/commands/{command.Id}/complete", completeBody, ct))
             _logger.LogDebug("IC agent command {Id}: complete callback failed (run outcome: {Success} — {Message}).", command.Id, success, message);
         else
@@ -579,6 +588,19 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AwsAgentWriteExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+    }
+
+    /// <summary>
+    /// CreateAdAccount: create a NEW, DISABLED, password-less AD user through this agent. All
+    /// validation, the deny-all base-DN containment control, the LDAP create + read-back, and the
+    /// structured ResultJson live in AdAgentCreateExecutor, resolved from a per-command DI scope. The
+    /// raw payload is NEVER logged here.
+    /// </summary>
+    private async Task<(bool Success, string Message, string? ResultJson)> CreateAdAccountAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentCreateExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 

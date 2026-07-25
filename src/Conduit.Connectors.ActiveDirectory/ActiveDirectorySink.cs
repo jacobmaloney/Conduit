@@ -441,6 +441,42 @@ public sealed class ActiveDirectorySink : IConnectorSink
     }
 
     /// <summary>
+    /// Post-create read-back: read the objectGUID of a freshly-created object by its DN. Returns null
+    /// on any failure — a failed read-back must NOT fail the create (the account already exists; the
+    /// caller reports a degraded result and IC reconciles on the next sync). Never throws.
+    /// </summary>
+    public async Task<Guid?> ReadObjectGuidByDnAsync(string distinguishedName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(distinguishedName)) return null;
+        try
+        {
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId);
+            if (tenant is null) return null;
+            var creds = await ReadCredsAsync();
+            if (creds is null) return null;
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var req = new SearchRequest(
+                distinguishedName: distinguishedName,
+                ldapFilter: "(objectClass=*)",
+                searchScope: SearchScope.Base,
+                attributeList: new[] { "objectGUID" });
+            var resp = (SearchResponse)conn.SendRequest(req);
+            if (resp.Entries.Count == 0) return null;
+            var e = resp.Entries[0];
+            if (!e.Attributes.Contains("objectGUID")) return null;
+            var raw = e.Attributes["objectGUID"].GetValues(typeof(byte[]));
+            if (raw.Length > 0 && raw[0] is byte[] b && b.Length == 16) return new Guid(b);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AD objectGUID read-back failed for {Dn} (tenant={TenantId}) — degraded.", distinguishedName, _tenantId);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Replace a single, caller-validated attribute on the GUID-resolved object.
     /// A null/empty value clears the attribute (Replace with no values = remove).
     /// The attribute name MUST already be allow-listed by the executor — this

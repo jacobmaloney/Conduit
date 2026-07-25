@@ -513,6 +513,11 @@ builder.Services.AddHttpClient("IcAgentCommandPoller")
 // drives the AD sink. Scoped: it resolves the scoped connector adapters + tenant
 // repo + credential protector. The poller resolves it per-command from its scope.
 builder.Services.AddScoped<Conduit.Web.Services.AdAgentWriteExecutor>();
+// CreateAdAccount executor — creates a NEW, DISABLED, password-less AD user for an IC-routed
+// provisioning command. Owns the deny-all base-DN containment control (the real OU containment),
+// defensive password/enable-key rejection, the LDAP create + objectGUID read-back, and the
+// structured ResultJson. Scoped, resolved per-command by the poller.
+builder.Services.AddScoped<Conduit.Web.Services.AdAgentCreateExecutor>();
 // ApplySqlWrite executor — validates + allow-lists an IC-routed SQL security DDL
 // change (CREATE/DROP user/login, role membership) and runs it through parameterized
 // QUOTENAME dynamic SQL with the per-connection scan credential. Scoped: it resolves
