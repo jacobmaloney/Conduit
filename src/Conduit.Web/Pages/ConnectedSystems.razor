@@ -398,7 +398,6 @@
                     {
                         <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
                             <option value="">— Select a connection type —</option>
-                            <option value="LocalDirectory">Local Directory (this Conduit)</option>
                             <option value="ActiveDirectory">Active Directory</option>
                             <option value="ActiveRoles">Active Roles</option>
                             <option value="EntraID">Entra ID (Microsoft 365)</option>
@@ -411,6 +410,7 @@
                             <option value="SqlDiscovery">SQL Server Discovery</option>
                             <option value="CSV">CSV File</option>
                             <option value="AWS">AWS IAM</option>
+                            <option value="AWSIdentityCenter">AWS IAM Identity Center</option>
                             <option value="SharePoint">SharePoint Online</option>
                             <option value="IdentityCenter">IdentityCenter</option>
                             <option value="CertificationCenterSaaS">Certification Center</option>
@@ -1701,6 +1701,7 @@
         "SqlDiscovery" => "SQL Server Discovery",
         "CSV" => "CSV File",
         "AWS" => "AWS IAM",
+        "AWSIdentityCenter" => "AWS IAM Identity Center",
         "SharePoint" => "SharePoint Online",
         "IdentityCenter" => "IdentityCenter",
         "Real" => "Real (legacy / generic)",
