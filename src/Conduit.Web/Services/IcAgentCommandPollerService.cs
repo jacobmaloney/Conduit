@@ -46,6 +46,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandApplySqlWrite = "ApplySqlWrite";
     private const string CommandApplyAwsWrite = "ApplyAwsWrite";
     private const string CommandCreateAdAccount = "CreateAdAccount";
+    private const string CommandBrowseContainers = "BrowseContainers";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
     private const string IcCredentialName = "identitycenter";
 
@@ -462,6 +463,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message, resultJson) = await CreateAdAccountAsync(command.Id, command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandBrowseContainers, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message, resultJson) = await BrowseContainersAsync(command.Id, command.PayloadJson, ct);
+        }
         else
         {
             success = false;
@@ -601,6 +606,18 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentCreateExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+    }
+
+    /// <summary>
+    /// BrowseContainers: READ-ONLY one-level OU/container enumeration under a permitted base DN, for the
+    /// IC account-definition OU picker. All validation + the allow-list scope + the LDAP read live in
+    /// AdAgentBrowseExecutor, resolved from a per-command DI scope. The raw payload is NEVER logged here.
+    /// </summary>
+    private async Task<(bool Success, string Message, string? ResultJson)> BrowseContainersAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentBrowseExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 

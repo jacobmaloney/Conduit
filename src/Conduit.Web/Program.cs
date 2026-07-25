@@ -523,6 +523,9 @@ builder.Services.AddScoped<Conduit.Web.Services.AdAgentWriteExecutor>();
 // defensive password/enable-key rejection, the LDAP create + objectGUID read-back, and the
 // structured ResultJson. Scoped, resolved per-command by the poller.
 builder.Services.AddScoped<Conduit.Web.Services.AdAgentCreateExecutor>();
+// BrowseContainers executor — READ-ONLY one-level OU/container enumeration under a permitted base DN
+// for the IC OU picker. Scoped to the same deny-all base-DN allow-list as the create path.
+builder.Services.AddScoped<Conduit.Web.Services.AdAgentBrowseExecutor>();
 // ApplySqlWrite executor — validates + allow-lists an IC-routed SQL security DDL
 // change (CREATE/DROP user/login, role membership) and runs it through parameterized
 // QUOTENAME dynamic SQL with the per-connection scan credential. Scoped: it resolves
