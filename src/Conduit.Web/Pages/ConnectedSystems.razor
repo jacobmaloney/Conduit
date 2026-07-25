@@ -397,7 +397,7 @@
                     else
                     {
                         <select class="form-select" @bind="form.SystemType" @bind:after="OnSystemTypeChanged">
-                            <option value="Emulator">Emulator (test/demo target)</option>
+                            <option value="">— Select a connection type —</option>
                             <option value="LocalDirectory">Local Directory (this Conduit)</option>
                             <option value="ActiveDirectory">Active Directory</option>
                             <option value="ActiveRoles">Active Roles</option>
@@ -2301,7 +2301,7 @@
     private void ShowCreateModal()
     {
         editingId = null;
-        form = new Tenant { SystemType = "Emulator", IsActive = true };
+        form = new Tenant { SystemType = "", IsActive = true };
         errorMessage = "";
         newConnStep = 1;
         ClearAutoRegStatus();
