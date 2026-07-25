@@ -38,7 +38,7 @@
             <div class="row g-2 align-items-start">
                 <div class="col-md-4">
                     <label class="form-label">Connection name</label>
-                    <input class="form-control" @bind="newConnectionName" placeholder="e.g. corp-local" list="known-connections" />
+                    <input class="form-control" @bind="newConnectionName" @bind:event="oninput" placeholder="e.g. corp-local" list="known-connections" />
                     <datalist id="known-connections">
                         @foreach (var name in knownConnectionNames)
                         {
@@ -49,7 +49,7 @@
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">Permitted base DN</label>
-                    <input class="form-control" @bind="newBaseDn" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
+                    <input class="form-control" @bind="newBaseDn" @bind:event="oninput" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
                 </div>
                 <div class="col-md-2">
                     <label class="form-label d-none d-md-block">&nbsp;</label>

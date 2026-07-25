@@ -673,6 +673,12 @@
                         </div>
                     }
                 }
+                @if (domainReq is null && (createCredTypes is null || createCredTypes.Count == 0))
+                {
+                    <div class="alert alert-secondary py-2 mb-0">
+                        <i class="oi oi-info"></i> This connection type has no additional configuration fields here — continue to <strong>Activate &amp; Test</strong>.
+                    </div>
+                }
                 }
                 @if (ShowStep3)
                 {
