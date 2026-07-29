@@ -3377,9 +3377,12 @@
                 }
                 else
                 {
-                    var val = GetGenericString(field.Key, field.DefaultValue ?? string.Empty);
-                    // Omit empty optional strings (match legacy behavior for Database/CSV).
-                    if (!field.IsRequired && string.IsNullOrWhiteSpace(val)) continue;
+                    // Trim — a pasted key with a stray space/newline hashes to a
+                    // different value server-side and 401s forever.
+                    var val = GetGenericString(field.Key, field.DefaultValue ?? string.Empty).Trim();
+                    // Omit EVERY empty field (required or not): the save merges over the
+                    // stored blob, so leave-blank = keep-existing instead of blanking it.
+                    if (string.IsNullOrWhiteSpace(val)) continue;
                     goj[field.Key] = val;
                 }
             }
@@ -3479,6 +3482,31 @@
         {
             storedCredentialNames = new();
         }
+
+        // Prefill NON-SECRET generic fields (e.g. BaseUrl) from the stored blob so a
+        // key-only re-save shows — and keeps — what's already configured. Secrets stay
+        // blank; leave-blank = keep-existing (merged on save).
+        try
+        {
+            var adapter = ConnectorRegistry.Get(s.SystemType);
+            var credTypes = adapter?.CredentialTypes;
+            if (credTypes is { Count: > 0 })
+            {
+                var raw = await CredentialProtector.RetrieveAsync(s.TenantId, CredentialNameFor(s.SystemType));
+                if (!string.IsNullOrEmpty(raw)
+                    && System.Text.Json.Nodes.JsonNode.Parse(raw) is System.Text.Json.Nodes.JsonObject stored)
+                {
+                    foreach (var field in credTypes[0].Fields)
+                    {
+                        if (field.IsSecret) continue;
+                        if (stored[field.Key] is not System.Text.Json.Nodes.JsonValue node) continue;
+                        if (field.IsBoolean && node.TryGetValue<bool>(out var b)) genericCredValues[field.Key] = b;
+                        else if (node.TryGetValue<string>(out var str)) genericCredValues[field.Key] = str;
+                    }
+                }
+            }
+        }
+        catch { /* prefill is best-effort; the modal still opens blank */ }
     }
 
     private void CloseCredentialsModal()
@@ -3500,6 +3528,24 @@
                 ? CredentialNameFor(credentialsFor.SystemType)
                 : credForm.CredentialName!.Trim();
             var json = BuildCredentialJson();
+            // Merge entered values over the stored blob (same contract as the create
+            // wizard): untouched fields — especially secrets left blank — survive a
+            // key-only or URL-only re-save instead of being silently wiped.
+            try
+            {
+                string? existingRaw = null;
+                try { existingRaw = await CredentialProtector.RetrieveAsync(credentialsFor.TenantId, credName); }
+                catch { /* no stored blob yet */ }
+                if (!string.IsNullOrEmpty(existingRaw)
+                    && System.Text.Json.Nodes.JsonNode.Parse(existingRaw) is System.Text.Json.Nodes.JsonObject existing
+                    && System.Text.Json.Nodes.JsonNode.Parse(json) is System.Text.Json.Nodes.JsonObject entered)
+                {
+                    foreach (var kv in entered)
+                        existing[kv.Key] = kv.Value?.DeepClone();
+                    json = existing.ToJsonString();
+                }
+            }
+            catch { /* merge is best-effort; fall back to storing what was entered */ }
             await CredentialProtector.StoreAsync(credentialsFor.TenantId, credName, json);
             credSaveMessage = $"Credentials saved (AES-GCM under name '{credName}').";
             try
