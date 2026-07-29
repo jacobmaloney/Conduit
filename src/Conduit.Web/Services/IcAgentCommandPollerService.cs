@@ -58,6 +58,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private readonly IHttpClientFactory _httpFactory;
     private readonly IConfiguration _config;
     private readonly IcAgentStatusService _status;
+    private readonly SqlDiscoveryRunner _discoveryRunner;
     private readonly ILogger<IcAgentCommandPollerService> _logger;
 
     /// <summary>BaseUrls whose pending endpoint returned 404 (feature not deployed) — log once each.</summary>
@@ -74,12 +75,14 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         IHttpClientFactory httpFactory,
         IConfiguration config,
         IcAgentStatusService status,
+        SqlDiscoveryRunner discoveryRunner,
         ILogger<IcAgentCommandPollerService> logger)
     {
         _scopeFactory = scopeFactory;
         _httpFactory = httpFactory;
         _config = config;
         _status = status;
+        _discoveryRunner = discoveryRunner;
         _logger = logger;
     }
 
@@ -507,53 +510,8 @@ public sealed class IcAgentCommandPollerService : BackgroundService
             catch (JsonException) { /* payload is advisory; fall through to first project */ }
         }
 
-        using var scope = _scopeFactory.CreateScope();
-        var projectRepo = scope.ServiceProvider.GetRequiredService<SyncProjectRepository>();
-        var tenantRepo = scope.ServiceProvider.GetRequiredService<TenantRepository>();
-        var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
-
-        var tenants = (await tenantRepo.GetAllAsync(includeInactive: true)).ToDictionary(t => t.Id);
-        var candidates = (await projectRepo.GetAllAsync())
-            .Where(p => p.IsEnabled
-                && tenants.TryGetValue(p.SourceTenantId, out var src)
-                && string.Equals(src.SystemType, SqlDiscoverySystemType, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var project = requestedName is null
-            ? candidates.FirstOrDefault()
-            : candidates.FirstOrDefault(p => string.Equals(p.Name, requestedName, StringComparison.OrdinalIgnoreCase));
-
-        if (project is null)
-        {
-            return (false, requestedName is null
-                ? "No enabled Sync Project with a SQL Discovery source exists."
-                : $"No enabled SQL Discovery project named '{requestedName}' exists.");
-        }
-
-        var claimed = await projectRepo.SetRunningAsync(project.Id, Guid.Empty);
-        if (!claimed)
-            return (false, $"Project '{project.Name}' already has a run in progress.");
-
-        try
-        {
-            // CancellationToken.None: a host shutdown mid-run is handled by the
-            // orchestrator's own cancellation registry; the command outcome is
-            // best-effort at that point.
-            var runId = await orchestrator.ExecuteAsync(project.Id, "Agent:RunSqlDiscovery", CancellationToken.None, preClaimed: true);
-            var run = await scope.ServiceProvider.GetRequiredService<SyncRunRepository>().GetByIdAsync(runId);
-            var status = run?.Status ?? "Unknown";
-            var ok = status is "Succeeded" or "PartialSuccess";
-            return (ok, $"Project '{project.Name}' run {runId}: {status}" +
-                        (run is null ? string.Empty : $" (read={run.ObjectsRead}, created={run.ObjectsCreated}, updated={run.ObjectsUpdated}, failed={run.ObjectsFailed})") +
-                        (string.IsNullOrEmpty(run?.ErrorMessage) ? string.Empty : $" — {run!.ErrorMessage}"));
-        }
-        catch (Exception ex)
-        {
-            try { await projectRepo.ClearRunningAsync(project.Id); }
-            catch { /* orchestrator releases on its own failure paths; this is defense in depth */ }
-            return (false, $"Project '{project.Name}' run threw: {ex.Message}");
-        }
+        // Shared with the SPN watcher — one run-CAS/orchestrator code path.
+        return await _discoveryRunner.RunAsync(requestedName, ct);
     }
 
     /// <summary>

@@ -237,6 +237,7 @@ builder.Services.AddScoped<TenantSnapshotService>();
 builder.Services.AddScoped<PortalAdminRepository>();
 builder.Services.AddScoped<ApiTokenRepository>();
 builder.Services.AddScoped<AuditLogRepository>();
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.SqlSpnSnapshotRepository>();
 builder.Services.AddScoped<LoginThrottleRepository>();
 builder.Services.AddScoped<SystemConfigurationRepository>();
 builder.Services.AddScoped<SetupRepository>();
@@ -539,7 +540,10 @@ builder.Services.AddScoped<Conduit.Web.Services.SqlAgentWriteExecutor>();
 builder.Services.AddScoped<Conduit.Web.Services.AwsAgentWriteExecutor>();
 // Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
 builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
+builder.Services.AddSingleton<Conduit.Web.Services.SqlDiscoveryRunner>();
 builder.Services.AddHostedService<Conduit.Web.Services.IcAgentCommandPollerService>();
+// Near-real-time SQL spin-up detection via AD SPN diffing (SqlSpnWatch:Enabled / :IntervalSeconds).
+builder.Services.AddHostedService<Conduit.Web.Services.SqlSpnWatchService>();
 // One-shot startup enrollment against an IC tenant portal (--enroll-url/--enroll-code).
 // Runs once after the setup gate + DatabaseInitializer below; no-ops when unconfigured.
 // Same redirect hardening as the poller: the response carries API keys, so a 3xx must

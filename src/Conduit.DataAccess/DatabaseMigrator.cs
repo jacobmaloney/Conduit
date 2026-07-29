@@ -1445,6 +1445,32 @@ END;
 "
             });
 
+            // Migration 34: SqlSpnSnapshot — the SPN watcher's memory. Holds the last-seen set of
+            // SQL Server hosts (by MSSQLSvc SPN) per AD connection so a fresh sweep can tell a
+            // genuinely NEW instance from one already known, across restarts. State only — no
+            // discovery/object data. A new SPN not in this table = an instance that just spun up.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 34,
+                Name = "SqlSpnSnapshot (SPN watcher state)",
+                Description = "Per-AD-connection remembered set of SQL SPN hosts. Lets the near-real-time SPN watcher diff sweeps to detect newly-registered SQL instances (spin-up) and retirements without re-interrogating every server. State only.",
+                SqlScript = @"
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SqlSpnSnapshot')
+BEGIN
+    CREATE TABLE [dbo].[SqlSpnSnapshot] (
+        [Id]             UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_SqlSpnSnapshot_Id] DEFAULT NEWID(),
+        [AdConnectionId] UNIQUEIDENTIFIER NOT NULL,
+        [HostKey]        NVARCHAR(512)    NOT NULL,
+        [Spn]            NVARCHAR(1024)   NULL,
+        [FirstSeenAt]    DATETIME2        NOT NULL CONSTRAINT [DF_SqlSpnSnapshot_FirstSeenAt] DEFAULT SYSUTCDATETIME(),
+        [LastSeenAt]     DATETIME2        NOT NULL CONSTRAINT [DF_SqlSpnSnapshot_LastSeenAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_SqlSpnSnapshot] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [UQ_SqlSpnSnapshot_Conn_Host] UNIQUE ([AdConnectionId], [HostKey])
+    );
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }
