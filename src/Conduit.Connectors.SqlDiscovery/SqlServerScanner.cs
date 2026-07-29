@@ -37,6 +37,18 @@ internal sealed class SqlServerFacts
     public int? CpuCount { get; init; }
     public int? MemoryGb { get; init; }
     public int? TcpPort { get; init; }
+    /// <summary>sys.dm_os_sys_info.virtual_machine_type_desc: "NONE" (physical) | "HYPERVISOR" | null (old server).</summary>
+    public string? VirtualMachineType { get; init; }
+    /// <summary>Physical socket count (sys.dm_os_sys_info.socket_count), when the server exposes it.</summary>
+    public int? SocketCount { get; init; }
+    /// <summary>Physical cores per socket (sys.dm_os_sys_info.cores_per_socket).</summary>
+    public int? CoresPerSocket { get; init; }
+    /// <summary>
+    /// PHYSICAL cores = socket_count * cores_per_socket. This — not CpuCount (logical, inflated
+    /// by hyperthreading) — is what SQL Server core licensing counts. Null when the topology
+    /// columns are unavailable (pre-2016-SP2 / 2017).
+    /// </summary>
+    public int? PhysicalCores { get; init; }
     public string DatabasesJson { get; init; } = "[]";
     public int DatabaseCount { get; init; }
     /// <summary>Null when login collection is disabled or the query failed.</summary>
@@ -315,6 +327,41 @@ SELECT CONVERT(nvarchar(128), SERVERPROPERTY('MachineName'))     AS MachineName,
         }
         catch (SqlException) { /* keep the configured/default port */ }
 
+        // Virtualization + PHYSICAL topology. cpu_count above is LOGICAL processors (inflated
+        // by hyperthreading); SQL core licensing counts PHYSICAL cores = socket_count *
+        // cores_per_socket. virtual_machine_type_desc tells us definitively whether this is a
+        // VM (so the reported cores are vCPUs) or bare metal. socket/core columns are
+        // 2016-SP2/2017+, so try them first and degrade to just the VM type on older servers.
+        string? vmType = null;
+        int? socketCount = null, coresPerSocket = null, physicalCores = null;
+        try
+        {
+            const string topoSql =
+                "SELECT virtual_machine_type_desc, socket_count, cores_per_socket FROM sys.dm_os_sys_info;";
+            await using var cmd = new SqlCommand(topoSql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                vmType = reader.IsDBNull(0) ? null : reader.GetString(0);
+                socketCount = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+                coresPerSocket = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+                if (socketCount is > 0 && coresPerSocket is > 0)
+                    physicalCores = socketCount * coresPerSocket;
+            }
+        }
+        catch (SqlException)
+        {
+            // Older server without socket/core columns — still learn if it's virtualized.
+            try
+            {
+                const string vmOnlySql = "SELECT virtual_machine_type_desc FROM sys.dm_os_sys_info;";
+                await using var cmd = new SqlCommand(vmOnlySql, conn);
+                var result = await cmd.ExecuteScalarAsync(ct);
+                vmType = result as string;
+            }
+            catch (SqlException) { /* pre-2008R2 — no virtualization signal available */ }
+        }
+
         var databases = new List<object>();
         var dbCount = 0;
         try
@@ -397,6 +444,10 @@ ORDER BY name;";
             CpuCount = cpuCount,
             MemoryGb = memoryGb,
             TcpPort = tcpPort,
+            VirtualMachineType = vmType,
+            SocketCount = socketCount,
+            CoresPerSocket = coresPerSocket,
+            PhysicalCores = physicalCores,
             DatabasesJson = System.Text.Json.JsonSerializer.Serialize(databases),
             DatabaseCount = dbCount,
             LoginsJson = loginsJson,

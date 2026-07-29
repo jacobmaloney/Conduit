@@ -337,7 +337,7 @@ public sealed class SqlDiscoverySource : IConnectorSource
                     // tenant name). Never the discovery-source literal anymore.
                     SourceConnection = string.Empty,
                     FromSpn = false,
-                    Endpoints = { new SqlEndpoint { Instance = entry.Instance, Port = entry.Port } }
+                    Endpoints = await BuildEndpointsForEntryAsync(entry, config, ct)
                 });
             }
         }
@@ -405,6 +405,55 @@ public sealed class SqlDiscoverySource : IConnectorSource
     }
 
     private sealed record AdCredentials(string Username, string Password);
+
+    /// <summary>
+    /// Endpoints to scan for one instance-list entry. If the operator named an instance or a
+    /// port, honor exactly that. If they gave only a hostname and the SQL Browser is enabled,
+    /// ask UDP/1434 to enumerate every instance on the host — this is what surfaces NAMED
+    /// instances and their dynamic ports that a bare 1433 attempt would miss. Falls back to the
+    /// single default endpoint when the Browser is off, unreachable, or returns nothing.
+    /// </summary>
+    private async Task<List<SqlEndpoint>> BuildEndpointsForEntryAsync(
+        ManualInstanceEntry entry, SqlDiscoveryConfig config, CancellationToken ct)
+    {
+        if (entry.Instance is not null || entry.Port is not null)
+            return new List<SqlEndpoint> { new() { Instance = entry.Instance, Port = entry.Port } };
+
+        if (!config.UseSqlBrowser)
+            return new List<SqlEndpoint> { new() };
+
+        try
+        {
+            var instances = await SqlBrowserProbe.QueryAsync(entry.Host, timeoutMs: 2000, ct);
+            if (instances.Count > 0)
+            {
+                var endpoints = new List<SqlEndpoint>();
+                foreach (var inst in instances)
+                {
+                    // Prefer the concrete TCP port when the Browser gave one (no re-resolve at
+                    // connect time); otherwise address the named instance by name.
+                    if (inst.TcpPort is > 0)
+                        endpoints.Add(new SqlEndpoint { Port = inst.TcpPort });
+                    else if (!string.Equals(inst.InstanceName, "MSSQLSERVER", StringComparison.OrdinalIgnoreCase))
+                        endpoints.Add(new SqlEndpoint { Instance = inst.InstanceName });
+                    else
+                        endpoints.Add(new SqlEndpoint());
+                }
+                if (endpoints.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "SQL Discovery: SQL Browser on '{Host}' enumerated {Count} instance(s).", entry.Host, endpoints.Count);
+                    return endpoints;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "SQL Discovery: SQL Browser probe of '{Host}' failed; falling back to the default endpoint.", entry.Host);
+        }
+
+        return new List<SqlEndpoint> { new() };
+    }
 
     /// <summary>
     /// LDAP SPN sweep: (servicePrincipalName=MSSQLSvc/*) over computer accounts,
@@ -683,6 +732,17 @@ public sealed class SqlDiscoverySource : IConnectorSource
             attrs["cpuCores"] = cpu.ToString(CultureInfo.InvariantCulture);
         if (facts.MemoryGb is { } mem)
             attrs["memoryGB"] = mem.ToString(CultureInfo.InvariantCulture);
+        // Virtualization + physical topology — lets IC license on PHYSICAL cores
+        // (socket*cores) instead of hyperthreaded logical cpu_count, and know whether the
+        // reported cores are vCPUs (VM) or bare metal.
+        if (!string.IsNullOrWhiteSpace(facts.VirtualMachineType))
+            attrs["sqlVirtualMachineType"] = facts.VirtualMachineType!;
+        if (facts.SocketCount is { } sockets)
+            attrs["sqlSocketCount"] = sockets.ToString(CultureInfo.InvariantCulture);
+        if (facts.CoresPerSocket is { } cps)
+            attrs["sqlCoresPerSocket"] = cps.ToString(CultureInfo.InvariantCulture);
+        if (facts.PhysicalCores is { } pcores)
+            attrs["sqlPhysicalCores"] = pcores.ToString(CultureInfo.InvariantCulture);
         if (facts.LoginsJson is not null)
             attrs["sqlLoginsJson"] = facts.LoginsJson;
         if (facts.PrincipalsJson is not null)

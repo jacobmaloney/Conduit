@@ -41,6 +41,15 @@ internal sealed class SqlDiscoveryConfig
     /// key keep working and gain the collection.
     /// </summary>
     public bool CollectLogins { get; init; } = true;
+    /// <summary>
+    /// Query the SQL Server Browser (UDP/1434) to enumerate NAMED instances and their
+    /// dynamic ports for instance-list hosts given as a bare hostname (no explicit
+    /// instance/port). Default TRUE — this is how non-default instances stop being
+    /// invisible to a 1433-only scan. An entry that names an instance or port is
+    /// respected as-is and never browser-expanded.
+    /// </summary>
+    public bool UseSqlBrowser { get; init; } = true;
+
     /// <summary>Bounded scan parallelism. Default 16.</summary>
     public int Parallelism { get; init; } = 16;
     /// <summary>Per-server SQL connect timeout in seconds. Default 8.</summary>
@@ -115,6 +124,7 @@ internal static class SqlDiscoveryConfigReader
             SqlPassword = Str("SqlPassword"),
             TrustServerCertificate = Bool("TrustServerCertificate", false),
             CollectLogins = Bool("CollectLogins", true),
+            UseSqlBrowser = Bool("UseSqlBrowser", true),
             Parallelism = Int("Parallelism", 16, 1, 64),
             ConnectTimeoutSeconds = Int("ConnectTimeoutSeconds", 8, 2, 60),
             DiscoverySourceName = string.IsNullOrWhiteSpace(Str("DiscoverySourceName")) ? "SQLDiscovery" : Str("DiscoverySourceName")!.Trim()
