@@ -743,6 +743,13 @@ public sealed class SqlDiscoverySource : IConnectorSource
             attrs["sqlCoresPerSocket"] = cps.ToString(CultureInfo.InvariantCulture);
         if (facts.PhysicalCores is { } pcores)
             attrs["sqlPhysicalCores"] = pcores.ToString(CultureInfo.InvariantCulture);
+        // Recent CPU from the ring buffer — IC accumulates these into a multi-day peak for right-sizing.
+        if (facts.CpuAvgPercent is { } cavg)
+            attrs["sqlCpuAvgPercent"] = cavg.ToString(CultureInfo.InvariantCulture);
+        if (facts.CpuPeakPercent is { } cpeak)
+            attrs["sqlCpuPeakPercent"] = cpeak.ToString(CultureInfo.InvariantCulture);
+        if (facts.CpuSampleMinutes is { } cmin)
+            attrs["sqlCpuSampleMinutes"] = cmin.ToString(CultureInfo.InvariantCulture);
         if (facts.LoginsJson is not null)
             attrs["sqlLoginsJson"] = facts.LoginsJson;
         if (facts.PrincipalsJson is not null)

@@ -49,6 +49,12 @@ internal sealed class SqlServerFacts
     /// columns are unavailable (pre-2016-SP2 / 2017).
     /// </summary>
     public int? PhysicalCores { get; init; }
+    /// <summary>Average SQL process CPU % from the scheduler-monitor ring buffer (recent ~4h). Null if unavailable.</summary>
+    public int? CpuAvgPercent { get; init; }
+    /// <summary>Peak SQL process CPU % from the ring buffer — feeds utilization-based right-sizing.</summary>
+    public int? CpuPeakPercent { get; init; }
+    /// <summary>Minutes of per-minute CPU samples behind the avg/peak (the ring buffer window).</summary>
+    public int? CpuSampleMinutes { get; init; }
     public string DatabasesJson { get; init; } = "[]";
     public int DatabaseCount { get; init; }
     /// <summary>Null when login collection is disabled or the query failed.</summary>
@@ -362,6 +368,34 @@ SELECT CONVERT(nvarchar(128), SERVERPROPERTY('MachineName'))     AS MachineName,
             catch (SqlException) { /* pre-2008R2 — no virtualization signal available */ }
         }
 
+        // Recent CPU from the scheduler-monitor ring buffer (~256 minutes of per-minute samples).
+        // SQL keeps no long CPU history, so this snapshot is accumulated over scans IC-side into a
+        // multi-day peak for right-sizing. SET QUOTED_IDENTIFIER ON is required for the XML .value().
+        int? cpuAvg = null, cpuPeak = null, cpuSamples = null;
+        try
+        {
+            const string cpuSql = @"
+SET QUOTED_IDENTIFIER ON;
+SELECT AVG(SQLProcessUtilization), MAX(SQLProcessUtilization), COUNT(*)
+FROM (
+  SELECT record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]','int') AS SQLProcessUtilization
+  FROM (
+    SELECT CONVERT(xml, record) AS record
+    FROM sys.dm_os_ring_buffers
+    WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR' AND record LIKE '%<SystemHealth>%'
+  ) AS x
+) AS y;";
+            await using var cmd = new SqlCommand(cpuSql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                cpuAvg = reader.IsDBNull(0) ? null : reader.GetInt32(0);
+                cpuPeak = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+                cpuSamples = reader.IsDBNull(2) ? null : reader.GetInt32(2);
+            }
+        }
+        catch (SqlException) { /* ring buffer unreadable — right-sizing simply skips this host */ }
+
         var databases = new List<object>();
         var dbCount = 0;
         try
@@ -448,6 +482,9 @@ ORDER BY name;";
             SocketCount = socketCount,
             CoresPerSocket = coresPerSocket,
             PhysicalCores = physicalCores,
+            CpuAvgPercent = cpuAvg,
+            CpuPeakPercent = cpuPeak,
+            CpuSampleMinutes = cpuSamples,
             DatabasesJson = System.Text.Json.JsonSerializer.Serialize(databases),
             DatabaseCount = dbCount,
             LoginsJson = loginsJson,
