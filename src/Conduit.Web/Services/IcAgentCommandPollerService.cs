@@ -452,7 +452,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         }
         else if (string.Equals(command.CommandType, CommandApplyObjectWrite, StringComparison.OrdinalIgnoreCase))
         {
-            (success, message) = await ApplyObjectWriteAsync(command.Id, command.PayloadJson, ct);
+            (success, message, resultJson) = await ApplyObjectWriteAsync(command.Id, command.PayloadJson, ct);
         }
         else if (string.Equals(command.CommandType, CommandApplySqlWrite, StringComparison.OrdinalIgnoreCase))
         {
@@ -520,11 +520,14 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     /// resolved from a per-command DI scope (TenantRepository + CredentialProtector
     /// + connector adapters are scoped). The raw payload is NEVER logged here.
     /// </summary>
-    private async Task<(bool Success, string Message)> ApplyObjectWriteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    private async Task<(bool Success, string Message, string? ResultJson)> ApplyObjectWriteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentWriteExecutor>();
-        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+        var (ok, message) = await executor.ExecuteAsync(commandId, payloadJson, ct);
+        // Structured result (currently only the sealed password reset) rides back on the
+        // completion body exactly like CreateAdAccount's. Never logged.
+        return (ok, message, executor.LastResultJson);
     }
 
     /// <summary>

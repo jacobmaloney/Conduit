@@ -45,11 +45,21 @@ public sealed class AdAgentWriteExecutor
     private const string OpAddGroupMember = "AddGroupMember";
     private const string OpRemoveGroupMember = "RemoveGroupMember";
     private const string OpMoveObject = "MoveObject";
+    private const string OpResetPasswordScramble = "ResetPasswordScramble";
+    private const string OpResetPasswordSealed = "ResetPasswordSealed";
 
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
-        OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject
+        OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject,
+        OpResetPasswordScramble, OpResetPasswordSealed
     };
+
+    /// <summary>
+    /// Structured result of the LAST executed command in this (per-command-scope) executor
+    /// instance — currently only the sealed password reset produces one (the ciphertext
+    /// envelope). Read by the poller immediately after ExecuteAsync; never logged.
+    /// </summary>
+    public string? LastResultJson { get; private set; }
 
     /// <summary>
     /// Fixed AD attribute allow-list — mirrors IC's writable set. Case-insensitive
@@ -197,6 +207,8 @@ public sealed class AdAgentWriteExecutor
                 OpAddGroupMember => await DoMembershipAsync(sink, target, p, add: true, ct),
                 OpRemoveGroupMember => await DoMembershipAsync(sink, target, p, add: false, ct),
                 OpMoveObject => await DoMoveObjectAsync(sink, p, sourceConnectionName, ct),
+                OpResetPasswordScramble => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: false, ct),
+                OpResetPasswordSealed => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: true, ct),
                 _ => (false, $"ApplyObjectWrite: operation '{operation}' is not allowed.")
             };
         }
@@ -209,6 +221,163 @@ public sealed class AdAgentWriteExecutor
     }
 
     // ── SetAttributes ────────────────────────────────────────────────────────
+    /// <summary>
+    /// Password reset (design: docs/architecture/password-reset-via-conduit-agent.md).
+    /// The AGENT generates the password — intent travels, material never does. Guards, in
+    /// order and all before any write: user-class only; target CURRENT DN inside a
+    /// permitted base DN (deny-all containment); AdminSDHolder/built-in principals refused
+    /// outright. Scramble discards the generated value; Sealed encrypts it to the
+    /// requester ephemeral P-256 public key (ECDH-ES + HKDF-SHA256 + AES-256-GCM) and
+    /// returns only ciphertext. The plaintext is cleared and never logged either way.
+    /// </summary>
+    private async Task<(bool, string)> DoResetPasswordAsync(
+        ActiveDirectorySink sink, AdResolvedObject target, ApplyObjectWritePayload p,
+        string sourceConnectionName, bool sealedMode, CancellationToken ct)
+    {
+        if (!target.IsClass("user"))
+            return (false, "ResetPassword: only user objects are resettable through this channel.");
+
+        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        if (!BaseDnContainment.IsContained(target.DistinguishedName, permitted))
+            return (false,
+                $"ResetPassword: the target is not within any permitted base DN for connection '{sourceConnectionName}' — refusing (deny-all containment).");
+
+        var (guarded, reason) = await sink.IsPasswordResetGuardedAsync(p.ObjectGuid!, ct);
+        if (guarded)
+            return (false, $"ResetPassword REFUSED: {reason}");
+
+        RecipientJwk? jwk = null;
+        if (sealedMode)
+        {
+            jwk = p.RecipientPublicKeyJwk;
+            if (jwk is null || !RecipientJwk.TryDecode(jwk, out _, out _))
+                return (false, "ResetPasswordSealed: a valid P-256 recipientPublicKeyJwk (x,y) is required.");
+        }
+
+        var requireChange = p.RequireChangeAtLogon ?? sealedMode; // sealed (a human receives it) defaults true
+        var password = GeneratePassword(24);
+        try
+        {
+            var applied = await sink.ResetPasswordAsync(p.ObjectGuid!, password, requireChange, ct);
+            if (applied.Outcome != ProvisionOutcome.Success)
+            {
+                // One retry at 32 chars for fine-grained policies demanding more.
+                password = GeneratePassword(32);
+                applied = await sink.ResetPasswordAsync(p.ObjectGuid!, password, requireChange, ct);
+                if (applied.Outcome != ProvisionOutcome.Success)
+                    return (false, $"ResetPassword failed: {applied.ErrorMessage}");
+            }
+
+            if (!sealedMode)
+                return (true, $"Password scrambled for {target.DistinguishedName} (requireChangeAtLogon={requireChange}).");
+
+            LastResultJson = SealToRecipient(password, jwk!, p.RecipientKeyFp);
+            return (true, $"Password reset for {target.DistinguishedName}; sealed to recipient key {p.RecipientKeyFp}.");
+        }
+        finally
+        {
+            password = null!; // drop the only reference; never logged, never in messages
+        }
+    }
+
+    /// <summary>CSPRNG password: guaranteed lower/upper/digit/symbol, no ambiguous glyphs.</summary>
+    private static string GeneratePassword(int length)
+    {
+        const string lower = "abcdefghjkmnpqrstuvwxyz";
+        const string upper = "ABCDEFGHJKMNPQRSTUVWXYZ";
+        const string digit = "23456789";
+        const string symbol = "!@#$%^*-_=+?";
+        const string all = lower + upper + digit + symbol;
+
+        var chars = new char[length];
+        chars[0] = lower[System.Security.Cryptography.RandomNumberGenerator.GetInt32(lower.Length)];
+        chars[1] = upper[System.Security.Cryptography.RandomNumberGenerator.GetInt32(upper.Length)];
+        chars[2] = digit[System.Security.Cryptography.RandomNumberGenerator.GetInt32(digit.Length)];
+        chars[3] = symbol[System.Security.Cryptography.RandomNumberGenerator.GetInt32(symbol.Length)];
+        for (var i = 4; i < length; i++)
+            chars[i] = all[System.Security.Cryptography.RandomNumberGenerator.GetInt32(all.Length)];
+        // Fisher-Yates so the guaranteed classes are not positionally predictable.
+        for (var i = length - 1; i > 0; i--)
+        {
+            var j = System.Security.Cryptography.RandomNumberGenerator.GetInt32(i + 1);
+            (chars[i], chars[j]) = (chars[j], chars[i]);
+        }
+        return new string(chars);
+    }
+
+    /// <summary>
+    /// ECDH-ES(P-256) → HKDF-SHA256(info="IC-sealed-password-v1", empty salt) → AES-256-GCM.
+    /// Interops with WebCrypto on the IdentityCenter side (deriveBits + HKDF + AES-GCM,
+    /// tag appended to ciphertext). Output carries the agent EPHEMERAL public key only.
+    /// </summary>
+    private static string SealToRecipient(string password, RecipientJwk jwk, string? recipientKeyFp)
+    {
+        RecipientJwk.TryDecode(jwk, out var xBytes, out var yBytes);
+        using var recipient = System.Security.Cryptography.ECDiffieHellman.Create();
+        recipient.ImportParameters(new System.Security.Cryptography.ECParameters
+        {
+            Curve = System.Security.Cryptography.ECCurve.NamedCurves.nistP256,
+            Q = new System.Security.Cryptography.ECPoint { X = xBytes, Y = yBytes }
+        });
+        using var ephemeral = System.Security.Cryptography.ECDiffieHellman.Create(
+            System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+
+        var shared = ephemeral.DeriveRawSecretAgreement(recipient.PublicKey);
+        var key = System.Security.Cryptography.HKDF.DeriveKey(
+            System.Security.Cryptography.HashAlgorithmName.SHA256, shared, 32,
+            salt: null, info: System.Text.Encoding.UTF8.GetBytes("IC-sealed-password-v1"));
+
+        var plaintext = System.Text.Encoding.UTF8.GetBytes(password);
+        var iv = System.Security.Cryptography.RandomNumberGenerator.GetBytes(12);
+        var cipher = new byte[plaintext.Length];
+        var tag = new byte[16];
+        using (var gcm = new System.Security.Cryptography.AesGcm(key, 16))
+            gcm.Encrypt(iv, plaintext, cipher, tag);
+        Array.Clear(plaintext);
+        Array.Clear(shared);
+        Array.Clear(key);
+
+        var ctAndTag = new byte[cipher.Length + tag.Length];
+        cipher.CopyTo(ctAndTag, 0);
+        tag.CopyTo(ctAndTag, cipher.Length);
+
+        var ephParams = ephemeral.ExportParameters(false);
+        static string B64Url(byte[] b) => Convert.ToBase64String(b).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        return JsonSerializer.Serialize(new
+        {
+            alg = "ECDH-ES+HKDF-SHA256+A256GCM",
+            epk = new { x = B64Url(ephParams.Q.X!), y = B64Url(ephParams.Q.Y!) },
+            iv = B64Url(iv),
+            sealedPassword = B64Url(ctAndTag),
+            recipientKeyFp
+        });
+    }
+
+    /// <summary>Recipient public key as a minimal P-256 JWK (x,y base64url, 32 bytes each).</summary>
+    public sealed class RecipientJwk
+    {
+        [JsonPropertyName("x")] public string? X { get; set; }
+        [JsonPropertyName("y")] public string? Y { get; set; }
+
+        public static bool TryDecode(RecipientJwk jwk, out byte[] x, out byte[] y)
+        {
+            x = Array.Empty<byte>(); y = Array.Empty<byte>();
+            try
+            {
+                static byte[] FromB64Url(string s)
+                {
+                    var t = s.Replace('-', '+').Replace('_', '/');
+                    return Convert.FromBase64String(t.PadRight(t.Length + (4 - t.Length % 4) % 4, '='));
+                }
+                if (string.IsNullOrWhiteSpace(jwk.X) || string.IsNullOrWhiteSpace(jwk.Y)) return false;
+                x = FromB64Url(jwk.X);
+                y = FromB64Url(jwk.Y);
+                return x.Length == 32 && y.Length == 32;
+            }
+            catch { return false; }
+        }
+    }
+
     /// <summary>
     /// MoveObject: relocate the object to a new parent container. The DESTINATION must be inside a
     /// permitted creation base DN (the same deny-all allow-list that contains creates) — an agent
@@ -404,6 +573,9 @@ public sealed class AdAgentWriteExecutor
         [JsonPropertyName("objectClass")] public string? ObjectClass { get; set; }   // advisory — AD-read class wins
         [JsonPropertyName("operation")] public string? Operation { get; set; }
         [JsonPropertyName("targetOu")] public string? TargetOu { get; set; }
+        [JsonPropertyName("requireChangeAtLogon")] public bool? RequireChangeAtLogon { get; set; }
+        [JsonPropertyName("recipientPublicKeyJwk")] public RecipientJwk? RecipientPublicKeyJwk { get; set; }
+        [JsonPropertyName("recipientKeyFp")] public string? RecipientKeyFp { get; set; }
         [JsonPropertyName("attributes")] public Dictionary<string, JsonElement?>? Attributes { get; set; }
         [JsonPropertyName("memberObjectGuid")] public string? MemberObjectGuid { get; set; }
     }

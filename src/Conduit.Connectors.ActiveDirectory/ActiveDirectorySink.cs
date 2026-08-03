@@ -801,6 +801,43 @@ public sealed class ActiveDirectorySink : IConnectorSink
         }
     }
 
+    /// <summary>
+    /// Password-reset privileged guard: TRUE when the target is AdminSDHolder-protected
+    /// (adminCount=1 — covers members of Domain/Enterprise/Schema Admins, Administrators,
+    /// operators via SDProp) or a well-known built-in principal. Such accounts are NEVER
+    /// resettable through the agent channel (no configuration override in v1).
+    /// </summary>
+    public async Task<(bool Guarded, string Reason)> IsPasswordResetGuardedAsync(string objectGuid, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(objectGuid, out var g)) return (true, "objectGuid is not a GUID.");
+        var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+            ?? throw new InvalidOperationException("Tenant not found.");
+        var creds = await ReadCredsAsync()
+            ?? throw new InvalidOperationException("No 'ldap' credential.");
+        using var conn = Bind(tenant.Domain, creds, out _);
+
+        var req = new SearchRequest($"<GUID={g}>", "(objectClass=*)", SearchScope.Base,
+            new[] { "adminCount", "sAMAccountName" });
+        SearchResponse resp;
+        try { resp = (SearchResponse)conn.SendRequest(req); }
+        catch { return (true, "target could not be read — refusing the reset (fail closed)."); }
+        if (resp.Entries.Count == 0) return (true, "target not found.");
+        var e = resp.Entries[0];
+
+        var adminCount = e.Attributes.Contains("adminCount") ? e.Attributes["adminCount"][0]?.ToString() : null;
+        if (string.Equals(adminCount?.Trim(), "1", StringComparison.Ordinal))
+            return (true, "the account is AdminSDHolder-protected (adminCount=1).");
+
+        var sam = e.Attributes.Contains("sAMAccountName") ? e.Attributes["sAMAccountName"][0]?.ToString() : null;
+        if (sam is not null &&
+            (sam.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
+             || sam.Equals("krbtgt", StringComparison.OrdinalIgnoreCase)
+             || sam.Equals("Guest", StringComparison.OrdinalIgnoreCase)))
+            return (true, $"'{sam}' is a well-known built-in principal.");
+
+        return (false, "");
+    }
+
     public async Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken cancellationToken)
     {
         try
