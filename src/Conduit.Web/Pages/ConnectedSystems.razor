@@ -412,8 +412,8 @@
                             <option value="AWS">AWS IAM</option>
                             <option value="AWSIdentityCenter">AWS IAM Identity Center</option>
                             <option value="SharePoint">SharePoint Online</option>
-                            <option value="IdentityCenter">IdentityCenter</option>
-                            <option value="CertificationCenterSaaS">Certification Center</option>
+                            <option value="IdentityCenter">Identity Center</option>
+                            <option value="CertificationCenterSaaS">Identity Center (SaaS Tenant)</option>
                         </select>
                     }
                     @{
@@ -637,7 +637,7 @@
                                                 <button class="btn btn-outline-secondary" type="button"
                                                         @onclick="() => ToggleSecret(ctype.Name, field.Key)"
                                                         title="@(IsSecretRevealed(ctype.Name, field.Key) ? "Hide" : "Show")">
-                                                    <i class="bi @(IsSecretRevealed(ctype.Name, field.Key) ? "bi-eye-slash" : "bi-eye")"></i>
+                                                    <i class="fas @(IsSecretRevealed(ctype.Name, field.Key) ? "fa-eye-slash" : "fa-eye")"></i>
                                                 </button>
                                             </div>
                                         }
@@ -1703,7 +1703,8 @@
         "AWS" => "AWS IAM",
         "AWSIdentityCenter" => "AWS IAM Identity Center",
         "SharePoint" => "SharePoint Online",
-        "IdentityCenter" => "IdentityCenter",
+        "IdentityCenter" => "Identity Center",
+        "CertificationCenterSaaS" => "Identity Center (SaaS Tenant)",
         "Real" => "Real (legacy / generic)",
         _ => systemType ?? string.Empty
     };
@@ -2284,7 +2285,11 @@
     private async Task Load()
     {
         loading = true;
-        try { stats = await TenantRepo.GetStatsAsync(); }
+        // Hide the seeded Default tenant (00000000-…-01) — it exists only as the FK
+        // fallback parent for tenant-less inserts, not a real connection. Suppressing it
+        // here keeps a fresh install's connection list (and counts) empty without removing
+        // the seed the schema/repositories depend on.
+        try { stats = (await TenantRepo.GetStatsAsync()).Where(s => s.TenantId != TenantRepository.DefaultTenantId).ToList(); }
         catch (Exception ex)
         {
             // Fix 8: surface the load failure on the page instead of swallowing

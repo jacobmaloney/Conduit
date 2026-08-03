@@ -47,6 +47,7 @@ public static class AttributeTemplateCatalog
         public const string Okta = "Okta";
         public const string GoogleWorkspace = "GoogleWorkspace";
         public const string Scim = "Scim";
+        public const string Csv = "CSV";
         public const string GenericLdap = "GenericLdap";
         public const string Database = "Database";
         public const string SharePoint = "SharePoint";
@@ -381,6 +382,7 @@ public static class AttributeTemplateCatalog
             E("costCenter", "CostCenter"),
             E("manager", "ManagerSourceId"),
             E("employeeId", "EmployeeId"),
+            E("employeeType", "EmployeeType"),
             E("isActive", "IsActive", false, "Boolean"),
             E("whenChanged", "WhenChanged"),
             E("whenCreated", "WhenCreated"),
@@ -752,6 +754,33 @@ public static class AttributeTemplateCatalog
         };
 
         // ──────────────────────────────── SCIM ─────────────────────────────────
+        // ─────────────────────────── CSV (flat HR feed) ───────────────────────────
+        // A CSV has no fixed native schema — columns are whatever the file's header row
+        // says. This template assumes the CONVENTIONAL HR-export header names (which are
+        // the canonical keys themselves) so Auto-map yields a sensible Identities feed out
+        // of the box. Columns absent from a given file simply produce no value; rename the
+        // rows for a non-standard header, or leave the step on passthrough to carry every
+        // column verbatim. EmployeeId is the correlation/business key.
+        c[(Systems.Csv, "User")] = new[]
+        {
+            E("EmployeeId", "EmployeeId", true),
+            E("FirstName", "FirstName"),
+            E("LastName", "LastName"),
+            E("DisplayName", "DisplayName"),
+            E("Email", "Email"),
+            E("UserPrincipalName", "UserPrincipalName"),
+            E("Username", "Username"),
+            E("Department", "Department"),
+            E("JobTitle", "JobTitle"),
+            E("EmployeeType", "EmployeeType"),
+            E("ManagerId", "ManagerSourceId"),
+            E("Company", "Company"),
+            E("Office", "Office"),
+            E("PhoneNumber", "PhoneNumber"),
+            E("MobilePhone", "MobilePhone"),
+            E("CostCenter", "CostCenter"),
+        };
+
         c[(Systems.Scim, "User")] = new[]
         {
             E("id", "SourceUniqueId", true),

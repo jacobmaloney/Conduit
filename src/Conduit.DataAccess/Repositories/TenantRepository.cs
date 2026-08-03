@@ -395,6 +395,16 @@ namespace Conduit.DataAccess.Repositories
         }
 
         /// <summary>
+        /// Count of connected systems that have a validated IdentityCenter target
+        /// (IcEntitlementBaseUrl stamped). Used by the Getting Started checklist to
+        /// mark the "Connect IdentityCenter" step done. The column is not on the Tenant
+        /// model, so this is a direct scalar query.
+        /// </summary>
+        public async Task<int> CountIcEntitlementTenantsAsync() =>
+            await ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM Tenants WHERE IcEntitlementBaseUrl IS NOT NULL;");
+
+        /// <summary>
         /// Returns user + group + active-token counts for each tenant.
         /// Used by the Connected Systems dashboard.
         /// </summary>

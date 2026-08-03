@@ -7,22 +7,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Conduit Setup</title>
     <base href="~/" />
+    @* Default to the adopted IdentityCenter warm-paper (light) theme unless the user
+       stored a dark preference. MUST run before the stylesheets / first paint — the
+       shared brand CSS only resolves its light tokens under html.light-theme. Mirrors
+       Pages/_Layout.cshtml exactly. *@
+    <script>if(localStorage.getItem('theme')!=='dark')document.documentElement.classList.add('light-theme');</script>
+    <link rel="icon" type="image/svg+xml" href="~/assets/brand/conduit-mark.svg" />
+    <link rel="alternate icon" href="~/favicon.ico" />
+    <meta name="theme-color" content="#FAFAF7" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <link rel="icon" type="image/svg+xml" href="~/assets/brand/conduit-mark.svg" />
-    <link rel="alternate icon" href="~/favicon.ico" />
-    <meta name="theme-color" content="#22D3EE" />
+    @* Shared brand / design-system stack — SAME files, SAME order as Pages/_Layout.cshtml
+       so first-run setup uses the identical IdentityCenter theme instead of half-loading
+       only conduit.css (which assumes these already defined the base tokens). *@
+    <link rel="stylesheet" href="css/brand-tokens.css" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
+    <link rel="stylesheet" href="lib/fontawesome/css/all.min.css" />
+    <link rel="stylesheet" href="css/conduit-design.css" />
+    <link href="css/center-shared.css" rel="stylesheet" />
+    <link href="css/ic-design-system.css" rel="stylesheet" />
     <link href="css/conduit.css" rel="stylesheet" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
 </head>
 <body>
-    @* The wizard page renders its own chrome (aside steps + main pane); this layout
-       is intentionally a pass-through so it doesn't fight the design's full-viewport shell. *@
-    @Body
+    @* Wrap in .ic-content so the wizard inherits IC's warm-paper palette — critically
+       the light --panel-2 that form inputs use (html.light-theme alone leaves it dark).
+       The wizard renders its own full-viewport shell inside; .ic-content only supplies
+       tokens (its flex:1 is inert without a flex parent), so it doesn't fight the shell. *@
+    <div class="ic-content">
+        @Body
+    </div>
 
     <script src="_framework/blazor.server.js"></script>
 </body>

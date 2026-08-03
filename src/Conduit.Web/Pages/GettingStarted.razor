@@ -1,0 +1,196 @@
+@page "/getting-started"
+@attribute [Authorize]
+@using Conduit.DataAccess.Repositories
+@inject TenantRepository TenantRepo
+@inject SyncProjectRepository ProjectRepo
+@inject SyncRunRepository RunRepo
+@inject PortalAdminRepository AdminRepo
+@inject SystemConfigurationRepository Config
+@inject NavigationManager Nav
+
+@*
+    Getting Started checklist — the post-install onboarding journey (parity with
+    IdentityCenter's /admin/setup). The first-run INSTALL wizard lives at /setup
+    (SetupService/SetupMiddleware); this page picks up after login and guides the
+    operator through connecting systems and running their first sync.
+
+    Each step is auto-marked done from REAL Conduit state, with a manual "Mark done"
+    override. Progress + the dismissed flag persist per-instance in SystemConfiguration.
+*@
+
+<PageTitle>Getting Started — Conduit</PageTitle>
+
+<style>
+    .gs-wrap { max-width: 860px; margin: 0 auto; }
+    .gs-eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: 12px; font-weight: 700;
+        color: var(--accent, #0284c7); margin-bottom: .35rem; }
+    .gs-h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 .35rem 0; }
+    .gs-lede { color: var(--text-secondary, #64748b); font-size: 14px; margin-bottom: 1.5rem; }
+    .gs-progress-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .5rem; }
+    .gs-progress-count { font-weight: 700; font-size: 1.05rem; }
+    .gs-progress-sub { color: var(--text-secondary, #64748b); font-size: 13px; }
+    .gs-bar { height: 8px; border-radius: 999px; background: rgba(2,132,199,.12); overflow: hidden; }
+    .gs-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg,#0284c7,#14b8a6);
+        transition: width .4s ease; }
+    .gs-step { display: flex; gap: 1rem; align-items: flex-start; }
+    .gs-badge { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 999px; display: inline-flex;
+        align-items: center; justify-content: center; font-weight: 700; font-size: 1rem;
+        background: rgba(2,132,199,.10); color: #0284c7; border: 1px solid rgba(2,132,199,.20); }
+    .gs-badge.done { background: rgba(20,184,166,.14); color: #0f9d8a; border-color: rgba(20,184,166,.30); }
+    .gs-step-body { flex: 1 1 auto; min-width: 0; }
+    .gs-step-title { font-size: 1.06rem; font-weight: 600; margin: .1rem 0 .25rem 0; }
+    .gs-step-desc { color: var(--text-secondary, #64748b); font-size: 13px; line-height: 1.55; margin-bottom: .75rem; }
+    .gs-step-actions { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    .gs-done-pill { display: inline-flex; align-items: center; gap: .35rem; font-size: 12px; font-weight: 700;
+        color: #0f9d8a; }
+    .gs-mark-link { background: none; border: none; padding: 0; font-size: 12px; color: var(--text-secondary,#64748b);
+        cursor: pointer; text-decoration: underline; }
+    .gs-mark-link:hover { color: #0284c7; }
+    .gs-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 1.25rem; flex-wrap: wrap; gap: .75rem; }
+</style>
+
+<div class="container-fluid py-4">
+    <div class="gs-wrap">
+        <div class="gs-eyebrow">Getting Started</div>
+        <h1 class="gs-h1">Get Conduit moving.</h1>
+        <p class="gs-lede">Five steps to your first sync — connect a system, point it at IdentityCenter, map it, and run.
+            Each step checks itself off as you go.</p>
+
+        @if (!_loaded)
+        {
+            <div class="text-center py-5"><div class="spinner-border text-primary" role="status"></div></div>
+        }
+        else
+        {
+            <div class="surface-card mb-4">
+                <div class="surface-card-body">
+                    <div class="gs-progress-head">
+                        <span class="gs-progress-count">@DoneCount of @TotalCount complete</span>
+                        <span class="gs-progress-sub">@(AllDone ? "All set — you're ready to sync." : $"{TotalCount - DoneCount} step(s) to go")</span>
+                    </div>
+                    <div class="gs-bar"><div class="gs-bar-fill" style="width:@(PercentDone)%;"></div></div>
+                </div>
+            </div>
+
+            @foreach (var s in _steps)
+            {
+                <div class="surface-card mb-3">
+                    <div class="surface-card-body">
+                        <div class="gs-step">
+                            <span class="gs-badge @(s.Done ? "done" : "")">
+                                @if (s.Done)
+                                {
+                                    <i class="oi oi-check"></i>
+                                }
+                                else
+                                {
+                                    @s.Num
+                                }
+                            </span>
+                            <div class="gs-step-body">
+                                <div class="gs-step-title">@s.Title</div>
+                                <div class="gs-step-desc">@s.Desc</div>
+                                <div class="gs-step-actions">
+                                    <a href="@s.Href" class="btn btn-sm btn-primary">
+                                        <i class="@s.Icon me-1"></i>@s.ActionLabel
+                                    </a>
+                                    @if (s.Done)
+                                    {
+                                        <span class="gs-done-pill"><i class="oi oi-circle-check"></i>Done</span>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="gs-mark-link" @onclick="() => MarkDone(s)">Mark as done</button>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="gs-foot">
+                <a href="/" class="btn btn-outline-secondary btn-sm">Back to dashboard</a>
+                <button type="button" class="btn btn-link btn-sm text-muted" @onclick="Dismiss">
+                    Dismiss this checklist
+                </button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private bool _loaded;
+    private List<StepVm> _steps = new();
+
+    private int DoneCount => _steps.Count(s => s.Done);
+    private int TotalCount => _steps.Count;
+    private int PercentDone => TotalCount == 0 ? 0 : (int)Math.Round(100.0 * DoneCount / TotalCount);
+    private bool AllDone => TotalCount > 0 && DoneCount == TotalCount;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        // Auto-detection from real Conduit state. Each signal is defensive: a fresh /
+        // un-migrated DB must never crash the page, so a failed probe just reads "not done".
+        bool adminSecured = false, sourceConnected = false, icConnected = false, projectCreated = false, syncRan = false;
+
+        try { var admins = await AdminRepo.GetAllAsync(); adminSecured = admins.Any(a => !string.Equals(a.UserName, "Admin", StringComparison.OrdinalIgnoreCase)); } catch { }
+        try { var tenants = await TenantRepo.GetAllAsync(true); sourceConnected = tenants.Any(t => t.Id != TenantRepository.DefaultTenantId); } catch { }
+        try { icConnected = await TenantRepo.CountIcEntitlementTenantsAsync() > 0; } catch { }
+        try { var projects = await ProjectRepo.GetAllAsync(); projectCreated = projects.Count > 0; } catch { }
+        try { var runs = await RunRepo.GetRecentAsync(1); syncRan = runs.Count > 0; } catch { }
+
+        var m1 = await GetFlag("GettingStarted.Step1");
+        var m2 = await GetFlag("GettingStarted.Step2");
+        var m3 = await GetFlag("GettingStarted.Step3");
+        var m4 = await GetFlag("GettingStarted.Step4");
+        var m5 = await GetFlag("GettingStarted.Step5");
+
+        _steps = new()
+        {
+            new StepVm(1, "Secure your admin account",
+                "Rename the default administrator and set a strong password so nobody can sign in with the out-of-box credentials.",
+                "oi oi-lock-locked", "/configuration", "Review admin", adminSecured, m1),
+            new StepVm(2, "Connect your first system",
+                "Add a source — Active Directory, Entra ID, Okta, Google, SCIM, or the synthetic emulator. Test the bind, then you're connected.",
+                "oi oi-plug", "/quick-connect", "Connect a system", sourceConnected, m2),
+            new StepVm(3, "Connect IdentityCenter",
+                "Point Conduit at IdentityCenter as a sync target (Base URL and an admin API key) so identities and accounts flow into governance.",
+                "oi oi-transfer", "/quick-connect", "Connect IdentityCenter", icConnected, m3),
+            new StepVm(4, "Map and schedule a sync",
+                "Create a sync project: pick source → target, auto-map attributes per object class, and set a schedule.",
+                "oi oi-loop-square", "/sync-projects", "Open sync projects", projectCreated, m4),
+            new StepVm(5, "Run your first sync",
+                "Kick off the project from the Synchronization Center and watch every object read, created, updated, and skipped in real time.",
+                "oi oi-media-play", "/synchronization-center", "Run a sync", syncRan, m5),
+        };
+        _loaded = true;
+    }
+
+    private async Task<bool> GetFlag(string key)
+    {
+        try { return string.Equals(await Config.GetValueAsync(key), "true", StringComparison.OrdinalIgnoreCase); }
+        catch { return false; }
+    }
+
+    private async Task MarkDone(StepVm s)
+    {
+        await Config.UpsertAsync($"GettingStarted.Step{s.Num}", "true", "Boolean",
+            "Getting Started step manually marked complete.");
+        await LoadAsync();
+    }
+
+    private async Task Dismiss()
+    {
+        await Config.UpsertAsync("GettingStarted.Dismissed", "true", "Boolean",
+            "Getting Started checklist dismissed by the operator.");
+        Nav.NavigateTo("/");
+    }
+
+    private sealed record StepVm(int Num, string Title, string Desc, string Icon, string Href, string ActionLabel, bool AutoDone, bool ManualDone)
+    {
+        public bool Done => AutoDone || ManualDone;
+    }
+}

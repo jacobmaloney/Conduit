@@ -499,6 +499,14 @@
   padding-left: 0.85rem;
 }
 
+/* Warm-paper (light) readability: the ok/err text + detail colors above are tuned for
+   Conduit's dark base and wash out to near-invisible on paper. Repoint to high-contrast
+   green / red / slate on the light theme so the verify banner is legible. */
+html.light-theme .conn-test-strip .conn-test-left { color: #334155; }
+html.light-theme .conn-test-strip.ok .conn-test-left { color: #047857; }
+html.light-theme .conn-test-strip.err .conn-test-left { color: #b91c1c; }
+html.light-theme .conn-test-detail { color: #475569; }
+
 /* ════════════════════════════════════════════════════════════════════════
    IDENTITY — Conduit fully adopts the IdentityCenter primary (no more cyan).
    Conduit's accent is re-pointed from its own cyan to the shared brand primary

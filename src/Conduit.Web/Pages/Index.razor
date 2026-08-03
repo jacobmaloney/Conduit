@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @inject Conduit.DataAccess.Repositories.UserRepository UserRepository
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+@inject Conduit.DataAccess.Repositories.SystemConfigurationRepository Config
 @inject IWebHostEnvironment Environment
 
 <PageTitle>Conduit — move identities across connected systems.</PageTitle>
@@ -20,6 +21,22 @@
         </div>
     </div>
 </div>
+
+@if (_showGettingStarted)
+{
+    <div class="container-fluid mt-4">
+        <div class="alert alert-info d-flex justify-content-between align-items-center flex-wrap gap-2" role="alert">
+            <div>
+                <i class="fas fa-list-check me-2"></i>
+                <strong>New to Conduit?</strong> Finish setting up — connect a system, point it at IdentityCenter, and run your first sync.
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+                <a href="/getting-started" class="btn btn-sm btn-primary">Getting Started</a>
+                <button type="button" class="btn-close" aria-label="Dismiss" @onclick="DismissGettingStarted"></button>
+            </div>
+        </div>
+    </div>
+}
 
 <div class="container-fluid features-section">
     <div class="section-header">
@@ -245,9 +262,16 @@
     private int groupCount = 0;
     private int tokenCount = 0;
     private List<Conduit.DataAccess.Repositories.TenantStats> systemStats = new();
+    private bool _showGettingStarted;
 
     protected override async Task OnInitializedAsync()
     {
+        // Onboarding banner shows until the operator dismisses the Getting Started
+        // checklist (persisted per-instance in SystemConfiguration). Defensive: a config
+        // read failure just hides the banner rather than breaking the dashboard.
+        try { _showGettingStarted = !string.Equals(await Config.GetValueAsync("GettingStarted.Dismissed"), "true", StringComparison.OrdinalIgnoreCase); }
+        catch { _showGettingStarted = false; }
+
         try
         {
             // Count-only fetch: the total comes from the COUNT(*) in the same query,
@@ -270,5 +294,16 @@
         {
             systemStats = new();
         }
+    }
+
+    private async Task DismissGettingStarted()
+    {
+        try
+        {
+            await Config.UpsertAsync("GettingStarted.Dismissed", "true", "Boolean",
+                "Getting Started checklist dismissed by the operator.");
+        }
+        catch { /* non-fatal — worst case the banner reappears next load */ }
+        _showGettingStarted = false;
     }
 }

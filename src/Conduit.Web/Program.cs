@@ -448,6 +448,9 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 // the SAME sink/source internals (byte-identical credential keyring + dispatch); differs
 // only in SystemType, friendly name, and a minimal paste-key-and-go credential.
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.IdentityCenter.CertificationCenterSaaSAdapter>();
+// Tag picker: fetches the IC connection's tag vocabulary (GET /api/objects/tags) so a sync
+// step's Tags field can offer real, existing tags to pick instead of a blind text box.
+builder.Services.AddScoped<Conduit.Connectors.IdentityCenter.IdentityCenterTagFetcher>();
 // SQL Discovery — source-only license-inventory scanner (SPN/instance-list enumeration → IC sink).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.SqlDiscovery.SqlDiscoveryAdapter>();
 // Active Roles — writes route THROUGH the AR Administration Service (EDMS://) so

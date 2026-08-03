@@ -36,7 +36,7 @@ public sealed class CertificationCenterSaaSAdapter : IConnectorAdapter
     private const string DefaultBaseUrl = "https://api.certification-center.com";
 
     public string SystemType => "CertificationCenterSaaS";
-    public string DisplayName => "Certification Center";
+    public string DisplayName => "Identity Center (SaaS Tenant)";
     public bool SupportsSource => true;
     public bool SupportsSink => true;
 
@@ -63,15 +63,15 @@ public sealed class CertificationCenterSaaSAdapter : IConnectorAdapter
         {
             // Same key the reader resolves — keeps the credential plumbing byte-identical.
             Name = IdentityCenterCredentialReader.CredentialName,
-            DisplayName = "Certification Center",
-            Description = "Paste your Certification Center API key. That's it.",
+            DisplayName = "Identity Center (SaaS Tenant)",
+            Description = "Paste your Identity Center (SaaS Tenant) API key. That's it.",
             Fields = new[]
             {
                 new CredentialFieldSpec
                 {
                     Key = "BaseUrl", Label = "Service URL", IsRequired = true,
                     DefaultValue = DefaultBaseUrl,
-                    Help = "Pre-filled for the standard Certification Center service. Only change this if you were given a different URL."
+                    Help = "Pre-filled for the standard Identity Center (SaaS Tenant) service. Only change this if you were given a different URL."
                 },
                 new CredentialFieldSpec
                 {

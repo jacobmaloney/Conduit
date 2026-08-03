@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Security;
@@ -23,7 +25,7 @@ namespace Conduit.Connectors.IdentityCenter;
 public sealed class IdentityCenterAdapter : IConnectorAdapter
 {
     public string SystemType => "IdentityCenter";
-    public string DisplayName => "IdentityCenter";
+    public string DisplayName => "Identity Center";
     public bool SupportsSource => true;
     public bool SupportsSink => true;
 
@@ -70,14 +72,14 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
         new CredentialTypeInfo
         {
             Name = "identitycenter",
-            DisplayName = "IdentityCenter API",
-            Description = "IdentityCenter base URL + admin-scoped API key.",
+            DisplayName = "Identity Center",
+            Description = "Identity Center (on-prem) base URL + admin-scoped API key.",
             Fields = new[]
             {
                 new CredentialFieldSpec
                 {
-                    Key = "BaseUrl", Label = "Base URL", Placeholder = "https://identitycenter.local:7048", IsRequired = true,
-                    Help = "On-prem: https://host:7048. Cloud/SaaS: your tenant API URL (e.g. https://api.certification-center.com). Tip: enroll with a code (--enroll-url/--enroll-code) and this is filled in automatically."
+                    Key = "BaseUrl", Label = "Base URL", Placeholder = "http://identitycenter.local:8080", IsRequired = true,
+                    Help = "Your on-prem Identity Center API base URL — e.g. http://identitycenter.local:8080. Match the scheme+port the API actually listens on (default plain HTTP on :8080; the :7048 web portal is NOT the API). Tip: enroll with a code (--enroll-url/--enroll-code) and this is filled in automatically."
                 },
                 new CredentialFieldSpec
                 {
@@ -246,5 +248,63 @@ internal static class IdentityCenterCredentialReader
         client.DefaultRequestHeaders.Remove("X-API-Key");
         client.DefaultRequestHeaders.Add("X-API-Key", creds.ApiKey);
         return client;
+    }
+}
+
+/// <summary>
+/// Fetches the tag vocabulary from an IdentityCenter connection (<c>GET /api/objects/tags</c>)
+/// so Conduit's per-step tag picker can offer real, existing tag names instead of a raw text
+/// box. Tagging into IC is assign-existing-only, so picking from the live list is exactly the
+/// right affordance. Best-effort: returns an EMPTY list on any failure (no/invalid credential,
+/// unreachable target, or an older IC without the endpoint) so the UI degrades to free typing.
+/// </summary>
+public sealed class IdentityCenterTagFetcher
+{
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly CredentialProtector _protector;
+    private readonly ILogger<IdentityCenterTagFetcher> _logger;
+
+    public IdentityCenterTagFetcher(
+        IHttpClientFactory httpFactory, CredentialProtector protector, ILogger<IdentityCenterTagFetcher> logger)
+    {
+        _httpFactory = httpFactory;
+        _protector = protector;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Returns the sorted, de-duped tag names available in the IdentityCenter connection
+    /// bound to <paramref name="tenantId"/>. Never throws — an empty list means "couldn't
+    /// fetch" and the caller should fall back to a plain text entry.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetTagsAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        try
+        {
+            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, tenantId, CredentialSide.Sink);
+            if (creds is null) return Array.Empty<string>();
+
+            var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+            using var resp = await client.GetAsync($"{creds.BaseUrl}/api/objects/tags", ct);
+            if (!resp.IsSuccessStatusCode) return Array.Empty<string>();
+
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("tags", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return Array.Empty<string>();
+
+            return arr.EnumerateArray()
+                .Select(e => e.GetString())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not fetch IdentityCenter tags for tenant {TenantId}.", tenantId);
+            return Array.Empty<string>();
+        }
     }
 }

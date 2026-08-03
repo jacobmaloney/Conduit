@@ -21,6 +21,7 @@
 @inject IJSRuntime JS
 @inject Conduit.Sync.Templates.IAttributeMapService AttributeMapper
 @inject Conduit.Sync.Templates.ISyncProjectGenerator ProjectGenerator
+@inject Conduit.Connectors.IdentityCenter.IdentityCenterTagFetcher IcTagFetcher
 
 @*
     Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjects.razor —
@@ -1012,14 +1013,14 @@
                        .center-hero draws linear-gradient(135deg, var(--center-gradient-start) 0%,
                        var(--center-gradient-end) 100%) which, under center-theme-system, is
                        emerald→teal (#059669 → #0d9488). *@
-                    <div class="center-hero mb-0" style="border-radius: 0; padding: 1.25rem 1.5rem;">
+                    <div class="center-hero mb-0 sync-edit-hero">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
-                                <h1 class="mb-1" style="font-size: 1.5rem;">
+                                <h1 class="mb-1 sync-edit-hero-title">
                                     <i class="fas fa-sync-alt me-2"></i>Edit Sync Project
                                     @if (!string.IsNullOrEmpty(form.Name))
                                     {
-                                        <span style="opacity: 0.85; font-weight: 600;">- @form.Name</span>
+                                        <span class="sync-edit-hero-name">- @form.Name</span>
                                     }
                                 </h1>
                                 <p class="lead mb-0">Configure directory synchronization workflows and settings</p>
@@ -1962,7 +1963,10 @@
                                                                             </select>
                                                                             <small class="form-text text-muted">Each step in a project can target a different class.</small>
                                                                         </div>
-                                                                        <div class="col-md-5 d-flex align-items-end">
+                                                                        <div class="col-md-5 d-flex flex-column">
+                                                                            @* Spacer label matches the Object Class label height so the button
+                                                                               top-aligns with the select input (not the column bottom). *@
+                                                                            <label class="form-label fw-semibold" aria-hidden="true">&nbsp;</label>
                                                                             <button type="button" class="btn btn-outline-primary btn-sm w-100"
                                                                                     @onclick="@(() => AutoMapStepForClass(stepRef.Id))"
                                                                                     disabled="@(form.SourceTenantId == Guid.Empty)"
@@ -1971,12 +1975,29 @@
                                                                             </button>
                                                                         </div>
                                                                         <div class="col-md-12">
-                                                                            <label class="form-label fw-semibold">Tags <CcHelpHint Text="Comma-separated tag names to apply to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." /></label>
-                                                                            <input class="form-control form-control-sm"
-                                                                                   value="@GetStepTagsCsv(stepRef)"
-                                                                                   @onchange="@(e => SetStepTagsCsv(stepRef, e.Value?.ToString()))"
-                                                                                   placeholder="Contractor, SOX — blank for none" />
-                                                                            <small class="form-text text-muted">Assign-existing-only: IC applies tags that already exist; unknown names are skipped.</small>
+                                                                            <label class="form-label fw-semibold">Tags <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." /></label>
+                                                                            @if (_icTags.Count > 0)
+                                                                            {
+                                                                                <div class="autogen-tag-picker">
+                                                                                    @foreach (var tag in _icTags)
+                                                                                    {
+                                                                                        <button type="button"
+                                                                                                class="autogen-tag-pill @(IsStepTagSelected(stepRef, tag) ? "selected" : "")"
+                                                                                                @onclick="@(() => ToggleStepTag(stepRef, tag))">
+                                                                                            @tag
+                                                                                        </button>
+                                                                                    }
+                                                                                </div>
+                                                                                <small class="form-text text-muted">Click to apply the target IdentityCenter's tags to every object this step syncs.</small>
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                <input class="form-control form-control-sm"
+                                                                                       value="@GetStepTagsCsv(stepRef)"
+                                                                                       @onchange="@(e => SetStepTagsCsv(stepRef, e.Value?.ToString()))"
+                                                                                       placeholder="Contractor, SOX — blank for none" />
+                                                                                <small class="form-text text-muted">Assign-existing-only: IC applies tags that already exist; unknown names are skipped. (Pick a target IdentityCenter connection to choose from its tags.)</small>
+                                                                            }
                                                                         </div>
                                                                     }
                                                                     <div class="col-md-12">
@@ -2179,10 +2200,9 @@
                         <button class="btn btn-outline-secondary btn-lg" @onclick="CloseFormModal">
                             <i class="fas fa-times me-2"></i>Cancel
                         </button>
-                        @* IC-parity GREEN Save: inline gradient reads the center-theme-system
+                        @* IC-parity GREEN Save: .btn-center-gradient reads the center-theme-system
                            tokens (emerald→teal), exactly as IdentityCenter's SyncProjectWizard. *@
-                        <button class="btn btn-primary btn-lg" @onclick="SaveForm" disabled="@saving"
-                                style="background: linear-gradient(135deg, var(--center-gradient-start) 0%, var(--center-gradient-end) 100%); border: none;">
+                        <button class="btn btn-primary btn-lg btn-center-gradient" @onclick="SaveForm" disabled="@saving">
                             @if (saving)
                             {
                                 <span class="spinner-border spinner-border-sm me-2"></span>
@@ -2283,13 +2303,13 @@
                             <table class="table table-sm mapping-modal-table">
                                 <thead>
                                     <tr>
-                                        <th style="width: 13%">Value</th>
-                                        <th style="width: 26%">Source Attribute</th>
-                                        <th style="width: 4%" class="text-center">→</th>
-                                        <th style="width: 26%">Target Attribute</th>
-                                        <th style="width: 22%">Transform / Value <CcHelpHint Text="Direct copies the source value (optionally through a transform chain like trim|lower). Constant (const:) writes a fixed value to every object, ignoring the source. Default (default:) writes a fixed value only when the source is empty." /></th>
-                                        <th style="width: 5%" class="text-center">Req</th>
-                                        <th style="width: 4%"></th>
+                                        <th class="mm-col-val">Value</th>
+                                        <th class="mm-col-src">Source Attribute</th>
+                                        <th class="mm-col-arrow text-center">→</th>
+                                        <th class="mm-col-tgt">Target Attribute</th>
+                                        <th class="mm-col-xform">Transform / Value <CcHelpHint Text="Direct copies the source value (optionally through a transform chain like trim|lower). Constant (const:) writes a fixed value to every object, ignoring the source. Default (default:) writes a fixed value only when the source is empty." /></th>
+                                        <th class="mm-col-req text-center">Req</th>
+                                        <th class="mm-col-act"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -2394,6 +2414,32 @@
     private bool saving;
     private Guid? editingId;
     private SyncProject form = new();
+
+    // Tag picker: the target IdentityCenter connection's tag vocabulary, fetched once per
+    // edit (and on sink change). Empty = couldn't fetch (non-IC target / unreachable) → the
+    // Tags field falls back to free text.
+    private List<string> _icTags = new();
+
+    private async Task LoadIcTagsAsync()
+    {
+        try { _icTags = (await IcTagFetcher.GetTagsAsync(form.SinkTenantId)).ToList(); }
+        catch { _icTags = new(); }
+    }
+
+    private bool IsStepTagSelected(WorkflowStep step, string tag)
+        => GetStepTagsCsv(step)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
+
+    private void ToggleStepTag(WorkflowStep step, string tag)
+    {
+        var set = GetStepTagsCsv(step)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        var existing = set.FirstOrDefault(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) set.Remove(existing); else set.Add(tag);
+        SetStepTagsCsv(step, string.Join(", ", set));
+    }
     private SyncProjectScope scopeForm = new() { PageSize = 1000 };
     private List<AttributeMapping> mappingForm = new();
     private string formError = string.Empty;
@@ -3514,7 +3560,8 @@
         var sinkType = tenantById.TryGetValue(form.SinkTenantId, out var snk) ? snk.SystemType : string.Empty;
         if (string.IsNullOrWhiteSpace(sourceType))
         {
-            await JS.InvokeVoidAsync("alert", "Pick a source Connected System on the Setup tab first.");
+            // Non-blocking: a native alert() freezes the whole page (and any automation).
+            formError = "Pick a source Connected System on the Setup tab first.";
             return;
         }
 
@@ -3522,10 +3569,11 @@
         var suggested = AttributeMapper.BuildMappings(sourceType, sinkType, stepClass);
         if (suggested.Count == 0)
         {
-            var msg = string.Concat("No attribute template available for ", sourceType, " ", stepClass, ".");
-            await JS.InvokeVoidAsync("alert", msg);
+            formError = string.Concat("No attribute template for ", sourceType, " ", stepClass,
+                " — leave this step on passthrough (it carries every source column through unchanged) or map rows manually.");
             return;
         }
+        formError = string.Empty;
 
         var current = GetStepMappings(stepId);
         var hasEdits = current.Any(m =>
@@ -4741,6 +4789,7 @@
             SkipUnchanged = selectedProject.SkipUnchanged
         };
         await LoadCredentialsForFormAsync();
+        await LoadIcTagsAsync();
         // An exception that escapes an @onclick dispatch kills the whole circuit
         // (and the framework's EndInvokeDotNet ack then masks it with an NRE), so
         // surface load failures in the modal's error banner instead of throwing.
@@ -4814,17 +4863,19 @@
 
         if (string.IsNullOrWhiteSpace(sourceType))
         {
-            await JS.InvokeVoidAsync("alert", "Pick a source Connected System on the Setup tab first.");
+            // Non-blocking: a native alert() freezes the whole page (and any automation).
+            toastError = "Pick a source Connected System on the Setup tab first.";
             return;
         }
 
         var suggested = AttributeMapper.BuildMappings(sourceType, sinkType, form.ObjectClass);
         if (suggested.Count == 0)
         {
-            var msg = string.Concat("No attribute template available for ", sourceType, " ", form.ObjectClass, ".");
-            await JS.InvokeVoidAsync("alert", msg);
+            toastError = string.Concat("No attribute template for ", sourceType, " ", form.ObjectClass,
+                " — leave the mappings blank (passthrough carries every source column through unchanged) or add rules manually.");
             return;
         }
+        toastError = string.Empty;
 
         var hasEdits = mappingForm.Any(m =>
             !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute));
@@ -4898,6 +4949,7 @@
         showSinkValidation = false;
         form.SinkTable = SinkIsIdentityCenter ? IcTableForTenant(form.SinkTenantId) : null;
         await LoadCredentialsForFormAsync();
+        await LoadIcTagsAsync();
     }
 
     // ─── Slice 4: connector-capability-aware pickers ─────────────────────────

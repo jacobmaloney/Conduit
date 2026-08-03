@@ -1815,14 +1815,17 @@ details summary::-webkit-details-marker { color: var(--accent); }
 }
 
 .login-header h2 {
-  color: var(--text);
+  /* Login card is always dark navy (see .login-card) and the standalone page has no
+     .ic-content theme ancestor, so --text is undefined here and would inherit near-black.
+     Use an explicit light color so the title is legible on the dark card. */
+  color: #f1f5f9;
   font-weight: 600;
   font-size: 1.5rem;
   margin: 0.75rem 0 0.25rem 0;
 }
 
 .login-header p {
-  color: var(--text-2);
+  color: #94a3b8;
   margin: 0;
 }
 
@@ -3246,6 +3249,54 @@ details summary::-webkit-details-marker { color: var(--accent); }
     overflow-y: auto;
     padding-right: 4px;
 }
+/* SyncProjects.razor — classes replacing former inline style= attributes (shared-CSS
+   policy: no inline styles). Values ported verbatim; the gradient reads the shared
+   center-theme tokens so it stays single-sourced with IdentityCenter's SyncProjectWizard. */
+.sync-edit-hero { border-radius: 0; padding: 1.25rem 1.5rem; }
+.sync-edit-hero-title { font-size: 1.5rem; }
+.sync-edit-hero-name { opacity: 0.85; font-weight: 600; }
+.btn-center-gradient {
+    background: linear-gradient(135deg, var(--center-gradient-start) 0%, var(--center-gradient-end) 100%);
+    border: none;
+}
+.mapping-modal-table th.mm-col-val   { width: 13%; }
+.mapping-modal-table th.mm-col-src   { width: 26%; }
+.mapping-modal-table th.mm-col-arrow { width: 4%; }
+.mapping-modal-table th.mm-col-tgt   { width: 26%; }
+.mapping-modal-table th.mm-col-xform { width: 22%; }
+.mapping-modal-table th.mm-col-req   { width: 5%; }
+.mapping-modal-table th.mm-col-act   { width: 4%; }
+
+/* Per-step Tags picker — toggle pills of the target IdentityCenter's tag vocabulary.
+   Uses the shared brand tokens (with fallbacks) so it tracks the warm-paper theme. */
+.autogen-tag-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 2px 0 4px;
+}
+.autogen-tag-pill {
+    border: 1px solid var(--border-2, #cbd5e1);
+    background: var(--panel-2, #f4f2ec);
+    color: var(--text-2, #475569);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.5;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.autogen-tag-pill:hover {
+    border-color: var(--accent, #0284c7);
+    color: var(--accent, #0284c7);
+}
+.autogen-tag-pill.selected {
+    background: var(--accent, #0284c7);
+    border-color: var(--accent, #0284c7);
+    color: #fff;
+}
+
 .autogen-tpl-card {
     padding: 12px 14px;
     border: 1px solid var(--border-2, rgba(120, 160, 220, 0.18));
