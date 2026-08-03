@@ -695,6 +695,17 @@ public sealed class ActiveDirectorySource : IConnectorSource
             ? new Guid(bytes).ToString()
             : entry.DistinguishedName;
 
+        // Derived enabled-ness: AD stores it as bit 0x2 (ACCOUNTDISABLE) of the
+        // userAccountControl bitmask, which no sink understands natively. Surface it as
+        // the standard "isActive" attribute (same name the cloud sources emit) so a
+        // mapped isActive -> IsActive flows the real enabled state to the sink. Without
+        // this every AD-synced account's enabled-ness was whatever the sink defaulted.
+        if (attrs.TryGetValue("userAccountControl", out var uacRaw)
+            && uacRaw is string uacStr && int.TryParse(uacStr, out var uac))
+        {
+            attrs["isActive"] = (uac & 0x2) == 0 ? "true" : "false";
+        }
+
         return new ConnectorObject
         {
             SourceId = sourceId,

@@ -1538,7 +1538,21 @@ public sealed class SyncProjectOrchestrator
         //       by design — diffing the prior registry against it would tombstone
         //       every unchanged record. On incremental passes, deletes come ONLY
         //       from source-emitted tombstone records (handled below).
-        if (deleteDetectionOn && seenSourceIds is not null && tombstoneSink is not null && !wasIncremental)
+        // A step whose scope is PARTIAL (BaseDN-scoped, or with include/exclude DN lists) reads
+        // only a SLICE of the class — diffing the whole class registry against that slice marks
+        // everything outside the slice "gone from source". Observed live 2026-08-03: a dedicated
+        // admin-OU user step (45 reads) tombstoned the other ~1,733 user records. A scoped read
+        // is never class-complete, so diff-based delete-detection is structurally invalid for it.
+        var scopeIsPartial =
+            !string.IsNullOrWhiteSpace(scope.BaseDN)
+            || !string.IsNullOrWhiteSpace(scope.IncludedBaseDNs)
+            || !string.IsNullOrWhiteSpace(scope.ExcludedBaseDNs);
+        if (deleteDetectionOn && scopeIsPartial && tombstoneSink is not null)
+        {
+            await Log(run, "Info",
+                $"    Delete-detection SKIPPED for class '{objectClass}': this step's scope is partial (BaseDN/include/exclude set) — its read is a slice, not the class population. Upsert-only.");
+        }
+        else if (deleteDetectionOn && seenSourceIds is not null && tombstoneSink is not null && !wasIncremental)
         {
             var complete = readWasComplete;
 
@@ -1771,7 +1785,7 @@ public sealed class SyncProjectOrchestrator
         // Incremental passes are additive here by construction (UpsertMany never
         // removes keys), so registering their partial seen-set is safe and keeps
         // newly created records delete-detectable.
-        if (deleteDetectionOn && readWasComplete && !skipUnchanged && seenSourceIds is not null && seenSourceIds.Count > 0)
+        if (deleteDetectionOn && !scopeIsPartial && readWasComplete && !skipUnchanged && seenSourceIds is not null && seenSourceIds.Count > 0)
         {
             // Register every id seen this run (present in source). Use a sentinel
             // hash — the value is irrelevant for delete-detection (only the key is),
