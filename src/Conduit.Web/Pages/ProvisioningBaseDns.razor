@@ -5,6 +5,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ICreationBaseDnAllowListRepository Repo
 @inject ICreationBaseDnPolicy Policy
+@inject Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository CredMapRepo
 @inject AuditLogService Audit
 @inject AuthenticationStateProvider AuthState
 @inject IHttpContextAccessor HttpCtx
@@ -38,14 +39,23 @@
             <div class="row g-2 align-items-start">
                 <div class="col-md-4">
                     <label class="form-label">Connection name</label>
-                    <input class="form-control" @bind="newConnectionName" @bind:event="oninput" placeholder="e.g. corp-local" list="known-connections" />
-                    <datalist id="known-connections">
-                        @foreach (var name in knownConnectionNames)
+                    <select class="form-select" @bind="newConnectionName">
+                        <option value="">-- select a connection --</option>
+                        @foreach (var name in connectionOptions)
                         {
-                            <option value="@name" />
+                            <option value="@name">@name</option>
                         }
-                    </datalist>
-                    <div class="form-text">The IdentityCenter connection name (its DirectoryConnections.Name).</div>
+                    </select>
+                    <div class="form-text">
+                        @if (connectionOptions.Count == 0)
+                        {
+                            <text>No connections are registered on this agent yet — run a sync from an IdentityCenter connection so it appears here.</text>
+                        }
+                        else
+                        {
+                            <text>The IdentityCenter connection to provision into (its DirectoryConnections.Name).</text>
+                        }
+                    </div>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">Permitted base DN</label>
@@ -150,6 +160,7 @@
 
     private List<ConnDisplay> connections = new();
     private List<string> knownConnectionNames = new();
+    private List<string> connectionOptions = new();
     private bool anyEffective;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
@@ -190,6 +201,16 @@
             // Deny-all globally only when NOTHING is in effect anywhere (DB ∪ config empty).
             anyEffective = connections.Any(c => c.EnforcedSource != BaseDnSource.None);
             knownConnectionNames = names;
+
+            // Dropdown options: connections Conduit can actually provision to (those with a registered
+            // credential mapping) UNION any already in the allow-list — so an operator picks a real
+            // connection name instead of typing a stray value that can never match.
+            var mapped = await CredMapRepo.GetAllSourceConnectionNamesAsync();
+            connectionOptions = mapped
+                .Concat(names)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
         catch (Exception ex)
         {

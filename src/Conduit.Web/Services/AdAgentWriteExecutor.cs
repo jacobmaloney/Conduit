@@ -44,10 +44,11 @@ public sealed class AdAgentWriteExecutor
     private const string OpSetManager = "SetManager";
     private const string OpAddGroupMember = "AddGroupMember";
     private const string OpRemoveGroupMember = "RemoveGroupMember";
+    private const string OpMoveObject = "MoveObject";
 
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
-        OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember
+        OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject
     };
 
     /// <summary>
@@ -92,17 +93,22 @@ public sealed class AdAgentWriteExecutor
     private readonly IEnumerable<IConnectorAdapter> _adapters;
     private readonly SinkConnectionCredentialMapRepository _credentialMap;
     private readonly TenantRepository _tenants;
+    // MoveObject destinations are contained by the SAME customer-owned base-DN allow-list creates use:
+    // a move may only land INSIDE a permitted base DN (deny-all when the list is empty).
+    private readonly ICreationBaseDnPolicy _baseDnPolicy;
     private readonly ILogger<AdAgentWriteExecutor> _logger;
 
     public AdAgentWriteExecutor(
         IEnumerable<IConnectorAdapter> adapters,
         SinkConnectionCredentialMapRepository credentialMap,
         TenantRepository tenants,
+        ICreationBaseDnPolicy baseDnPolicy,
         ILogger<AdAgentWriteExecutor> logger)
     {
         _adapters = adapters;
         _credentialMap = credentialMap;
         _tenants = tenants;
+        _baseDnPolicy = baseDnPolicy;
         _logger = logger;
     }
 
@@ -190,6 +196,7 @@ public sealed class AdAgentWriteExecutor
                 OpDisable => await DoEnableAsync(sink, target, p.ObjectGuid!, enabled: false, ct),
                 OpAddGroupMember => await DoMembershipAsync(sink, target, p, add: true, ct),
                 OpRemoveGroupMember => await DoMembershipAsync(sink, target, p, add: false, ct),
+                OpMoveObject => await DoMoveObjectAsync(sink, p, sourceConnectionName, ct),
                 _ => (false, $"ApplyObjectWrite: operation '{operation}' is not allowed.")
             };
         }
@@ -202,6 +209,31 @@ public sealed class AdAgentWriteExecutor
     }
 
     // ── SetAttributes ────────────────────────────────────────────────────────
+    /// <summary>
+    /// MoveObject: relocate the object to a new parent container. The DESTINATION must be inside a
+    /// permitted creation base DN (the same deny-all allow-list that contains creates) — an agent
+    /// must never be steerable to arbitrary parts of the directory. The RDN is preserved by the sink.
+    /// </summary>
+    private async Task<(bool, string)> DoMoveObjectAsync(
+        ActiveDirectorySink sink, ApplyObjectWritePayload p, string sourceConnectionName, CancellationToken ct)
+    {
+        var targetOu = p.TargetOu?.Trim();
+        if (string.IsNullOrEmpty(targetOu))
+            return (false, "MoveObject: targetOu is required.");
+        if (!BaseDnContainment.IsWellFormedDn(targetOu))
+            return (false, $"MoveObject: targetOu '{targetOu}' is not a well-formed DN.");
+
+        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        if (!BaseDnContainment.IsContained(targetOu, permitted))
+            return (false,
+                $"MoveObject: targetOu is not within any permitted creation base DN for connection '{sourceConnectionName}' — refusing the move (deny-all containment).");
+
+        var result = await sink.MoveAsync(p.ObjectGuid!, targetOu, ct);
+        return result.Outcome == ProvisionOutcome.Success
+            ? (true, $"Moved object to {result.ExternalId}.")
+            : (false, $"MoveObject failed: {result.ErrorMessage}");
+    }
+
     private async Task<(bool, string)> DoSetAttributesAsync(
         ActiveDirectorySink sink, AdResolvedObject target, ApplyObjectWritePayload p, CancellationToken ct)
     {
@@ -371,6 +403,7 @@ public sealed class AdAgentWriteExecutor
         [JsonPropertyName("sourceConnectionName")] public string? SourceConnectionName { get; set; }  // server-resolved IC DirectoryConnections.Name; the credential selector
         [JsonPropertyName("objectClass")] public string? ObjectClass { get; set; }   // advisory — AD-read class wins
         [JsonPropertyName("operation")] public string? Operation { get; set; }
+        [JsonPropertyName("targetOu")] public string? TargetOu { get; set; }
         [JsonPropertyName("attributes")] public Dictionary<string, JsonElement?>? Attributes { get; set; }
         [JsonPropertyName("memberObjectGuid")] public string? MemberObjectGuid { get; set; }
     }

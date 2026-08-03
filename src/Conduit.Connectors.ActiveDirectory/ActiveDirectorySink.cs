@@ -664,12 +664,17 @@ public sealed class ActiveDirectorySink : IConnectorSink
             if (string.IsNullOrWhiteSpace(sam))
                 return ProvisionResult.Failed("Cannot create AD user without a sAMAccountName / userName mapping.");
 
-            // Refuse to silently update if the object already exists. CreateAsync
-            // is explicit — callers asked to create, not upsert. Return Failed so
-            // the workflow doesn't claim a create that didn't happen.
+            // Create-else-LINK (correlate-first, "create if it doesn't exist, else link them"): when an
+            // account with this sAMAccountName already exists, ATTACH the identity to it instead of
+            // failing/duplicating. Return Success with the EXISTING DN so the caller records the linked
+            // account (not a new create). The account's own attributes are left as-is — this is a link,
+            // not an overwrite.
             var dupe = FindDnByFilter(conn, $"(sAMAccountName={EscapeFilter(sam!)})");
             if (dupe is not null)
-                return ProvisionResult.Failed($"AD user with sAMAccountName='{sam}' already exists at {dupe}.");
+            {
+                _logger.LogInformation("AD account sAMAccountName='{Sam}' already exists at {Dn} — linking (not creating).", sam, dupe);
+                return ProvisionResult.Success(externalId: dupe);
+            }
 
             string? upn = GetStr(newObject, "userPrincipalName") ?? GetStr(newObject, "UserPrincipalName");
             var baseDn = ResolveBaseDn(conn, newObject);
@@ -699,7 +704,20 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
             add.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
 
-            conn.SendRequest(add);
+            try
+            {
+                conn.SendRequest(add);
+            }
+            catch (DirectoryOperationException dex) when (
+                dex.Response?.ResultCode == ResultCode.EntryAlreadyExists ||
+                (dex.Message?.IndexOf("ENTRY_EXISTS", StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
+            {
+                // The sAM pre-search can miss (scoped search / replication lag), but AD reports the DN
+                // already exists → LINK to the existing account rather than fail. Same create-else-link
+                // outcome as the pre-check above ("create if it doesn't exist, else link them").
+                _logger.LogInformation("AD create hit an existing entry at {Dn} — linking (not creating).", newDn);
+                return ProvisionResult.Success(externalId: newDn);
+            }
 
             // Optional initial password — same LDAPS guard as upsert path.
             var password = GetStr(newObject, "password") ?? GetStr(newObject, "userPassword");
@@ -762,6 +780,12 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var rdnEnd = sourceDn.IndexOf(',');
             if (rdnEnd <= 0) return ProvisionResult.Failed($"Cannot parse RDN from '{sourceDn}'.");
             var rdn = sourceDn.Substring(0, rdnEnd);
+
+            // Idempotent: already under the requested container -> success no-op, so a re-run
+            // (Mover retry, redelivered command) never errors on an already-completed move.
+            var currentParent = sourceDn.Substring(rdnEnd + 1).Trim();
+            if (string.Equals(currentParent, newContainer.Trim(), StringComparison.OrdinalIgnoreCase))
+                return ProvisionResult.Success(externalId: sourceDn);
 
             var modDn = new ModifyDNRequest(sourceDn, newContainer, rdn) { DeleteOldRdn = true };
             conn.SendRequest(modDn);
@@ -1012,15 +1036,25 @@ public sealed class ActiveDirectorySink : IConnectorSink
 
     private static string? FindDnByGuid(LdapConnection conn, string guid)
     {
-        // <GUID=...> form needs the binary GUID encoded as escaped hex bytes.
+        // Bind directly on AD's extended <GUID=...> DN with Base scope — the same form
+        // ResolveByGuid uses. (The previous empty-base Subtree search ALWAYS failed against
+        // AD: the RootDSE is not a search root, so every GUID lookup returned null and any
+        // caller passing a GUID — e.g. MoveAsync — reported "object not found".)
         if (!Guid.TryParse(guid, out var g)) return null;
-        var hex = string.Join(string.Empty, g.ToByteArray().Select(b => $"\\{b:X2}"));
-        // Subtree search needs a base; AD's RootDSE search at "" with a GUID filter works.
-        var req = new SearchRequest("", $"(objectGUID={hex})", SearchScope.Subtree, new[] { "distinguishedName" });
+        var req = new SearchRequest($"<GUID={g}>", "(objectClass=*)", SearchScope.Base, new[] { "distinguishedName" });
         try
         {
             var resp = (SearchResponse)conn.SendRequest(req);
-            return resp.Entries.Count > 0 ? resp.Entries[0].DistinguishedName : null;
+            if (resp.Entries.Count == 0) return null;
+            var e = resp.Entries[0];
+            // Read the distinguishedName ATTRIBUTE — a <GUID=...>-based entry reports its
+            // Entry.DistinguishedName in GUID form, which AD then rejects for ModifyDN.
+            var dn = e.Attributes.Contains("distinguishedName")
+                ? e.Attributes["distinguishedName"][0]?.ToString()
+                : e.DistinguishedName;
+            return string.IsNullOrWhiteSpace(dn) || dn.StartsWith("<GUID=", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : dn;
         }
         catch
         {

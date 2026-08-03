@@ -95,6 +95,20 @@ public class SinkConnectionCredentialMapRepository : BaseRepository
              WHERE SourceConnectionName = @Name",
             new { Name = sourceConnectionName });
 
+    /// <summary>
+    /// Every distinct source-connection name that has a credential mapping — i.e. the IdentityCenter
+    /// connections Conduit can actually provision to. Used to populate the AD-creation base-DN
+    /// connection picker so an operator selects a real connection name instead of typing a stray value.
+    /// </summary>
+    public async Task<List<string>> GetAllSourceConnectionNamesAsync()
+    {
+        var rows = await QueryAsync<string>(@"
+            SELECT DISTINCT SourceConnectionName FROM SinkConnectionCredentialMap
+             WHERE SourceConnectionName IS NOT NULL AND LEN(SourceConnectionName) > 0
+             ORDER BY SourceConnectionName");
+        return rows.ToList();
+    }
+
     /// <summary>Revocation: drop every mapping pointing at a tenant (e.g. tenant deleted).</summary>
     public Task DeleteByTenantAsync(Guid conduitTenantId) =>
         ExecuteAsync(@"
