@@ -47,11 +47,12 @@ public sealed class AdAgentWriteExecutor
     private const string OpMoveObject = "MoveObject";
     private const string OpResetPasswordScramble = "ResetPasswordScramble";
     private const string OpResetPasswordSealed = "ResetPasswordSealed";
+    private const string OpDeleteObject = "DeleteObject";
 
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
         OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject,
-        OpResetPasswordScramble, OpResetPasswordSealed
+        OpResetPasswordScramble, OpResetPasswordSealed, OpDeleteObject
     };
 
     /// <summary>
@@ -209,6 +210,7 @@ public sealed class AdAgentWriteExecutor
                 OpMoveObject => await DoMoveObjectAsync(sink, p, sourceConnectionName, ct),
                 OpResetPasswordScramble => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: false, ct),
                 OpResetPasswordSealed => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: true, ct),
+                OpDeleteObject => await DoDeleteObjectAsync(sink, target, p, sourceConnectionName, ct),
                 _ => (false, $"ApplyObjectWrite: operation '{operation}' is not allowed.")
             };
         }
@@ -218,6 +220,39 @@ public sealed class AdAgentWriteExecutor
             _logger.LogError(ex, "ApplyObjectWrite {CommandId} ({Operation}) threw.", commandId, operation);
             return (false, $"ApplyObjectWrite: {operation} failed: {ex.Message}");
         }
+    }
+
+    // ── DeleteObject ─────────────────────────────────────────────────────────
+    /// <summary>
+    /// Permanently delete a directory object. Guards, in order and all before any write:
+    /// LEAF classes only (user/group/computer/contact) — never OUs/containers/infrastructure;
+    /// target's CURRENT DN inside a permitted base DN (deny-all containment); AdminSDHolder
+    /// (adminCount=1) and well-known built-in principals refused outright, no override
+    /// (same guard the password reset uses). Idempotent: a target already gone is reported
+    /// as success (nothing to delete).
+    /// </summary>
+    private async Task<(bool, string)> DoDeleteObjectAsync(
+        ActiveDirectorySink sink, AdResolvedObject target, ApplyObjectWritePayload p,
+        string sourceConnectionName, CancellationToken ct)
+    {
+        if (!(target.IsClass("user") || target.IsClass("group") ||
+              target.IsClass("computer") || target.IsClass("contact")))
+            return (false, "DeleteObject: only user, group, computer, or contact objects may be deleted through this channel.");
+
+        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        if (!BaseDnContainment.IsContained(target.DistinguishedName, permitted))
+            return (false,
+                $"DeleteObject: the target is not within any permitted base DN for connection '{sourceConnectionName}' — refusing (deny-all containment).");
+
+        var (guarded, reason) = await sink.IsPasswordResetGuardedAsync(p.ObjectGuid!, ct);
+        if (guarded)
+            return (false, $"DeleteObject REFUSED: {reason}");
+
+        var r = await sink.DeleteAsync(target.DistinguishedName, ct);
+        if (r.Outcome == SinkWriteOutcome.Failed)
+            return (false, $"DeleteObject failed: {r.ErrorMessage}");
+
+        return (true, $"Deleted {target.DistinguishedName}.");
     }
 
     // ── SetAttributes ────────────────────────────────────────────────────────
