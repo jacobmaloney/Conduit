@@ -55,6 +55,10 @@ internal sealed class SqlServerFacts
     public int? CpuPeakPercent { get; init; }
     /// <summary>Minutes of per-minute CPU samples behind the avg/peak (the ring buffer window).</summary>
     public int? CpuSampleMinutes { get; init; }
+    /// <summary>Most recent user read/write across user DBs (UTC), from sys.dm_db_index_usage_stats. Null if unavailable. Feeds idle detection.</summary>
+    public DateTime? LastUserActivityUtc { get; init; }
+    /// <summary>User sessions open at scan time (sys.dm_exec_sessions is_user_process=1). Null if unavailable.</summary>
+    public int? ActiveUserSessions { get; init; }
     public string DatabasesJson { get; init; } = "[]";
     public int DatabaseCount { get; init; }
     /// <summary>Null when login collection is disabled or the query failed.</summary>
@@ -396,6 +400,29 @@ FROM (
         }
         catch (SqlException) { /* ring buffer unreadable — right-sizing simply skips this host */ }
 
+        // Last user activity + open user sessions (P1.5 idle detection). last_user_* reset on
+        // restart, so IC keeps the most recent value ever observed. Converted to UTC in-query so
+        // the timestamp is comparable regardless of the server's local timezone. Best-effort.
+        DateTime? lastActivity = null;
+        int? activeSessions = null;
+        try
+        {
+            const string actSql = @"
+SELECT (SELECT DATEADD(minute, DATEDIFF(minute, GETDATE(), GETUTCDATE()), MAX(v))
+        FROM sys.dm_db_index_usage_stats s
+        CROSS APPLY (VALUES (s.last_user_seek),(s.last_user_scan),(s.last_user_lookup),(s.last_user_update)) AS x(v)
+        WHERE s.database_id > 4) AS LastUserActivityUtc,
+       (SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1) AS ActiveUserSessions;";
+            await using var cmd = new SqlCommand(actSql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                lastActivity = reader.IsDBNull(0) ? null : reader.GetDateTime(0);
+                activeSessions = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+            }
+        }
+        catch (SqlException) { /* activity DMVs unreadable — idle detection falls back to CPU/DB signals */ }
+
         var databases = new List<object>();
         var dbCount = 0;
         try
@@ -485,6 +512,8 @@ ORDER BY name;";
             CpuAvgPercent = cpuAvg,
             CpuPeakPercent = cpuPeak,
             CpuSampleMinutes = cpuSamples,
+            LastUserActivityUtc = lastActivity,
+            ActiveUserSessions = activeSessions,
             DatabasesJson = System.Text.Json.JsonSerializer.Serialize(databases),
             DatabaseCount = dbCount,
             LoginsJson = loginsJson,

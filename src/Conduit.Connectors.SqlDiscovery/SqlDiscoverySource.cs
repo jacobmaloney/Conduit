@@ -750,6 +750,11 @@ public sealed class SqlDiscoverySource : IConnectorSource
             attrs["sqlCpuPeakPercent"] = cpeak.ToString(CultureInfo.InvariantCulture);
         if (facts.CpuSampleMinutes is { } cmin)
             attrs["sqlCpuSampleMinutes"] = cmin.ToString(CultureInfo.InvariantCulture);
+        // Activity signals (P1.5 idle detection) — IC projects these onto SqlServerInventory.
+        if (facts.LastUserActivityUtc is { } lastAct)
+            attrs["sqlLastUserActivity"] = lastAct.ToString("o", CultureInfo.InvariantCulture);
+        if (facts.ActiveUserSessions is { } sess)
+            attrs["sqlActiveUserSessions"] = sess.ToString(CultureInfo.InvariantCulture);
         if (facts.LoginsJson is not null)
             attrs["sqlLoginsJson"] = facts.LoginsJson;
         if (facts.PrincipalsJson is not null)
