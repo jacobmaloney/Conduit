@@ -1368,10 +1368,12 @@ public sealed class SyncProjectOrchestrator
         var groupMembershipBuffer = new List<GroupMembership>();
         // Capture membership only on a group-like step into a sink that absorbs it.
         // Conduit native class names are lowercase; compare case-insensitively.
-        // "team" carries member edges in Attributes["members"] exactly like "group".
+        // "team" and "site" carry member edges in Attributes["members"] exactly like
+        // "group" (a site's members are its backing M365 group's members).
         var captureGroupMembership =
             (string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase)
-             || string.Equals(objectClass, "team", StringComparison.OrdinalIgnoreCase))
+             || string.Equals(objectClass, "team", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(objectClass, "site", StringComparison.OrdinalIgnoreCase))
             && sink is IGroupMembershipEmittingSink;
         int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, ttlRefreshed = 0;
 

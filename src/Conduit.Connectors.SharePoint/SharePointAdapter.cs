@@ -382,14 +382,88 @@ public sealed class SharePointSource : IConnectorSource
         // /sites collection). Site counts are modest vs. users; buffering is cheap.
         var allSites = await ListAllSitesAsync(client, cancellationToken);
 
+        // Group-connected (modern) sites: resolve the backing M365 group per site and
+        // carry its member ids, so sites get member edges like teams do and IC's
+        // member add/remove can target the backing group. Best-effort — Graph has no
+        // per-site membership surface, so classic sites simply have no entry here.
+        var backingBySiteId = await TryGetSiteBackingGroupsAsync(client, cancellationToken);
+
         var parentById = BuildSiteHierarchy(allSites);
         foreach (var s in allSites)
         {
             if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
             parentById.TryGetValue(s.Id ?? string.Empty, out var parentSiteId);
+            backingBySiteId.TryGetValue(s.Id ?? string.Empty, out var backing);
             emitted++;
-            yield return MapSite(s, parentSiteId, storageByUrl);
+            yield return MapSite(s, parentSiteId, storageByUrl, backing.GroupId, backing.MemberIds);
         }
+    }
+
+    /// <summary>
+    /// Maps root-site id -> (backing Unified group id, that group's member ids).
+    /// One pass over the tenant's Unified groups: per group, /groups/{id}/sites/root
+    /// gives the connected site; /groups/{id}/members gives the ids. Per-group
+    /// failures skip that group only; a listing failure returns an empty map (sites
+    /// still emit, minus membership).
+    /// </summary>
+    private async Task<Dictionary<string, (string GroupId, List<string> MemberIds)>> TryGetSiteBackingGroupsAsync(
+        GraphServiceClient client, CancellationToken cancellationToken)
+    {
+        var map = new Dictionary<string, (string, List<string>)>(StringComparer.Ordinal);
+        try
+        {
+            var groups = await client.Groups.GetAsync(req =>
+            {
+                req.QueryParameters.Filter = "groupTypes/any(c:c eq 'Unified')";
+                req.QueryParameters.Select = new[] { "id" };
+                req.QueryParameters.Top = 100;
+            }, cancellationToken);
+
+            while (groups?.Value != null)
+            {
+                foreach (var g in groups.Value)
+                {
+                    if (string.IsNullOrEmpty(g.Id)) continue;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var rootSite = await client.Groups[g.Id].Sites["root"]
+                            .GetAsync(req => req.QueryParameters.Select = new[] { "id" }, cancellationToken);
+                        if (string.IsNullOrEmpty(rootSite?.Id)) continue;
+
+                        var memberIds = new List<string>();
+                        var members = await client.Groups[g.Id].Members.GetAsync(req =>
+                        {
+                            req.QueryParameters.Select = new[] { "id" };
+                            req.QueryParameters.Top = 999;
+                        }, cancellationToken);
+                        while (members?.Value != null)
+                        {
+                            foreach (var m in members.Value)
+                                if (!string.IsNullOrEmpty(m.Id)) memberIds.Add(m.Id!);
+                            if (string.IsNullOrEmpty(members.OdataNextLink)) break;
+                            members = await client.Groups[g.Id].Members
+                                .WithUrl(members.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+                        }
+
+                        map[rootSite!.Id!] = (g.Id!, memberIds);
+                    }
+                    catch (Microsoft.Graph.Models.ODataErrors.ODataError)
+                    {
+                        // Group without a provisioned site (or no access) — skip it.
+                    }
+                }
+                if (string.IsNullOrEmpty(groups.OdataNextLink)) break;
+                groups = await client.Groups.WithUrl(groups.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "SharePoint: could not resolve site backing groups ({Message}) — sites emit without member edges this run.",
+                ex.Message);
+        }
+        return map;
     }
 
     /// <summary>The flat tenant /sites collection, fully paged. Shared by site/drive/list.</summary>
@@ -533,7 +607,9 @@ public sealed class SharePointSource : IConnectorSource
     internal static ConnectorObject MapSite(
         Microsoft.Graph.Models.Site s,
         string? parentSiteId,
-        IReadOnlyDictionary<string, SiteStorage>? storageByUrl)
+        IReadOnlyDictionary<string, SiteStorage>? storageByUrl,
+        string? backingGroupId = null,
+        List<string>? memberIds = null)
     {
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -548,6 +624,10 @@ public sealed class SharePointSource : IConnectorSource
             ["parentSiteId"] = parentSiteId,
             ["whenCreated"] = s.CreatedDateTime?.ToString("o")
         };
+        // Group-connected sites: the backing M365 group id (IC's member add/remove
+        // targets this) + its member ids (feed the membership second pass).
+        if (!string.IsNullOrEmpty(backingGroupId)) attrs["groupId"] = backingGroupId;
+        if (memberIds is { Count: > 0 }) attrs["members"] = memberIds;
         if (storageByUrl is not null && !string.IsNullOrEmpty(s.WebUrl) &&
             storageByUrl.TryGetValue(s.WebUrl!, out var storage))
         {
