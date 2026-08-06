@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.EC2" Version="4.0.108" />
     <PackageReference Include="AWSSDK.IdentityManagement" Version="4.0.9.18" />
     <PackageReference Include="AWSSDK.IdentityStore" Version="4.0.5" />
     <PackageReference Include="AWSSDK.SSOAdmin" Version="4.0.5" />

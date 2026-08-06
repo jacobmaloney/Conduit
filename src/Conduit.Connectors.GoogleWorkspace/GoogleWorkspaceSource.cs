@@ -78,12 +78,24 @@ public sealed class GoogleWorkspaceSource : IConnectorSource
             return EnumerateRolesAsync(service, _logger, ct);
         if (string.Equals(objectClass, "domain", StringComparison.OrdinalIgnoreCase))
             return EnumerateDomainsAsync(service, _logger, ct);
+        if (string.Equals(objectClass, "mobiledevice", StringComparison.OrdinalIgnoreCase))
+            return EnumerateMobileDevicesAsync(service, _logger, ct);
+        if (string.Equals(objectClass, "chromeosdevice", StringComparison.OrdinalIgnoreCase))
+            return EnumerateChromeOsDevicesAsync(service, _logger, ct);
+        if (string.Equals(objectClass, "roleAssignment", StringComparison.OrdinalIgnoreCase))
+            return EnumerateRoleAssignmentsAsync(service, _logger, ct);
+        if (string.Equals(objectClass, "calendarresource", StringComparison.OrdinalIgnoreCase))
+            return EnumerateCalendarResourcesAsync(service, _logger, ct);
         throw new NotSupportedException(
             $"Google Workspace source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedClasses)}.");
     }
 
     /// <summary>The native object classes this source can enumerate.</summary>
-    public static readonly string[] SupportedClasses = { "user", "group", "organizationalUnit", "role", "domain" };
+    public static readonly string[] SupportedClasses =
+    {
+        "user", "group", "organizationalUnit", "role", "domain",
+        "mobiledevice", "chromeosdevice", "roleAssignment", "calendarresource"
+    };
 
     /// <summary>True when this source can enumerate the given class (case-insensitive).</summary>
     public static bool IsSupportedClass(string objectClass)
@@ -302,6 +314,216 @@ public sealed class GoogleWorkspaceSource : IConnectorSource
                 Attributes = attrs
             };
         }
+    }
+
+    // ── Device fleet + delegated-admin classes. Each pages off the customer and
+    //    skips itself with a scope-hint warning on 403, mirroring role/orgUnit. ──
+
+    private static async IAsyncEnumerable<ConnectorObject> EnumerateMobileDevicesAsync(
+        DirectoryService service, ILogger logger,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? pageToken = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            MobileDevices? resp = null;
+            try
+            {
+                var req = service.Mobiledevices.List(CustomerKey);
+                req.MaxResults = 100;
+                if (!string.IsNullOrEmpty(pageToken)) req.PageToken = pageToken;
+                resp = await req.ExecuteAsync(cancellationToken);
+            }
+            catch (GoogleApiException ex) when (IsForbidden(ex))
+            {
+                logger.LogWarning("Google Workspace: skipping class mobiledevice — service account lacks admin.directory.device.mobile.readonly (403).");
+                yield break;
+            }
+
+            if (resp?.Mobiledevices != null)
+            {
+                foreach (var d in resp.Mobiledevices)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var id = d.ResourceId ?? d.DeviceId;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    var owner = d.Email?.FirstOrDefault();
+                    var name = d.Name?.FirstOrDefault() ?? d.Model ?? id;
+                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["objectClass"] = "mobiledevice",
+                        ["id"] = id,
+                        ["objectGuid"] = id
+                    };
+                    Set(attrs, "displayName", name);
+                    Set(attrs, "cn", name);
+                    Set(attrs, "model", d.Model);
+                    Set(attrs, "os", d.Os);
+                    Set(attrs, "deviceType", d.Type);
+                    Set(attrs, "status", d.Status);
+                    Set(attrs, "serialNumber", d.SerialNumber);
+                    Set(attrs, "ownerEmail", owner);
+                    Set(attrs, "lastSync", d.LastSyncRaw);
+                    yield return new ConnectorObject { SourceId = id!, ObjectClass = "mobiledevice", Attributes = attrs };
+                }
+            }
+            pageToken = resp?.NextPageToken;
+        } while (!string.IsNullOrEmpty(pageToken));
+    }
+
+    private static async IAsyncEnumerable<ConnectorObject> EnumerateChromeOsDevicesAsync(
+        DirectoryService service, ILogger logger,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? pageToken = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ChromeOsDevices? resp = null;
+            try
+            {
+                var req = service.Chromeosdevices.List(CustomerKey);
+                req.MaxResults = 100;
+                if (!string.IsNullOrEmpty(pageToken)) req.PageToken = pageToken;
+                resp = await req.ExecuteAsync(cancellationToken);
+            }
+            catch (GoogleApiException ex) when (IsForbidden(ex))
+            {
+                logger.LogWarning("Google Workspace: skipping class chromeosdevice — service account lacks admin.directory.device.chromeos.readonly (403).");
+                yield break;
+            }
+
+            if (resp?.Chromeosdevices != null)
+            {
+                foreach (var d in resp.Chromeosdevices)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var id = d.DeviceId;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    var name = d.AnnotatedAssetId ?? d.SerialNumber ?? id;
+                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["objectClass"] = "chromeosdevice",
+                        ["id"] = id,
+                        ["objectGuid"] = id
+                    };
+                    Set(attrs, "displayName", name);
+                    Set(attrs, "cn", name);
+                    Set(attrs, "serialNumber", d.SerialNumber);
+                    Set(attrs, "status", d.Status);
+                    Set(attrs, "model", d.Model);
+                    Set(attrs, "osVersion", d.OsVersion);
+                    Set(attrs, "platformVersion", d.PlatformVersion);
+                    Set(attrs, "macAddress", d.MacAddress);
+                    Set(attrs, "annotatedUser", d.AnnotatedUser);
+                    Set(attrs, "annotatedLocation", d.AnnotatedLocation);
+                    Set(attrs, "orgUnitPath", d.OrgUnitPath);
+                    Set(attrs, "lastSync", d.LastSyncRaw);
+                    yield return new ConnectorObject { SourceId = id!, ObjectClass = "chromeosdevice", Attributes = attrs };
+                }
+            }
+            pageToken = resp?.NextPageToken;
+        } while (!string.IsNullOrEmpty(pageToken));
+    }
+
+    private static async IAsyncEnumerable<ConnectorObject> EnumerateRoleAssignmentsAsync(
+        DirectoryService service, ILogger logger,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? pageToken = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RoleAssignments? resp = null;
+            try
+            {
+                var req = service.RoleAssignments.List(CustomerKey);
+                req.MaxResults = 200;
+                if (!string.IsNullOrEmpty(pageToken)) req.PageToken = pageToken;
+                resp = await req.ExecuteAsync(cancellationToken);
+            }
+            catch (GoogleApiException ex) when (IsForbidden(ex))
+            {
+                logger.LogWarning("Google Workspace: skipping class roleAssignment — service account lacks admin.directory.rolemanagement.readonly (403).");
+                yield break;
+            }
+
+            if (resp?.Items != null)
+            {
+                foreach (var ra in resp.Items)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!ra.RoleAssignmentId.HasValue) continue;
+                    var id = ra.RoleAssignmentId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    var roleId = ra.RoleId?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["objectClass"] = "roleassignment",
+                        ["id"] = id,
+                        ["objectGuid"] = id
+                    };
+                    Set(attrs, "displayName", $"Role {roleId} → {ra.AssignedTo}");
+                    Set(attrs, "cn", id);
+                    Set(attrs, "roleId", roleId);
+                    Set(attrs, "assignedTo", ra.AssignedTo);
+                    Set(attrs, "scopeType", ra.ScopeType);
+                    Set(attrs, "orgUnitId", ra.OrgUnitId);
+                    yield return new ConnectorObject { SourceId = id, ObjectClass = "roleAssignment", Attributes = attrs };
+                }
+            }
+            pageToken = resp?.NextPageToken;
+        } while (!string.IsNullOrEmpty(pageToken));
+    }
+
+    private static async IAsyncEnumerable<ConnectorObject> EnumerateCalendarResourcesAsync(
+        DirectoryService service, ILogger logger,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? pageToken = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CalendarResources? resp = null;
+            try
+            {
+                var req = service.Resources.Calendars.List(CustomerKey);
+                req.MaxResults = 100;
+                if (!string.IsNullOrEmpty(pageToken)) req.PageToken = pageToken;
+                resp = await req.ExecuteAsync(cancellationToken);
+            }
+            catch (GoogleApiException ex) when (IsForbidden(ex))
+            {
+                logger.LogWarning("Google Workspace: skipping class calendarresource — service account lacks admin.directory.resource.calendar.readonly (403).");
+                yield break;
+            }
+
+            if (resp?.Items != null)
+            {
+                foreach (var r in resp.Items)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var id = r.ResourceId;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["objectClass"] = "calendarresource",
+                        ["id"] = id,
+                        ["objectGuid"] = id
+                    };
+                    Set(attrs, "displayName", r.ResourceName);
+                    Set(attrs, "cn", r.ResourceName);
+                    Set(attrs, "resourceType", r.ResourceType);
+                    Set(attrs, "resourceEmail", r.ResourceEmail);
+                    Set(attrs, "description", r.ResourceDescription);
+                    Set(attrs, "buildingId", r.BuildingId);
+                    Set(attrs, "floorName", r.FloorName);
+                    if (r.Capacity.HasValue) attrs["capacity"] = r.Capacity.Value;
+                    yield return new ConnectorObject { SourceId = id!, ObjectClass = "calendarresource", Attributes = attrs };
+                }
+            }
+            pageToken = resp?.NextPageToken;
+        } while (!string.IsNullOrEmpty(pageToken));
     }
 
     private static bool IsForbidden(GoogleApiException ex) =>

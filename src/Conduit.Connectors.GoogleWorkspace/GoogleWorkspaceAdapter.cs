@@ -106,7 +106,13 @@ internal static class GoogleCredentialReader
                 DirectoryService.Scope.AdminDirectoryGroupMemberReadonly,
                 DirectoryService.Scope.AdminDirectoryOrgunitReadonly,
                 DirectoryService.Scope.AdminDirectoryRolemanagementReadonly,
-                DirectoryService.Scope.AdminDirectoryDomainReadonly
+                DirectoryService.Scope.AdminDirectoryDomainReadonly,
+                // Device fleet + delegated-admin + resource classes. Domain-wide delegation
+                // must authorize these too; a connection missing them degrades per-class
+                // (403 → warn + skip), it does not break user/group sync.
+                DirectoryService.Scope.AdminDirectoryDeviceMobileReadonly,
+                DirectoryService.Scope.AdminDirectoryDeviceChromeosReadonly,
+                DirectoryService.Scope.AdminDirectoryResourceCalendarReadonly
             }
             : new[]
             {

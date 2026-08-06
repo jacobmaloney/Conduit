@@ -15,7 +15,8 @@ namespace Conduit.Connectors.Aws;
 
 /// <summary>
 /// AWS IAM source — paged via Marker. Governance-relevant object classes:
-/// "user" / "group" / "role" / "policy" / "account". Users emit UserName
+/// "user" / "group" / "role" / "policy" / "account" / "computer" (EC2 instances
+/// in the connection's Region). Users emit UserName
 /// (= IAM UserName), Arn, Path, CreateDate (SourceId = UserId). Groups emit
 /// GroupName + GroupId + Arn + members (SourceId = GroupId). Roles, customer-
 /// managed policies, and the account alias mirror the EntraID pattern: a
@@ -46,7 +47,7 @@ public sealed class AwsSource : IConnectorSource
         using var iam = AwsCredentialReader.CreateIamClient(creds);
         var emitted = 0;
 
-        var stream = Dispatch(objectClass, iam, cancellationToken);
+        var stream = Dispatch(objectClass, iam, creds, cancellationToken);
 
         await foreach (var obj in stream)
         {
@@ -64,7 +65,7 @@ public sealed class AwsSource : IConnectorSource
     /// the wrong label.
     /// </summary>
     private IAsyncEnumerable<ConnectorObject> Dispatch(
-        string objectClass, AmazonIdentityManagementServiceClient iam, CancellationToken ct)
+        string objectClass, AmazonIdentityManagementServiceClient iam, AwsCredentials creds, CancellationToken ct)
     {
         if (string.Equals(objectClass, "user", StringComparison.OrdinalIgnoreCase))
             return EnumerateUsersAsync(iam, ct);
@@ -76,12 +77,14 @@ public sealed class AwsSource : IConnectorSource
             return EnumeratePoliciesAsync(iam, ct);
         if (string.Equals(objectClass, "account", StringComparison.OrdinalIgnoreCase))
             return EnumerateAccountAliasesAsync(iam, ct);
+        if (string.Equals(objectClass, "computer", StringComparison.OrdinalIgnoreCase))
+            return EnumerateEc2InstancesAsync(creds, ct);
         throw new NotSupportedException(
             $"AWS IAM source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedClasses)}.");
     }
 
     /// <summary>The native object classes this source can enumerate.</summary>
-    public static readonly string[] SupportedClasses = { "user", "group", "role", "policy", "account" };
+    public static readonly string[] SupportedClasses = { "user", "group", "role", "policy", "account", "computer" };
 
     /// <summary>True when this source can enumerate the given class (case-insensitive).</summary>
     public static bool IsSupportedClass(string objectClass)
@@ -317,6 +320,85 @@ public sealed class AwsSource : IConnectorSource
                 }
             };
         }
+    }
+
+    // EC2 instances in the connection's Region, emitted as "computer" — the same class
+    // AD computers and SQL-discovered hosts use, so IC's inventory model lines up.
+    // SourceId = InstanceId. Per-class UnauthorizedOperation skip (needs
+    // ec2:DescribeInstances; IAM-only credentials just skip this class).
+    private async IAsyncEnumerable<ConnectorObject> EnumerateEc2InstancesAsync(
+        AwsCredentials creds,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var ec2 = AwsCredentialReader.CreateEc2Client(creds);
+        string? nextToken = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Amazon.EC2.Model.DescribeInstancesResponse resp;
+            try
+            {
+                resp = await ec2.DescribeInstancesAsync(new Amazon.EC2.Model.DescribeInstancesRequest
+                {
+                    MaxResults = 100,
+                    NextToken = nextToken
+                }, cancellationToken);
+            }
+            catch (Amazon.EC2.AmazonEC2Exception ex) when (
+                ex.StatusCode == HttpStatusCode.Forbidden ||
+                string.Equals(ex.ErrorCode, "UnauthorizedOperation", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning(
+                    "AWS: skipping class computer — credential lacks ec2:DescribeInstances in {Region} (UnauthorizedOperation).",
+                    creds.Region);
+                yield break;
+            }
+
+            foreach (var reservation in resp.Reservations ?? new List<Amazon.EC2.Model.Reservation>())
+            {
+                foreach (var i in reservation.Instances ?? new List<Amazon.EC2.Model.Instance>())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (string.IsNullOrEmpty(i.InstanceId)) continue;
+                    string? nameTag = null;
+                    if (i.Tags != null)
+                    {
+                        foreach (var t in i.Tags)
+                        {
+                            if (string.Equals(t.Key, "Name", StringComparison.OrdinalIgnoreCase)) { nameTag = t.Value; break; }
+                        }
+                    }
+                    var display = string.IsNullOrEmpty(nameTag) ? i.InstanceId : nameTag;
+                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["objectClass"] = "computer",
+                        ["id"] = i.InstanceId,
+                        ["objectGuid"] = i.InstanceId,
+                        ["displayName"] = display,
+                        ["cn"] = display,
+                        ["instanceType"] = i.InstanceType?.Value,
+                        ["state"] = i.State?.Name?.Value,
+                        ["region"] = creds.Region,
+                        ["privateIp"] = i.PrivateIpAddress,
+                        ["publicIp"] = i.PublicIpAddress,
+                        ["dNSHostName"] = string.IsNullOrEmpty(i.PrivateDnsName) ? i.PublicDnsName : i.PrivateDnsName,
+                        ["imageId"] = i.ImageId,
+                        ["vpcId"] = i.VpcId,
+                        ["subnetId"] = i.SubnetId,
+                        ["architecture"] = i.Architecture?.Value,
+                        ["platform"] = string.IsNullOrEmpty(i.PlatformDetails) ? i.Platform?.Value : i.PlatformDetails
+                    };
+                    if (i.LaunchTime.HasValue) attrs["whenCreated"] = i.LaunchTime.Value.ToString("o");
+                    yield return new ConnectorObject
+                    {
+                        SourceId = i.InstanceId,
+                        ObjectClass = "computer",
+                        Attributes = attrs
+                    };
+                }
+            }
+            nextToken = resp.NextToken;
+        } while (!string.IsNullOrEmpty(nextToken));
     }
 
     private static bool IsForbidden(AmazonIdentityManagementServiceException ex)

@@ -143,11 +143,15 @@ namespace Conduit.Sync.Templates
         private static readonly string[] OktaCore = { "user", "group" };
         private static readonly string[] OktaFull = { "user", "group", "application" };
         private static readonly string[] GoogleCore = { "user", "group" };
-        private static readonly string[] GoogleFull = { "user", "group", "organizationalUnit", "role", "domain" };
+        private static readonly string[] GoogleFull =
+        {
+            "user", "group", "organizationalUnit", "role", "domain",
+            "mobiledevice", "chromeosdevice", "roleAssignment", "calendarresource"
+        };
         private static readonly string[] AwsCore = { "user", "group" };
-        private static readonly string[] AwsFull = { "user", "group", "role", "policy", "account" };
+        private static readonly string[] AwsFull = { "user", "group", "role", "policy", "account", "computer" };
         private static readonly string[] AwsIdentityCenterCore = { "user", "group" };
-        private static readonly string[] AwsIdentityCenterFull = { "user", "group", "permissionSet" };
+        private static readonly string[] AwsIdentityCenterFull = { "user", "group", "permissionSet", "application" };
         private static readonly string[] LdapCore = { "user", "group" };
         private static readonly string[] LdapFull = { "user", "group", "organizationalUnit" };
         private static readonly string[] DatabaseCore = { "user" };

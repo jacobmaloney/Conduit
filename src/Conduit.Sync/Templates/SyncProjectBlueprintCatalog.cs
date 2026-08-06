@@ -208,20 +208,27 @@ public static class SyncProjectBlueprintCatalog
         new SyncProjectBlueprint
         {
             Id = "aws-iam-governance",
-            Name = "AWS IAM Governance",
+            Name = "AWS Cloud Estate",
             Description =
-                "Inventories AWS IAM for governance — users, groups, roles, customer-managed "
-                + "policies, and the account alias — into IdentityCenter.",
+                "Inventories the AWS estate — IAM users, groups, roles, customer-managed "
+                + "policies, the account alias, and EC2 instances (as computer assets) — "
+                + "into IdentityCenter.",
             SourceSystemType = "AWS",
-            ExplicitClasses = new[] { "user", "group", "role", "policy", "account" },
+            ExplicitClasses = new[] { "user", "group", "role", "policy", "account", "computer" },
             DefaultCronSchedule = DailyCron,
             Notes = new[]
             {
                 "Requires an IAM access key with these read-only actions: iam:ListUsers, "
                     + "iam:ListGroups, iam:GetGroup, iam:ListRoles, iam:ListPolicies, "
-                    + "iam:ListAccountAliases.",
+                    + "iam:ListAccountAliases, ec2:DescribeInstances.",
+                "EC2 instances enumerate in the connection's configured Region only — a second "
+                    + "region means a second connection.",
                 "Source-only inventory: classes the credential cannot read are skipped with a "
                     + "warning rather than failing the whole run."
+            },
+            ClassAdvisories = new Dictionary<string, string>
+            {
+                ["computer"] = "EC2 instances in the connection's Region; needs ec2:DescribeInstances."
             }
         },
         new SyncProjectBlueprint
@@ -229,29 +236,38 @@ public static class SyncProjectBlueprintCatalog
             Id = "aws-identity-center-governance",
             Name = "AWS Identity Center Governance",
             Description =
-                "Inventories AWS IAM Identity Center (formerly AWS SSO) — users, groups, and "
-                + "permission sets — into IdentityCenter.",
+                "Inventories AWS IAM Identity Center (formerly AWS SSO) — users, groups, "
+                + "permission sets, and assigned applications — into IdentityCenter.",
             SourceSystemType = "AWSIdentityCenter",
-            ExplicitClasses = new[] { "user", "group", "permissionSet" },
+            ExplicitClasses = new[] { "user", "group", "permissionSet", "application" },
             DefaultCronSchedule = DailyCron,
             Notes = new[]
             {
                 "Requires an access key with read-only Identity Center actions: "
                     + "identitystore:ListUsers, identitystore:ListGroups, sso:ListInstances, "
-                    + "sso:ListPermissionSets, sso:DescribePermissionSet.",
+                    + "sso:ListPermissionSets, sso:DescribePermissionSet, sso:ListApplications.",
                 "The Identity Store ID and SSO Instance ARN auto-discover via "
                     + "sso:ListInstances when left blank on the connection."
+            },
+            ClassAdvisories = new Dictionary<string, string>
+            {
+                ["application"] = "Needs sso:ListApplications; legacy account instances without the applications API skip this class with a warning."
             }
         },
         new SyncProjectBlueprint
         {
             Id = "gws-directory-governance",
-            Name = "Google Workspace Directory",
+            Name = "Google Workspace Estate",
             Description =
-                "Inventories the Google Workspace directory — users, groups, organizational "
-                + "units, admin roles, and domains — into IdentityCenter for governance.",
+                "Inventories the full Google Workspace estate — users, groups, organizational "
+                + "units, admin roles, domains, mobile devices, ChromeOS devices, admin role "
+                + "assignments, and calendar resources — into IdentityCenter for governance.",
             SourceSystemType = "GoogleWorkspace",
-            ExplicitClasses = new[] { "user", "group", "organizationalUnit", "role", "domain" },
+            ExplicitClasses = new[]
+            {
+                "user", "group", "organizationalUnit", "role", "domain",
+                "mobiledevice", "chromeosdevice", "roleAssignment", "calendarresource"
+            },
             DefaultCronSchedule = DailyCron,
             Notes = new[]
             {
@@ -259,9 +275,17 @@ public static class SyncProjectBlueprintCatalog
                     + "admin email, and these read-only Admin SDK Directory scopes: "
                     + "admin.directory.user.readonly, admin.directory.group.readonly, "
                     + "admin.directory.group.member.readonly, admin.directory.orgunit.readonly, "
-                    + "admin.directory.rolemanagement.readonly, admin.directory.domain.readonly.",
+                    + "admin.directory.rolemanagement.readonly, admin.directory.domain.readonly, "
+                    + "admin.directory.device.mobile.readonly, admin.directory.device.chromeos.readonly, "
+                    + "admin.directory.resource.calendar.readonly.",
                 "Source-only inventory: classes whose scope was not granted are skipped with a "
                     + "warning rather than failing the whole run."
+            },
+            ClassAdvisories = new Dictionary<string, string>
+            {
+                ["mobiledevice"] = "Needs admin.directory.device.mobile.readonly in the domain-wide delegation grant.",
+                ["chromeosdevice"] = "Needs admin.directory.device.chromeos.readonly in the domain-wide delegation grant.",
+                ["calendarresource"] = "Needs admin.directory.resource.calendar.readonly in the domain-wide delegation grant."
             }
         },
         new SyncProjectBlueprint
@@ -281,6 +305,34 @@ public static class SyncProjectBlueprintCatalog
                     + "whole domain naming context (refine the per-step filter to scope it down).",
                 "Group membership is pushed on a second pass from the AD 'member' attribute; "
                     + "member DNs land unresolved until DN->objectGUID reconciliation."
+            }
+        },
+        new SyncProjectBlueprint
+        {
+            Id = "active-directory-full-estate",
+            Name = "Active Directory Full Estate",
+            Description =
+                "Everything Active Directory holds — the identity core (users, groups, "
+                + "computers, contacts) plus the infrastructure surface: OUs, containers, "
+                + "GPOs, managed service accounts (gMSA/MSA), trusts, sites, subnets, "
+                + "site links, PKI certificate templates, CAs, BitLocker recovery info, "
+                + "DNS zones and nodes, print queues, SCPs, and the schema — one Enterprise-"
+                + "Reporter-style inventory in IdentityCenter.",
+            SourceSystemType = "ActiveDirectory",
+            Mode = GenerationMode.Full,
+            DefaultCronSchedule = DailyCron,
+            Notes = new[]
+            {
+                "24 object classes — the same read-capable directory account as the core "
+                    + "blueprint covers almost all of them; BitLocker recovery info "
+                    + "(msFVE-RecoveryInformation) additionally needs delegated read on the "
+                    + "recovery objects.",
+                "Sites, subnets, site links, PKI templates, CAs, and the schema live in the "
+                    + "Configuration/Schema naming contexts — the default scope reads the DOMAIN "
+                    + "naming context, so add CN=Configuration,DC=… (and CN=Schema,CN=Configuration,DC=…) "
+                    + "as Included containers on those steps or they read empty.",
+                "Prefer the core Active Directory Governance blueprint if you only need "
+                    + "people and access — this one is the infrastructure audit."
             }
         },
         new SyncProjectBlueprint
@@ -318,25 +370,6 @@ public static class SyncProjectBlueprintCatalog
                 "Requires an Okta API token (or OAuth service app) with read scopes for "
                     + "users, groups, and apps (okta.users.read, okta.groups.read, okta.apps.read).",
                 "Source-only inventory: classes the token cannot read are skipped with a "
-                    + "warning rather than failing the whole run."
-            }
-        },
-        new SyncProjectBlueprint
-        {
-            Id = "google-workspace-directory",
-            Name = "Google Workspace Directory",
-            Description =
-                "Inventories the Google Workspace directory — users, groups, organizational "
-                + "units, admin roles, and domains — into IdentityCenter for governance.",
-            SourceSystemType = "GoogleWorkspace",
-            ExplicitClasses = new[] { "user", "group", "organizationalUnit", "role", "domain" },
-            DefaultCronSchedule = DailyCron,
-            Notes = new[]
-            {
-                "Requires a GCP service account with domain-wide delegation, an impersonated "
-                    + "admin email, and the read-only Admin SDK Directory scopes "
-                    + "(admin.directory.user/group/orgunit/rolemanagement/domain .readonly).",
-                "Source-only inventory: classes whose scope was not granted are skipped with a "
                     + "warning rather than failing the whole run."
             }
         },

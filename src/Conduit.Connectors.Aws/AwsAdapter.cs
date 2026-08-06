@@ -97,4 +97,13 @@ internal static class AwsCredentialReader
         var region = RegionEndpoint.GetBySystemName(creds.Region);
         return new AmazonIdentityManagementServiceClient(basic, region);
     }
+
+    // EC2 is regional (IAM is global) — instances enumerate in the connection's
+    // configured Region only. A second region means a second connection.
+    public static Amazon.EC2.AmazonEC2Client CreateEc2Client(AwsCredentials creds)
+    {
+        var basic = new BasicAWSCredentials(creds.AccessKeyId, creds.SecretAccessKey);
+        var region = RegionEndpoint.GetBySystemName(creds.Region);
+        return new Amazon.EC2.AmazonEC2Client(basic, region);
+    }
 }

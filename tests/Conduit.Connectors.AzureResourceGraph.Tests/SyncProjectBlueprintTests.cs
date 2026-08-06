@@ -46,15 +46,32 @@ public class SyncProjectBlueprintTests
         StepsOf(p).Select(s => s.Step.ObjectClass!).ToArray();
 
     [Fact]
-    public void Catalog_ShipsExactlySixBlueprints()
+    public void Catalog_ShipsThe15CuratedBlueprints_WithUniqueIdsAndNames()
     {
-        Assert.Equal(6, SyncProjectBlueprintCatalog.All.Count);
-        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("entra-directory-governance"));
-        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("m365-license-usage"));
-        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("azure-resource-inventory"));
-        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("aws-iam-governance"));
-        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("aws-identity-center-governance"));
-        Assert.NotNull(SyncProjectBlueprintCatalog.GetById("gws-directory-governance"));
+        Assert.Equal(15, SyncProjectBlueprintCatalog.All.Count);
+        foreach (var id in new[]
+        {
+            "entra-directory-governance", "m365-license-usage",
+            "sharepoint-collaboration-governance", "azure-resource-inventory",
+            "aws-iam-governance", "aws-identity-center-governance",
+            "gws-directory-governance", "active-directory-governance",
+            "active-directory-full-estate", "active-roles-governance",
+            "okta-directory-governance", "generic-ldap-directory",
+            "scim-directory-governance", "database-directory-governance",
+            "sql-server-discovery"
+        })
+        {
+            Assert.NotNull(SyncProjectBlueprintCatalog.GetById(id));
+        }
+
+        // No duplicate ids or display names — a duplicate renders as two identical
+        // cards in the create flow (this caught a real double Google blueprint).
+        Assert.Equal(
+            SyncProjectBlueprintCatalog.All.Count,
+            SyncProjectBlueprintCatalog.All.Select(b => b.Id.ToLowerInvariant()).Distinct().Count());
+        Assert.Equal(
+            SyncProjectBlueprintCatalog.All.Count,
+            SyncProjectBlueprintCatalog.All.Select(b => b.Name.ToLowerInvariant()).Distinct().Count());
     }
 
     [Fact]

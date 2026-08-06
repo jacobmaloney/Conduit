@@ -260,4 +260,75 @@ public class SharePointMappingTests
         foreach (var cls in new[] { "channel", "channelfile", "drive", "list" })
             Assert.False(SyncProjectBlueprintCatalog.IsDeferredClass(cls));
     }
+
+    // ─── drive / list / subscribedSku mappers (used to silently fall through to
+    //     the site enumeration — these pin the dedicated emitters) ─────────────
+
+    [Fact]
+    public void MapDrive_emits_drive_class_with_quota_and_site_context()
+    {
+        var drive = new Drive
+        {
+            Id = "drv-1",
+            Name = "Documents",
+            DriveType = "documentLibrary",
+            WebUrl = "https://contoso.sharepoint.com/sites/hr/Shared%20Documents",
+            Quota = new Quota { Total = 1000, Used = 250, State = "normal" }
+        };
+
+        var obj = SharePointSource.MapDrive(drive, "HR");
+
+        Assert.Equal("drv-1", obj.SourceId);
+        Assert.Equal("Drive", obj.ObjectClass);
+        Assert.Equal("Documents", obj.Attributes["displayName"]);
+        Assert.Equal("HR", obj.Attributes["siteName"]);
+        Assert.Equal(1000L, obj.Attributes["quotaTotal"]);
+        Assert.Equal(250L, obj.Attributes["quotaUsed"]);
+        Assert.Equal("normal", obj.Attributes["quotaState"]);
+    }
+
+    [Fact]
+    public void MapList_emits_list_class_with_template_and_site_context()
+    {
+        var list = new List
+        {
+            Id = "lst-1",
+            DisplayName = "Onboarding Tasks",
+            Name = "OnboardingTasks",
+            WebUrl = "https://contoso.sharepoint.com/sites/hr/Lists/OnboardingTasks",
+            ListProp = new ListInfo { Template = "genericList" }
+        };
+
+        var obj = SharePointSource.MapList(list, "HR");
+
+        Assert.Equal("lst-1", obj.SourceId);
+        Assert.Equal("List", obj.ObjectClass);
+        Assert.Equal("Onboarding Tasks", obj.Attributes["displayName"]);
+        Assert.Equal("genericList", obj.Attributes["listTemplate"]);
+        Assert.Equal("HR", obj.Attributes["siteName"]);
+    }
+
+    [Fact]
+    public void MapSubscribedSku_emits_sku_with_consumption_figures()
+    {
+        var sku = new SubscribedSku
+        {
+            Id = "sku-1",
+            SkuPartNumber = "ENTERPRISEPACK",
+            SkuId = System.Guid.Parse("6fd2c87f-b296-42f0-b197-1e91e994b900"),
+            AppliesTo = "User",
+            ConsumedUnits = 180,
+            PrepaidUnits = new LicenseUnitsDetail { Enabled = 200, Suspended = 0 },
+            ServicePlans = new List<ServicePlanInfo> { new(), new(), new() }
+        };
+
+        var obj = SharePointSource.MapSubscribedSku(sku);
+
+        Assert.Equal("sku-1", obj.SourceId);
+        Assert.Equal("SubscribedSku", obj.ObjectClass);
+        Assert.Equal("ENTERPRISEPACK", obj.Attributes["displayName"]);
+        Assert.Equal(180, obj.Attributes["consumedUnits"]);
+        Assert.Equal(200, obj.Attributes["prepaidEnabled"]);
+        Assert.Equal(3, obj.Attributes["servicePlanCount"]);
+    }
 }

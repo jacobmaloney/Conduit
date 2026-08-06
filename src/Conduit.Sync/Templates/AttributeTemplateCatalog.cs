@@ -914,6 +914,61 @@ public static class AttributeTemplateCatalog
             E("verified", "Verified", false, "Boolean"),
         };
 
+        c[(Systems.GoogleWorkspace, "mobiledevice")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("model", "Model"),
+            E("os", "OperatingSystem"),
+            E("deviceType", "DeviceType"),
+            E("status", "Status"),
+            E("serialNumber", "SerialNumber"),
+            E("ownerEmail", "OwnerEmail"),
+            E("lastSync", "LastSync"),
+        };
+
+        c[(Systems.GoogleWorkspace, "chromeosdevice")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("serialNumber", "SerialNumber"),
+            E("status", "Status"),
+            E("model", "Model"),
+            E("osVersion", "OsVersion"),
+            E("platformVersion", "PlatformVersion"),
+            E("macAddress", "MacAddress"),
+            E("annotatedUser", "AnnotatedUser"),
+            E("annotatedLocation", "AnnotatedLocation"),
+            E("orgUnitPath", "OrgUnitPath"),
+            E("lastSync", "LastSync"),
+        };
+
+        c[(Systems.GoogleWorkspace, "roleAssignment")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("roleId", "RoleId"),
+            E("assignedTo", "AssignedTo"),
+            E("scopeType", "ScopeType"),
+            E("orgUnitId", "OrgUnitId"),
+        };
+
+        c[(Systems.GoogleWorkspace, "calendarresource")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("resourceType", "ResourceType"),
+            E("resourceEmail", "ResourceEmail"),
+            E("description", "Description"),
+            E("buildingId", "BuildingId"),
+            E("floorName", "FloorName"),
+            E("capacity", "Capacity", false, "Integer"),
+        };
+
         // ──────────────────────────────── AWS ──────────────────────────────────
         c[(Systems.Aws, "User")] = new[]
         {
@@ -964,6 +1019,27 @@ public static class AttributeTemplateCatalog
             E("accountAlias", "AccountAlias"),
         };
 
+        // EC2 instances in the connection's Region — same "computer" class AD hosts
+        // use, so cloud VMs land in the one estate inventory.
+        c[(Systems.Aws, "Computer")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("cn", "CN"),
+            E("instanceType", "InstanceType"),
+            E("state", "State"),
+            E("region", "Region"),
+            E("privateIp", "PrivateIp"),
+            E("publicIp", "PublicIp"),
+            E("dNSHostName", "DnsHostName"),
+            E("imageId", "ImageId"),
+            E("vpcId", "VpcId"),
+            E("subnetId", "SubnetId"),
+            E("architecture", "Architecture"),
+            E("platform", "Platform"),
+            E("whenCreated", "WhenCreated"),
+        };
+
         // ───────────────────────── AWS Identity Center ─────────────────────────
         // The SSO-flavored IdentityStore + SSO Admin source. SourceUniqueId is the
         // IdentityStore UserId / GroupId for user/group, and the permission-set ARN
@@ -997,6 +1073,18 @@ public static class AttributeTemplateCatalog
             E("description", "Description"),
             E("arn", "ARN"),
             E("sessionDuration", "SessionDuration"),
+            E("whenCreated", "WhenCreated"),
+        };
+
+        c[(Systems.AwsIdentityCenter, "Application")] = new[]
+        {
+            E("id", "SourceUniqueId", true),
+            E("displayName", "DisplayName", true),
+            E("name", "Name"),
+            E("description", "Description"),
+            E("arn", "ARN"),
+            E("providerArn", "ProviderArn"),
+            E("status", "Status"),
             E("whenCreated", "WhenCreated"),
         };
 

@@ -57,6 +57,18 @@ public sealed class AwsSsoSource : IConnectorSource
             yield break;
         }
 
+        if (string.Equals(objectClass, "application", StringComparison.OrdinalIgnoreCase))
+        {
+            var emittedApps = 0;
+            await foreach (var app in EnumerateApplicationsAsync(creds, instance.SsoInstanceArn, cancellationToken))
+            {
+                if (scope.MaxObjects.HasValue && emittedApps >= scope.MaxObjects.Value) yield break;
+                emittedApps++;
+                yield return app;
+            }
+            yield break;
+        }
+
         if (!string.Equals(objectClass, "user", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase))
         {
@@ -155,7 +167,7 @@ public sealed class AwsSsoSource : IConnectorSource
     }
 
     /// <summary>The native object classes this source can enumerate.</summary>
-    public static readonly string[] SupportedClasses = { "user", "group", "permissionSet" };
+    public static readonly string[] SupportedClasses = { "user", "group", "permissionSet", "application" };
 
     /// <summary>True when this source can enumerate the given class (case-insensitive).</summary>
     public static bool IsSupportedClass(string objectClass)
@@ -232,6 +244,72 @@ public sealed class AwsSsoSource : IConnectorSource
                     {
                         SourceId = arn,
                         ObjectClass = "permissionSet",
+                        Attributes = attrs
+                    };
+                }
+            }
+            next = resp.NextToken;
+        } while (!string.IsNullOrEmpty(next));
+    }
+
+    // Identity Center applications (customer-managed + AWS-managed apps assigned
+    // through IdC). SourceId = the application ARN. Per-class AccessDenied skip —
+    // the API also does not exist on legacy account instances, so ANY failure here
+    // warns and yields nothing rather than aborting user/group sync.
+    private async IAsyncEnumerable<ConnectorObject> EnumerateApplicationsAsync(
+        AwsSsoCredentials creds, string instanceArn,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var admin = AwsSsoCredentialReader.CreateSsoAdminClient(creds);
+        string? next = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SsoAdminModel.ListApplicationsResponse? resp = null;
+            try
+            {
+                resp = await admin.ListApplicationsAsync(new SsoAdminModel.ListApplicationsRequest
+                {
+                    InstanceArn = instanceArn,
+                    MaxResults = 100,
+                    NextToken = next
+                }, cancellationToken);
+            }
+            catch (Amazon.SSOAdmin.Model.AccessDeniedException)
+            {
+                _logger.LogWarning("AWS Identity Center: skipping class application — credential lacks sso:ListApplications (AccessDenied).");
+                yield break;
+            }
+            catch (Amazon.SSOAdmin.AmazonSSOAdminException ex)
+            {
+                _logger.LogWarning("AWS Identity Center: skipping class application — {Message}.", ex.Message);
+                yield break;
+            }
+
+            if (resp.Applications is not null)
+            {
+                foreach (var app in resp.Applications)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (string.IsNullOrEmpty(app.ApplicationArn)) continue;
+                    var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["objectClass"] = "application",
+                        ["id"] = app.ApplicationArn,
+                        ["objectGuid"] = app.ApplicationArn,
+                        ["arn"] = app.ApplicationArn,
+                        ["displayName"] = app.Name,
+                        ["cn"] = app.Name,
+                        ["name"] = app.Name,
+                        ["description"] = app.Description,
+                        ["providerArn"] = app.ApplicationProviderArn,
+                        ["status"] = app.Status?.Value
+                    };
+                    if (app.CreatedDate is { } created) attrs["whenCreated"] = created.ToString("o");
+                    yield return new ConnectorObject
+                    {
+                        SourceId = app.ApplicationArn,
+                        ObjectClass = "application",
                         Attributes = attrs
                     };
                 }

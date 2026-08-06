@@ -14,9 +14,11 @@ namespace Conduit.Connectors.Okta;
 
 /// <summary>
 /// Okta source — paged enumeration via Link: rel="next" header. Object classes:
-/// "User" (default), "Group". Attribute parity with IC's OktaQueryService: emits
-/// both Okta-native names (login, email) and AD-compatible aliases
+/// "User", "Group", "Application". Attribute parity with IC's OktaQueryService:
+/// emits both Okta-native names (login, email) and AD-compatible aliases
 /// (sAMAccountName, sn, l, st, etc.) so downstream sinks see consistent keys.
+/// Applications FULL-READ each run — /api/v1/apps does not accept the
+/// lastUpdated filter grammar the incremental cursor uses for users/groups.
 /// </summary>
 public sealed class OktaSource : IConnectorSource
 {
@@ -72,25 +74,35 @@ public sealed class OktaSource : IConnectorSource
         OktaWatermark watermark,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (!IsSupportedClass(objectClass))
+        {
+            throw new NotSupportedException(
+                $"Okta source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedClasses)}.");
+        }
+
         var creds = await OktaCredentialReader.ReadAsync(_protector, _tenantId)
             ?? throw new InvalidOperationException($"No 'okta' credential for tenant {_tenantId}.");
         var client = OktaCredentialReader.BuildClient(_httpFactory, creds);
 
         var pageSize = scope.PageSize > 0 && scope.PageSize <= 200 ? scope.PageSize : 200;
+        var isApp = string.Equals(objectClass, "Application", StringComparison.OrdinalIgnoreCase);
 
-        // Build filter (project filter + Phase 2 incremental clause).
+        // Build filter (project filter + Phase 2 incremental clause). Applications never get the
+        // incremental clause — /api/v1/apps rejects the lastUpdated filter grammar.
         string? combined = null;
         if (!string.IsNullOrWhiteSpace(scope.QueryExpression)) combined = scope.QueryExpression;
-        if (!string.IsNullOrWhiteSpace(sinceIsoUtc))
+        if (!string.IsNullOrWhiteSpace(sinceIsoUtc) && !isApp)
         {
             var increment = $"lastUpdated gt \"{sinceIsoUtc}\"";
             combined = combined is null ? increment : $"({combined}) and {increment}";
         }
         var filterPart = combined is null ? "" : $"&filter={Uri.EscapeDataString(combined)}";
 
-        string url = string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase)
-            ? $"{creds.OrgUrl}/api/v1/groups?limit={pageSize}{filterPart}"
-            : $"{creds.OrgUrl}/api/v1/users?limit={pageSize}{filterPart}";
+        string url = isApp
+            ? $"{creds.OrgUrl}/api/v1/apps?limit={pageSize}"
+            : string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase)
+                ? $"{creds.OrgUrl}/api/v1/groups?limit={pageSize}{filterPart}"
+                : $"{creds.OrgUrl}/api/v1/users?limit={pageSize}{filterPart}";
 
         var emitted = 0;
         await foreach (var obj in EnumeratePagedAsync(client, url, objectClass, watermark, cancellationToken))
@@ -152,9 +164,11 @@ public sealed class OktaSource : IConnectorSource
                         watermark.Observe(dt);
                     }
 
-                    var converted = string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase)
-                        ? ConvertGroup(el)
-                        : ConvertUser(el);
+                    var converted = string.Equals(objectClass, "Application", StringComparison.OrdinalIgnoreCase)
+                        ? ConvertApp(el)
+                        : string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase)
+                            ? ConvertGroup(el)
+                            : ConvertUser(el);
                     if (converted != null) yield return converted;
                 }
             }
@@ -256,6 +270,47 @@ public sealed class OktaSource : IConnectorSource
         Set(attrs, "whenCreated", Str(el, "created"));
         Set(attrs, "whenChanged", Str(el, "lastUpdated"));
         return new ConnectorObject { SourceId = id!, ObjectClass = "Group", Attributes = attrs };
+    }
+
+    // App objects from /api/v1/apps: "label" is the human name, "name" the app-type key
+    // (oidc_client, bookmark, …). Attribute names match the template catalog's Okta
+    // Application entries (displayName/cn/appSignOnMode/appStatus).
+    private static ConnectorObject? ConvertApp(JsonElement el)
+    {
+        var id = Str(el, "id");
+        if (string.IsNullOrEmpty(id)) return null;
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["id"] = id,
+            ["objectGuid"] = id,
+            ["objectClass"] = "application"
+        };
+        var label = Str(el, "label");
+        Set(attrs, "displayName", label);
+        Set(attrs, "cn", label);
+        Set(attrs, "name", Str(el, "name"));
+        Set(attrs, "appSignOnMode", Str(el, "signOnMode"));
+        Set(attrs, "signOnMode", Str(el, "signOnMode"));
+        var status = Str(el, "status");
+        if (status != null)
+        {
+            attrs["appStatus"] = status;
+            attrs["active"] = status.Equals("ACTIVE", StringComparison.OrdinalIgnoreCase);
+        }
+        Set(attrs, "whenCreated", Str(el, "created"));
+        Set(attrs, "whenChanged", Str(el, "lastUpdated"));
+        return new ConnectorObject { SourceId = id!, ObjectClass = "Application", Attributes = attrs };
+    }
+
+    /// <summary>The native object classes this source can enumerate.</summary>
+    public static readonly string[] SupportedClasses = { "user", "group", "application" };
+
+    /// <summary>True when this source can enumerate the given class (case-insensitive).</summary>
+    public static bool IsSupportedClass(string objectClass)
+    {
+        foreach (var c in SupportedClasses)
+            if (string.Equals(c, objectClass, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private static string? Str(JsonElement el, string name) =>

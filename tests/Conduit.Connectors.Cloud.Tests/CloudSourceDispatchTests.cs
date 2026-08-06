@@ -18,6 +18,7 @@ public class CloudSourceDispatchTests
     [InlineData("role")]
     [InlineData("policy")]
     [InlineData("account")]
+    [InlineData("computer")]
     public void AwsSource_supports_each_governance_class_case_insensitively(string cls)
     {
         Assert.True(AwsSource.IsSupportedClass(cls));
@@ -26,7 +27,6 @@ public class CloudSourceDispatchTests
     }
 
     [Theory]
-    [InlineData("computer")]
     [InlineData("permissionSet")]
     [InlineData("organizationalUnit")]
     [InlineData("")]
@@ -36,15 +36,18 @@ public class CloudSourceDispatchTests
     }
 
     [Fact]
-    public void AwsSource_supported_set_is_exactly_the_five_governance_classes()
+    public void AwsSource_supported_set_is_exactly_the_six_governance_classes()
     {
-        Assert.Equal(new[] { "user", "group", "role", "policy", "account" }, AwsSource.SupportedClasses);
+        Assert.Equal(
+            new[] { "user", "group", "role", "policy", "account", "computer" },
+            AwsSource.SupportedClasses);
     }
 
     [Theory]
     [InlineData("user")]
     [InlineData("group")]
     [InlineData("permissionSet")]
+    [InlineData("application")]
     public void AwsSsoSource_supports_each_governance_class_case_insensitively(string cls)
     {
         Assert.True(AwsSsoSource.IsSupportedClass(cls));
@@ -62,9 +65,11 @@ public class CloudSourceDispatchTests
     }
 
     [Fact]
-    public void AwsSsoSource_supported_set_is_exactly_user_group_permissionSet()
+    public void AwsSsoSource_supported_set_is_exactly_user_group_permissionSet_application()
     {
-        Assert.Equal(new[] { "user", "group", "permissionSet" }, AwsSsoSource.SupportedClasses);
+        Assert.Equal(
+            new[] { "user", "group", "permissionSet", "application" },
+            AwsSsoSource.SupportedClasses);
     }
 
     [Theory]
@@ -73,6 +78,10 @@ public class CloudSourceDispatchTests
     [InlineData("organizationalUnit")]
     [InlineData("role")]
     [InlineData("domain")]
+    [InlineData("mobiledevice")]
+    [InlineData("chromeosdevice")]
+    [InlineData("roleAssignment")]
+    [InlineData("calendarresource")]
     public void GoogleWorkspaceSource_supports_each_governance_class_case_insensitively(string cls)
     {
         Assert.True(GoogleWorkspaceSource.IsSupportedClass(cls));
@@ -90,10 +99,14 @@ public class CloudSourceDispatchTests
     }
 
     [Fact]
-    public void GoogleWorkspaceSource_supported_set_is_exactly_the_five_governance_classes()
+    public void GoogleWorkspaceSource_supported_set_is_exactly_the_nine_governance_classes()
     {
         Assert.Equal(
-            new[] { "user", "group", "organizationalUnit", "role", "domain" },
+            new[]
+            {
+                "user", "group", "organizationalUnit", "role", "domain",
+                "mobiledevice", "chromeosdevice", "roleAssignment", "calendarresource"
+            },
             GoogleWorkspaceSource.SupportedClasses);
     }
 }

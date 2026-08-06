@@ -285,7 +285,93 @@ public sealed class SharePointSource : IConnectorSource
             yield break;
         }
 
-        // Default: Site. The /sites list carries NO storage figures — those come
+        // ── subscribedSku: tenant license SKUs — one small collection, no paging cliffs ──
+        if (string.Equals(objectClass, "subscribedSku", StringComparison.OrdinalIgnoreCase))
+        {
+            var skus = await client.SubscribedSkus.GetAsync(cancellationToken: cancellationToken);
+            while (skus?.Value != null)
+            {
+                foreach (var sku in skus.Value)
+                {
+                    if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                    if (string.IsNullOrEmpty(sku.Id)) continue;
+                    emitted++;
+                    yield return MapSubscribedSku(sku);
+                }
+                if (string.IsNullOrEmpty(skus.OdataNextLink)) break;
+                skus = await client.SubscribedSkus.WithUrl(skus.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+            yield break;
+        }
+
+        // ── drive: document libraries per site. Same Sites.Read.All scope as /sites;
+        //    a failure on ONE site's drives warns and skips that site only. ──
+        if (string.Equals(objectClass, "Drive", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var s in await ListAllSitesAsync(client, cancellationToken))
+            {
+                if (string.IsNullOrEmpty(s.Id)) continue;
+                List<Microsoft.Graph.Models.Drive> drives;
+                try
+                {
+                    var page = await client.Sites[s.Id].Drives.GetAsync(cancellationToken: cancellationToken);
+                    drives = page?.Value ?? new List<Microsoft.Graph.Models.Drive>();
+                }
+                catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+                {
+                    _logger.LogWarning("SharePoint: skipping drives for site {SiteId} ({Message}).", s.Id, ex.Error?.Message ?? ex.Message);
+                    continue;
+                }
+                foreach (var d in drives)
+                {
+                    if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                    if (string.IsNullOrEmpty(d.Id)) continue;
+                    emitted++;
+                    yield return MapDrive(d, s.DisplayName ?? s.Name);
+                }
+            }
+            yield break;
+        }
+
+        // ── list: SharePoint lists per site (document libraries appear here too,
+        //    flagged by their template). Same per-site failure isolation as drives. ──
+        if (string.Equals(objectClass, "List", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var s in await ListAllSitesAsync(client, cancellationToken))
+            {
+                if (string.IsNullOrEmpty(s.Id)) continue;
+                List<Microsoft.Graph.Models.List> lists;
+                try
+                {
+                    var page = await client.Sites[s.Id].Lists.GetAsync(cancellationToken: cancellationToken);
+                    lists = page?.Value ?? new List<Microsoft.Graph.Models.List>();
+                }
+                catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+                {
+                    _logger.LogWarning("SharePoint: skipping lists for site {SiteId} ({Message}).", s.Id, ex.Error?.Message ?? ex.Message);
+                    continue;
+                }
+                foreach (var l in lists)
+                {
+                    if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
+                    if (string.IsNullOrEmpty(l.Id)) continue;
+                    emitted++;
+                    yield return MapList(l, s.DisplayName ?? s.Name);
+                }
+            }
+            yield break;
+        }
+
+        // Any class we don't recognize is an honest error, not a silent site sync —
+        // a wrong class here used to fall through and emit the whole /sites list.
+        if (!string.Equals(objectClass, "Site", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new NotSupportedException(
+                $"SharePoint source does not support object class '{objectClass}'. " +
+                "Supported: site, team, channel, channelfile, drive, list, subscribedSku, sharepointgroup.");
+        }
+
+        // ── site: The /sites list carries NO storage figures — those come
         // from the getSharePointSiteUsageDetail usage report, which we fetch once
         // and join by site URL. A 403 on the report (missing Reports.Read.All)
         // skips enrichment with a warning but every site still emits.
@@ -294,14 +380,7 @@ public sealed class SharePointSource : IConnectorSource
         // Collect the flat /sites list first so we can resolve each site's parent
         // by webUrl path containment (the tenant returns no parentReference on the
         // /sites collection). Site counts are modest vs. users; buffering is cheap.
-        var allSites = new List<Microsoft.Graph.Models.Site>();
-        var sites = await client.Sites.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
-        while (sites?.Value != null)
-        {
-            allSites.AddRange(sites.Value);
-            if (string.IsNullOrEmpty(sites.OdataNextLink)) break;
-            sites = await client.Sites.WithUrl(sites.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
-        }
+        var allSites = await ListAllSitesAsync(client, cancellationToken);
 
         var parentById = BuildSiteHierarchy(allSites);
         foreach (var s in allSites)
@@ -311,6 +390,21 @@ public sealed class SharePointSource : IConnectorSource
             emitted++;
             yield return MapSite(s, parentSiteId, storageByUrl);
         }
+    }
+
+    /// <summary>The flat tenant /sites collection, fully paged. Shared by site/drive/list.</summary>
+    private static async Task<List<Microsoft.Graph.Models.Site>> ListAllSitesAsync(
+        GraphServiceClient client, CancellationToken cancellationToken)
+    {
+        var allSites = new List<Microsoft.Graph.Models.Site>();
+        var sites = await client.Sites.GetAsync(req => req.QueryParameters.Top = 100, cancellationToken);
+        while (sites?.Value != null)
+        {
+            allSites.AddRange(sites.Value);
+            if (string.IsNullOrEmpty(sites.OdataNextLink)) break;
+            sites = await client.Sites.WithUrl(sites.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+        }
+        return allSites;
     }
 
     /// <summary>
@@ -465,6 +559,82 @@ public sealed class SharePointSource : IConnectorSource
         {
             SourceId = s.Id ?? string.Empty,
             ObjectClass = "Site",
+            Attributes = attrs
+        };
+    }
+
+    internal static ConnectorObject MapDrive(Microsoft.Graph.Models.Drive d, string? siteName)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "drive",
+            ["id"] = d.Id,
+            ["objectGuid"] = d.Id,
+            ["displayName"] = d.Name,
+            ["cn"] = d.Name,
+            ["name"] = d.Name,
+            ["driveType"] = d.DriveType,
+            ["webUrl"] = d.WebUrl,
+            ["description"] = d.Description,
+            ["siteName"] = siteName
+        };
+        if (d.Quota?.Total is long total) attrs["quotaTotal"] = total;
+        if (d.Quota?.Used is long used) attrs["quotaUsed"] = used;
+        if (!string.IsNullOrEmpty(d.Quota?.State)) attrs["quotaState"] = d.Quota!.State;
+        return new ConnectorObject
+        {
+            SourceId = d.Id ?? string.Empty,
+            ObjectClass = "Drive",
+            Attributes = attrs
+        };
+    }
+
+    internal static ConnectorObject MapList(Microsoft.Graph.Models.List l, string? siteName)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "list",
+            ["id"] = l.Id,
+            ["objectGuid"] = l.Id,
+            ["displayName"] = l.DisplayName ?? l.Name,
+            ["cn"] = l.Name,
+            ["name"] = l.Name,
+            ["webUrl"] = l.WebUrl,
+            ["description"] = l.Description,
+            ["siteName"] = siteName,
+            ["listTemplate"] = l.ListProp?.Template,
+            ["createdDateTime"] = l.CreatedDateTime?.ToString("o"),
+            ["lastModifiedDateTime"] = l.LastModifiedDateTime?.ToString("o")
+        };
+        return new ConnectorObject
+        {
+            SourceId = l.Id ?? string.Empty,
+            ObjectClass = "List",
+            Attributes = attrs
+        };
+    }
+
+    internal static ConnectorObject MapSubscribedSku(Microsoft.Graph.Models.SubscribedSku sku)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectClass"] = "subscribedsku",
+            ["id"] = sku.Id,
+            ["objectGuid"] = sku.Id,
+            ["skuPartNumber"] = sku.SkuPartNumber,
+            ["displayName"] = sku.SkuPartNumber,
+            ["cn"] = sku.SkuPartNumber,
+            ["skuId"] = sku.SkuId?.ToString(),
+            ["appliesTo"] = sku.AppliesTo
+        };
+        if (sku.ConsumedUnits is int consumed) attrs["consumedUnits"] = consumed;
+        if (sku.PrepaidUnits?.Enabled is int enabled) attrs["prepaidEnabled"] = enabled;
+        if (sku.PrepaidUnits?.Suspended is int suspended) attrs["prepaidSuspended"] = suspended;
+        if (sku.ServicePlans is { Count: > 0 } plans) attrs["servicePlanCount"] = plans.Count;
+        return new ConnectorObject
+        {
+            SourceId = sku.Id ?? string.Empty,
+            ObjectClass = "SubscribedSku",
             Attributes = attrs
         };
     }
