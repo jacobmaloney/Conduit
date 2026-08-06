@@ -244,7 +244,8 @@ public static class SyncProjectBlueprintCatalog
             Notes = new[]
             {
                 "Requires an access key with read-only Identity Center actions: "
-                    + "identitystore:ListUsers, identitystore:ListGroups, sso:ListInstances, "
+                    + "identitystore:ListUsers, identitystore:ListGroups, "
+                    + "identitystore:ListGroupMemberships (group member edges), sso:ListInstances, "
                     + "sso:ListPermissionSets, sso:DescribePermissionSet, sso:ListApplications.",
                 "The Identity Store ID and SSO Instance ARN auto-discover via "
                     + "sso:ListInstances when left blank on the connection."

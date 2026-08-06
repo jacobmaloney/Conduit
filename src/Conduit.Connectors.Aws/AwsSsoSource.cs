@@ -100,6 +100,10 @@ public sealed class AwsSsoSource : IConnectorSource
                         ["description"] = g.Description,
                         ["externalId"] = ExtractExternalId(g.ExternalIds)
                     };
+                    // Member user ids feed the orchestrator's membership second pass
+                    // (attrs["members"], same as the other cloud sources). Best-effort.
+                    var members = await TryGetGroupMemberIdsAsync(idStore, instance.IdentityStoreId, g.GroupId, cancellationToken);
+                    if (members.Count > 0) attrs["members"] = members;
                     emitted++;
                     yield return new ConnectorObject
                     {
@@ -175,6 +179,42 @@ public sealed class AwsSsoSource : IConnectorSource
         foreach (var c in SupportedClasses)
             if (string.Equals(c, objectClass, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Member user ids for one Identity Center group via identitystore
+    /// ListGroupMemberships (paged). Best-effort: an AccessDenied (or any
+    /// failure) returns what was gathered so far — a group still emits, just
+    /// without member edges, mirroring the other cloud sources.
+    /// </summary>
+    private static async Task<List<string>> TryGetGroupMemberIdsAsync(
+        Amazon.IdentityStore.AmazonIdentityStoreClient idStore, string identityStoreId, string groupId,
+        CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        try
+        {
+            string? next = null;
+            do
+            {
+                var resp = await idStore.ListGroupMembershipsAsync(new ListGroupMembershipsRequest
+                {
+                    IdentityStoreId = identityStoreId,
+                    GroupId = groupId,
+                    MaxResults = 100,
+                    NextToken = next
+                }, cancellationToken);
+                foreach (var m in resp.GroupMemberships)
+                {
+                    var userId = m.MemberId?.UserId;
+                    if (!string.IsNullOrEmpty(userId)) ids.Add(userId!);
+                }
+                next = resp.NextToken;
+            } while (!string.IsNullOrEmpty(next));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* best effort — needs identitystore:ListGroupMemberships */ }
+        return ids;
     }
 
     // Permission sets are listed as ARNs then hydrated one-by-one via Describe.

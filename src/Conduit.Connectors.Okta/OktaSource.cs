@@ -105,7 +105,7 @@ public sealed class OktaSource : IConnectorSource
                 : $"{creds.OrgUrl}/api/v1/users?limit={pageSize}{filterPart}";
 
         var emitted = 0;
-        await foreach (var obj in EnumeratePagedAsync(client, url, objectClass, watermark, cancellationToken))
+        await foreach (var obj in EnumeratePagedAsync(client, url, creds.OrgUrl, objectClass, watermark, cancellationToken))
         {
             if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
             emitted++;
@@ -139,7 +139,7 @@ public sealed class OktaSource : IConnectorSource
     }
 
     private static async IAsyncEnumerable<ConnectorObject> EnumeratePagedAsync(
-        HttpClient client, string url, string objectClass, OktaWatermark watermark,
+        HttpClient client, string url, string orgUrl, string objectClass, OktaWatermark watermark,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         string? next = url;
@@ -169,7 +169,19 @@ public sealed class OktaSource : IConnectorSource
                         : string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase)
                             ? ConvertGroup(el)
                             : ConvertUser(el);
-                    if (converted != null) yield return converted;
+                    if (converted is null) continue;
+
+                    // Groups: fetch member user ids so the orchestrator's membership
+                    // second pass has edges to push (attrs["members"], same as the
+                    // other cloud sources). Best-effort — a failure on one group's
+                    // member listing drops that group's edges only.
+                    if (string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var members = await TryGetGroupMemberIdsAsync(client, orgUrl, converted.SourceId, cancellationToken);
+                        if (members.Count > 0) converted.Attributes["members"] = members;
+                    }
+
+                    yield return converted;
                 }
             }
             next = null;
@@ -184,6 +196,52 @@ public sealed class OktaSource : IConnectorSource
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Member user ids for one group via /api/v1/groups/{id}/users (paged by Link
+    /// header, id-only projection). Best-effort: any failure logs nothing here and
+    /// returns the ids gathered so far — one group's member listing failing must
+    /// not abort the group enumeration.
+    /// </summary>
+    private static async Task<List<string>> TryGetGroupMemberIdsAsync(
+        HttpClient client, string orgUrl, string groupId, CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        try
+        {
+            string? next = $"{orgUrl}/api/v1/groups/{Uri.EscapeDataString(groupId)}/users?limit=200";
+            while (!string.IsNullOrEmpty(next))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var resp = await client.GetAsync(next, cancellationToken);
+                if (!resp.IsSuccessStatusCode) break;
+                var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        var id = Str(el, "id");
+                        if (!string.IsNullOrEmpty(id)) ids.Add(id!);
+                    }
+                }
+                next = null;
+                if (resp.Headers.TryGetValues("Link", out var links))
+                {
+                    foreach (var link in links)
+                    {
+                        if (!link.Contains("rel=\"next\"", StringComparison.OrdinalIgnoreCase)) continue;
+                        var start = link.IndexOf('<') + 1;
+                        var end = link.IndexOf('>');
+                        if (start > 0 && end > start) { next = link[start..end]; break; }
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* best effort — edges for this group just don't emit this run */ }
+        return ids;
     }
 
     private static ConnectorObject? ConvertUser(JsonElement el)
