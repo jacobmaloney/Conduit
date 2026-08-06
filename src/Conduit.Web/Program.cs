@@ -535,6 +535,7 @@ builder.Services.AddScoped<Conduit.Web.Services.AdAgentBrowseExecutor>();
 // QUOTENAME dynamic SQL with the per-connection scan credential. Scoped: it resolves
 // the scoped CredentialProtector. The poller resolves it per-command from its scope.
 builder.Services.AddScoped<Conduit.Web.Services.SqlAgentWriteExecutor>();
+builder.Services.AddScoped<Conduit.Web.Services.SqlServiceAgentExecutor>();
 // ApplyAwsWrite executor — validates + allow-lists an IC-routed AWS IAM change
 // (tag, group membership, managed-policy attach/detach, access-key status, console-
 // access removal) and drives AwsIamWriter; ALL AWS SDK calls stay in the connector.

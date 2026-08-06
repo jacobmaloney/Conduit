@@ -44,6 +44,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandRunSqlDiscovery = "RunSqlDiscovery";
     private const string CommandApplyObjectWrite = "ApplyObjectWrite";
     private const string CommandApplySqlWrite = "ApplySqlWrite";
+    private const string CommandStopSqlService = "StopSqlService";
     private const string CommandApplyAwsWrite = "ApplyAwsWrite";
     private const string CommandCreateAdAccount = "CreateAdAccount";
     private const string CommandBrowseContainers = "BrowseContainers";
@@ -458,6 +459,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message) = await ApplySqlWriteAsync(command.Id, command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandStopSqlService, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message) = await StopSqlServiceAsync(command.Id, command.PayloadJson, ct);
+        }
         else if (string.Equals(command.CommandType, CommandApplyAwsWrite, StringComparison.OrdinalIgnoreCase))
         {
             (success, message) = await ApplyAwsWriteAsync(command.Id, command.PayloadJson, ct);
@@ -554,6 +559,19 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AwsAgentWriteExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+    }
+
+    /// <summary>
+    /// StopSqlService: stop (or, in dry-run, only report) the SQL Server Windows service on a
+    /// discovered on-prem host — the decommission-execution verb. All validation, the
+    /// service-name allow-list, dry-run handling, and the remote Invoke-Command live in
+    /// SqlServiceAgentExecutor. The raw payload is NEVER logged here.
+    /// </summary>
+    private async Task<(bool Success, string Message)> StopSqlServiceAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.SqlServiceAgentExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 
