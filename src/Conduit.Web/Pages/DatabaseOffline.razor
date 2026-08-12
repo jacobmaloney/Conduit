@@ -52,6 +52,15 @@
         </div>
 
         <a class="offline-manual" href="/db-offline">Check again now</a>
+
+        <div class="offline-divider"><span>or</span></div>
+
+        <p class="offline-moved">
+            Moved to a new database server, or the old one is gone for good?
+        </p>
+        <a class="offline-reconnect" href="/setup">
+            Reconnect to a different database
+        </a>
     </div>
 </div>
 
@@ -158,6 +167,48 @@
         color: var(--accent, #22D3EE);
         font-size: 13px;
         font-weight: 600;
+    }
+
+    .offline-divider {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 26px 0 18px;
+        color: var(--text-3, #6B809E);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+
+    .offline-divider::before,
+    .offline-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: rgba(157, 176, 204, 0.14);
+    }
+
+    .offline-moved {
+        color: var(--text-2, #9DB0CC);
+        font-size: 13.5px;
+        line-height: 1.5;
+        margin: 0 0 14px;
+    }
+
+    .offline-reconnect {
+        display: inline-block;
+        padding: 10px 20px;
+        border-radius: 10px;
+        background: var(--accent, #22D3EE);
+        color: #06121F;
+        font-size: 14px;
+        font-weight: 700;
+        text-decoration: none;
+        transition: filter 0.15s ease;
+    }
+
+    .offline-reconnect:hover {
+        filter: brightness(1.08);
     }
 </style>
 
