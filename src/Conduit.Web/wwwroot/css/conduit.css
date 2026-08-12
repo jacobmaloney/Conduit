@@ -3297,6 +3297,211 @@ details summary::-webkit-details-marker { color: var(--accent); }
     color: #fff;
 }
 
+/* ── Sync step editor: inline rename ──────────────────────────────────────────
+   The collapsed step header's name is click-to-edit. The pen glyph lives INSIDE
+   the same hit target so there is no second control on a row that already has
+   ten. min-width keeps the type/class badges from sliding sideways on swap. */
+.step-name-editable {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 22ch;
+    padding: 1px 4px;
+    margin-left: -4px;
+    border-bottom: 1px dashed transparent;
+    border-radius: 3px;
+    cursor: text;
+}
+.step-name-editable:hover {
+    background: var(--panel-2, #f4f2ec);
+    border-bottom-color: var(--border-2, #cbd5e1);
+}
+.step-name-pen {
+    font-size: 0.75em;
+    opacity: 0;
+    transition: opacity .12s;
+}
+.step-name-editable:hover .step-name-pen { opacity: 0.5; }
+.step-name-inline {
+    display: inline-block;
+    width: auto;
+    min-width: 22ch;
+    max-width: 40ch;
+}
+
+/* A duplicated step flashes so an Esc'd rename still leaves the new row obvious.
+   Background only — no transform/filter here; this card can wrap a fixed-position
+   modal and either would trap it in a new containing block. */
+@keyframes step-card-flash {
+    from { background: var(--accent-100, rgba(2, 132, 199, 0.16)); }
+    to   { background: transparent; }
+}
+.step-card-flash { animation: step-card-flash 1.2s ease-out 1; }
+
+/* ── Sync step editor: per-step IdentityCenter tags ───────────────────────────
+   Assign-existing-only. Committed chips + a filtered add-popover; there is no
+   free-text path because IC silently skips names it doesn't already have. */
+.step-tag-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+.step-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--border-2, #cbd5e1);
+    background: var(--panel-2, #f4f2ec);
+    color: var(--text-2, #475569);
+    border-radius: 999px;
+    padding: 1px 9px;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.6;
+}
+.step-tag-chip .step-tag-chip-label {
+    display: inline-block;
+    max-width: 12ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.step-tag-chip.overflow {
+    color: var(--text-3, #94a3b8);
+    background: transparent;
+}
+.step-tag-chip.stale {
+    border-style: dashed;
+    border-color: var(--warn, #F59E0B);
+    color: var(--warn, #F59E0B);
+    background: transparent;
+}
+.step-tag-chip.stale .step-tag-chip-label { text-decoration: line-through; }
+.step-tag-chip.editable {
+    font-size: 12.5px;
+    padding: 3px 6px 3px 12px;
+}
+.step-tag-chip-x {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    opacity: 0.55;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+}
+.step-tag-chip-x:hover { opacity: 1; }
+
+.step-tag-editor {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 2px 0 4px;
+}
+.step-tag-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px dashed var(--border-2, #cbd5e1);
+    background: transparent;
+    color: var(--text-2, #475569);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.5;
+    cursor: pointer;
+}
+.step-tag-add:hover:not(:disabled) {
+    border-color: var(--accent, #0284c7);
+    color: var(--accent, #0284c7);
+}
+.step-tag-add.open {
+    border-style: solid;
+    border-color: var(--accent, #0284c7);
+    color: var(--accent, #0284c7);
+}
+.step-tag-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.step-tag-popover {
+    position: absolute;
+    z-index: 5;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    width: min(320px, 100%);
+    padding: 8px;
+    border: 1px solid var(--border-2, #cbd5e1);
+    border-radius: var(--radius-sm, 7px);
+    background: var(--panel, #fff);
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
+}
+.step-tag-popover-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 190px;
+    overflow-y: auto;
+    margin-top: 8px;
+}
+.step-tag-popover-empty {
+    margin-top: 8px;
+    font-size: 12.5px;
+    color: var(--text-2, #475569);
+}
+
+.step-tag-head {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 4px;
+}
+.step-tag-refresh {
+    border: 0;
+    background: transparent;
+    color: var(--accent, #0284c7);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 0 4px;
+    margin-left: 6px;
+    cursor: pointer;
+}
+.step-tag-refresh i { margin-right: 4px; }
+
+.step-tag-state {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-2, #cbd5e1);
+    border-radius: var(--radius-sm, 7px);
+    font-size: 12.5px;
+    line-height: 1.45;
+}
+.step-tag-state.warn {
+    border-color: var(--warn, #F59E0B);
+    background: rgba(245, 158, 11, 0.08);
+}
+.step-tag-state.info {
+    border-color: var(--info, #3B82F6);
+    background: rgba(59, 130, 246, 0.07);
+}
+.step-tag-state.warn > i { color: var(--warn, #F59E0B); }
+.step-tag-state.info > i { color: var(--info, #3B82F6); }
+.step-tag-state-body { flex: 1; min-width: 0; }
+.step-tag-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+.step-tag-stale-hint { color: var(--text-3, #94a3b8); }
+
 .autogen-tpl-card {
     padding: 12px 14px;
     border: 1px solid var(--border-2, rgba(120, 160, 220, 0.18));

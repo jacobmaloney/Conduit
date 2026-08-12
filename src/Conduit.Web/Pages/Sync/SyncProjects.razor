@@ -6,6 +6,7 @@
 @using Conduit.Sync.Orchestration
 @using Conduit.Sync.Templates
 @using Conduit.Sync.Connectors
+@using Conduit.Connectors.IdentityCenter
 @using Microsoft.Extensions.DependencyInjection
 @inject ConnectorRegistry Connectors
 @inject SyncProjectRepository ProjectRepo
@@ -1704,7 +1705,7 @@
                                 <i class="fas fa-plus me-1"></i>Add workflow
                             </button>
                         </div>
-                        <p class="text-muted small mb-3">Click a workflow to expand its steps. Each step's <strong>Mappings</strong> button opens the attribute editor; the gear edits step settings; Scope sets a per-step filter.</p>
+                        <p class="text-muted small mb-3">Use the chevron to expand or collapse a workflow, and each step's own chevron to expand or collapse that step. <strong>Collapse all</strong> closes everything at once. Each step's <strong>Mappings</strong> button opens the attribute editor; the gear edits step settings; Scope sets a per-step filter.</p>
 
                         <div class="row g-3 mb-3">
                             <div class="col-12">
@@ -1742,6 +1743,12 @@
                                                 disabled="@(SourceSystemType.Length == 0 || MappingStepCount == 0)"
                                                 title="Re-run auto-map for every Mapping step using each step's own object class">
                                             <i class="fas fa-magic me-1"></i>Auto-map all steps
+                                        </button>
+                                        <button type="button" class="btn btn-link btn-sm p-0 ms-3"
+                                                @onclick="CollapseAll"
+                                                disabled="@(!AnythingExpanded)"
+                                                title="Collapse every expanded workflow and step panel">
+                                            <i class="fas fa-compress-alt me-1"></i>Collapse all
                                         </button>
                                     </div>
                                     @if (!string.IsNullOrEmpty(bulkBuilderMessage))
@@ -1866,8 +1873,26 @@
                                                     var mapCount = StepMappingCount(stepRef.Id);
                                                     var settingsOpen = expandedStepSettings.Contains(stepRef.Id);
                                                     var scopeOpen = expandedStepScope.Contains(stepRef.Id);
+                                                    var stepCardClass = _flashStepId == stepRef.Id ? "workflow-step-card step-card-flash" : "workflow-step-card";
+                                                    var isRenaming = _renamingStepId == stepRef.Id;
+                                                    // One JSON parse per step per render feeds BOTH the collapsed chips and
+                                                    // the gear-panel picker. Stale-first, then alphabetical.
+                                                    var stepTags = OrderedStepTags(stepRef);
+                                                    var stepChips = StepTagChips(stepTags);
+                                                    var stepStaleTags = stepTags.Where(IsTagStale).ToList();
+                                                    var tagPickerOpen = _tagPopoverStepId == stepRef.Id;
+                                                    var tagCandidates = tagPickerOpen ? AvailableTagsFor(stepTags) : new List<string>();
+                                                    var tagVocabUsable = _icTagStatus == IcTagFetchStatus.Ok && _icTags.Count > 0;
+                                                    var addTagTitle = tagVocabUsable
+                                                        ? "Add an existing IdentityCenter tag"
+                                                        : _icTagStatus == IcTagFetchStatus.Loading
+                                                            ? "Checking IdentityCenter for its tag list…"
+                                                            : _icTagStatus == IcTagFetchStatus.Ok
+                                                                ? "IdentityCenter has no tags defined yet — see the message above."
+                                                                : "Tag list unavailable — see the message above.";
+                                                    var addTagClass = tagPickerOpen ? "step-tag-add open" : "step-tag-add";
 
-                                                    <div class="workflow-step-card">
+                                                    <div class="@stepCardClass">
                                                         <div class="step-header d-flex justify-content-between align-items-start">
                                                             <div class="flex-grow-1">
                                                                 <div class="d-flex align-items-center">
@@ -1882,11 +1907,55 @@
                                                                         </button>
                                                                     </div>
                                                                     <span class="badge bg-secondary me-2">#@(stepIndex + 1)</span>
-                                                                    <strong>@stepRef.Name</strong>
+                                                                    @if (isRenaming)
+                                                                    {
+                                                                        <input class="form-control form-control-sm step-name-inline"
+                                                                               @ref="_renameInput"
+                                                                               value="@_renameDraft"
+                                                                               @oninput="@(e => _renameDraft = e.Value?.ToString() ?? string.Empty)"
+                                                                               @onkeydown="@(e => OnRenameKeyDown(e, stepRef))"
+                                                                               @onblur="@(() => OnRenameBlur(stepRef))" />
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        <span class="step-name-editable" title="Click to rename"
+                                                                              @onclick="@(() => BeginRename(stepRef))">
+                                                                            <strong>@stepRef.Name</strong><i class="fas fa-pen step-name-pen"></i>
+                                                                        </span>
+                                                                    }
                                                                     <span class="badge @stepBadgeClass ms-2">@stepRef.StepType</span>
                                                                     @if (isMappingStep && !string.IsNullOrWhiteSpace(stepRef.ObjectClass))
                                                                     {
                                                                         <span class="badge bg-dark ms-2">@stepRef.ObjectClass</span>
+                                                                    }
+                                                                    @if (isMappingStep && stepChips.Visible.Count > 0)
+                                                                    {
+                                                                        <span class="step-tag-chips ms-2">
+                                                                            @for (int ci = 0; ci < stepChips.Visible.Count; ci++)
+                                                                            {
+                                                                                var chipName = stepChips.Visible[ci];
+                                                                                var chipStale = IsTagStale(chipName);
+                                                                                var chipClass = chipStale ? "step-tag-chip stale" : "step-tag-chip";
+                                                                                var chipTitle = chipStale ? StaleChipTitle(chipName) : chipName;
+                                                                                var chipLeads = ci == 0;
+                                                                                <span class="@chipClass" title="@chipTitle">
+                                                                                    @if (chipStale)
+                                                                                    {
+                                                                                        <i class="fas fa-triangle-exclamation"></i>
+                                                                                    }
+                                                                                    else if (chipLeads)
+                                                                                    {
+                                                                                        <i class="fas fa-tag"></i>
+                                                                                    }
+                                                                                    <span class="step-tag-chip-label">@chipName</span>
+                                                                                </span>
+                                                                            }
+                                                                            @if (stepChips.Overflow.Count > 0)
+                                                                            {
+                                                                                var overflowTitle = string.Join(", ", stepChips.Overflow);
+                                                                                <span class="step-tag-chip overflow" title="@overflowTitle">+@stepChips.Overflow.Count</span>
+                                                                            }
+                                                                        </span>
                                                                     }
                                                                     @if (!stepRef.Enabled)
                                                                     {
@@ -1921,6 +1990,14 @@
                                                                 <button type="button" class="btn btn-sm btn-outline-danger"
                                                                         @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">
                                                                     <i class="fas fa-trash fa-sm"></i>
+                                                                </button>
+                                                                @* Far right, mirroring the workflow's chevron. The gear toggles the same
+                                                                   panel, but it reads as "settings" rather than "expand", so nobody finds
+                                                                   it as the way back out. *@
+                                                                <button type="button" class="btn btn-sm btn-outline-info"
+                                                                        @onclick="() => ToggleStepSettings(stepRef.Id)"
+                                                                        title="@(settingsOpen ? "Collapse step" : "Expand step")">
+                                                                    <i class="fas @(settingsOpen ? "fa-chevron-up" : "fa-chevron-down")"></i>
                                                                 </button>
                                                             </div>
                                                         </div>
@@ -1974,31 +2051,210 @@
                                                                                 <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
                                                                             </button>
                                                                         </div>
-                                                                        <div class="col-md-12">
-                                                                            <label class="form-label fw-semibold">Tags <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." /></label>
-                                                                            @if (_icTags.Count > 0)
-                                                                            {
-                                                                                <div class="autogen-tag-picker">
-                                                                                    @foreach (var tag in _icTags)
+                                                                        @if (SinkIsIdentityCenter)
+                                                                        {
+                                                                            <div class="col-md-12">
+                                                                                @* Refresh sits OUTSIDE the label: a <button> inside a for-less <label>
+                                                                                   becomes its implicitly-labeled control, so clicking the word "Tags"
+                                                                                   would fire a refetch. *@
+                                                                                <div class="step-tag-head">
+                                                                                    <label class="form-label fw-semibold mb-0">
+                                                                                        Tags
+                                                                                        <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." />
+                                                                                    </label>
+                                                                                    <button type="button" class="step-tag-refresh" @onclick="LoadIcTagsAsync"
+                                                                                            title="Re-read the tag list from IdentityCenter">
+                                                                                        <i class="fas fa-rotate"></i>Refresh
+                                                                                    </button>
+                                                                                </div>
+                                                                                <div class="step-tag-editor">
+                                                                                    @foreach (var selTag in stepTags)
                                                                                     {
-                                                                                        <button type="button"
-                                                                                                class="autogen-tag-pill @(IsStepTagSelected(stepRef, tag) ? "selected" : "")"
-                                                                                                @onclick="@(() => ToggleStepTag(stepRef, tag))">
-                                                                                            @tag
-                                                                                        </button>
+                                                                                        var selName = selTag;
+                                                                                        var selStale = IsTagStale(selName);
+                                                                                        var selClass = selStale ? "step-tag-chip editable stale" : "step-tag-chip editable";
+                                                                                        var selTitle = selStale ? StaleChipTitle(selName) : selName;
+                                                                                        <span class="@selClass" title="@selTitle">
+                                                                                            @if (selStale)
+                                                                                            {
+                                                                                                <i class="fas fa-triangle-exclamation"></i>
+                                                                                            }
+                                                                                            <span class="step-tag-chip-label">@selName</span>
+                                                                                            <button type="button" class="step-tag-chip-x" title="Remove"
+                                                                                                    @onclick="@(() => RemoveStepTag(stepRef, selName))">&times;</button>
+                                                                                        </span>
+                                                                                    }
+                                                                                    <button type="button" class="@addTagClass" title="@addTagTitle"
+                                                                                            disabled="@(!tagVocabUsable)"
+                                                                                            @onclick="@(() => ToggleTagPicker(stepRef.Id))">
+                                                                                        <i class="fas fa-plus"></i>Add tag
+                                                                                    </button>
+                                                                                    @if (tagPickerOpen)
+                                                                                    {
+                                                                                        <div class="step-tag-popover">
+                                                                                            <input class="form-control form-control-sm" placeholder="Filter tags…"
+                                                                                                   value="@_tagFilter"
+                                                                                                   @oninput="@(e => _tagFilter = e.Value?.ToString() ?? string.Empty)"
+                                                                                                   @onkeydown="OnTagFilterKeyDown" />
+                                                                                            @if (tagCandidates.Count > 0)
+                                                                                            {
+                                                                                                <div class="step-tag-popover-list">
+                                                                                                    @foreach (var cand in tagCandidates)
+                                                                                                    {
+                                                                                                        var candName = cand;
+                                                                                                        <button type="button" class="autogen-tag-pill"
+                                                                                                                @onclick="@(() => AddStepTag(stepRef, candName))">@candName</button>
+                                                                                                    }
+                                                                                                </div>
+                                                                                            }
+                                                                                            else if (_tagFilter.Trim().Length > 0)
+                                                                                            {
+                                                                                                <div class="step-tag-popover-empty">
+                                                                                                    <strong>No tag matches "@_tagFilter".</strong>
+                                                                                                    <div>Tags must already exist in IdentityCenter. Create it in IdentityCenter → Objects → Tags, then click Refresh.</div>
+                                                                                                </div>
+                                                                                            }
+                                                                                            else
+                                                                                            {
+                                                                                                <div class="step-tag-popover-empty">
+                                                                                                    <strong>Every IdentityCenter tag is already on this step.</strong>
+                                                                                                </div>
+                                                                                            }
+                                                                                        </div>
                                                                                     }
                                                                                 </div>
-                                                                                <small class="form-text text-muted">Click to apply the target IdentityCenter's tags to every object this step syncs.</small>
-                                                                            }
-                                                                            else
-                                                                            {
-                                                                                <input class="form-control form-control-sm"
-                                                                                       value="@GetStepTagsCsv(stepRef)"
-                                                                                       @onchange="@(e => SetStepTagsCsv(stepRef, e.Value?.ToString()))"
-                                                                                       placeholder="Contractor, SOX — blank for none" />
-                                                                                <small class="form-text text-muted">Assign-existing-only: IC applies tags that already exist; unknown names are skipped. (Pick a target IdentityCenter connection to choose from its tags.)</small>
-                                                                            }
-                                                                        </div>
+                                                                                <small class="form-text text-muted d-block">Assign existing tags only. Conduit can't create tags in IdentityCenter.</small>
+
+                                                                                @* Loading must be the FIRST branch: it is the state of not having asked
+                                                                                   yet, so nothing below it — least of all "IC has no tags" — may claim
+                                                                                   anything about IC's contents while a fetch is in flight. *@
+                                                                                @if (_icTagStatus == IcTagFetchStatus.Loading)
+                                                                                {
+                                                                                    <div class="step-tag-state">
+                                                                                        <i class="fas fa-circle-notch fa-spin"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>Checking IdentityCenter for its tag list…</strong>
+                                                                                            <div>Tags already saved on this step are kept and still apply when the project runs.</div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.Unreachable)
+                                                                                {
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-plug-circle-xmark"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>Can't reach IdentityCenter at <code>@IcTagHost</code> — tag list unavailable.</strong>
+                                                                                            <div>Any tags already saved on this step are kept and will still apply when the project runs. You just can't change them until Conduit can reach IC.</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.Unauthorized)
+                                                                                {
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-key"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>IdentityCenter rejected Conduit's API key (401). Tag list unavailable.</strong>
+                                                                                            <div>Update the key on this project's sink connection, then Retry.</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.Forbidden)
+                                                                                {
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-ban"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>IdentityCenter accepted the key but refused the request (403). Tag list unavailable.</strong>
+                                                                                            <div>Most often the IC tenant row isn't Active — a tenant must have Status = 'Active' or its API keys return 403. Check the tenant in IdentityCenter, then Retry.</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.NoCredentials)
+                                                                                {
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-key"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>This project's IdentityCenter sink has no stored credential. Tag list unavailable.</strong>
+                                                                                            <div>Save a base URL + API key on the sink connection, then Retry.</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.EndpointMissing)
+                                                                                {
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-plug-circle-xmark"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>This IdentityCenter has no tag endpoint (404). Tag list unavailable.</strong>
+                                                                                            <div>Tags already saved on this step are kept and still apply when the project runs.</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.Error)
+                                                                                {
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-triangle-exclamation"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>Couldn't read the tag list from IdentityCenter. Tag list unavailable.</strong>
+                                                                                            <div>@_icTagDetail</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                                else if (_icTagStatus == IcTagFetchStatus.Ok && _icTags.Count == 0)
+                                                                                {
+                                                                                    <div class="step-tag-state info">
+                                                                                        <i class="fas fa-circle-info"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>IdentityCenter has no tags defined yet.</strong>
+                                                                                            <div>Create the tags you want to assign in IdentityCenter (Objects → Tags), then Refresh. Conduit can only assign tags that already exist.</div>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Refresh</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+
+                                                                                @if (stepStaleTags.Count > 0)
+                                                                                {
+                                                                                    var staleOne = stepStaleTags.Count == 1;
+                                                                                    var staleNoun = staleOne ? "tag" : "tags";
+                                                                                    var staleVerb = staleOne ? "no longer exists" : "no longer exist";
+                                                                                    var staleBtn = staleOne ? "Remove stale tag" : "Remove stale tags";
+                                                                                    var staleHint = staleOne
+                                                                                        ? "or create it in IdentityCenter and Refresh"
+                                                                                        : "or create them in IdentityCenter and Refresh";
+                                                                                    <div class="step-tag-state warn">
+                                                                                        <i class="fas fa-triangle-exclamation"></i>
+                                                                                        <div class="step-tag-state-body">
+                                                                                            <strong>@stepStaleTags.Count @staleNoun on this step @staleVerb in IdentityCenter and will be ignored at run time.</strong>
+                                                                                            <div class="step-tag-state-actions">
+                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                                                                        @onclick="@(() => RemoveStaleTags(stepRef))">@staleBtn</button>
+                                                                                                <span class="step-tag-stale-hint">· @staleHint</span>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                }
+                                                                            </div>
+                                                                        }
                                                                     }
                                                                     <div class="col-md-12">
                                                                         <div class="form-check form-switch">
@@ -2416,29 +2672,239 @@
     private SyncProject form = new();
 
     // Tag picker: the target IdentityCenter connection's tag vocabulary, fetched once per
-    // edit (and on sink change). Empty = couldn't fetch (non-IC target / unreachable) → the
-    // Tags field falls back to free text.
+    // edit (and on sink change, and on the operator's explicit Refresh — he creates a tag in
+    // IC and comes straight back). Tagging is ASSIGN-EXISTING-ONLY: IC resolves names against
+    // its own Tags rows and silently skips unknown ones, so there is no path here to type a
+    // new name. _icTagStatus is what makes "IC has no tags" distinguishable from "we couldn't
+    // ask" — every state the UI shows hangs off it, including whether staleness is knowable.
     private List<string> _icTags = new();
+    private IcTagFetchStatus _icTagStatus = IcTagFetchStatus.NoSinkSelected;
+    private string? _icTagDetail;
+
+    private Guid? _tagPopoverStepId;
+    private string _tagFilter = string.Empty;
+
+    private string IcTagHost => string.IsNullOrWhiteSpace(_icTagDetail) ? "the sink connection" : _icTagDetail!;
 
     private async Task LoadIcTagsAsync()
     {
-        try { _icTags = (await IcTagFetcher.GetTagsAsync(form.SinkTenantId)).ToList(); }
-        catch { _icTags = new(); }
+        if (!SinkIsIdentityCenter)
+        {
+            _icTags = new();
+            _icTagStatus = IcTagFetchStatus.NoSinkSelected;
+            _icTagDetail = null;
+            return;
+        }
+
+        // Loading before the await. Without it the status sits at its initial NoSinkSelected,
+        // which matches no strip, so the render fell through to "IdentityCenter has no tags
+        // defined yet" — a claim about IC's contents made before IC had been asked.
+        _icTagStatus = IcTagFetchStatus.Loading;
+        _icTagDetail = null;
+        StateHasChanged();
+
+        var vocab = await IcTagFetcher.GetTagVocabularyAsync(form.SinkTenantId);
+        _icTags = vocab.Tags.ToList();
+        _icTagStatus = vocab.Status;
+        _icTagDetail = vocab.Detail;
     }
 
-    private bool IsStepTagSelected(WorkflowStep step, string tag)
-        => GetStepTagsCsv(step)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
+    private List<string> StepTagList(WorkflowStep step) => GetStepTags(step);
 
-    private void ToggleStepTag(WorkflowStep step, string tag)
+    /// <summary>
+    /// A tag saved on a step that IC's vocabulary no longer has. Only ANSWERABLE when the
+    /// fetch succeeded — if we couldn't read the vocabulary, every tag would look stale, so
+    /// nothing is stale and the state strip does the explaining instead.
+    /// </summary>
+    private bool IsTagStale(string tag)
+        => _icTagStatus == IcTagFetchStatus.Ok
+           && !_icTags.Contains(tag, StringComparer.OrdinalIgnoreCase);
+
+    private static string StaleChipTitle(string tag)
+        => $"'{tag}' no longer exists in IdentityCenter. This step will run and sync normally, but nothing will be tagged '{tag}'.";
+
+    /// <summary>Stale first, then alphabetical within each group — the collapsed row and the
+    /// editor must render the same set identically so two steps diff visually.</summary>
+    private List<string> OrderedStepTags(WorkflowStep step)
     {
-        var set = GetStepTagsCsv(step)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var all = StepTagList(step);
+        return all.Where(IsTagStale).OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .Concat(all.Where(t => !IsTagStale(t)).OrderBy(t => t, StringComparer.OrdinalIgnoreCase))
             .ToList();
-        var existing = set.FirstOrDefault(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null) set.Remove(existing); else set.Add(tag);
-        SetStepTagsCsv(step, string.Join(", ", set));
+    }
+
+    /// <summary>Collapsed-row chips: cap at 3, but stale chips always render — they never
+    /// collapse into the +N, because a hidden broken tag is the thing this feature exists to
+    /// surface.</summary>
+    private (List<string> Visible, List<string> Overflow) StepTagChips(List<string> ordered)
+    {
+        var stale = ordered.Where(IsTagStale).ToList();
+        var normal = ordered.Where(t => !IsTagStale(t)).ToList();
+        var room = Math.Max(0, 3 - stale.Count);
+        return (stale.Concat(normal.Take(room)).ToList(), normal.Skip(room).ToList());
+    }
+
+    private List<string> AvailableTagsFor(List<string> selected)
+    {
+        var q = _tagFilter.Trim();
+        return _icTags
+            .Where(t => !selected.Any(s => string.Equals(s, t, StringComparison.OrdinalIgnoreCase)))
+            .Where(t => q.Length == 0 || t.Contains(q, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private void ToggleTagPicker(Guid stepId)
+    {
+        _tagFilter = string.Empty;
+        _tagPopoverStepId = _tagPopoverStepId == stepId ? null : stepId;
+    }
+
+    private void OnTagFilterKeyDown(KeyboardEventArgs e)
+    {
+        if (!string.Equals(e.Key, "Escape", StringComparison.Ordinal)) return;
+        CloseTagPicker();
+    }
+
+    private void AddStepTag(WorkflowStep step, string tag)
+    {
+        var list = StepTagList(step);
+        if (!list.Any(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)))
+        {
+            list.Add(tag);
+            SetStepTags(step, list);
+        }
+
+        // Picking a tag dismisses the popover. Escape only fires while focus is in the
+        // filter input, and clicking a pill moves focus off it — so without this there
+        // is no way to close the popover except re-clicking "Add tag". Re-open it to add
+        // another; the common case (one tag per step) is then a single click.
+        CloseTagPicker();
+    }
+
+    private void CloseTagPicker()
+    {
+        _tagPopoverStepId = null;
+        _tagFilter = string.Empty;
+    }
+
+    private void RemoveStepTag(WorkflowStep step, string tag)
+    {
+        var list = StepTagList(step);
+        var hit = list.FirstOrDefault(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
+        if (hit is null) return;
+        list.Remove(hit);
+        SetStepTags(step, list);
+    }
+
+    // Operator-driven only. Config is never silently repaired — dropping a name behind his
+    // back is the same failure class as the sink dropping it at run time.
+    private void RemoveStaleTags(WorkflowStep step)
+    {
+        var kept = StepTagList(step).Where(t => !IsTagStale(t)).ToList();
+        SetStepTags(step, kept);
+    }
+
+    // ── Inline step rename (collapsed header) ──────────────────────────────────
+    // Accelerator over the gear panel's Name field, which stays. Commits on Enter and on
+    // blur; Esc cancels. Persistence is the existing dirty-flag → Save changes flow.
+    private Guid? _renamingStepId;
+    private string _renameDraft = string.Empty;
+    private string _renameOriginal = string.Empty;
+    private bool _renameCancelled;
+    private bool _renameCommitting;
+    private ElementReference _renameInput;
+    private bool _focusRenameOnRender;
+    private int _renameSelStart;
+    private int _renameSelEnd;
+    private Guid? _flashStepId;
+
+    private void BeginRename(WorkflowStep step)
+    {
+        if (_renamingStepId == step.Id) return;
+        _renamingStepId = step.Id;
+        _renameOriginal = step.Name;
+        _renameDraft = _renameOriginal;
+        _renameCancelled = false;
+        _renameSelStart = _renameDraft.Length;
+        _renameSelEnd = _renameDraft.Length;
+        _focusRenameOnRender = true;
+        _tagPopoverStepId = null;
+    }
+
+    private void OnRenameKeyDown(KeyboardEventArgs e, WorkflowStep step)
+    {
+        if (string.Equals(e.Key, "Escape", StringComparison.Ordinal))
+        {
+            // Raise the flag BEFORE the input leaves the DOM: its removal fires blur, and an
+            // unguarded blur handler would re-commit the text Esc just discarded.
+            _renameCancelled = true;
+            _renamingStepId = null;
+            _renameDraft = _renameOriginal;
+            return;
+        }
+        if (string.Equals(e.Key, "Enter", StringComparison.Ordinal)) CommitRename(step);
+    }
+
+    private void OnRenameBlur(WorkflowStep step)
+    {
+        if (_renameCancelled) { _renameCancelled = false; return; }
+        CommitRename(step);
+    }
+
+    private void CommitRename(WorkflowStep step)
+    {
+        if (_renameCommitting) return;
+        _renameCommitting = true;
+        try
+        {
+            if (_renamingStepId != step.Id) return;
+            _renamingStepId = null;
+            var next = _renameDraft.Trim();
+            // Blank reverts silently; duplicates are allowed, so there is nothing else to check.
+            if (next.Length == 0 || string.Equals(next, _renameOriginal, StringComparison.Ordinal)) return;
+            step.Name = next;
+            MarkWorkflowsDirty();
+        }
+        finally { _renameCommitting = false; }
+    }
+
+    private void FlashStep(Guid stepId)
+    {
+        _flashStepId = stepId;
+        _ = ClearStepFlashAsync(stepId);
+    }
+
+    private async Task ClearStepFlashAsync(Guid stepId)
+    {
+        await Task.Delay(1200);
+        if (_flashStepId != stepId) return;
+        _flashStepId = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusRenameOnRender || _renamingStepId is null) return;
+        _focusRenameOnRender = false;
+        try
+        {
+            await _renameInput.FocusAsync();
+            // Blazor has no caret/selection API. Call the DOM method through its prototype so
+            // this needs no site-wide script (_Layout deliberately avoids eval()); the
+            // ElementReference is revived to the real input on the JS side.
+            await JS.InvokeVoidAsync(
+                "HTMLInputElement.prototype.setSelectionRange.call", _renameInput, _renameSelStart, _renameSelEnd);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException
+                                      or InvalidOperationException or ObjectDisposedException
+                                      or OperationCanceledException)
+        {
+            // The row can be re-rendered out from under the focus call; a lost caret is not
+            // worth tearing down the circuit for. A default ElementReference throws
+            // InvalidOperationException rather than JSException, and an escape from
+            // OnAfterRenderAsync takes the whole circuit with it.
+            Logger.LogDebug(ex, "Inline step rename: could not focus/select the name input.");
+        }
     }
     private SyncProjectScope scopeForm = new() { PageSize = 1000 };
     private List<AttributeMapping> mappingForm = new();
@@ -2646,43 +3112,61 @@
     // The "tags" property of the step's free-form Configuration holds a JSON array of
     // tag NAMES. The orchestrator parses the same property at run time and stamps the
     // names onto every emitted object so the IC sink can apply them as ObjectTags
-    // (assign-existing-only). These two helpers (de)serialize that property as a
-    // comma-separated string for the text input, preserving any other config keys.
+    // (assign-existing-only).
+    //
+    // A comma is a LEGAL character inside an IC tag name ("Finance, EU"), so the list is
+    // the currency here and nothing that a picker produced may be routed through a joined
+    // string — a round trip through CSV would split that name into two that don't exist
+    // and IC would silently drop both. The Csv pair below survives for the free-text path
+    // and delegates to the list pair; the on-disk shape is unchanged either way.
 
-    private string GetStepTagsCsv(WorkflowStep step)
+    private List<string> GetStepTags(WorkflowStep step)
     {
-        if (string.IsNullOrWhiteSpace(step.Configuration)) return string.Empty;
+        var names = new List<string>();
+        if (string.IsNullOrWhiteSpace(step.Configuration)) return names;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return;
+            var t = s.Trim();
+            if (seen.Add(t)) names.Add(t);
+        }
+
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(step.Configuration);
-            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return string.Empty;
-            if (!doc.RootElement.TryGetProperty("tags", out var tagsEl)) return string.Empty;
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return names;
+            if (!doc.RootElement.TryGetProperty("tags", out var tagsEl)) return names;
+
             if (tagsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
             {
-                var names = new List<string>();
                 foreach (var el in tagsEl.EnumerateArray())
-                    if (el.ValueKind == System.Text.Json.JsonValueKind.String)
-                    {
-                        var s = el.GetString();
-                        if (!string.IsNullOrWhiteSpace(s)) names.Add(s!.Trim());
-                    }
-                return string.Join(", ", names);
+                    if (el.ValueKind == System.Text.Json.JsonValueKind.String) Add(el.GetString());
             }
-            if (tagsEl.ValueKind == System.Text.Json.JsonValueKind.String)
-                return tagsEl.GetString() ?? string.Empty;
+            // Legacy / hand-stamped shape: a single comma-separated string. Splitting is the
+            // only reading available for it, and it's what the orchestrator does too.
+            else if (tagsEl.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                foreach (var part in (tagsEl.GetString() ?? string.Empty)
+                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    Add(part);
+            }
         }
         catch (System.Text.Json.JsonException) { }
-        return string.Empty;
+        return names;
     }
 
-    private void SetStepTagsCsv(WorkflowStep step, string? csv)
+    private void SetStepTags(WorkflowStep step, IEnumerable<string> names)
     {
-        // Parse the input into a clean, de-duplicated name list.
-        var names = new List<string>();
+        var clean = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var part in (csv ?? string.Empty)
-                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            if (seen.Add(part)) names.Add(part);
+        foreach (var n in names)
+        {
+            if (string.IsNullOrWhiteSpace(n)) continue;
+            var t = n.Trim();
+            if (seen.Add(t)) clean.Add(t);
+        }
 
         // Preserve any other keys already in Configuration; only replace "tags".
         var bag = new Dictionary<string, object?>();
@@ -2699,8 +3183,8 @@
             catch (System.Text.Json.JsonException) { }
         }
 
-        if (names.Count > 0)
-            bag["tags"] = names;
+        if (clean.Count > 0)
+            bag["tags"] = clean;
 
         step.Configuration = bag.Count > 0
             ? System.Text.Json.JsonSerializer.Serialize(bag)
@@ -2708,9 +3192,45 @@
         MarkWorkflowsDirty();
     }
 
+    private string GetStepTagsCsv(WorkflowStep step) => string.Join(", ", GetStepTags(step));
+
+    private void SetStepTagsCsv(WorkflowStep step, string? csv)
+        => SetStepTags(step, (csv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
     private void ToggleWorkflowExpanded(Guid id)
     {
         if (!expandedWorkflows.Remove(id)) expandedWorkflows.Add(id);
+    }
+
+    /// <summary>
+    /// True when any workflow or step panel is open. Drives the Collapse all button's
+    /// disabled state so it never presents itself as doing something when there is
+    /// nothing open to close.
+    /// </summary>
+    private bool AnythingExpanded =>
+        expandedWorkflows.Count > 0
+        || expandedWorkflowSettings.Count > 0
+        || expandedStepSettings.Count > 0
+        || expandedStepScope.Count > 0
+        || _tagPopoverStepId is not null;
+
+    /// <summary>
+    /// Collapses every expanded panel at BOTH levels in one click — workflow bodies,
+    /// workflow rename panels, step settings, and step scope — plus any open tag
+    /// popover. The per-item chevron/gear toggles still work; this exists because
+    /// once several are open they are scattered down a long page and closing them
+    /// one at a time means scrolling back to each.
+    /// Expansion is view state only, so this discards nothing the user has typed —
+    /// edits live in workflowsForm/stepsForm and are unaffected.
+    /// </summary>
+    private void CollapseAll()
+    {
+        expandedWorkflows.Clear();
+        expandedWorkflowSettings.Clear();
+        expandedStepSettings.Clear();
+        expandedStepScope.Clear();
+        CloseTagPicker();
     }
 
     private void ToggleWorkflowSettings(Guid id)
@@ -2964,6 +3484,16 @@
         selectedWorkflowId = src.WorkflowId;
         selectedStepId = newStep.Id;
         workflowsDirty = true;
+
+        // A duplicate is always about to be re-scoped and re-named, so open both panels and
+        // drop the caret straight on the " (Copy)" suffix — typing replaces it. Esc leaves
+        // the suffix intact, which is why the row also flashes.
+        expandedStepSettings.Add(newStep.Id);
+        expandedStepScope.Add(newStep.Id);
+        FlashStep(newStep.Id);
+        BeginRename(newStep);
+        _renameSelStart = src.Name.Length;
+        _renameSelEnd = newStep.Name.Length;
     }
 
     private void MoveStepUpById(Guid id)   { selectedStepId = id; MoveStepUp(); }

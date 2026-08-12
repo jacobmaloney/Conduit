@@ -129,6 +129,17 @@ public sealed class IdentityCenterAdapter : IConnectorAdapter
 /// (/api/objects/*); Identities = people golden records (/api/identities/*).</summary>
 internal enum IcTable { Objects, Identities }
 
+/// <summary>
+/// The stored credential row exists but could not be parsed. Its message is authored in
+/// this file and quotes nothing from the blob, which is what makes it the one credential
+/// failure whose text may be shown to an operator verbatim — every other read failure can
+/// carry a connection string, a SQL login, or a key-file path and must not reach a page.
+/// </summary>
+public sealed class IdentityCenterCredentialFormatException : InvalidOperationException
+{
+    public IdentityCenterCredentialFormatException(string message) : base(message) { }
+}
+
 internal sealed record IdentityCenterCredentials(string BaseUrl, string ApiKey, IcTable Table);
 
 internal static class IdentityCenterCredentialReader
@@ -176,7 +187,7 @@ internal static class IdentityCenterCredentialReader
         // fall back to a tolerant extractor rather than silently failing a run.
         string? url, key;
         if (!TryParseCredentialBlob(raw, out url, out key))
-            throw new InvalidOperationException(
+            throw new IdentityCenterCredentialFormatException(
                 "The stored 'identitycenter' credential exists but is malformed " +
                 "(could not read BaseUrl + ApiKey). Re-save the IdentityCenter connection's " +
                 "credential in Connected Systems to repair it.");
@@ -251,15 +262,56 @@ internal static class IdentityCenterCredentialReader
     }
 }
 
+/// <summary>Why a tag-vocabulary fetch produced the list it did.</summary>
+/// <remarks>
+/// <see cref="Ok"/> with an EMPTY <see cref="IcTagVocabulary.Tags"/> is a valid, non-error
+/// outcome: IC answered and genuinely has no tags defined. Every other member means the
+/// vocabulary is UNKNOWN — callers must not infer anything about a tag's existence from it,
+/// and that includes <see cref="Loading"/>, which is the state of not having asked yet.
+/// </remarks>
+public enum IcTagFetchStatus
+{
+    Ok,
+    NoSinkSelected,
+    NoCredentials,
+    Unreachable,
+    Unauthorized,
+    Forbidden,
+    EndpointMissing,
+    Error,
+    /// <summary>A fetch is in flight. Owned by the caller, never returned by the fetcher.</summary>
+    Loading
+}
+
+/// <summary>
+/// The tag vocabulary of an IdentityCenter connection plus WHY it looks the way it does.
+/// <paramref name="Detail"/> carries the resolved BaseUrl for the reachability/auth outcomes
+/// (the UI names the host in its message) and the failure text for <see cref="IcTagFetchStatus.Error"/>.
+/// </summary>
+public sealed record IcTagVocabulary(
+    IReadOnlyList<string> Tags,
+    IcTagFetchStatus Status,
+    string? Detail);
+
 /// <summary>
 /// Fetches the tag vocabulary from an IdentityCenter connection (<c>GET /api/objects/tags</c>)
-/// so Conduit's per-step tag picker can offer real, existing tag names instead of a raw text
-/// box. Tagging into IC is assign-existing-only, so picking from the live list is exactly the
-/// right affordance. Best-effort: returns an EMPTY list on any failure (no/invalid credential,
-/// unreachable target, or an older IC without the endpoint) so the UI degrades to free typing.
+/// so Conduit's per-step tag picker can offer real, existing tag names. Tagging into IC is
+/// assign-existing-only — IC resolves names against its own Tags rows and silently skips
+/// unknown ones — so picking from the live list is the only honest affordance. Every failure
+/// comes back as an <see cref="IcTagFetchStatus"/> the UI can explain; the sole exception that
+/// escapes is cancellation of the CALLER's token, which means nobody is waiting for an answer.
 /// </summary>
 public sealed class IdentityCenterTagFetcher
 {
+    /// <summary>
+    /// Timeout for the vocabulary fetch. Deliberately NOT the sink's 300s bulk-write budget:
+    /// this is a small interactive read behind an open modal, and against an unresponsive IC
+    /// the operator has to be told "can't reach it" in seconds, not minutes. Applied as a
+    /// linked <see cref="CancellationTokenSource"/> so the shared client's timeout — which
+    /// the bulk-write path depends on — is untouched.
+    /// </summary>
+    private static readonly TimeSpan TagFetchTimeout = TimeSpan.FromSeconds(12);
+
     private readonly IHttpClientFactory _httpFactory;
     private readonly CredentialProtector _protector;
     private readonly ILogger<IdentityCenterTagFetcher> _logger;
@@ -274,37 +326,125 @@ public sealed class IdentityCenterTagFetcher
 
     /// <summary>
     /// Returns the sorted, de-duped tag names available in the IdentityCenter connection
-    /// bound to <paramref name="tenantId"/>. Never throws — an empty list means "couldn't
-    /// fetch" and the caller should fall back to a plain text entry.
+    /// bound to <paramref name="tenantId"/>. An empty list here is ambiguous (no tags, or no
+    /// fetch); call <see cref="GetTagVocabularyAsync"/> when the caller needs to tell those apart.
     /// </summary>
     public async Task<IReadOnlyList<string>> GetTagsAsync(Guid tenantId, CancellationToken ct = default)
+        => (await GetTagVocabularyAsync(tenantId, ct)).Tags;
+
+    /// <summary>
+    /// Status-bearing fetch. Distinguishes "IC has no tags" (<see cref="IcTagFetchStatus.Ok"/>
+    /// with an empty list) from every way the vocabulary can be UNKNOWN — unreachable, 401,
+    /// 403, an IC too old to expose the endpoint, or no stored credential. A credential row
+    /// that exists but is malformed comes back as <see cref="IcTagFetchStatus.Error"/> carrying
+    /// the repair message, which is a different problem from "not configured".
+    /// </summary>
+    public async Task<IcTagVocabulary> GetTagVocabularyAsync(Guid tenantId, CancellationToken ct = default)
     {
+        if (tenantId == Guid.Empty)
+            return new IcTagVocabulary(Array.Empty<string>(), IcTagFetchStatus.NoSinkSelected, null);
+
+        IdentityCenterCredentials? creds;
         try
         {
-            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, tenantId, CredentialSide.Sink);
-            if (creds is null) return Array.Empty<string>();
+            creds = await IdentityCenterCredentialReader.ReadAsync(_protector, tenantId, CredentialSide.Sink);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "IdentityCenter tag fetch: credential for tenant {TenantId} could not be read.", tenantId);
+            return new IcTagVocabulary(Array.Empty<string>(), IcTagFetchStatus.Error, SafeDetail(ex));
+        }
 
+        if (creds is null)
+            return new IcTagVocabulary(Array.Empty<string>(), IcTagFetchStatus.NoCredentials, null);
+
+        var baseUrl = creds.BaseUrl;
+        using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        fetchCts.CancelAfter(TagFetchTimeout);
+        var fetchCt = fetchCts.Token;
+        try
+        {
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
-            using var resp = await client.GetAsync($"{creds.BaseUrl}/api/objects/tags", ct);
-            if (!resp.IsSuccessStatusCode) return Array.Empty<string>();
+            using var resp = await client.GetAsync($"{baseUrl}/api/objects/tags", fetchCt);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var code = (int)resp.StatusCode;
+                var status = code switch
+                {
+                    401 => IcTagFetchStatus.Unauthorized,
+                    403 => IcTagFetchStatus.Forbidden,
+                    404 => IcTagFetchStatus.EndpointMissing,
+                    _ => IcTagFetchStatus.Error
+                };
+                _logger.LogWarning(
+                    "IdentityCenter tag fetch for tenant {TenantId} returned {StatusCode} from {BaseUrl}.",
+                    tenantId, code, baseUrl);
+                return new IcTagVocabulary(
+                    Array.Empty<string>(),
+                    status,
+                    status == IcTagFetchStatus.Error ? $"{code} {resp.ReasonPhrase}" : baseUrl);
+            }
 
-            var json = await resp.Content.ReadAsStringAsync(ct);
+            var json = await resp.Content.ReadAsStringAsync(fetchCt);
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("tags", out var arr) || arr.ValueKind != JsonValueKind.Array)
-                return Array.Empty<string>();
+                return new IcTagVocabulary(
+                    Array.Empty<string>(), IcTagFetchStatus.Error,
+                    "IdentityCenter returned an unexpected response shape for the tag list.");
 
-            return arr.EnumerateArray()
+            var names = arr.EnumerateArray()
                 .Select(e => e.GetString())
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Select(s => s!.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+            // Zero tags off a 200 is NOT a failure — IC simply has none defined yet.
+            return new IcTagVocabulary(names, IcTagFetchStatus.Ok, baseUrl);
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "IdentityCenter tag fetch: {BaseUrl} unreachable for tenant {TenantId}.", baseUrl, tenantId);
+            return new IcTagVocabulary(Array.Empty<string>(), IcTagFetchStatus.Unreachable, baseUrl);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // Our short vocabulary timeout, or HttpClient.Timeout — either way IC did not
+            // answer in time and the vocabulary is unknown, which is what the UI must say.
+            // A cancellation that came from the CALLER's token is a different event: it
+            // means nobody is waiting for this answer, so it propagates rather than
+            // painting a "can't reach IdentityCenter" claim the operator never earned.
+            _logger.LogWarning(ex, "IdentityCenter tag fetch: {BaseUrl} timed out for tenant {TenantId}.", baseUrl, tenantId);
+            return new IcTagVocabulary(Array.Empty<string>(), IcTagFetchStatus.Unreachable, baseUrl);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Could not fetch IdentityCenter tags for tenant {TenantId}.", tenantId);
-            return Array.Empty<string>();
+            return new IcTagVocabulary(Array.Empty<string>(), IcTagFetchStatus.Error, SafeDetail(ex));
         }
     }
+
+    /// <summary>
+    /// The operator-facing sentence for a failure. <see cref="IcTagVocabulary.Detail"/> is
+    /// rendered into the page, and an exception message can carry a connection string, a SQL
+    /// login name, or a key-file path — so the real exception goes to the log and the UI gets
+    /// a fixed sentence chosen by TYPE. The malformed-credential message is the one that
+    /// passes through: it is authored in this file and quotes nothing from the blob.
+    /// </summary>
+    private static string SafeDetail(Exception ex) => ex switch
+    {
+        IdentityCenterCredentialFormatException => ex.Message,
+        System.Security.Cryptography.CryptographicException =>
+            "The stored credential could not be decrypted. Re-save the IdentityCenter connection's credential in Connected Systems.",
+        System.Data.Common.DbException =>
+            "Conduit could not read the stored credential from its own database. Check Conduit's database connection, then retry.",
+        UnauthorizedAccessException or System.IO.IOException =>
+            "Conduit could not read the stored credential from disk. See the Conduit log for detail.",
+        InvalidOperationException =>
+            "Conduit could not read the stored credential for this connection. See the Conduit log for detail.",
+        JsonException =>
+            "IdentityCenter returned a tag list Conduit could not read.",
+        _ => "The tag list could not be read. See the Conduit log for detail."
+    };
 }
