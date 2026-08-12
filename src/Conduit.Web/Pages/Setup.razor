@@ -405,9 +405,12 @@
 
     protected override async Task OnInitializedAsync()
     {
-        // Check if setup is required
-        var setupRequired = await SetupService.IsSetupRequiredAsync();
-        if (!setupRequired)
+        // Only bounce to the app when the database is genuinely READY (reachable + set up).
+        // If it's Unreachable, the operator opened /setup specifically to repoint Conduit at a
+        // different, reachable server — redirecting to "/" would just bounce them to /db-offline
+        // and evict what they were typing. Keep the wizard open so they can reconnect.
+        var status = await SetupService.GetDatabaseStatusAsync();
+        if (status == DatabaseStatus.Ready)
         {
             Navigation.NavigateTo("/");
         }
