@@ -25,8 +25,27 @@ public static class AttributeMapResolver
         public bool IsRequired { get; init; }
     }
 
-    public static List<ResolvedMapping> Resolve(string sourceSystemType, string sinkSystemType, string objectClass)
+    /// <summary>
+    /// A source attribute the INNER JOIN discarded because the sink template
+    /// declares no entry for its canonical key. Callers MUST report these — a
+    /// silently dropped attribute never reaches the sink and, because the source
+    /// read only requests mapped attributes, is never even read.
+    /// </summary>
+    public sealed class DroppedAttribute
     {
+        public string SourceAttribute { get; init; } = string.Empty;
+        public string Canonical { get; init; } = string.Empty;
+    }
+
+    public static List<ResolvedMapping> Resolve(string sourceSystemType, string sinkSystemType, string objectClass)
+        => Resolve(sourceSystemType, sinkSystemType, objectClass, out _);
+
+    public static List<ResolvedMapping> Resolve(
+        string sourceSystemType, string sinkSystemType, string objectClass,
+        out List<DroppedAttribute> dropped)
+    {
+        dropped = new List<DroppedAttribute>();
+
         var source = AttributeTemplateCatalog.Get(sourceSystemType, objectClass);
         if (source is null || source.Count == 0)
             return new List<ResolvedMapping>();
@@ -37,6 +56,11 @@ public static class AttributeMapResolver
         var seenSourceCanonical = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in source)
         {
+            // Sink-only entries declare what this system will ACCEPT, never what it
+            // hands out. Skipping them here (not recording them as dropped — they were
+            // never source-eligible) keeps a template from becoming an authority on
+            // attributes it merely stores.
+            if (e.SinkOnly) continue;
             if (seenSourceCanonical.Add(e.Canonical))
                 orderedSource.Add(e);
         }
@@ -67,12 +91,19 @@ public static class AttributeMapResolver
         foreach (var s in orderedSource)
         {
             if (!sinkByCanonical.TryGetValue(s.Canonical, out var sinkEntry))
+            {
+                dropped.Add(new DroppedAttribute
+                {
+                    SourceAttribute = s.SourceAttribute,
+                    Canonical = s.Canonical
+                });
                 continue;
+            }
 
             result.Add(new ResolvedMapping
             {
                 SourceAttribute = s.SourceAttribute,
-                SinkAttribute = sinkEntry.SourceAttribute,
+                SinkAttribute = sinkEntry.SinkName,
                 IsRequired = s.IsRequired || sinkEntry.IsRequired
             });
         }

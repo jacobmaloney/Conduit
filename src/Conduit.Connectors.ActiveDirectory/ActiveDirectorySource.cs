@@ -717,6 +717,17 @@ public sealed class ActiveDirectorySource : IConnectorSource
         if (logonIso != null)
             attrs["lastLogonTimestamp"] = logonIso;
 
+        // pwdLastSet is the same FILETIME shape and needs the same treatment — a
+        // password-age rule reading an 18-digit integer as a date silently evaluates
+        // nothing. ConvertAdFileTime returns null for the 0 sentinel ("must change at
+        // next logon"), so that case lands as no value rather than a bogus 1601 date.
+        if (attrs.TryGetValue("pwdLastSet", out var pls))
+        {
+            var pwdIso = ConvertAdFileTime(pls);
+            if (pwdIso != null)
+                attrs["pwdLastSet"] = pwdIso;
+        }
+
         return new ConnectorObject
         {
             SourceId = sourceId,

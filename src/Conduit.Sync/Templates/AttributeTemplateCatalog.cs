@@ -28,10 +28,28 @@ public static class AttributeTemplateCatalog
         public string Canonical { get; init; } = string.Empty;
         public bool IsRequired { get; init; }
         public string DataType { get; init; } = "String";
+        /// <summary>
+        /// Native name to WRITE when this template is the SINK side. Null for the
+        /// overwhelming majority of entries, where a connector exposes an attribute
+        /// under the same name it accepts it under. Set it only when read-name and
+        /// write-name genuinely differ — otherwise the resolver would have to pick
+        /// one and break the other direction.
+        /// </summary>
+        public string? SinkAttribute { get; init; }
+        /// <summary>SinkAttribute when set, otherwise SourceAttribute.</summary>
+        public string SinkName => string.IsNullOrWhiteSpace(SinkAttribute) ? SourceAttribute : SinkAttribute!;
+        /// <summary>
+        /// Entry participates ONLY when its template is the sink. A template is used
+        /// in both directions, so declaring a canonical to ACCEPT a value silently
+        /// also declares it as something to HAND OUT. For directory-control
+        /// attributes that is a write primitive, not a convenience — see the
+        /// IdentityCenter User template.
+        /// </summary>
+        public bool SinkOnly { get; init; }
     }
 
-    private static Entry E(string source, string canonical, bool required = false, string dataType = "String")
-        => new() { SourceAttribute = source, Canonical = canonical, IsRequired = required, DataType = dataType };
+    private static Entry E(string source, string canonical, bool required = false, string dataType = "String", string? sinkAttribute = null, bool sinkOnly = false)
+        => new() { SourceAttribute = source, Canonical = canonical, IsRequired = required, DataType = dataType, SinkAttribute = sinkAttribute, SinkOnly = sinkOnly };
 
     // (SystemType, ObjectClass) -> ordered attribute entries. Keys are matched
     // case-insensitively by the lookup helpers below.
@@ -108,6 +126,12 @@ public static class AttributeTemplateCatalog
             E("userAccountControl", "UserAccountControl", false, "Integer"),
             E("pwdLastSet", "PasswordLastSet", false, "DateTime"),
             E("lastLogonTimestamp", "LastLogonTimestamp"),
+            // EntryToConnectorObject falls back to lastLogon when the replicated
+            // lastLogonTimestamp is absent — but that fallback is dead code unless
+            // lastLogon is REQUESTED, and the request set is derived from the mapped
+            // source attributes. Mapping it is what makes the fallback reachable.
+            // Per-DC and non-replicated, so it is a floor, never an authority.
+            E("lastLogon", "LastLogon"),
         };
         c[(Systems.ActiveDirectory, "Group")] = new[]
         {
@@ -361,6 +385,12 @@ public static class AttributeTemplateCatalog
         // no mappings" bug). The User set covers BOTH the Objects and Identities tables
         // (both surface as ObjectClass "User"); Identities-only keys are additive and
         // harmless when absent on an Objects row.
+        //
+        // This template is ALSO the SINK side of every AD/ARS/Entra → IC project, and
+        // that direction is the one that bites: the resolver INNER-JOINs source to sink
+        // on the canonical key, so any canonical MISSING here is dropped from the
+        // project before the source is even read. Adding a source connector attribute
+        // is not enough — its canonical must exist below or the data never lands.
         c[(Systems.IdentityCenter, "User")] = new[]
         {
             E("sourceUniqueId", "SourceUniqueId", true),
@@ -380,10 +410,34 @@ public static class AttributeTemplateCatalog
             E("division", "Division"),
             E("office", "Office"),
             E("costCenter", "CostCenter"),
-            E("manager", "ManagerSourceId"),
+            // READ name and WRITE name differ. IC SOURCES this as "manager" (the value
+            // lives in ObjectAttributes under that name), but IC's /api/objects/bulk
+            // allow-list accepts the manager reference only as "ManagerSourceId" — sent
+            // as "manager" it lands back in ObjectAttributes and Objects.ManagerSourceId
+            // stays 0, leaving the Lookup step's ManagerSourceId -> ManagerObjectId
+            // resolution nothing to read. One name cannot serve both directions.
+            E("manager", "ManagerSourceId", sinkAttribute: "ManagerSourceId"),
             E("employeeId", "EmployeeId"),
             E("employeeType", "EmployeeType"),
             E("isActive", "IsActive", false, "Boolean"),
+            // Account-state trio. Absent here, the resolver's canonical INNER JOIN
+            // dropped them from every AD/ARS -> IC User project before the LDAP read,
+            // so IC saw no disabled accounts, no password age and no logon data. IC has
+            // no typed Objects column for these — they land in ObjectAttributes under
+            // the canonical name, which is exactly what IC's Computer passthrough and
+            // the Entra device sync already write.
+            //
+            // SINK-ONLY, deliberately. IC's ObjectAttributes is app-writable, and the
+            // AD/ARS templates declare these same canonicals, so letting IC SOURCE them
+            // would resolve IC -> AD/ARS mappings that write an attacker-settable
+            // integer straight into AD's account-control bitmask (clear 0x2 to re-enable
+            // a terminated account, set 0x80000 TRUSTED_FOR_DELEGATION, ...). The ARS
+            // and Generic LDAP sinks write whatever key they are handed. IC is a
+            // destination for account state, never an authority on it.
+            E("UserAccountControl", "UserAccountControl", false, "Integer", sinkOnly: true),
+            E("PasswordLastSet", "PasswordLastSet", false, "DateTime", sinkOnly: true),
+            E("LastLogonTimestamp", "LastLogonTimestamp", sinkOnly: true),
+            E("LastLogon", "LastLogon", sinkOnly: true),
             E("whenChanged", "WhenChanged"),
             E("whenCreated", "WhenCreated"),
         };
@@ -396,6 +450,33 @@ public static class AttributeTemplateCatalog
             E("displayName", "DisplayName"),
             E("description", "Description"),
             E("email", "Email"),
+            // Same canonical INNER JOIN gap as the User template, and the one that cost
+            // the live project its group membership: AD/ARS Group declares groupType,
+            // managedBy and member, none of which existed here, so all three were
+            // dropped before the LDAP read. Only canonicals IC actually CONSUMES are
+            // added — adminCount and isCriticalSystemObject stay out because IC has no
+            // reader for either, and a mapping IC discards is just payload weight.
+            //
+            // groupType drives IC's security-vs-distribution and scope display
+            // (PersonRepository / GroupService / ObjectGroupSettingsTab all read
+            // ObjectAttributes 'groupType'). SINK-ONLY: it encodes group scope and type,
+            // which IC never authors, and the ARS / Generic LDAP sinks write whatever
+            // key they are handed.
+            E("groupType", "GroupType", false, "Integer", sinkOnly: true),
+            // managedBy is the group OWNER reference. IC's bulk ingest resolves it
+            // DN -> ObjectId itself, which is the entire job of the "Resolve Group Owner
+            // Relationships" Lookup step — a step that resolves nothing while this
+            // mapping is absent. Bidirectional on purpose: owner assignment is a real
+            // IC -> directory write.
+            E("managedBy", "ManagedBy"),
+            // Member edges. The value never needs to LAND on IC (nothing there reads an
+            // ObjectAttributes row named 'member'; memberships arrive via
+            // /api/objects/group-memberships/bulk). The mapping exists so the attribute
+            // is REQUESTED from LDAP at all — the orchestrator's group-membership second
+            // pass reads the raw Attributes["member"], and an unrequested attribute
+            // comes back empty. SINK-ONLY: writing a member list INTO a directory group
+            // is a full replace, so an IC-sourced project must never resolve it.
+            E("member", "member", sinkOnly: true),
             E("whenChanged", "WhenChanged"),
             E("whenCreated", "WhenCreated"),
         };

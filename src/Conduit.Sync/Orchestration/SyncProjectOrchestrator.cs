@@ -597,7 +597,15 @@ public sealed class SyncProjectOrchestrator
         if (mappings.Count == 0)
         {
             var resolved = Templates.AttributeMapResolver.Resolve(
-                ctx.SourceTenant.SystemType, ctx.SinkTenant.SystemType, objectClass);
+                ctx.SourceTenant.SystemType, ctx.SinkTenant.SystemType, objectClass, out var droppedAttrs);
+            if (droppedAttrs.Count > 0)
+            {
+                await Log(ctx.RunId, "Warning",
+                    $"    Step '{step.Name}': {droppedAttrs.Count} {ctx.SourceTenant.SystemType} {objectClass} attribute(s) " +
+                    $"have no counterpart in the {ctx.SinkTenant.SystemType} sink template and were dropped — " +
+                    string.Join(", ", droppedAttrs.Select(d => d.SourceAttribute + " (canonical " + d.Canonical + ")")) +
+                    ". They are neither read nor written.");
+            }
             if (resolved.Count > 0)
             {
                 mappings = resolved
@@ -795,7 +803,7 @@ public sealed class SyncProjectOrchestrator
             // Resolve manager from common attribute keys. Source-stamped first,
             // mapped second. Sinks decide how to interpret the value (DN, UPN, GUID).
             string? managerRef = null;
-            foreach (var key in new[] { "manager", "Manager", "managerId", "managerDN", "managerUpn" })
+            foreach (var key in new[] { "manager", "Manager", "managerId", "managerDN", "managerUpn", "ManagerSourceId" })
             {
                 if (obj.Attributes.TryGetValue(key, out var v) && v is not null)
                 {
@@ -980,7 +988,7 @@ public sealed class SyncProjectOrchestrator
 
         var refKeys = isGroupClass
             ? new[] { "managedBy", "owner", "Owner", "ownerId", "ownerDN", "ownerUpn" }
-            : new[] { "manager", "Manager", "managerId", "managerDN", "managerUpn" };
+            : new[] { "manager", "Manager", "managerId", "managerDN", "managerUpn", "ManagerSourceId" };
 
         // IC Objects-table sink: relationship resolution (manager / managedBy / owner)
         // is performed by IdentityCenter ITSELF during bulk ingest — its /api/objects/bulk
