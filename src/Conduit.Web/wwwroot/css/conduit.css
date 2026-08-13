@@ -4380,3 +4380,55 @@ details summary::-webkit-details-marker { color: var(--accent); }
 /* Empty-state headings ("No Groups Found", "No Users Found", "No Logs Found") —
    the .alert-heading tint is too light on the pale box; darken for contrast. */
 .ic-content .alert-heading { color: #1e293b; }
+
+/* ── Sync History left-rail rows (IC Directory Objects row shape) ────────────
+   Base sizing/centering comes from center-shared.css .avatar-initials(.avatar-sm);
+   these are the Conduit-only deltas. conduit.css loads last, so the radius and
+   colour rules here beat ic-design-system.css's .ic-content .avatar-initials. */
+.sync-run-row-body {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Squared off, deliberately: a sync run is not a person, so it does not get a
+   person's rounded avatar. */
+.sync-run-row .sync-run-tile {
+    border-radius: 4px;
+    box-shadow: none;
+}
+.sync-run-row .sync-run-tile i { font-size: 0.7rem; }
+.sync-run-row .sync-run-tile:hover { transform: none; }
+
+.sync-run-row .sync-run-tile-ok       { background: rgba(14, 124, 86, 0.12);  color: #0e7c56; }
+.sync-run-row .sync-run-tile-running  { background: rgba(14, 116, 144, 0.14); color: #0e7490; }
+.sync-run-row .sync-run-tile-partial  { background: rgba(180, 83, 9, 0.12);   color: #b45309; }
+.sync-run-row .sync-run-tile-failed   { background: rgba(185, 28, 28, 0.12);  color: #b91c1c; }
+.sync-run-row .sync-run-tile-idle     { background: rgba(100, 116, 139, 0.14); color: #475569; }
+
+.sync-run-row .identity-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    min-width: 0;
+    margin-right: 0.5rem;
+    color: var(--text-primary, #e5e7eb);
+}
+
+/* Counter chips. The healthy case stays quiet — zeros recede, a nonzero failure
+   count is the only thing in the row allowed to shout. */
+.sync-run-count {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--surface-inset, rgba(148, 163, 184, 0.10));
+    color: var(--text-secondary, #94a3b8);
+    white-space: nowrap;
+}
+.sync-run-count.is-zero {
+    background: transparent;
+    color: var(--text-tertiary, #6b809e);
+    opacity: 0.65;
+}
+.sync-run-count-failed {
+    background: #b91c1c;
+    color: #fff;
+    font-weight: 600;
+}

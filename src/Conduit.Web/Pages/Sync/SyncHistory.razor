@@ -24,6 +24,8 @@
           deep-links into the relevant subset.
 
     Visuals: CcTemplate1 header + CcStatRow + CcFilterTabs + CcListPanel.
+    Left-rail rows follow IC's Directory Objects row shape (status tile +
+    name + muted secondary + right-aligned badge cluster), squared off.
     Zero inline style= attributes.
 *@
 
@@ -63,34 +65,43 @@
                          Width="100%">
                 <RowTemplate>
                     <div class="sync-run-row @(selectedRun?.Id == context.Id ? "active" : "")">
-                        <div class="sync-run-row-head">
-                            <span class="badge bg-@StatusBadgeColor(context.Status)">
-                                @if (context.Status == "Running")
-                                {
-                                    <i class="fas fa-spinner fa-spin me-1"></i>
-                                }
-                                else if (context.Status == "PartialSuccess")
-                                {
-                                    <i class="fas fa-triangle-exclamation me-1"></i>
-                                }
-                                @StatusLabel(context.Status)
-                            </span>
-                            <span class="sync-run-row-when">@context.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</span>
-                        </div>
-                        <div class="sync-run-row-name">@ProjectName(context.SyncProjectId)</div>
-                        <div class="sync-run-row-counts">
-                            R @context.ObjectsRead · C @context.ObjectsCreated · U @context.ObjectsUpdated · F @context.ObjectsFailed
-                            @if (context.DurationMs.HasValue)
-                            {
-                                <span class="sync-run-row-dur"> · @($"{context.DurationMs.Value / 1000.0:0.0}s")</span>
-                            }
-                        </div>
-                        @if (!string.IsNullOrEmpty(context.ErrorMessage))
-                        {
-                            <div class="sync-run-row-err">
-                                <i class="fas fa-exclamation-triangle me-1"></i>@TruncateErr(context.ErrorMessage!)
+                        <div class="d-flex align-items-start">
+                            <div class="avatar-initials avatar-sm me-2 sync-run-tile @StatusTileClass(context.Status)"
+                                 title="@StatusLabel(context.Status)">
+                                <i class="@StatusTileIcon(context.Status)"></i>
                             </div>
-                        }
+                            <div class="sync-run-row-body">
+                                <div class="d-flex align-items-center">
+                                    <div class="identity-name text-truncate">@ProjectName(context.SyncProjectId)</div>
+                                    <span class="sync-run-row-when ms-auto flex-shrink-0">@context.StartedAt.ToString("yyyy-MM-dd HH:mm:ss")</span>
+                                </div>
+                                <div class="sync-run-row-counts identity-badges d-flex align-items-center gap-1 flex-wrap">
+                                    <span class="sync-run-count @(context.ObjectsRead == 0 ? "is-zero" : "")" title="Objects read">R @context.ObjectsRead</span>
+                                    <span class="sync-run-count @(context.ObjectsCreated == 0 ? "is-zero" : "")" title="Objects created">C @context.ObjectsCreated</span>
+                                    <span class="sync-run-count @(context.ObjectsUpdated == 0 ? "is-zero" : "")" title="Objects updated">U @context.ObjectsUpdated</span>
+                                    @if (context.ObjectsFailed > 0)
+                                    {
+                                        <span class="sync-run-count sync-run-count-failed" title="Objects failed">
+                                            <i class="fas fa-triangle-exclamation me-1"></i>F @context.ObjectsFailed
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="sync-run-count is-zero" title="Objects failed">F 0</span>
+                                    }
+                                    @if (context.DurationMs.HasValue)
+                                    {
+                                        <span class="sync-run-count sync-run-row-dur ms-auto" title="Duration">@($"{context.DurationMs.Value / 1000.0:0.0}s")</span>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrEmpty(context.ErrorMessage))
+                                {
+                                    <div class="sync-run-row-err text-truncate" title="@context.ErrorMessage">
+                                        <i class="fas fa-exclamation-triangle me-1"></i>@TruncateErr(context.ErrorMessage!)
+                                    </div>
+                                }
+                            </div>
+                        </div>
                     </div>
                 </RowTemplate>
                 <EmptyTemplate>
@@ -612,7 +623,9 @@
             new CcStatRow.StatItem("Created", filteredRuns.Sum(r => r.ObjectsCreated).ToString("N0"), ValueColor: "text-success"),
             new CcStatRow.StatItem("Updated", filteredRuns.Sum(r => r.ObjectsUpdated).ToString("N0"), ValueColor: "text-info"),
             new CcStatRow.StatItem("Skipped", filteredRuns.Sum(r => r.ObjectsSkipped).ToString("N0"), ValueColor: "text-muted"),
-            new CcStatRow.StatItem("Failed",  filteredRuns.Sum(r => r.ObjectsFailed).ToString("N0"),  ValueColor: "text-danger", Emphasize: filteredRuns.Any(r => r.ObjectsFailed > 0))
+            // "Objects Failed", not "Failed" — the status pill above counts failed
+            // RUNS, and two differently-scoped "Failed" numbers sat inches apart.
+            new CcStatRow.StatItem("Objects Failed", filteredRuns.Sum(r => r.ObjectsFailed).ToString("N0"), ValueColor: "text-danger", Emphasize: filteredRuns.Any(r => r.ObjectsFailed > 0))
         };
     }
 
@@ -1047,6 +1060,28 @@
     {
         "PartialSuccess" => "Partial Success",
         _                => status ?? "Unknown"
+    };
+
+    // Left-rail row tile. The tile colour + glyph carry the run status, so the
+    // row does not need to spend a line on a status badge.
+    private static string StatusTileClass(string? status) => status switch
+    {
+        "Succeeded"      => "sync-run-tile-ok",
+        "Running"        => "sync-run-tile-running",
+        "Failed"         => "sync-run-tile-failed",
+        "PartialSuccess" => "sync-run-tile-partial",
+        _                => "sync-run-tile-idle"
+    };
+
+    private static string StatusTileIcon(string? status) => status switch
+    {
+        "Succeeded"      => "fas fa-check",
+        "Running"        => "fas fa-spinner fa-spin",
+        "Failed"         => "fas fa-xmark",
+        "PartialSuccess" => "fas fa-triangle-exclamation",
+        "Cancelled"      => "fas fa-ban",
+        "Interrupted"    => "fas fa-plug-circle-xmark",
+        _                => "fas fa-circle-question"
     };
 
     private static string TruncateErr(string s) =>
