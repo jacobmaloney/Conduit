@@ -3502,6 +3502,62 @@ details summary::-webkit-details-marker { color: var(--accent); }
 }
 .step-tag-stale-hint { color: var(--text-3, #94a3b8); }
 
+/* ── Step Scope modal: Included / Blocked path lists ────────────────────── */
+.step-scope-section { margin-bottom: 16px; }
+/* Inheriting the project scope: the editors stay on screen so the operator can see
+   what he would be overriding, but read as inert rather than merely unresponsive. */
+.step-scope-inert { opacity: 0.55; }
+.step-scope-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.step-scope-list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.step-scope-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border: 1px solid var(--border-2, #cbd5e1);
+    border-radius: var(--radius-sm, 7px);
+    background: var(--panel-2, rgba(255, 255, 255, 0.02));
+    font-size: 12.5px;
+}
+.step-scope-dn {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.step-scope-x {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    opacity: 0.55;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+}
+.step-scope-x:hover:not(:disabled) { opacity: 1; }
+.step-scope-x:disabled { opacity: 0.25; cursor: not-allowed; }
+.step-scope-error {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--danger, #ef4444);
+}
+
 .autogen-tpl-card {
     padding: 12px 14px;
     border: 1px solid var(--border-2, rgba(120, 160, 220, 0.18));

@@ -41,7 +41,9 @@
             because IC's Schedule tab is just a cron field, no need for a tab).
 
     Visuals come from the Conduit design system (CcTemplate1 / CcStatRow /
-    CcListPanel / CcConfirmationModal) and conduit.css classes. No inline style= attributes.
+    CcScheduleEditor / CcHelpHint / CcDirectoryBrowserModal) and conduit.css classes.
+    The project cards are hand-rolled here rather than a shared list panel, and the
+    confirm dialogs are local modals. No inline style= attributes.
 *@
 
 <PageTitle>Sync Projects - Conduit</PageTitle>
@@ -1705,7 +1707,7 @@
                                 <i class="fas fa-plus me-1"></i>Add workflow
                             </button>
                         </div>
-                        <p class="text-muted small mb-3">Use the chevron to expand or collapse a workflow, and each step's own chevron to expand or collapse that step. <strong>Collapse all</strong> closes everything at once. Each step's <strong>Mappings</strong> button opens the attribute editor; the gear edits step settings; Scope sets a per-step filter.</p>
+                        <p class="text-muted small mb-3">Use a workflow's chevron to expand or collapse its steps; <strong>Collapse all</strong> closes every open workflow at once. A step is a single header row — the gear opens its settings, and Mapping steps also get <strong>Mappings</strong> for the attribute editor and a funnel for a per-step scope and filter. All three open as modals.</p>
 
                         <div class="row g-3 mb-3">
                             <div class="col-12">
@@ -1871,26 +1873,12 @@
                                                         _ => "bg-secondary"
                                                     };
                                                     var mapCount = StepMappingCount(stepRef.Id);
-                                                    var settingsOpen = expandedStepSettings.Contains(stepRef.Id);
-                                                    var scopeOpen = expandedStepScope.Contains(stepRef.Id);
                                                     var stepCardClass = _flashStepId == stepRef.Id ? "workflow-step-card step-card-flash" : "workflow-step-card";
                                                     var isRenaming = _renamingStepId == stepRef.Id;
-                                                    // One JSON parse per step per render feeds BOTH the collapsed chips and
-                                                    // the gear-panel picker. Stale-first, then alphabetical.
+                                                    // Stale-first, then alphabetical — the collapsed chips and the Settings
+                                                    // modal's picker order identically so two steps diff visually.
                                                     var stepTags = OrderedStepTags(stepRef);
                                                     var stepChips = StepTagChips(stepTags);
-                                                    var stepStaleTags = stepTags.Where(IsTagStale).ToList();
-                                                    var tagPickerOpen = _tagPopoverStepId == stepRef.Id;
-                                                    var tagCandidates = tagPickerOpen ? AvailableTagsFor(stepTags) : new List<string>();
-                                                    var tagVocabUsable = _icTagStatus == IcTagFetchStatus.Ok && _icTags.Count > 0;
-                                                    var addTagTitle = tagVocabUsable
-                                                        ? "Add an existing IdentityCenter tag"
-                                                        : _icTagStatus == IcTagFetchStatus.Loading
-                                                            ? "Checking IdentityCenter for its tag list…"
-                                                            : _icTagStatus == IcTagFetchStatus.Ok
-                                                                ? "IdentityCenter has no tags defined yet — see the message above."
-                                                                : "Tag list unavailable — see the message above.";
-                                                    var addTagClass = tagPickerOpen ? "step-tag-add open" : "step-tag-add";
 
                                                     <div class="@stepCardClass">
                                                         <div class="step-header d-flex justify-content-between align-items-start">
@@ -1957,6 +1945,14 @@
                                                                             }
                                                                         </span>
                                                                     }
+                                                                    @if (isMappingStep && StepScopeDiscardPending(stepRef))
+                                                                    {
+                                                                        <span class="step-tag-chip stale ms-2"
+                                                                              title="Inherit is on and this step still owns a scope — Save deletes it and the step falls back to the project Scope tab.">
+                                                                            <i class="fas fa-triangle-exclamation"></i>
+                                                                            <span class="step-tag-chip-label">Scope</span>
+                                                                        </span>
+                                                                    }
                                                                     @if (!stepRef.Enabled)
                                                                     {
                                                                         <span class="badge bg-secondary ms-2">Disabled</span>
@@ -1974,13 +1970,13 @@
                                                                             <span class="badge bg-light text-primary ms-1">@mapCount</span>
                                                                         }
                                                                     </button>
-                                                                    <button type="button" class="btn btn-sm @(scopeOpen ? "btn-info" : "btn-outline-primary")"
-                                                                            @onclick="() => ToggleStepScope(stepRef.Id)" title="Configure filter">
+                                                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                                                            @onclick="() => OpenStepScopeModal(stepRef.Id)" title="Configure scope and filter">
                                                                         <i class="fas fa-filter"></i>
                                                                     </button>
                                                                 }
-                                                                <button type="button" class="btn btn-sm @(settingsOpen ? "btn-info" : "btn-outline-secondary")"
-                                                                        @onclick="() => ToggleStepSettings(stepRef.Id)" title="Edit settings">
+                                                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                                        @onclick="() => OpenStepSettingsModal(stepRef.Id)" title="Edit settings">
                                                                     <i class="fas fa-cog"></i>
                                                                 </button>
                                                                 <button type="button" class="btn btn-sm btn-outline-success"
@@ -1991,342 +1987,8 @@
                                                                         @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">
                                                                     <i class="fas fa-trash fa-sm"></i>
                                                                 </button>
-                                                                @* Far right, mirroring the workflow's chevron. The gear toggles the same
-                                                                   panel, but it reads as "settings" rather than "expand", so nobody finds
-                                                                   it as the way back out. *@
-                                                                <button type="button" class="btn btn-sm btn-outline-info"
-                                                                        @onclick="() => ToggleStepSettings(stepRef.Id)"
-                                                                        title="@(settingsOpen ? "Collapse step" : "Expand step")">
-                                                                    <i class="fas @(settingsOpen ? "fa-chevron-up" : "fa-chevron-down")"></i>
-                                                                </button>
                                                             </div>
                                                         </div>
-
-                                                        @* Inline step settings (gear) *@
-                                                        @if (settingsOpen)
-                                                        {
-                                                            <div class="workflow-settings-strip">
-                                                                <div class="row g-3">
-                                                                    <div class="col-md-7">
-                                                                        <label class="form-label fw-semibold">Name</label>
-                                                                        <input class="form-control form-control-sm" @bind="stepRef.Name" @bind:after="MarkWorkflowsDirty" />
-                                                                    </div>
-                                                                    <div class="col-md-5">
-                                                                        <label class="form-label fw-semibold">Type</label>
-                                                                        <select class="form-select form-select-sm" @bind="stepRef.StepType" @bind:after="MarkWorkflowsDirty">
-                                                                            <option value="Mapping">Mapping (source → target)</option>
-                                                                            <option value="PersonMatch">PersonMatch</option>
-                                                                            <option value="PersonCreate">PersonCreate</option>
-                                                                            <option value="AssignManager">AssignManager</option>
-                                                                            <option value="AssignGroupOwner">AssignGroupOwner</option>
-                                                                            <option value="Lookup">Lookup - Resolve Relationships (Manager, Owner)</option>
-                                                                            <option value="LicenseSync">LicenseSync - M365 Licenses</option>
-                                                                            <option value="SignInLogSync">SignInLogSync - Sign-In Logs</option>
-                                                                            <option value="UsageReportSync">UsageReportSync - M365 Usage</option>
-                                                                            <option value="AppRoleSync">AppRoleSync - App Role Assignments</option>
-                                                                            <option value="GroupMembership">GroupMembership - Group Memberships</option>
-                                                                            <option value="Custom">Custom (no-op)</option>
-                                                                        </select>
-                                                                    </div>
-                                                                    @if (isMappingStep)
-                                                                    {
-                                                                        <div class="col-md-7">
-                                                                            <label class="form-label fw-semibold">Object Class</label>
-                                                                            <select class="form-select form-select-sm" @bind="stepRef.ObjectClass" @bind:after="MarkWorkflowsDirty">
-                                                                                @foreach (var opt in StepObjectClassOptionsFor(stepRef.ObjectClass))
-                                                                                {
-                                                                                    <option value="@opt.Value">@opt.Label</option>
-                                                                                }
-                                                                            </select>
-                                                                            <small class="form-text text-muted">Each step in a project can target a different class.</small>
-                                                                        </div>
-                                                                        <div class="col-md-5 d-flex flex-column">
-                                                                            @* Spacer label matches the Object Class label height so the button
-                                                                               top-aligns with the select input (not the column bottom). *@
-                                                                            <label class="form-label fw-semibold" aria-hidden="true">&nbsp;</label>
-                                                                            <button type="button" class="btn btn-outline-primary btn-sm w-100"
-                                                                                    @onclick="@(() => AutoMapStepForClass(stepRef.Id))"
-                                                                                    disabled="@(form.SourceTenantId == Guid.Empty)"
-                                                                                    title="Populate this step's mappings from the template for its object class">
-                                                                                <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
-                                                                            </button>
-                                                                        </div>
-                                                                        @if (SinkIsIdentityCenter)
-                                                                        {
-                                                                            <div class="col-md-12">
-                                                                                @* Refresh sits OUTSIDE the label: a <button> inside a for-less <label>
-                                                                                   becomes its implicitly-labeled control, so clicking the word "Tags"
-                                                                                   would fire a refetch. *@
-                                                                                <div class="step-tag-head">
-                                                                                    <label class="form-label fw-semibold mb-0">
-                                                                                        Tags
-                                                                                        <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." />
-                                                                                    </label>
-                                                                                    <button type="button" class="step-tag-refresh" @onclick="LoadIcTagsAsync"
-                                                                                            title="Re-read the tag list from IdentityCenter">
-                                                                                        <i class="fas fa-rotate"></i>Refresh
-                                                                                    </button>
-                                                                                </div>
-                                                                                <div class="step-tag-editor">
-                                                                                    @foreach (var selTag in stepTags)
-                                                                                    {
-                                                                                        var selName = selTag;
-                                                                                        var selStale = IsTagStale(selName);
-                                                                                        var selClass = selStale ? "step-tag-chip editable stale" : "step-tag-chip editable";
-                                                                                        var selTitle = selStale ? StaleChipTitle(selName) : selName;
-                                                                                        <span class="@selClass" title="@selTitle">
-                                                                                            @if (selStale)
-                                                                                            {
-                                                                                                <i class="fas fa-triangle-exclamation"></i>
-                                                                                            }
-                                                                                            <span class="step-tag-chip-label">@selName</span>
-                                                                                            <button type="button" class="step-tag-chip-x" title="Remove"
-                                                                                                    @onclick="@(() => RemoveStepTag(stepRef, selName))">&times;</button>
-                                                                                        </span>
-                                                                                    }
-                                                                                    <button type="button" class="@addTagClass" title="@addTagTitle"
-                                                                                            disabled="@(!tagVocabUsable)"
-                                                                                            @onclick="@(() => ToggleTagPicker(stepRef.Id))">
-                                                                                        <i class="fas fa-plus"></i>Add tag
-                                                                                    </button>
-                                                                                    @if (tagPickerOpen)
-                                                                                    {
-                                                                                        <div class="step-tag-popover">
-                                                                                            <input class="form-control form-control-sm" placeholder="Filter tags…"
-                                                                                                   value="@_tagFilter"
-                                                                                                   @oninput="@(e => _tagFilter = e.Value?.ToString() ?? string.Empty)"
-                                                                                                   @onkeydown="OnTagFilterKeyDown" />
-                                                                                            @if (tagCandidates.Count > 0)
-                                                                                            {
-                                                                                                <div class="step-tag-popover-list">
-                                                                                                    @foreach (var cand in tagCandidates)
-                                                                                                    {
-                                                                                                        var candName = cand;
-                                                                                                        <button type="button" class="autogen-tag-pill"
-                                                                                                                @onclick="@(() => AddStepTag(stepRef, candName))">@candName</button>
-                                                                                                    }
-                                                                                                </div>
-                                                                                            }
-                                                                                            else if (_tagFilter.Trim().Length > 0)
-                                                                                            {
-                                                                                                <div class="step-tag-popover-empty">
-                                                                                                    <strong>No tag matches "@_tagFilter".</strong>
-                                                                                                    <div>Tags must already exist in IdentityCenter. Create it in IdentityCenter → Objects → Tags, then click Refresh.</div>
-                                                                                                </div>
-                                                                                            }
-                                                                                            else
-                                                                                            {
-                                                                                                <div class="step-tag-popover-empty">
-                                                                                                    <strong>Every IdentityCenter tag is already on this step.</strong>
-                                                                                                </div>
-                                                                                            }
-                                                                                        </div>
-                                                                                    }
-                                                                                </div>
-                                                                                <small class="form-text text-muted d-block">Assign existing tags only. Conduit can't create tags in IdentityCenter.</small>
-
-                                                                                @* Loading must be the FIRST branch: it is the state of not having asked
-                                                                                   yet, so nothing below it — least of all "IC has no tags" — may claim
-                                                                                   anything about IC's contents while a fetch is in flight. *@
-                                                                                @if (_icTagStatus == IcTagFetchStatus.Loading)
-                                                                                {
-                                                                                    <div class="step-tag-state">
-                                                                                        <i class="fas fa-circle-notch fa-spin"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>Checking IdentityCenter for its tag list…</strong>
-                                                                                            <div>Tags already saved on this step are kept and still apply when the project runs.</div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.Unreachable)
-                                                                                {
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-plug-circle-xmark"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>Can't reach IdentityCenter at <code>@IcTagHost</code> — tag list unavailable.</strong>
-                                                                                            <div>Any tags already saved on this step are kept and will still apply when the project runs. You just can't change them until Conduit can reach IC.</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.Unauthorized)
-                                                                                {
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-key"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>IdentityCenter rejected Conduit's API key (401). Tag list unavailable.</strong>
-                                                                                            <div>Update the key on this project's sink connection, then Retry.</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.Forbidden)
-                                                                                {
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-ban"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>IdentityCenter accepted the key but refused the request (403). Tag list unavailable.</strong>
-                                                                                            <div>Most often the IC tenant row isn't Active — a tenant must have Status = 'Active' or its API keys return 403. Check the tenant in IdentityCenter, then Retry.</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.NoCredentials)
-                                                                                {
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-key"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>This project's IdentityCenter sink has no stored credential. Tag list unavailable.</strong>
-                                                                                            <div>Save a base URL + API key on the sink connection, then Retry.</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.EndpointMissing)
-                                                                                {
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-plug-circle-xmark"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>This IdentityCenter has no tag endpoint (404). Tag list unavailable.</strong>
-                                                                                            <div>Tags already saved on this step are kept and still apply when the project runs.</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.Error)
-                                                                                {
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-triangle-exclamation"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>Couldn't read the tag list from IdentityCenter. Tag list unavailable.</strong>
-                                                                                            <div>@_icTagDetail</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                                else if (_icTagStatus == IcTagFetchStatus.Ok && _icTags.Count == 0)
-                                                                                {
-                                                                                    <div class="step-tag-state info">
-                                                                                        <i class="fas fa-circle-info"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>IdentityCenter has no tags defined yet.</strong>
-                                                                                            <div>Create the tags you want to assign in IdentityCenter (Objects → Tags), then Refresh. Conduit can only assign tags that already exist.</div>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Refresh</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-
-                                                                                @if (stepStaleTags.Count > 0)
-                                                                                {
-                                                                                    var staleOne = stepStaleTags.Count == 1;
-                                                                                    var staleNoun = staleOne ? "tag" : "tags";
-                                                                                    var staleVerb = staleOne ? "no longer exists" : "no longer exist";
-                                                                                    var staleBtn = staleOne ? "Remove stale tag" : "Remove stale tags";
-                                                                                    var staleHint = staleOne
-                                                                                        ? "or create it in IdentityCenter and Refresh"
-                                                                                        : "or create them in IdentityCenter and Refresh";
-                                                                                    <div class="step-tag-state warn">
-                                                                                        <i class="fas fa-triangle-exclamation"></i>
-                                                                                        <div class="step-tag-state-body">
-                                                                                            <strong>@stepStaleTags.Count @staleNoun on this step @staleVerb in IdentityCenter and will be ignored at run time.</strong>
-                                                                                            <div class="step-tag-state-actions">
-                                                                                                <button type="button" class="btn btn-sm btn-outline-secondary"
-                                                                                                        @onclick="@(() => RemoveStaleTags(stepRef))">@staleBtn</button>
-                                                                                                <span class="step-tag-stale-hint">· @staleHint</span>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                }
-                                                                            </div>
-                                                                        }
-                                                                    }
-                                                                    <div class="col-md-12">
-                                                                        <div class="form-check form-switch">
-                                                                            <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{stepRef.Id}")" @bind="stepRef.Enabled" @bind:after="MarkWorkflowsDirty" />
-                                                                            <label class="form-check-label" for="@($"stepEnabled_{stepRef.Id}")">Enabled</label>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                                <p class="text-muted small mt-2 mb-0">@StepTypeHint(stepRef.StepType)</p>
-                                                            </div>
-                                                        }
-
-                                                        @* Inline per-step Scope (Filter button) *@
-                                                        @if (scopeOpen && isMappingStep)
-                                                        {
-                                                            var stepId = stepRef.Id;
-                                                            var inheritScope = !stepScopeInherit.TryGetValue(stepId, out var inhS) || inhS;
-                                                            <div class="workflow-settings-strip">
-                                                                <div class="workflow-step-section-head">
-                                                                    <h6 class="form-section-title mb-0"><i class="fas fa-filter me-2"></i>Step Scope</h6>
-                                                                    <div class="form-check form-switch">
-                                                                        <input class="form-check-input" type="checkbox" id="@($"scopeInherit_{stepId}")"
-                                                                               checked="@inheritScope"
-                                                                               @onchange="@(e => OnStepScopeInheritChanged(stepId, e))" />
-                                                                        <label class="form-check-label small" for="@($"scopeInherit_{stepId}")">Inherit from project Scope tab</label>
-                                                                    </div>
-                                                                </div>
-                                                                @if (!inheritScope)
-                                                                {
-                                                                    var scope = GetStepScope(stepId);
-                                                                    var stepInc = scope.GetIncludedBaseList();
-                                                                    var stepBlk = scope.GetExcludedBaseList();
-                                                                    <div class="row g-3 mt-1">
-                                                                        <div class="col-md-7">
-                                                                            <label class="form-label fw-semibold">Base DN</label>
-                                                                            <div class="input-group input-group-sm">
-                                                                                <input class="form-control" @bind="scope.BaseDN" placeholder="DC=demo,DC=local — or blank for source's defaultNamingContext" />
-                                                                                <button type="button" class="btn btn-outline-primary" @onclick="@(() => OpenStepScopeBrowser(stepId))" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick Included / Blocked containers">
-                                                                                    <i class="bi bi-folder-symlink me-1"></i>Locations
-                                                                                </button>
-                                                                            </div>
-                                                                            @if (stepInc.Count > 1 || stepBlk.Count > 0)
-                                                                            {
-                                                                                <small class="form-text text-muted">
-                                                                                    <i class="bi bi-check-circle-fill text-success me-1"></i>@stepInc.Count included
-                                                                                    @if (stepBlk.Count > 0)
-                                                                                    {
-                                                                                        <span><i class="bi bi-slash-circle-fill text-danger ms-2 me-1"></i>@stepBlk.Count blocked</span>
-                                                                                    }
-                                                                                </small>
-                                                                            }
-                                                                        </div>
-                                                                        <div class="col-md-5">
-                                                                            <label class="form-label fw-semibold">Page size</label>
-                                                                            <input class="form-control form-control-sm" type="number" min="1" max="10000" @bind="scope.PageSize" />
-                                                                        </div>
-                                                                        <div class="col-md-9">
-                                                                            <label class="form-label fw-semibold">LDAP filter override</label>
-                                                                            <input class="form-control form-control-sm" @bind="scope.LdapFilter" placeholder="(leave blank for default for object class)" />
-                                                                        </div>
-                                                                        <div class="col-md-3">
-                                                                            <label class="form-label fw-semibold">Max objects</label>
-                                                                            <input class="form-control form-control-sm" type="number" min="0" @bind="scope.MaxObjects" />
-                                                                        </div>
-                                                                    </div>
-                                                                }
-                                                                else
-                                                                {
-                                                                    <p class="text-muted small mt-2 mb-0">This step uses the project-level Scope. Uncheck the toggle above to override only for this step.</p>
-                                                                }
-                                                            </div>
-                                                        }
                                                     </div>
                                                 }
                                             }
@@ -2640,7 +2302,590 @@
     <div class="modal-backdrop fade show"></div>
 }
 
-@* Shared live container browser for the Scope step's Base DN picker. *@
+@* ────────── Nested per-step Settings modal (gear) ──────────
+   The step card is a header row only; everything about a step is edited in a
+   modal launched from it. Fields bind straight to the step and mark the form
+   dirty, exactly as the inline strip did — Save changes still persists. *@
+@if (settingsModalStepId is { } smStepId && SettingsModalStep is { } smStep)
+{
+    var smIsMapping = string.Equals(smStep.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase);
+    var smTags = OrderedStepTags(smStep);
+    var smStaleTags = smTags.Where(IsTagStale).ToList();
+    var smPickerOpen = _tagPopoverStepId == smStepId;
+    var smCandidates = smPickerOpen ? AvailableTagsFor(smTags) : new List<string>();
+    var smVocabUsable = _icTagStatus == IcTagFetchStatus.Ok && _icTags.Count > 0;
+    var smAddTagTitle = smVocabUsable
+        ? "Add an existing IdentityCenter tag"
+        : _icTagStatus == IcTagFetchStatus.Loading
+            ? "Checking IdentityCenter for its tag list…"
+            : _icTagStatus == IcTagFetchStatus.Ok
+                ? "IdentityCenter has no tags defined yet — see the message above."
+                : "Tag list unavailable — see the message above.";
+    var smAddTagClass = smPickerOpen ? "step-tag-add open" : "step-tag-add";
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-cog me-2"></i>Step Settings: @smStep.Name
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseStepSettingsModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-7">
+                            <label class="form-label fw-semibold">Name</label>
+                            <input class="form-control form-control-sm" @bind="smStep.Name" @bind:after="MarkWorkflowsDirty" />
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label fw-semibold">Type</label>
+                            <select class="form-select form-select-sm" @bind="smStep.StepType" @bind:after="MarkWorkflowsDirty">
+                                <option value="Mapping">Mapping (source → target)</option>
+                                <option value="PersonMatch">PersonMatch</option>
+                                <option value="PersonCreate">PersonCreate</option>
+                                <option value="AssignManager">AssignManager</option>
+                                <option value="AssignGroupOwner">AssignGroupOwner</option>
+                                <option value="Lookup">Lookup - Resolve Relationships (Manager, Owner)</option>
+                                <option value="LicenseSync">LicenseSync - M365 Licenses</option>
+                                <option value="SignInLogSync">SignInLogSync - Sign-In Logs</option>
+                                <option value="UsageReportSync">UsageReportSync - M365 Usage</option>
+                                <option value="AppRoleSync">AppRoleSync - App Role Assignments</option>
+                                <option value="GroupMembership">GroupMembership - Group Memberships</option>
+                                <option value="Custom">Custom (no-op)</option>
+                            </select>
+                        </div>
+                        @if (smIsMapping)
+                        {
+                            <div class="col-md-7">
+                                <label class="form-label fw-semibold">Object Class</label>
+                                <select class="form-select form-select-sm" @bind="smStep.ObjectClass" @bind:after="MarkWorkflowsDirty">
+                                    @foreach (var opt in StepObjectClassOptionsFor(smStep.ObjectClass))
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </select>
+                                <small class="form-text text-muted">Each step in a project can target a different class.</small>
+                            </div>
+                            <div class="col-md-5 d-flex flex-column">
+                                @* Spacer label matches the Object Class label height so the button
+                                   top-aligns with the select input (not the column bottom). *@
+                                <label class="form-label fw-semibold" aria-hidden="true">&nbsp;</label>
+                                <button type="button" class="btn btn-outline-primary btn-sm w-100"
+                                        @onclick="@(() => AutoMapStepForClass(smStepId))"
+                                        disabled="@(form.SourceTenantId == Guid.Empty)"
+                                        title="Populate this step's mappings from the template for its object class">
+                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Auto-map for this class
+                                </button>
+                            </div>
+                            @if (SinkIsIdentityCenter)
+                            {
+                                <div class="col-md-12">
+                                    @* Refresh sits OUTSIDE the label: a <button> inside a for-less <label>
+                                       becomes its implicitly-labeled control, so clicking the word "Tags"
+                                       would fire a refetch. *@
+                                    <div class="step-tag-head">
+                                        <label class="form-label fw-semibold mb-0">
+                                            Tags
+                                            <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." />
+                                        </label>
+                                        <button type="button" class="step-tag-refresh" @onclick="LoadIcTagsAsync"
+                                                title="Re-read the tag list from IdentityCenter">
+                                            <i class="fas fa-rotate"></i>Refresh
+                                        </button>
+                                    </div>
+                                    <div class="step-tag-editor">
+                                        @foreach (var selTag in smTags)
+                                        {
+                                            var selName = selTag;
+                                            var selStale = IsTagStale(selName);
+                                            var selClass = selStale ? "step-tag-chip editable stale" : "step-tag-chip editable";
+                                            var selTitle = selStale ? StaleChipTitle(selName) : selName;
+                                            <span class="@selClass" title="@selTitle">
+                                                @if (selStale)
+                                                {
+                                                    <i class="fas fa-triangle-exclamation"></i>
+                                                }
+                                                <span class="step-tag-chip-label">@selName</span>
+                                                <button type="button" class="step-tag-chip-x" title="Remove"
+                                                        @onclick="@(() => RemoveStepTag(smStep, selName))">&times;</button>
+                                            </span>
+                                        }
+                                        <button type="button" class="@smAddTagClass" title="@smAddTagTitle"
+                                                disabled="@(!smVocabUsable)"
+                                                @onclick="@(() => ToggleTagPicker(smStepId))">
+                                            <i class="fas fa-plus"></i>Add tag
+                                        </button>
+                                        @if (smPickerOpen)
+                                        {
+                                            <div class="step-tag-popover">
+                                                <input class="form-control form-control-sm" placeholder="Filter tags…"
+                                                       value="@_tagFilter"
+                                                       @oninput="@(e => _tagFilter = e.Value?.ToString() ?? string.Empty)"
+                                                       @onkeydown="OnTagFilterKeyDown" />
+                                                @if (smCandidates.Count > 0)
+                                                {
+                                                    <div class="step-tag-popover-list">
+                                                        @foreach (var cand in smCandidates)
+                                                        {
+                                                            var candName = cand;
+                                                            <button type="button" class="autogen-tag-pill"
+                                                                    @onclick="@(() => AddStepTag(smStep, candName))">@candName</button>
+                                                        }
+                                                    </div>
+                                                }
+                                                else if (_tagFilter.Trim().Length > 0)
+                                                {
+                                                    <div class="step-tag-popover-empty">
+                                                        <strong>No tag matches "@_tagFilter".</strong>
+                                                        <div>Tags must already exist in IdentityCenter. Create it in IdentityCenter → Objects → Tags, then click Refresh.</div>
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="step-tag-popover-empty">
+                                                        <strong>Every IdentityCenter tag is already on this step.</strong>
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                    <small class="form-text text-muted d-block">Assign existing tags only. Conduit can't create tags in IdentityCenter.</small>
+
+                                    @* Loading must be the FIRST branch: it is the state of not having asked
+                                       yet, so nothing below it — least of all "IC has no tags" — may claim
+                                       anything about IC's contents while a fetch is in flight. *@
+                                    @if (_icTagStatus == IcTagFetchStatus.Loading)
+                                    {
+                                        <div class="step-tag-state">
+                                            <i class="fas fa-circle-notch fa-spin"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>Checking IdentityCenter for its tag list…</strong>
+                                                <div>Tags already saved on this step are kept and still apply when the project runs.</div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.Unreachable)
+                                    {
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-plug-circle-xmark"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>Can't reach IdentityCenter at <code>@IcTagHost</code> — tag list unavailable.</strong>
+                                                <div>Any tags already saved on this step are kept and will still apply when the project runs. You just can't change them until Conduit can reach IC.</div>
+                                                <div class="step-tag-state-actions">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.Unauthorized)
+                                    {
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-key"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>IdentityCenter rejected Conduit's API key (401). Tag list unavailable.</strong>
+                                                <div>Update the key on this project's sink connection, then Retry.</div>
+                                                <div class="step-tag-state-actions">
+                                                    <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.Forbidden)
+                                    {
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-ban"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>IdentityCenter accepted the key but refused the request (403). Tag list unavailable.</strong>
+                                                <div>Most often the IC tenant row isn't Active — a tenant must have Status = 'Active' or its API keys return 403. Check the tenant in IdentityCenter, then Retry.</div>
+                                                <div class="step-tag-state-actions">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.NoCredentials)
+                                    {
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-key"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>This project's IdentityCenter sink has no stored credential. Tag list unavailable.</strong>
+                                                <div>Save a base URL + API key on the sink connection, then Retry.</div>
+                                                <div class="step-tag-state-actions">
+                                                    <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.EndpointMissing)
+                                    {
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-plug-circle-xmark"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>This IdentityCenter has no tag endpoint (404). Tag list unavailable.</strong>
+                                                <div>Tags already saved on this step are kept and still apply when the project runs.</div>
+                                                <div class="step-tag-state-actions">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.Error)
+                                    {
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-triangle-exclamation"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>Couldn't read the tag list from IdentityCenter. Tag list unavailable.</strong>
+                                                <div>@_icTagDetail</div>
+                                                <div class="step-tag-state-actions">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_icTagStatus == IcTagFetchStatus.Ok && _icTags.Count == 0)
+                                    {
+                                        <div class="step-tag-state info">
+                                            <i class="fas fa-circle-info"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>IdentityCenter has no tags defined yet.</strong>
+                                                <div>Create the tags you want to assign in IdentityCenter (Objects → Tags), then Refresh. Conduit can only assign tags that already exist.</div>
+                                                <div class="step-tag-state-actions">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Refresh</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+
+                                    @if (smStaleTags.Count > 0)
+                                    {
+                                        var staleOne = smStaleTags.Count == 1;
+                                        var staleNoun = staleOne ? "tag" : "tags";
+                                        var staleVerb = staleOne ? "no longer exists" : "no longer exist";
+                                        var staleBtn = staleOne ? "Remove stale tag" : "Remove stale tags";
+                                        var staleHint = staleOne
+                                            ? "or create it in IdentityCenter and Refresh"
+                                            : "or create them in IdentityCenter and Refresh";
+                                        <div class="step-tag-state warn">
+                                            <i class="fas fa-triangle-exclamation"></i>
+                                            <div class="step-tag-state-body">
+                                                <strong>@smStaleTags.Count @staleNoun on this step @staleVerb in IdentityCenter and will be ignored at run time.</strong>
+                                                <div class="step-tag-state-actions">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                            @onclick="@(() => RemoveStaleTags(smStep))">@staleBtn</button>
+                                                    <span class="step-tag-stale-hint">· @staleHint</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                        <div class="col-md-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{smStepId}")" @bind="smStep.Enabled" @bind:after="MarkWorkflowsDirty" />
+                                <label class="form-check-label" for="@($"stepEnabled_{smStepId}")">Enabled</label>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-muted small mt-2 mb-0">@StepTypeHint(smStep.StepType)</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseStepSettingsModal">
+                        <i class="fas fa-times me-1"></i>Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ────────── Nested per-step Scope modal (filter button) ──────────
+   Edits a DRAFT, not the live scope: Cancel discards, Apply commits through
+   SetIncludedBaseList / SetExcludedBaseList so BaseDN stays coherent as the
+   single-value fallback ActiveRolesSource still reads. Browse routes the
+   container tree's picked sets into the SAME draft. *@
+@if (scopeModalStepId is { } scStepId && ScopeModalStep is { } scStep)
+{
+    // Non-null means the step OWNS a scope — a row read from the database, or one
+    // drafted and applied this session. It is exactly what Save deletes when Inherit
+    // is on, so the discard notice keys off the same value: copy and behaviour cannot
+    // drift apart.
+    var scOwnsScope = stepScopes.ContainsKey(scStepId) && stepScopes[scStepId] is not null;
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-filter me-2"></i>Step Scope: @scStep.Name
+                        @if (!string.IsNullOrWhiteSpace(scStep.ObjectClass))
+                        {
+                            <span class="badge bg-dark ms-2">@scStep.ObjectClass</span>
+                        }
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CancelStepScopeModal"></button>
+                </div>
+                <div class="modal-body">
+                    @* Same banner shape as the Mappings modal's inherit banner — it is what
+                       explains why everything below is greyed out. *@
+                    <div class="alert @(scopeDraftInherit ? "alert-secondary" : "alert-primary") d-flex align-items-start mb-3">
+                        <i class="fas fa-sitemap fa-lg me-3 mt-1"></i>
+                        <div class="flex-grow-1">
+                            <strong>@(scopeDraftInherit ? "Inheriting the project Scope" : "This step owns its Scope")</strong>
+                            <p class="mb-2 mt-1"><small>
+                                When inheriting, this step reads whatever the project Scope tab reads. Turn the toggle off to
+                                bound this step to its own containers and filter.
+                            </small></p>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="@($"scopeInherit_{scStepId}")"
+                                       checked="@scopeDraftInherit"
+                                       @onchange="OnScopeDraftInheritChanged" />
+                                <label class="form-check-label small" for="@($"scopeInherit_{scStepId}")">Inherit from project Scope tab</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    @* Inherit is only honoured at run time once the step's own scope row is
+                       GONE, so Save deletes it. That is data loss the operator asked for —
+                       state it plainly, and only when there is something to lose. *@
+                    @if (scopeDraftInherit && scOwnsScope)
+                    {
+                        <div class="step-tag-state warn">
+                            <i class="fas fa-triangle-exclamation"></i>
+                            <div class="step-tag-state-body">
+                                <strong>Saving with Inherit on discards this step's own scope.</strong>
+                                <div>
+                                    <strong>Save changes</strong> deletes the scope stored against this step — its included
+                                    and blocked paths, LDAP filter, page size and max objects are not kept anywhere. The
+                                    step then reads whatever the project Scope tab reads. Untick Inherit to keep the
+                                    step's own scope.
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="step-scope-section @(scopeDraftInherit ? "step-scope-inert" : "")">
+                        <div class="step-scope-section-head">
+                            <label class="form-label fw-semibold mb-0">
+                                Included paths
+                                <CcHelpHint Text="Each included container becomes a subtree LDAP base for this step's read. With Inherit off and no included path, this step reads the ENTIRE directory from the source's root (RootDSE defaultNamingContext) — the project Scope tab is not consulted." />
+                            </label>
+                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                    @onclick="OpenScopeDraftBrowser"
+                                    disabled="@(scopeDraftInherit || form.SourceTenantId == Guid.Empty)"
+                                    title="Pick Included / Blocked containers from the live directory">
+                                <i class="bi bi-folder-symlink me-1"></i>Browse…
+                            </button>
+                        </div>
+                        @* An empty included set is a LEGAL choice, not an error — but with Inherit
+                           off it means the whole directory, because the orchestrator's
+                           `GetScopeByStepAsync(step.Id) ?? GetProjectScopeAsync(...)` short-circuits
+                           on ROW EXISTENCE, not row content. A saved-but-empty step scope therefore
+                           never falls through to the project scope, and the AD source resolves
+                           RootDSE defaultNamingContext instead. Warn; do not block.
+                           With Inherit on the fall-through is real again — but only once Save has
+                           dropped the row, so the reassurance is withheld while one still owns the
+                           step; the discard notice above is the accurate statement in that case. *@
+                        @if (scopeDraftIncluded.Count == 0 && scopeDraftInherit)
+                        {
+                            @if (!scOwnsScope)
+                            {
+                                <p class="text-muted small mb-2">No included path on this step — the project Scope tab applies.</p>
+                            }
+                        }
+                        else if (scopeDraftIncluded.Count == 0)
+                        {
+                            <div class="step-tag-state warn">
+                                <i class="fas fa-triangle-exclamation"></i>
+                                <div class="step-tag-state-body">
+                                    <strong>No included path — this step will read the ENTIRE directory.</strong>
+                                    <div>
+                                        With Inherit off and nothing included, the read starts at the source's root
+                                        (RootDSE <code>defaultNamingContext</code>) and walks the whole subtree. The project
+                                        Scope tab is <strong>not</strong> consulted. Add a path above, or tick Inherit to use
+                                        the project Scope.
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <ul class="step-scope-list">
+                                @foreach (var dn in scopeDraftIncluded)
+                                {
+                                    var dnRef = dn;
+                                    <li class="step-scope-row">
+                                        <i class="bi bi-check-circle-fill text-success"></i>
+                                        <span class="step-scope-dn" title="@dnRef">@dnRef</span>
+                                        <button type="button" class="step-scope-x" title="Remove this path"
+                                                disabled="@scopeDraftInherit"
+                                                @onclick="@(() => RemoveScopeDraftIncluded(dnRef))">&times;</button>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        <div class="input-group input-group-sm">
+                            <input class="form-control" placeholder="type a DN…"
+                                   disabled="@scopeDraftInherit"
+                                   value="@scopeDraftIncludedInput"
+                                   @oninput="@(e => scopeDraftIncludedInput = e.Value?.ToString() ?? string.Empty)"
+                                   @onkeydown="OnScopeDraftIncludedKeyDown" />
+                            <button type="button" class="btn btn-outline-secondary"
+                                    disabled="@scopeDraftInherit" @onclick="AddScopeDraftIncluded">
+                                <i class="fas fa-plus me-1"></i>Add
+                            </button>
+                        </div>
+                        @if (scopeDraftIncludedError is { } incErr)
+                        {
+                            <div class="step-scope-error">@incErr</div>
+                        }
+                    </div>
+
+                    <div class="step-scope-section @(scopeDraftInherit ? "step-scope-inert" : "")">
+                        <div class="step-scope-section-head">
+                            <label class="form-label fw-semibold mb-0">
+                                Blocked paths
+                                <CcHelpHint Text="Any object at or under a blocked container is dropped from the read even when it sits under an included path." />
+                            </label>
+                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                    @onclick="OpenScopeDraftBrowser"
+                                    disabled="@(scopeDraftInherit || form.SourceTenantId == Guid.Empty)"
+                                    title="Pick Included / Blocked containers from the live directory">
+                                <i class="bi bi-folder-symlink me-1"></i>Browse…
+                            </button>
+                        </div>
+                        @if (scopeDraftBlocked.Count == 0)
+                        {
+                            <p class="text-muted small mb-2">Nothing blocked.</p>
+                        }
+                        else
+                        {
+                            <ul class="step-scope-list">
+                                @foreach (var dn in scopeDraftBlocked)
+                                {
+                                    var dnRef = dn;
+                                    <li class="step-scope-row">
+                                        <i class="bi bi-slash-circle-fill text-danger"></i>
+                                        <span class="step-scope-dn" title="@dnRef">@dnRef</span>
+                                        <button type="button" class="step-scope-x" title="Remove this path"
+                                                disabled="@scopeDraftInherit"
+                                                @onclick="@(() => RemoveScopeDraftBlocked(dnRef))">&times;</button>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        <div class="input-group input-group-sm">
+                            <input class="form-control" placeholder="type a DN…"
+                                   disabled="@scopeDraftInherit"
+                                   value="@scopeDraftBlockedInput"
+                                   @oninput="@(e => scopeDraftBlockedInput = e.Value?.ToString() ?? string.Empty)"
+                                   @onkeydown="OnScopeDraftBlockedKeyDown" />
+                            <button type="button" class="btn btn-outline-secondary"
+                                    disabled="@scopeDraftInherit" @onclick="AddScopeDraftBlocked">
+                                <i class="fas fa-plus me-1"></i>Add
+                            </button>
+                        </div>
+                        @if (scopeDraftBlockedError is { } blkErr)
+                        {
+                            <div class="step-scope-error">@blkErr</div>
+                        }
+                    </div>
+
+                    <div class="row g-3 @(scopeDraftInherit ? "step-scope-inert" : "")">
+                        <div class="col-md-12">
+                            <label class="form-label fw-semibold">LDAP filter</label>
+                            <input class="form-control form-control-sm" disabled="@scopeDraftInherit"
+                                   @bind="scopeDraftLdapFilter" placeholder="(&amp;(objectClass=user)…) — blank for the object-class default" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Page size</label>
+                            <input class="form-control form-control-sm" type="number" min="1" max="10000"
+                                   disabled="@scopeDraftInherit" @bind="scopeDraftPageSize" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Max objects</label>
+                            <input class="form-control form-control-sm" type="number" min="0"
+                                   disabled="@scopeDraftInherit" @bind="scopeDraftMaxObjects" />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CancelStepScopeModal">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="ApplyStepScopeModal">
+                        <i class="fas fa-check me-1"></i>Apply
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* ────────── Pending step-scope discard confirmation (Save changes) ──────────
+   The nested Scope modal states the discard at the moment Inherit is ticked, but the
+   delete lands on the PARENT modal's Save — tabs and steps later. This names the steps
+   off the SAME predicate the persist loop deletes on (StepScopeDiscardPending), so the
+   list and the destruction cannot drift apart. Renders last: every modal here is
+   z-index 1055, so DOM order is what puts this on top. *@
+@if (showScopeDiscardConfirm)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-danger">
+                    <h5 class="modal-title">
+                        <i class="fas fa-triangle-exclamation me-2"></i>Discard step scopes?
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CancelScopeDiscard"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">
+                        Saving deletes the scope stored against
+                        <strong>@scopeDiscardList.Count step@(scopeDiscardList.Count == 1 ? "" : "s")</strong>
+                        left on <strong>Inherit from project Scope tab</strong>:
+                    </p>
+                    <ul class="mb-3 ps-4">
+                        @foreach (var discard in scopeDiscardList)
+                        {
+                            <li class="mb-1">
+                                <strong>@discard.Step</strong>
+                                <span class="text-muted small ms-1">in @discard.Workflow</span>
+                            </li>
+                        }
+                    </ul>
+                    <div class="step-tag-state warn">
+                        <i class="fas fa-triangle-exclamation"></i>
+                        <div class="step-tag-state-body">
+                            <strong>This cannot be undone.</strong>
+                            <div>
+                                Each step's own included and blocked paths, LDAP filter, page size and max
+                                objects are deleted and are not kept anywhere. The step then reads whatever
+                                the project Scope tab reads. Cancel to go back with nothing saved.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CancelScopeDiscard">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-danger" @onclick="ConfirmScopeDiscardAndSave">
+                        <i class="fas fa-trash me-1"></i>Discard scopes and save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* Shared live container browser for the Scope step's Base DN picker. Rendered
+   LAST on purpose: every modal above it is z-index 1055 too, so DOM order is
+   what puts the container tree on top when Browse opens it from one of them. *@
 <CcDirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" OnScopesSelected="OnScopesPicked" />
 
 @code {
@@ -2668,6 +2913,12 @@
     // Form modal state
     private bool showFormModal;
     private bool saving;
+
+    // Save-time confirmation for irreversible per-step scope deletes.
+    private bool showScopeDiscardConfirm;
+    private bool scopeDiscardConfirmed;
+    private List<(string Workflow, string Step)> scopeDiscardList = new();
+
     private Guid? editingId;
     private SyncProject form = new();
 
@@ -2926,42 +3177,45 @@
         StateHasChanged();
     }
 
-    // Tracks which scope object the multi-select tree is editing: null = the
-    // project-level scopeForm; otherwise the per-step scope keyed by step id.
-    private Guid? scopeBrowserStepId;
+    // Which scope the multi-select tree is editing: false = the project-level
+    // scopeForm (writes through immediately, as it always has); true = the Step
+    // Scope modal's draft sets, so Browse stays behind that modal's Cancel.
+    private bool scopeBrowserToDraft;
 
     /// <summary>Open the IC-style multi-select scope tree for the PROJECT-level scope.</summary>
     private async Task OpenScopeBrowser()
     {
         if (baseDnBrowser is null || form.SourceTenantId == Guid.Empty) return;
-        scopeBrowserStepId = null;
+        scopeBrowserToDraft = false;
         await baseDnBrowser.ShowForScopeAsync(
             form.SourceTenantId, form.SourceCredentialName,
             scopeForm.GetIncludedBaseList(), scopeForm.GetExcludedBaseList());
     }
 
-    /// <summary>Open the IC-style multi-select scope tree for a specific step's scope.</summary>
-    private async Task OpenStepScopeBrowser(Guid stepId)
-    {
-        if (baseDnBrowser is null || form.SourceTenantId == Guid.Empty) return;
-        scopeBrowserStepId = stepId;
-        var scope = GetStepScope(stepId);
-        await baseDnBrowser.ShowForScopeAsync(
-            form.SourceTenantId, form.SourceCredentialName,
-            scope.GetIncludedBaseList(), scope.GetExcludedBaseList());
-    }
-
     /// <summary>
-    /// Apply the edited Included / Blocked DN sets back onto whichever scope object
-    /// the tree was opened for. SetIncludedBaseList keeps BaseDN coherent as the
-    /// single-value fallback so single-base callers keep working.
+    /// Apply the edited Included / Blocked DN sets back onto whichever scope the
+    /// tree was opened for. The project path writes straight onto scopeForm via
+    /// SetIncludedBaseList, which keeps BaseDN coherent as the single-value
+    /// fallback so single-base callers keep working; the step path lands in the
+    /// modal's draft and only reaches a SyncProjectScope on Apply.
     /// </summary>
     private void OnScopesPicked((HashSet<string> Included, HashSet<string> Blocked) sets)
     {
-        var target = scopeBrowserStepId.HasValue ? GetStepScope(scopeBrowserStepId.Value) : scopeForm;
-        target.SetIncludedBaseList(sets.Included);
-        target.SetExcludedBaseList(sets.Blocked);
-        scopeBrowserStepId = null;
+        if (scopeBrowserToDraft)
+        {
+            scopeDraftIncluded.Clear();
+            scopeDraftIncluded.AddRange(sets.Included);
+            scopeDraftBlocked.Clear();
+            scopeDraftBlocked.AddRange(sets.Blocked);
+            scopeDraftIncludedError = null;
+            scopeDraftBlockedError = null;
+            scopeBrowserToDraft = false;
+            StateHasChanged();
+            return;
+        }
+
+        scopeForm.SetIncludedBaseList(sets.Included);
+        scopeForm.SetExcludedBaseList(sets.Blocked);
         StateHasChanged();
     }
 
@@ -3093,18 +3347,25 @@
     private readonly HashSet<Guid> stepsDeleted = new();
 
     // ─── IC card-idiom UI state (presentation only; no new persisted data) ───
-    // Which workflow cards / step settings / step scope blocks are expanded, and
-    // which step's Attribute Mappings modal is open. These replace the old
-    // tree+detail selection; selectedWorkflowId/selectedStepId are still kept in
-    // sync by the wrapper handlers so the existing move/delete helpers work.
+    // Which workflow cards are expanded, and which step owns each of the three
+    // per-step modals. A step card is a header row only — Mappings, Settings and
+    // Scope all open as modals — so there is no per-step expansion set.
+    // selectedWorkflowId/selectedStepId are still kept in sync by the wrapper
+    // handlers so the existing move/delete helpers work.
     private readonly HashSet<Guid> expandedWorkflows = new();
     private readonly HashSet<Guid> expandedWorkflowSettings = new();
-    private readonly HashSet<Guid> expandedStepSettings = new();
-    private readonly HashSet<Guid> expandedStepScope = new();
     private Guid? mappingModalStepId;
+    private Guid? settingsModalStepId;
+    private Guid? scopeModalStepId;
 
     private WorkflowStep? MappingModalStep =>
         mappingModalStepId is { } id ? StepById(id) : null;
+
+    private WorkflowStep? SettingsModalStep =>
+        settingsModalStepId is { } id ? StepById(id) : null;
+
+    private WorkflowStep? ScopeModalStep =>
+        scopeModalStepId is { } id ? StepById(id) : null;
 
     private void MarkWorkflowsDirty() => workflowsDirty = true;
 
@@ -3210,17 +3471,13 @@
     /// </summary>
     private bool AnythingExpanded =>
         expandedWorkflows.Count > 0
-        || expandedWorkflowSettings.Count > 0
-        || expandedStepSettings.Count > 0
-        || expandedStepScope.Count > 0
-        || _tagPopoverStepId is not null;
+        || expandedWorkflowSettings.Count > 0;
 
     /// <summary>
-    /// Collapses every expanded panel at BOTH levels in one click — workflow bodies,
-    /// workflow rename panels, step settings, and step scope — plus any open tag
-    /// popover. The per-item chevron/gear toggles still work; this exists because
-    /// once several are open they are scattered down a long page and closing them
-    /// one at a time means scrolling back to each.
+    /// Collapses every expanded workflow card and rename panel in one click. This
+    /// exists because once several are open they are scattered down a long page and
+    /// closing them one at a time means scrolling back to each. Steps have nothing
+    /// to collapse — their panels are modals.
     /// Expansion is view state only, so this discards nothing the user has typed —
     /// edits live in workflowsForm/stepsForm and are unaffected.
     /// </summary>
@@ -3228,28 +3485,11 @@
     {
         expandedWorkflows.Clear();
         expandedWorkflowSettings.Clear();
-        expandedStepSettings.Clear();
-        expandedStepScope.Clear();
-        CloseTagPicker();
     }
 
     private void ToggleWorkflowSettings(Guid id)
     {
         if (!expandedWorkflowSettings.Remove(id)) expandedWorkflowSettings.Add(id);
-    }
-
-    private void ToggleStepSettings(Guid id)
-    {
-        if (!expandedStepSettings.Remove(id)) expandedStepSettings.Add(id);
-    }
-
-    private async Task ToggleStepScope(Guid id)
-    {
-        if (!expandedStepScope.Remove(id))
-        {
-            expandedStepScope.Add(id);
-            await EnsureStepScopeLoadedAsync(id);
-        }
     }
 
     /// <summary>Count of non-blank rules a step owns (drives the Mappings count badge).</summary>
@@ -3485,11 +3725,9 @@
         selectedStepId = newStep.Id;
         workflowsDirty = true;
 
-        // A duplicate is always about to be re-scoped and re-named, so open both panels and
-        // drop the caret straight on the " (Copy)" suffix — typing replaces it. Esc leaves
-        // the suffix intact, which is why the row also flashes.
-        expandedStepSettings.Add(newStep.Id);
-        expandedStepScope.Add(newStep.Id);
+        // A duplicate is always about to be re-named, so drop the caret straight on the
+        // " (Copy)" suffix — typing replaces it. Esc leaves the suffix intact, which is
+        // why the row also flashes.
         FlashStep(newStep.Id);
         BeginRename(newStep);
         _renameSelStart = src.Name.Length;
@@ -3502,17 +3740,18 @@
     {
         selectedStepId = id;
         DeleteStep();
-        expandedStepSettings.Remove(id);
-        expandedStepScope.Remove(id);
         if (mappingModalStepId == id) mappingModalStepId = null;
+        if (settingsModalStepId == id) CloseStepSettingsModal();
+        if (scopeModalStepId == id) CancelStepScopeModal();
     }
 
-    /// <summary>Add a step from a card and keep its parent workflow expanded + the new step's settings open.</summary>
+    /// <summary>Add a step from a card, keep its parent workflow expanded, and open the
+    /// new step's Settings modal — a fresh step always needs a name and a type.</summary>
     private void AddStepExpanded(Guid workflowId)
     {
         AddStep(workflowId);
         expandedWorkflows.Add(workflowId);
-        if (selectedStepId is { } newId) expandedStepSettings.Add(newId);
+        if (selectedStepId is { } newId) settingsModalStepId = newId;
     }
 
     // ── Nested Attribute Mappings modal ──
@@ -3537,6 +3776,167 @@
         stepMappingsLoaded.Add(stepId);
         stepMappingsInherit[stepId] = true;
         workflowsDirty = true;
+    }
+
+    // ── Nested Step Settings modal (gear) ──
+    private void OpenStepSettingsModal(Guid stepId) => settingsModalStepId = stepId;
+
+    /// <summary>Closing the modal takes the tag popover with it — the popover lives inside
+    /// the modal body, so leaving it open would carry its state into the next step opened.</summary>
+    private void CloseStepSettingsModal()
+    {
+        settingsModalStepId = null;
+        CloseTagPicker();
+    }
+
+    // ── Nested Step Scope modal (filter) ──────────────────────────────────────
+    // The modal edits a DRAFT copy so Cancel is real. Nothing here touches the
+    // database: Apply writes into the in-memory stepScopes entry, and the whole
+    // project form persists on Save changes.
+    private bool scopeDraftInherit = true;
+    private readonly List<string> scopeDraftIncluded = new();
+    private readonly List<string> scopeDraftBlocked = new();
+    private string scopeDraftLdapFilter = string.Empty;
+    private int scopeDraftPageSize = 1000;
+    private int? scopeDraftMaxObjects;
+    private string scopeDraftIncludedInput = string.Empty;
+    private string scopeDraftBlockedInput = string.Empty;
+    private string? scopeDraftIncludedError;
+    private string? scopeDraftBlockedError;
+
+    private async Task OpenStepScopeModal(Guid stepId)
+    {
+        await EnsureStepScopeLoadedAsync(stepId);
+
+        // Read WITHOUT materializing a scope: an operator who opens the modal and
+        // cancels must leave stepScopes exactly as he found it.
+        var sc = stepScopes.TryGetValue(stepId, out var loaded) ? loaded : null;
+        scopeDraftInherit = !stepScopeInherit.TryGetValue(stepId, out var inherit) || inherit;
+        scopeDraftIncluded.Clear();
+        scopeDraftBlocked.Clear();
+        if (sc is not null)
+        {
+            scopeDraftIncluded.AddRange(sc.GetIncludedBaseList());
+            scopeDraftBlocked.AddRange(sc.GetExcludedBaseList());
+        }
+        scopeDraftLdapFilter = sc?.LdapFilter ?? string.Empty;
+        scopeDraftPageSize = sc?.PageSize ?? 1000;
+        scopeDraftMaxObjects = sc?.MaxObjects;
+        scopeDraftIncludedInput = string.Empty;
+        scopeDraftBlockedInput = string.Empty;
+        scopeDraftIncludedError = null;
+        scopeDraftBlockedError = null;
+        scopeModalStepId = stepId;
+    }
+
+    private void CancelStepScopeModal() => scopeModalStepId = null;
+
+    /// <summary>
+    /// Commit the draft onto the step's scope. The DN sets go through
+    /// SetIncludedBaseList / SetExcludedBaseList rather than the JSON columns
+    /// directly, because those setters are what keep BaseDN pointing at the first
+    /// included container — ActiveRolesSource still falls back to it.
+    /// Inherit ON deliberately writes nothing: a non-null stepScopes entry is what
+    /// tells Save there is a row to DELETE, so materializing one here would make a
+    /// step that never owned a scope claim it has one to discard.
+    /// </summary>
+    private void ApplyStepScopeModal()
+    {
+        if (scopeModalStepId is not { } stepId) return;
+
+        stepScopeInherit[stepId] = scopeDraftInherit;
+        if (!scopeDraftInherit)
+        {
+            var sc = GetStepScope(stepId);
+            sc.SetIncludedBaseList(scopeDraftIncluded);
+            sc.SetExcludedBaseList(scopeDraftBlocked);
+            sc.LdapFilter = string.IsNullOrWhiteSpace(scopeDraftLdapFilter) ? null : scopeDraftLdapFilter.Trim();
+            sc.PageSize = scopeDraftPageSize;
+            sc.MaxObjects = scopeDraftMaxObjects;
+        }
+
+        scopeModalStepId = null;
+        MarkWorkflowsDirty();
+    }
+
+    private void OnScopeDraftInheritChanged(ChangeEventArgs e)
+    {
+        scopeDraftInherit = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+        scopeDraftIncludedError = null;
+        scopeDraftBlockedError = null;
+    }
+
+    /// <summary>Open the container tree on behalf of the Scope modal — the picked sets land
+    /// in the draft, so Browse is still undone by Cancel.</summary>
+    private async Task OpenScopeDraftBrowser()
+    {
+        if (baseDnBrowser is null || form.SourceTenantId == Guid.Empty) return;
+        scopeBrowserToDraft = true;
+        await baseDnBrowser.ShowForScopeAsync(
+            form.SourceTenantId, form.SourceCredentialName, scopeDraftIncluded, scopeDraftBlocked);
+    }
+
+    /// <summary>
+    /// Deliberately shallow: a DN needs at least one <c>attr=value</c> RDN, and that
+    /// is all this checks. Anything stricter would start rejecting the legal-but-odd
+    /// (escaped commas, multi-valued RDNs, non-standard attribute types) that the
+    /// directory itself accepts.
+    /// </summary>
+    private static string? ValidateScopeDn(string dn)
+    {
+        if (string.IsNullOrWhiteSpace(dn)) return "Type a container DN first.";
+        if (!dn.Contains('=')) return "Not a distinguished name — needs at least one attribute=value part, e.g. OU=Staff,DC=corp,DC=local.";
+        return null;
+    }
+
+    private void AddScopeDraftIncluded()
+    {
+        var dn = scopeDraftIncludedInput.Trim();
+        scopeDraftIncludedError = ValidateScopeDn(dn);
+        if (scopeDraftIncludedError is not null) return;
+        if (scopeDraftIncluded.Contains(dn, StringComparer.OrdinalIgnoreCase))
+        {
+            scopeDraftIncludedError = "That path is already included.";
+            return;
+        }
+        scopeDraftIncluded.Add(dn);
+        scopeDraftIncludedInput = string.Empty;
+    }
+
+    private void AddScopeDraftBlocked()
+    {
+        var dn = scopeDraftBlockedInput.Trim();
+        scopeDraftBlockedError = ValidateScopeDn(dn);
+        if (scopeDraftBlockedError is not null) return;
+        if (scopeDraftBlocked.Contains(dn, StringComparer.OrdinalIgnoreCase))
+        {
+            scopeDraftBlockedError = "That path is already blocked.";
+            return;
+        }
+        scopeDraftBlocked.Add(dn);
+        scopeDraftBlockedInput = string.Empty;
+    }
+
+    private void RemoveScopeDraftIncluded(string dn)
+    {
+        scopeDraftIncluded.RemoveAll(d => string.Equals(d, dn, StringComparison.OrdinalIgnoreCase));
+        scopeDraftIncludedError = null;
+    }
+
+    private void RemoveScopeDraftBlocked(string dn)
+    {
+        scopeDraftBlocked.RemoveAll(d => string.Equals(d, dn, StringComparison.OrdinalIgnoreCase));
+        scopeDraftBlockedError = null;
+    }
+
+    private void OnScopeDraftIncludedKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Enter", StringComparison.Ordinal)) AddScopeDraftIncluded();
+    }
+
+    private void OnScopeDraftBlockedKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Enter", StringComparison.Ordinal)) AddScopeDraftBlocked();
     }
 
     private Workflow? SelectedWorkflow =>
@@ -4208,14 +4608,6 @@
         workflowsDirty = true;
     }
 
-    private void OnStepScopeInheritChanged(Guid stepId, ChangeEventArgs e)
-    {
-        var inherit = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
-        stepScopeInherit[stepId] = inherit;
-        // GetStepScope materializes a fresh blank scope on first edit when needed.
-        workflowsDirty = true;
-    }
-
     private void AddStep(Guid workflowId)
     {
         if (!stepsByWorkflow.TryGetValue(workflowId, out var list))
@@ -4299,6 +4691,34 @@
     }
 
     /// <summary>
+    /// The single definition of "Save is about to delete this step's own scope":
+    /// a Mapping step the operator opened, left on Inherit, that still owns a scope
+    /// row. PersistWorkflowsAsync's delete branch and the Save confirmation both read
+    /// this, so the dialog cannot name a different set than the loop destroys.
+    /// </summary>
+    private bool StepScopeDiscardPending(WorkflowStep s) =>
+        string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase)
+        && stepScopesLoaded.Contains(s.Id)
+        && (!stepScopeInherit.TryGetValue(s.Id, out var inherit) || inherit)
+        && stepScopes.TryGetValue(s.Id, out var owned)
+        && owned is not null;
+
+    /// <summary>Every pending discard, walked in the same order PersistWorkflowsAsync walks the tree.</summary>
+    private List<(string Workflow, string Step)> PendingScopeDiscards()
+    {
+        var pending = new List<(string Workflow, string Step)>();
+        foreach (var wf in workflowsForm)
+        {
+            if (!stepsByWorkflow.TryGetValue(wf.Id, out var steps)) continue;
+            foreach (var s in steps)
+            {
+                if (StepScopeDiscardPending(s)) pending.Add((wf.Name, s.Name));
+            }
+        }
+        return pending;
+    }
+
+    /// <summary>
     /// Phase 7. Called from SaveForm to persist the workflow tree on Save. Idempotent —
     /// uses Insert-or-Update via repo per row, then issues deletes for anything dropped.
     /// </summary>
@@ -4362,12 +4782,16 @@
                         {
                             await WorkflowRepo.UpsertScopeForStepAsync(projectId, s.Id, GetStepScope(s.Id));
                         }
-                        // Inherit path intentionally leaves the per-step scope row
-                        // alone — repo wipes happen only if the operator explicitly
-                        // edited then re-checked inherit. Simpler to leave a stale
-                        // row (orchestrator only consults it when present) than to
-                        // forge a DELETE here. If staleness becomes a problem we
-                        // can add WorkflowRepository.DeleteScopeForStepAsync later.
+                        else if (StepScopeDiscardPending(s))
+                        {
+                            // Inherit is only honoured at run time if the row is GONE:
+                            // GetScopeByStepAsync short-circuits on ROW EXISTENCE, so a
+                            // survivor keeps overriding the project scope forever. The
+                            // non-null entry is the signal that there is one to drop —
+                            // steps that never owned a scope skip the round-trip.
+                            await WorkflowRepo.DeleteScopeForStepAsync(s.Id);
+                            stepScopes[s.Id] = null;
+                        }
                     }
                 }
             }
@@ -5799,6 +6223,19 @@
             if (!string.IsNullOrWhiteSpace(firstClass)) form.ObjectClass = firstClass;
         }
 
+        // PersistWorkflowsAsync deletes step scopes outright, and the operator ticked
+        // Inherit screens ago in a modal that is long gone. Name what is about to go.
+        if (!scopeDiscardConfirmed)
+        {
+            var pendingDiscards = PendingScopeDiscards();
+            if (pendingDiscards.Count > 0)
+            {
+                scopeDiscardList = pendingDiscards;
+                showScopeDiscardConfirm = true;
+                return;
+            }
+        }
+
         saving = true;
         try
         {
@@ -5866,6 +6303,26 @@
         finally
         {
             saving = false;
+        }
+    }
+
+    private void CancelScopeDiscard()
+    {
+        showScopeDiscardConfirm = false;
+        scopeDiscardList = new List<(string Workflow, string Step)>();
+    }
+
+    private async Task ConfirmScopeDiscardAndSave()
+    {
+        showScopeDiscardConfirm = false;
+        scopeDiscardConfirmed = true;
+        try
+        {
+            await SaveForm();
+        }
+        finally
+        {
+            scopeDiscardConfirmed = false;
         }
     }
 

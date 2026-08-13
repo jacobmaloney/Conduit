@@ -246,4 +246,15 @@ public class WorkflowRepository : BaseRepository
                 VALUES (@Id, @SyncProjectId, @WorkflowStepId, @BaseDN, @IncludedBaseDNs, @ExcludedBaseDNs, @LdapFilter, @QueryExpression, @PageSize, @MaxObjects, @IncludeDeleted, @CreatedAt, @LastModified);";
         await ExecuteAsync(sql, scope);
     }
+
+    /// <summary>
+    /// Drops a step's own scope so the orchestrator falls back to the project scope.
+    /// Needed because <see cref="GetScopeByStepAsync"/> short-circuits on ROW EXISTENCE,
+    /// not row content — a row left behind keeps overriding the project scope no matter
+    /// what it holds, and an empty one sends the read to the directory root.
+    /// </summary>
+    public Task<int> DeleteScopeForStepAsync(Guid workflowStepId) =>
+        ExecuteAsync(
+            "DELETE FROM SyncProjectScopes WHERE WorkflowStepId = @Id;",
+            new { Id = workflowStepId });
 }
