@@ -121,7 +121,7 @@ END;";
 
             if (!exists)
             {
-                await connection.ExecuteAsync($"CREATE DATABASE [{databaseName}]");
+                await connection.ExecuteAsync($"CREATE DATABASE {SqlIdentifier.QuoteName(databaseName)}");
                 Console.WriteLine($"Created database: {databaseName}");
             }
         }

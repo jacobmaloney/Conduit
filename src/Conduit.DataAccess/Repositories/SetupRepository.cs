@@ -22,21 +22,58 @@ public class SetupRepository : BaseRepository
     public Task<int> CountActiveAdminsAsync() =>
         ExecuteScalarAsync<int>("SELECT COUNT(*) FROM PortalAdmins WHERE Active = 1");
 
-    public Task<Guid?> GetAdminIdByUserNameAsync(string userName) =>
-        QuerySingleOrDefaultAsync<Guid?>(
-            "SELECT [Id] FROM [PortalAdmins] WHERE LOWER([UserName]) = LOWER(@UserName)",
-            new { UserName = userName });
+    /// <summary>
+    /// Count of portal administrator rows, ACTIVE OR NOT.
+    ///
+    /// This is the "has this install ever been set up?" question. The active count is not:
+    /// a table holding deactivated admins is a populated table with history behind it, and
+    /// treating that as a first run is what let an anonymous caller re-run setup against a
+    /// live install.
+    /// </summary>
+    public Task<int> CountAdminsAsync() =>
+        ExecuteScalarAsync<int>("SELECT COUNT(*) FROM PortalAdmins");
 
-    public Task UpdateAdminPasswordAsync(Guid id, string hash, string salt) =>
-        ExecuteAsync(@"
-            UPDATE [PortalAdmins]
-            SET [PasswordHash] = @Hash, [PasswordSalt] = @Salt, [Active] = 1, [LastModified] = SYSUTCDATETIME()
-            WHERE [Id] = @Id",
-            new { Hash = hash, Salt = salt, Id = id });
+    /// <summary>
+    /// True when ANY row — active or deactivated — already carries this username.
+    ///
+    /// The unauthenticated recovery path is insert-only, so this is a hard refusal, never a
+    /// branch into an UPDATE. There used to be a <c>GetAdminIdByUserNameAsync</c> +
+    /// <c>UpdateAdminPasswordAsync</c> pair here whose UPDATE also set <c>Active = 1</c>:
+    /// naming a DEACTIVATED admin from the anonymous wizard reactivated that identity and
+    /// set its password — a takeover of a real, named account complete with its audit
+    /// history. Both methods are deleted rather than guarded; the reactivation primitive
+    /// should not exist on the setup path at all.
+    /// </summary>
+    public async Task<bool> AdminUserNameExistsAsync(string userName) =>
+        await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM [PortalAdmins] WHERE LOWER([UserName]) = LOWER(@UserName)",
+            new { UserName = userName }) > 0;
+
+    /// <summary>
+    /// Reads one ACTIVE portal admin's stored credential from the CURRENT database so it
+    /// can be copied into a database the same signed-in admin just prepared. Never
+    /// enumerates: the caller must name the account, and the only account it may name is
+    /// the one it is authenticated as. Null when there is no active admin by that name.
+    /// </summary>
+    public Task<PortalAdminCredential?> GetActiveAdminCredentialAsync(string userName) =>
+        QuerySingleOrDefaultAsync<PortalAdminCredential>(@"
+            SELECT TOP 1 [UserName], [DisplayName], [PasswordHash], [PasswordSalt]
+            FROM [PortalAdmins]
+            WHERE LOWER([UserName]) = LOWER(@UserName) AND [Active] = 1",
+            new { UserName = userName });
 
     public Task InsertAdminAsync(string userName, string displayName, string hash, string salt) =>
         ExecuteAsync(@"
             INSERT INTO [PortalAdmins] ([Id], [UserName], [DisplayName], [PasswordHash], [PasswordSalt], [Active])
             VALUES (NEWID(), @UserName, @DisplayName, @Hash, @Salt, 1)",
             new { UserName = userName, DisplayName = displayName, Hash = hash, Salt = salt });
+}
+
+/// <summary>A portal admin's stored credential material. Never logged, never rendered.</summary>
+public sealed class PortalAdminCredential
+{
+    public string UserName { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public string PasswordHash { get; set; } = string.Empty;
+    public string PasswordSalt { get; set; } = string.Empty;
 }

@@ -21,9 +21,11 @@ namespace Conduit.Web.Middleware
         }
 
         /// <summary>
-        /// Invokes the middleware. Routes by the three-state database status:
+        /// Invokes the middleware. Routes by the four-state database status:
         ///   Unreachable → /db-offline (NEVER the wizard — a network blip must not expose
-        ///   first-run setup), NotConfigured → /setup (legitimate first run), Ready → normal.
+        ///   first-run setup), NotConfigured → /setup (legitimate first run),
+        ///   NeedsAdminRecovery → /admin-recovery (schema present but nobody can sign in —
+        ///   a dead end that demands the host-local token, NEVER the wizard), Ready → normal.
         /// De-hammering / brief caching lives in SetupService.GetDatabaseStatusAsync so a
         /// transient outage can recover without a latched middleware flag.
         /// </summary>
@@ -39,6 +41,7 @@ namespace Conduit.Web.Middleware
                 path.StartsWith("/lib") ||
                 path.StartsWith("/setup") ||
                 path.StartsWith("/db-offline") ||
+                path.StartsWith("/admin-recovery") ||
                 path.StartsWith("/login") ||
                 path.StartsWith("/logout"))
             {
@@ -57,6 +60,11 @@ namespace Conduit.Web.Middleware
                 case DatabaseStatus.NotConfigured:
                     // Genuine first run.
                     context.Response.Redirect("/setup");
+                    return;
+                case DatabaseStatus.NeedsAdminRecovery:
+                    // Schema present, nobody can sign in. Recovery requires proof of host
+                    // access; this must never fall through to /setup.
+                    context.Response.Redirect("/admin-recovery");
                     return;
                 default:
                     await _next(context);

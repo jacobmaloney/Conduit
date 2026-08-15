@@ -5,12 +5,14 @@
 @inject SetupService SetupService
 @inject IConfiguration Configuration
 @inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthState
+@inject IHostEnvironment HostEnvironment
 
 <PageTitle>Database Settings - Conduit</PageTitle>
 
 <div class="container-fluid">
     <h1>Database Settings</h1>
-    <p class="lead">Change the SQL Server / database this application uses.</p>
+    <p class="lead">Point Conduit at a different SQL Server, or stand up a brand-new database.</p>
 
     <div class="row">
         <div class="col-lg-8">
@@ -22,6 +24,42 @@
                     <code class="text-muted">@MaskConnectionString(currentConnectionString)</code>
                 </div>
             </div>
+
+            @{
+                var prepared = prepareResult;
+            }
+            @if (prepared is not null && prepared.Success)
+            {
+                <div class="alert alert-success" role="alert">
+                    <h5 class="alert-heading">Database '@prepared.DatabaseName' is ready.</h5>
+                    <p class="mb-2">
+                        Schema built and the sign-in is set up. Conduit is <strong>still running on
+                        '@CurrentDatabaseName()'</strong> until you restart it.
+                    </p>
+                    @if (string.IsNullOrEmpty(prepared.AdminUserName))
+                    {
+                        <p class="mb-0">
+                            After you restart, sign in with an administrator account that already
+                            existed in '@prepared.DatabaseName' — this action created none and changed
+                            no passwords there.
+                        </p>
+                    }
+                    else
+                    {
+                        <p class="mb-0">
+                            After you restart, sign in as <code>@prepared.AdminUserName</code>
+                            @if (prepared.AdminPasswordCarriedOver)
+                            {
+                                <text>with your current password.</text>
+                            }
+                            else
+                            {
+                                <text>with the password you just set.</text>
+                            }
+                        </p>
+                    }
+                </div>
+            }
 
             <div class="card mb-4">
                 <div class="card-header">
@@ -49,6 +87,7 @@
                         <div class="mb-3">
                             <label class="form-label">Database Name</label>
                             <input type="text" class="form-control" @bind="databaseName" />
+                            <small class="form-text text-muted">Type a name that does not exist yet to create a new database.</small>
                         </div>
 
                         <div class="mb-3">
@@ -96,57 +135,104 @@
                         </div>
                     }
 
+                    <hr />
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Who signs in after restart?</label>
+
+                        <div class="form-check">
+                            <input type="radio" class="form-check-input" id="signinCopy" name="signinChoice"
+                                   checked="@copyCurrentAdmin" @onchange="SelectCopyAdmin" />
+                            <label class="form-check-label" for="signinCopy">
+                                Me — <strong>@(string.IsNullOrEmpty(currentAdminUserName) ? "(unknown)" : currentAdminUserName)</strong>, same password
+                            </label>
+                        </div>
+
+                        <div class="form-check">
+                            <input type="radio" class="form-check-input" id="signinNew" name="signinChoice"
+                                   checked="@(!copyCurrentAdmin)" @onchange="SelectNewAdmin" />
+                            <label class="form-check-label" for="signinNew">A different admin</label>
+                        </div>
+
+                        @if (!copyCurrentAdmin)
+                        {
+                            <div class="row g-2 mt-2 ms-1">
+                                <div class="col-sm-6">
+                                    <input type="text" class="form-control" placeholder="Username" @bind="newAdminUserName" />
+                                </div>
+                                <div class="col-sm-6">
+                                    <input type="password" class="form-control" placeholder="Password (min 8 characters)" @bind="newAdminPassword" />
+                                </div>
+                            </div>
+                        }
+
+                        <small class="form-text text-muted d-block mt-2">
+                            No agents, connections, or sync history come across &mdash; the new database starts empty.
+                        </small>
+                        <small class="form-text text-muted d-block mt-1">
+                            <strong>"Me" duplicates your credential.</strong> Your username, password hash and
+                            salt are copied into the new database as a second, independent account. It is a
+                            copy that outlives the original: changing or revoking your password in
+                            '@CurrentDatabaseName()' later has <em>no effect</em> on the copy, and the copy
+                            keeps working. To retire the credential you must change it in both databases.
+                        </small>
+                    </div>
+
                     <div class="d-flex gap-2 flex-wrap">
-                        <button type="button" class="btn btn-secondary" @onclick="TestConnection" disabled="@testingConnection">
+                        <button type="button" class="btn btn-secondary" @onclick="TestConnection" disabled="@(testingConnection || preparing)">
                             @if (testingConnection)
                             {
                                 <span class="spinner-border spinner-border-sm me-2" role="status"></span>
                             }
                             Test Connection
                         </button>
-                        <button type="button" class="btn btn-primary" @onclick="SaveConnection" disabled="@(!CanSave())">
-                            @if (saving)
+                        <button type="button" class="btn btn-primary" @onclick="PrepareDatabase" disabled="@(!CanPrepare())">
+                            @if (preparing)
                             {
                                 <span class="spinner-border spinner-border-sm me-2" role="status"></span>
                             }
-                            Save
+                            Create and prepare database
                         </button>
                     </div>
+
+                    @if (prepared != null)
+                    {
+                        <ul class="list-group mt-3">
+                            @foreach (var step in prepared.Steps)
+                            {
+                                <li class="list-group-item d-flex align-items-start gap-2">
+                                    <span class="@StepIconClass(step.State)">@StepIcon(step.State)</span>
+                                    <div>
+                                        <div class="@(step.State == PrepareStepState.Failed ? "text-danger fw-bold" : "")">@step.Title</div>
+                                        @if (!string.IsNullOrEmpty(step.Message))
+                                        {
+                                            <div class="small @(step.State == PrepareStepState.Failed ? "text-danger" : "text-muted")">@step.Message</div>
+                                        }
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+
+                        var failedStep = prepared.Success ? null : prepared.FailedStep;
+                        @if (failedStep != null && !preparing)
+                        {
+                            <div class="alert alert-danger mt-3">
+                                <strong>Stopped at &quot;@failedStep.Title&quot;.</strong>
+                                <div class="small mt-1">@failedStep.Message</div>
+                                <hr class="my-2" />
+                                <small>
+                                    The connection was <strong>not</strong> saved. Conduit is still running on
+                                    '@CurrentDatabaseName()' and a restart will change nothing. Fix the problem above and run it again.
+                                </small>
+                            </div>
+                        }
+                    }
 
                     @if (connectionTest != null)
                     {
                         var alertClass = GetTestAlertClass();
                         <div class="mt-3 alert @alertClass py-2">
                             @GetTestMessage()
-                            @if (connectionTest.ServerReachable && !connectionTest.DatabaseExists && !string.IsNullOrWhiteSpace(connectionTest.DatabaseName))
-                            {
-                                <hr class="my-2" />
-                                <button type="button" class="btn btn-sm btn-warning" @onclick="CreateDatabaseNow" disabled="@creatingDatabase">
-                                    @if (creatingDatabase)
-                                    {
-                                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
-                                    }
-                                    Create Database Now
-                                </button>
-                                @if (!string.IsNullOrEmpty(createDatabaseMessage))
-                                {
-                                    <div class="small mt-2 @(createDatabaseSuccess ? "text-success" : "text-danger")">
-                                        @createDatabaseMessage
-                                    </div>
-                                }
-                            }
-                        </div>
-                    }
-
-                    @if (!string.IsNullOrEmpty(saveMessage))
-                    {
-                        <div class="alert @(saveSuccess ? "alert-success" : "alert-danger") mt-3 py-2">
-                            @saveMessage
-                            @if (saveSuccess)
-                            {
-                                <hr class="my-2" />
-                                <small>The new connection has been written to <code>@configFileName</code>. Restart the application for all services to pick up the change.</small>
-                            }
                         </div>
                     }
                 </div>
@@ -160,10 +246,28 @@
                 </div>
                 <div class="card-body small">
                     <ul class="mb-0 ps-3">
-                        <li>Test the connection before saving.</li>
-                        <li>If the database does not exist, you'll get a "Create Database Now" button.</li>
-                        <li>Saved settings go to <code>@configFileName</code>.</li>
-                        <li>Some services cache the connection at startup — restart the app to be safe.</li>
+                        <li>
+                            <strong>Create and prepare database</strong> does everything in one go: creates the
+                            database if needed, builds the schema, sets up the sign-in, then saves the connection.
+                            Nothing is saved unless every step succeeds.
+                        </li>
+                        <li>
+                            The connection string and JWT secret are written to
+                            <code>@secretsFilePath</code> — an ACL-restricted machine-local file,
+                            <em>not</em> to any <code>appsettings*.json</code>.
+                        </li>
+                        <li>
+                            The only thing that goes to <code>@environmentConfigPath</code> is the Kestrel
+                            listening port, and only when it is changed from the setup wizard.
+                        </li>
+                        <li>
+                            That file is read once at startup (<code>reloadOnChange: false</code>), so
+                            <strong>restart Conduit</strong> to switch over. Until you do, the app keeps
+                            serving from the current database.
+                        </li>
+                        <li>
+                            Test Connection is optional — it just reports what is there before you commit.
+                        </li>
                         <li>If you lose connectivity and the app won't load, the <a href="/setup">setup wizard</a> is always reachable.</li>
                     </ul>
                 </div>
@@ -174,7 +278,9 @@
 
 @code {
     private string currentConnectionString = "";
-    private string configFileName = "";
+    private string secretsFilePath = "";
+    private string environmentConfigPath = "";
+    private string currentAdminUserName = "";
 
     private string databaseType = "sqlserver";
     private string serverName = "localhost";
@@ -186,22 +292,43 @@
     private bool encryptConnection = false;
     private string customConnectionString = "";
 
+    private bool copyCurrentAdmin = true;
+    private string newAdminUserName = "";
+    private string newAdminPassword = "";
+
     private bool testingConnection;
     private ConnectionTestResult? connectionTest;
 
-    private bool creatingDatabase;
-    private string createDatabaseMessage = "";
-    private bool createDatabaseSuccess;
+    private bool preparing;
+    private PrepareDatabaseResult? prepareResult;
 
-    private bool saving;
-    private string saveMessage = "";
-    private bool saveSuccess;
-
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         currentConnectionString = Configuration.GetConnectionString("DefaultConnection") ?? "";
-        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
-        configFileName = environment == "Development" ? "appsettings.Development.json" : "appsettings.Production.json";
+        secretsFilePath = SecretsFile.DefaultPath;
+        environmentConfigPath = SetupService.BuildEnvironmentConfigPath(
+            HostEnvironment.ContentRootPath,
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"));
+
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        currentAdminUserName = auth.User.Identity?.Name ?? "";
+    }
+
+    private void SelectCopyAdmin() => copyCurrentAdmin = true;
+
+    private void SelectNewAdmin() => copyCurrentAdmin = false;
+
+    private string CurrentDatabaseName()
+    {
+        try
+        {
+            var name = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(currentConnectionString).InitialCatalog;
+            return string.IsNullOrWhiteSpace(name) ? "the current database" : name;
+        }
+        catch
+        {
+            return "the current database";
+        }
     }
 
     private string BuildConnectionString()
@@ -228,11 +355,13 @@
     private async Task TestConnection()
     {
         testingConnection = true;
-        saveMessage = "";
-        createDatabaseMessage = "";
         try
         {
             connectionTest = await SetupService.TestConnectionAsync(BuildConnectionString());
+        }
+        catch (Exception ex)
+        {
+            connectionTest = new ConnectionTestResult { ErrorMessage = ex.Message };
         }
         finally
         {
@@ -240,53 +369,68 @@
         }
     }
 
-    private async Task CreateDatabaseNow()
+    private bool CanPrepare()
     {
-        creatingDatabase = true;
-        createDatabaseMessage = "";
+        if (preparing || testingConnection) return false;
+        if (string.IsNullOrWhiteSpace(BuildConnectionString())) return false;
+        if (copyCurrentAdmin) return !string.IsNullOrWhiteSpace(currentAdminUserName);
+        return !string.IsNullOrWhiteSpace(newAdminUserName) && newAdminPassword.Length >= 8;
+    }
+
+    private async Task PrepareDatabase()
+    {
+        preparing = true;
+        connectionTest = null;
+        prepareResult = null;
+
+        var request = new PrepareDatabaseRequest
+        {
+            ConnectionString = BuildConnectionString(),
+            CopyCurrentAdmin = copyCurrentAdmin,
+            NewAdminUserName = newAdminUserName,
+            NewAdminPassword = newAdminPassword
+        };
+
         try
         {
-            var (success, message) = await SetupService.CreateDatabaseAsync(BuildConnectionString());
-            createDatabaseSuccess = success;
-            createDatabaseMessage = message;
-            if (success)
+            // Hand the service the principal, not a username — it derives which account it
+            // is allowed to copy, so this page cannot name someone else's.
+            var auth = await AuthState.GetAuthenticationStateAsync();
+
+            prepareResult = await SetupService.PrepareDatabaseAsync(request, auth.User, async live =>
             {
-                connectionTest = await SetupService.TestConnectionAsync(BuildConnectionString());
+                prepareResult = live;
+                await InvokeAsync(StateHasChanged);
+            });
+
+            if (prepareResult.Success)
+            {
+                newAdminPassword = "";
             }
         }
         finally
         {
-            creatingDatabase = false;
+            preparing = false;
         }
     }
 
-    private bool CanSave()
+    private static string StepIcon(PrepareStepState state) => state switch
     {
-        if (saving) return false;
-        if (connectionTest == null) return false;
-        if (!connectionTest.ServerReachable) return false;
-        return connectionTest.DatabaseExists;
-    }
+        PrepareStepState.Succeeded => "✓",
+        PrepareStepState.Skipped => "–",
+        PrepareStepState.Failed => "✗",
+        PrepareStepState.Running => "…",
+        _ => "·"
+    };
 
-    private async Task SaveConnection()
+    private static string StepIconClass(PrepareStepState state) => state switch
     {
-        saving = true;
-        saveMessage = "";
-        try
-        {
-            var (success, message) = await SetupService.UpdateConnectionStringAsync(BuildConnectionString());
-            saveSuccess = success;
-            saveMessage = message;
-            if (success)
-            {
-                currentConnectionString = BuildConnectionString();
-            }
-        }
-        finally
-        {
-            saving = false;
-        }
-    }
+        PrepareStepState.Succeeded => "text-success fw-bold",
+        PrepareStepState.Skipped => "text-muted fw-bold",
+        PrepareStepState.Failed => "text-danger fw-bold",
+        PrepareStepState.Running => "text-primary fw-bold",
+        _ => "text-muted"
+    };
 
     private string GetTestAlertClass()
     {
@@ -305,18 +449,21 @@
         }
         if (!connectionTest.DatabaseExists)
         {
-            return $"Connected to server, but database '{connectionTest.DatabaseName}' does not exist.";
+            return $"Connected to the server. Database '{connectionTest.DatabaseName}' does not exist yet — 'Create and prepare database' will create it and build its schema.";
         }
         if (!connectionTest.SchemaExists)
         {
-            return $"Connected. Database '{connectionTest.DatabaseName}' exists but has no schema. Run setup or restart the app to migrate.";
+            return $"Connected. Database '{connectionTest.DatabaseName}' exists but is empty — 'Create and prepare database' will build its schema and set up the sign-in. Restarting alone will not do this.";
         }
-        return $"Connection successful. Database '{connectionTest.DatabaseName}' is ready.";
+        return $"Connection successful. Database '{connectionTest.DatabaseName}' already has a schema.";
     }
 
     private static string MaskConnectionString(string cs)
     {
         if (string.IsNullOrEmpty(cs)) return "Not configured";
-        return System.Text.RegularExpressions.Regex.Replace(cs, @"(Password|Pwd|password|pwd)\s*=\s*([^;]+)", "$1=****");
+        // Case-insensitive: a stored string using PWD= or PassWord= would otherwise render
+        // the plaintext SQL password.
+        return System.Text.RegularExpressions.Regex.Replace(cs, @"(Password|Pwd)\s*=\s*([^;]+)", "$1=****",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 }

@@ -29,6 +29,20 @@ var builder = WebApplication.CreateBuilder(args);
 // --enroll-url/--enroll-code CLI overrides are unaffected: they arrive as the
 // distinct top-level keys "enroll-url"/"enroll-code", which EnrollmentService
 // checks before Enroll:Url/Enroll:Code.
+//
+// SECURITY — THIS LINE'S POSITION IS LOAD-BEARING. Registering AFTER
+// CreateBuilder(args) means this provider is appended after every default one, and in
+// ASP.NET Core configuration the LAST provider registered wins. So secrets.json
+// outranks not only appsettings*.json but also the environment-variable provider —
+// a ConnectionStrings__DefaultConnection env var cannot override it.
+//
+// The provisioning marker's integrity depends on exactly that. The marker lives in
+// secrets.json and authorizes an unattended schema build against the ONE database it
+// names. If a lower-integrity source could win the connection string, an attacker or
+// an accident that set an env var would redirect that authorization at a database no
+// admin ever designated, while the marker still appeared to match. Moving this call
+// earlier — or "tidying" it up next to the other providers — silently breaks that.
+// See ProvisionedConnectionMarker and ProvisionedSchemaService.
 builder.Configuration.AddJsonFile(SecretsFile.DefaultPath, optional: true, reloadOnChange: false);
 
 // Run as a Windows Service when hosted by the SCM (no-op for console/dev runs).
@@ -254,6 +268,9 @@ builder.Services.AddScoped<AuditLogService>();
 builder.Services.AddScoped<SetupService>();
 // Unattended first-run setup from a Provision: config section (installer-stamped).
 builder.Services.AddScoped<ProvisioningService>();
+// Startup safety net: migrate a configured-but-empty database when the secrets.json
+// provisioning marker pins that exact server + database.
+builder.Services.AddScoped<ProvisionedSchemaService>();
 builder.Services.AddScoped<SystemConfigurationService>();
 builder.Services.AddScoped<DemoSeedService>();
 builder.Services.AddScoped<ParityDemoSeedService>();
@@ -590,7 +607,38 @@ using (var scope = app.Services.CreateScope())
     if (setupRequired)
     {
         var provisioner = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.ProvisioningService>();
-        if (await provisioner.TryApplyAtStartupAsync())
+        try
+        {
+            if (await provisioner.TryApplyAtStartupAsync())
+            {
+                setupRequired = false;
+                SetupMiddleware.ClearCache();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Provisioning is a convenience for installer-stamped hosts; it is NEVER a
+            // reason the process fails to start. ProvisioningService handles only
+            // SetupAlreadyCompletedException, so anything else thrown from the setup path
+            // used to escape the startup scope and kill the boot outright — on a fresh host,
+            // the one place the operator most needs the app up. Log it and fall through: the
+            // /setup wizard is reachable and can do the same job by hand.
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            logger.LogError(ex,
+                "Provisioned setup threw — continuing startup so the /setup wizard stays reachable.");
+        }
+    }
+
+    // PROVISIONED-CONNECTION SAFETY NET: setup looks "required" only because the schema
+    // is absent. When the secrets.json marker pins the SAME server + database that is
+    // currently configured, an authenticated admin already designated this database, so
+    // build its schema now rather than dead-ending at a wizard that asks for a connection
+    // the app already has. No marker, or a marker naming a different server/database,
+    // changes nothing — see ProvisionedSchemaService for the security rationale.
+    if (setupRequired)
+    {
+        var provisionedSchema = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.ProvisionedSchemaService>();
+        if (await provisionedSchema.TryInitializeAtStartupAsync())
         {
             setupRequired = false;
             SetupMiddleware.ClearCache();

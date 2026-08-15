@@ -3,6 +3,7 @@
 @inject SetupService SetupService
 @inject NavigationManager Navigation
 @layout SetupLayout
+@implements IAsyncDisposable
 
 @*
     Database Offline page.
@@ -13,15 +14,16 @@
     must not expose first-run setup.
 
     Anonymous by design (you can't authenticate without a database anyway) and uses the
-    same SetupLayout chrome as the wizard. A <meta http-equiv="refresh"> drives automatic
-    recovery: once the host returns, the next request re-probes (the SetupService status
-    cache TTL has long since expired) and the middleware lets the operator straight through
-    to the app or the wizard, as appropriate — no manual reload required.
-*@
+    same SetupLayout chrome as the wizard.
 
-<HeadContent>
-    <meta http-equiv="refresh" content="10" />
-</HeadContent>
+    Automatic recovery is driven by a COMPONENT-SCOPED timer, never a meta-refresh tag.
+    HeadContent projects into the live document.head, which arms a document-level refresh
+    that survives client-side navigation away from this page — the operator would click
+    "Reconnect to a different database", start typing in the wizard, and get hard-navigated
+    out from under mid-keystroke. Removing the meta element does NOT cancel the
+    already-scheduled navigation; a timer, by contrast, disposes with the component.
+    Do not reintroduce the meta refresh — DatabaseOfflineMetaRefreshTests guards it.
+*@
 
 <div class="offline-shell">
     <div class="offline-card">
@@ -48,17 +50,24 @@
 
         <div class="offline-retry">
             <span class="offline-spinner"></span>
-            <span>Retrying&hellip; this page refreshes every 10&nbsp;seconds.</span>
+            <span>Retrying&hellip; we'll take you through automatically as soon as it's back.</span>
         </div>
 
-        <a class="offline-manual" href="/db-offline">Check again now</a>
+        <a class="offline-manual" href="/db-offline" @onclick="CheckNowAsync" @onclick:preventDefault>
+            @(_checking ? "Checking…" : "Check again now")
+        </a>
+
+        @if (_lastCheckFailed)
+        {
+            <p class="offline-still">Still unreachable.</p>
+        }
 
         <div class="offline-divider"><span>or</span></div>
 
         <p class="offline-moved">
             Moved to a new database server, or the old one is gone for good?
         </p>
-        <a class="offline-reconnect" href="/setup">
+        <a class="offline-reconnect" href="/setup" @onclick="Reconnect" @onclick:preventDefault>
             Reconnect to a different database
         </a>
     </div>
@@ -167,6 +176,13 @@
         color: var(--accent, #22D3EE);
         font-size: 13px;
         font-weight: 600;
+        cursor: pointer;
+    }
+
+    .offline-still {
+        color: var(--text-3, #6B809E);
+        font-size: 12.5px;
+        margin: 10px 0 0;
     }
 
     .offline-divider {
@@ -213,15 +229,95 @@
 </style>
 
 @code {
+    // 15s, not 10: SetupService's status probe allows a 15s connect timeout, so a
+    // shorter interval would stack overlapping probes against a dead host.
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
+
     private string _server = string.Empty;
     private string _serverPhrase = string.Empty;
+    private bool _offline;
+    private bool _checking;
+    private bool _lastCheckFailed;
+    private int _probing;
+    private System.Threading.Timer? _timer;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        // Self-evict when the database is healthy. This route is anonymous by design, so on
+        // a live install it would otherwise render to any caller and disclose the configured
+        // SQL host via GetConfiguredServerName(). Mirrors the guard in Setup.razor.
+        if (await SetupService.GetDatabaseStatusAsync() != DatabaseStatus.Unreachable)
+        {
+            Navigation.NavigateTo("/", forceLoad: true);
+            return;
+        }
+
+        _offline = true;
         _server = SetupService.GetConfiguredServerName();
         if (!string.IsNullOrEmpty(_server))
         {
             _serverPhrase = " at " + _server;
+        }
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _offline)
+        {
+            _timer = new System.Threading.Timer(_ => _ = ProbeAsync(), null, PollInterval, PollInterval);
+        }
+        return Task.CompletedTask;
+    }
+
+    // forceLoad: destroy this document rather than client-side navigating, so nothing
+    // armed on it can outlive the page and yank the wizard out from under the operator.
+    private void Reconnect() => Navigation.NavigateTo("/setup", forceLoad: true);
+
+    private async Task CheckNowAsync()
+    {
+        _checking = true;
+        await ProbeAsync();
+        _checking = false;
+    }
+
+    private async Task ProbeAsync()
+    {
+        // Per-circuit early-out so a click and a timer tick can't overlap. The authoritative
+        // one-probe-at-a-time gate is static, inside SetupService.
+        if (System.Threading.Interlocked.Exchange(ref _probing, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            var status = await SetupService.GetDatabaseStatusAsync();
+            if (status != DatabaseStatus.Unreachable)
+            {
+                // forceLoad so SetupMiddleware re-evaluates and routes onward.
+                await InvokeAsync(() => Navigation.NavigateTo("/", forceLoad: true));
+                return;
+            }
+
+            _lastCheckFailed = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // A throwing probe must never tear down the circuit — keep polling.
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _probing, 0);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer is not null)
+        {
+            await _timer.DisposeAsync();
+            _timer = null;
         }
     }
 }

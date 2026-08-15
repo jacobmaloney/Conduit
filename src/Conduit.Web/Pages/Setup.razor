@@ -1,10 +1,12 @@
 @page "/setup"
 @using Conduit.Web.Services
 @using System.Security.Cryptography
+@using Microsoft.Extensions.Logging
 @inject SetupService SetupService
 @inject NavigationManager Navigation
 @inject IJSRuntime JSRuntime
 @inject IConfiguration Configuration
+@inject ILogger<Setup> Logger
 @layout SetupLayout
 
 <div class="wizard-shell">
@@ -54,6 +56,47 @@
                 <div class="wizard-eyebrow">All set</div>
                 <h1 class="wizard-h1">Setup <span class="hl">complete</span>.</h1>
                 <p class="wizard-lede">Conduit has been successfully configured. Redirecting to the login page…</p>
+            }
+            else if (prefill.RecoveryRequired)
+            {
+                <!--
+                    Schema present, zero active admins. This wizard renders NO FORM for that
+                    state — not a narrowed one.
+
+                    A narrowed wizard was the original answer here and it was wrong twice
+                    over. First, it made the anonymous wizard reachable on an install that
+                    had already been set up, and its admin step would resolve an existing
+                    username with no Active filter and UPDATE it with Active = 1 — typing a
+                    deactivated admin's name took that account over. Second, the step list
+                    never actually narrowed: StepList() was a fixed four-element array and
+                    submit was gated on currentStep == 4, so the operator still walked
+                    through Step 3, which carries the JWT signing key and a "Generate New"
+                    button that an anonymous visitor could use to mint this install's
+                    signing key.
+
+                    WHAT ENFORCES WHAT, precisely, because this branch is easy to over-credit:
+
+                      - The AUTHORITATIVE refusals are server-side and in SetupService:
+                        ApplySetupAsync throws unless setup is genuinely required, and both
+                        it and CreateAdminUserAsync refuse when PortalAdmins holds any row.
+                        Nothing rendered or not rendered here can be relied on for that; a
+                        hostile client controls its own render tree.
+
+                      - This branch is what keeps the EditForm — every step, the JWT key
+                        field, the Generate button, the submit path — out of the render tree,
+                        so the real signing key is never sent to a client in this state. It
+                        fires because OnInitializedAsync sets prefill.RecoveryRequired before
+                        it redirects. Deleting that assignment does NOT make this branch fall
+                        back to the redirect; it silently renders the whole form instead.
+                -->
+                <div class="wizard-eyebrow">Recovery required</div>
+                <h1 class="wizard-h1">This install needs its <span class="hl">administrator</span> back.</h1>
+                <p class="wizard-lede">
+                    Conduit already has a database and a schema — this is not a first run, so the
+                    setup wizard will not open. What it does not have is an active portal
+                    administrator, and restoring one requires access to the Conduit host itself.
+                </p>
+                <a class="btn btn-primary" href="/admin-recovery">Continue to recovery</a>
             }
             else
             {
@@ -120,6 +163,12 @@
                                         <div class="mb-3">
                                             <label class="form-label">Username</label>
                                             <input type="text" class="form-control" @bind="dbUsername" />
+                                            @if (prefill.HasConnection && !prefill.IntegratedSecurity)
+                                            {
+                                                <small class="form-text text-muted">
+                                                    Re-enter the SQL login. Stored credentials are never shown on this page.
+                                                </small>
+                                            }
                                         </div>
 
                                         <div class="mb-3">
@@ -250,12 +299,29 @@
                                 <div class="mb-3">
                                     <label class="form-label">JWT Secret Key</label>
                                     <div class="input-group">
-                                        <input type="text" class="form-control" @bind="config.JwtSecretKey" readonly />
+                                        @if (reusedExistingJwtKey)
+                                        {
+                                            <input type="text" class="form-control" value="Existing signing key retained" readonly />
+                                        }
+                                        else
+                                        {
+                                            <input type="text" class="form-control" @bind="config.JwtSecretKey" readonly />
+                                        }
                                         <button type="button" class="btn btn-outline-secondary" @onclick="GenerateSecretKey">
                                             Generate New
                                         </button>
                                     </div>
-                                    <small class="form-text text-muted">This key is used to sign JWT tokens. Keep it secure!</small>
+                                    @if (reusedExistingJwtKey)
+                                    {
+                                        <small class="form-text text-muted">
+                                            This install already has a signing key, so it is being kept — every API token
+                                            already issued stays valid. Generating a new one invalidates all of them.
+                                        </small>
+                                    }
+                                    else
+                                    {
+                                        <small class="form-text text-muted">This key is used to sign JWT tokens. Keep it secure!</small>
+                                    }
                                 </div>
 
                                 <div class="mb-3">
@@ -403,6 +469,14 @@
     private string createDatabaseMessage = "";
     private bool createDatabaseSuccess = false;
 
+    // Connection details the app has already resolved. Never carries a password —
+    // /setup is anonymous and must not render a stored credential.
+    private SetupPrefill prefill = new();
+
+    /// <summary>True while config.JwtSecretKey holds this install's REAL key, which must
+    /// not be rendered on this anonymous page. Cleared as soon as a new one is generated.</summary>
+    private bool reusedExistingJwtKey;
+
     protected override async Task OnInitializedAsync()
     {
         // Only bounce to the app when the database is genuinely READY (reachable + set up).
@@ -414,9 +488,81 @@
         {
             Navigation.NavigateTo("/");
         }
+        else if (status == DatabaseStatus.NeedsAdminRecovery)
+        {
+            // Schema present, nobody can sign in. That is not a first run and this wizard
+            // is not the repair for it — recovery requires the host-local token.
+            //
+            // Set the render state BEFORE navigating and returning. This return skips
+            // ApplyPrefillAsync, so prefill.RecoveryRequired would otherwise stay false and
+            // the recovery branch in the markup — the branch that keeps the EditForm out of
+            // the render tree — would never fire on the one path it is named for. A client
+            // that ignores the redirect would get the full wizard rendered to it.
+            prefill = new SetupPrefill { RecoveryRequired = true };
+            Navigation.NavigateTo("/admin-recovery", forceLoad: true);
+            return;
+        }
 
-        // Generate initial secret key
-        GenerateSecretKey();
+        await ApplyPrefillAsync();
+    }
+
+    /// <summary>
+    /// Seeds the wizard from the NON-SECRET shape of the configuration the app already
+    /// resolved — auth mode and the TLS checkboxes, so they start where the install is.
+    ///
+    /// The server hostname, the database name, the SQL login, and the SQL password are all
+    /// deliberately withheld. This page is anonymous and it hands a visitor a connection
+    /// tester and a CREATE DATABASE against a server they name; rendering the real server
+    /// and database turns a blind probe into a targeted one. Those fields fall back to
+    /// their defaults, which the operator retypes — that is the intended cost.
+    /// </summary>
+    private async Task ApplyPrefillAsync()
+    {
+        try
+        {
+            prefill = await SetupService.GetSetupPrefillAsync();
+        }
+        catch (Exception ex)
+        {
+            // Prefill is a convenience. It must never be the reason the wizard won't render.
+            Logger.LogWarning(ex, "Could not read the resolved connection for setup prefill.");
+            prefill = new SetupPrefill();
+        }
+
+        if (prefill.HasConnection)
+        {
+            // NOTE: prefill.ConnectionString is never assigned to config here. It carries
+            // the SQL password, and the "Custom" database type binds config.ConnectionString
+            // straight into a textarea on this ANONYMOUS page. The wizard rebuilds the
+            // string from the visible fields in UpdateConnectionString(), so seeding it
+            // would buy nothing and would put the password one dropdown change from the DOM.
+            authType = prefill.IntegratedSecurity ? "windows" : "sql";
+            trustServerCertificate = prefill.TrustServerCertificate;
+            encryptConnection = prefill.Encrypt;
+        }
+
+        if (prefill.ServerPort is > 0)
+        {
+            config.ServerPort = prefill.ServerPort.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(prefill.JwtSecretKey))
+        {
+            // Reuse the existing signing key. Rotating it here would invalidate every API
+            // token already issued against this install.
+            //
+            // SECURITY: /setup is anonymous, and step 3 renders the key into the DOM. A
+            // freshly generated throwaway key is harmless there, but a LIVE install's real
+            // signing key is not — anyone who could reach the page could forge tokens. So
+            // the flag below suppresses the value and shows a placeholder instead; the key
+            // itself stays server-side.
+            config.JwtSecretKey = prefill.JwtSecretKey!;
+            reusedExistingJwtKey = true;
+        }
+        else
+        {
+            GenerateSecretKey();
+        }
     }
 
     private void NextStep()
@@ -529,6 +675,16 @@
         {
             connectionTest = await SetupService.TestConnectionAsync(config.ConnectionString);
         }
+        catch (Exception ex)
+        {
+            // An unhandled exception in a Blazor Server event handler tears down the
+            // circuit and takes every typed field with it. A failed test must never do
+            // more than render an inline error. The operator sees the driver's own text
+            // ("Login failed for user 'sa'", "No such host is known") because that is the
+            // only thing that tells them what to fix; the full detail also goes to the log.
+            Logger.LogWarning(ex, "Connection test failed.");
+            connectionTest = new ConnectionTestResult { ErrorMessage = ex.Message };
+        }
         finally
         {
             testingConnection = false;
@@ -588,6 +744,7 @@
         var bytes = new byte[64];
         rng.GetBytes(bytes);
         config.JwtSecretKey = Convert.ToBase64String(bytes);
+        reusedExistingJwtKey = false;
     }
 
     private async Task HandleValidSubmit()
@@ -631,6 +788,18 @@
             // Setup was completed by another request/session. Bounce to the app root.
             isProcessing = false;
             Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            // ANY other failure must render inline. An unhandled exception in a Blazor Server
+            // event handler tears down the circuit, so before this existed a first-run
+            // operator who clicked "Complete Setup" got a dead page with nothing to act on —
+            // and any change that made ApplySetupAsync throw earlier than expected turned
+            // into exactly that, invisibly. The detail goes to the log, not to the page:
+            // /setup is anonymous and driver messages carry server and database names.
+            Logger.LogError(ex, "First-run setup failed: {Message}", ex.Message);
+            errors.Add("Setup could not be completed. Check the application log on the Conduit host.");
+            isProcessing = false;
         }
     }
 }

@@ -94,12 +94,37 @@ namespace Conduit.DataAccess.Repositories
                 new { Id = id });
         }
 
-        public async Task SetActiveAsync(Guid id, bool active)
+        /// <summary>
+        /// Activates or deactivates an admin. DEACTIVATING refuses when it would leave the
+        /// install with zero active admins; returns false rather than throwing so a caller
+        /// can render the refusal. Activating is always allowed and always returns true.
+        ///
+        /// <see cref="DeleteAsync"/> has carried this guard for a long time and this method
+        /// did not, which is a distinction without a difference to whoever is clicking:
+        /// both routes end with nobody able to sign in. Recovering from that state now
+        /// requires physical access to the host (see AdminRecoveryToken), so the cheap
+        /// refusal here is worth a great deal more than it used to be.
+        ///
+        /// Nothing calls this today — it is currently the ONLY code in the repo that writes
+        /// PortalAdmins.Active, with zero callers. The guard is here so that the first
+        /// callsite added inherits it rather than reintroducing the lockout.
+        /// </summary>
+        public async Task<bool> SetActiveAsync(Guid id, bool active)
         {
             using var conn = NewConn();
+
+            if (!active)
+            {
+                var remaining = await conn.ExecuteScalarAsync<int>(
+                    "SELECT COUNT(*) FROM PortalAdmins WHERE Active = 1 AND Id <> @Id",
+                    new { Id = id });
+                if (remaining < 1) return false;
+            }
+
             await conn.ExecuteAsync(
                 "UPDATE PortalAdmins SET Active = @Active, LastModified = SYSUTCDATETIME() WHERE Id = @Id",
                 new { Id = id, Active = active });
+            return true;
         }
 
         /// <summary>

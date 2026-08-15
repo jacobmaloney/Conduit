@@ -1,0 +1,375 @@
+@page "/admin-recovery"
+@using Conduit.Web.Services
+@inject SetupService SetupService
+@inject NavigationManager Navigation
+@layout SetupLayout
+
+@*
+    Zero-admin recovery.
+
+    Shown by SetupMiddleware when the configured database is reachable and has a schema but
+    ZERO ACTIVE portal admins — nobody can sign in, so there is no authenticated path to
+    repair it, and the anonymous /setup wizard must never be that path.
+
+    This page is a DEAD END until the operator proves host access by pasting the one-time
+    token from %PROGRAMDATA%\Conduit\recovery.token, which carries the same ACL as
+    secrets.json. Reading that file is the same trust boundary as reading the connection
+    string, which is the correct boundary for minting the first administrator.
+
+    It discloses nothing about the DATABASE — no server name, no database name, no login.
+    It does render the absolute path of the Conduit data directory, because the operator
+    needs to be told which file to open; that is a deliberate trade, not an oversight. It is
+    of no use to a caller who cannot reach the host, and one who can reach the host can
+    already enumerate it. Beyond that path, an anonymous visitor learns only that this
+    install needs attention on its host — which they can already tell from being unable to
+    sign in.
+*@
+
+<div class="offline-shell">
+    <div class="offline-card">
+        <div class="offline-mark">
+            <ConduitMark Size="64" Color="var(--accent)" HubFill="var(--bg-2)" />
+        </div>
+
+        @if (_created)
+        {
+            <div class="offline-badge recovery-ok">
+                <span class="offline-dot"></span>
+                Recovered
+            </div>
+
+            <h1 class="offline-title">Administrator restored</h1>
+            <p class="offline-lead">
+                The account is active and the recovery token has been used up. A new token is
+                only ever issued if this install loses all of its administrators again.
+            </p>
+            <a class="offline-reconnect" href="/login">Go to sign-in</a>
+        }
+        else
+        {
+            <div class="offline-badge">
+                <span class="offline-dot"></span>
+                Administrator recovery
+            </div>
+
+            <h1 class="offline-title">No administrator can sign in</h1>
+
+            <p class="offline-lead">
+                This Conduit install has a database, but it has no active portal
+                administrator &mdash; so there is no account left to authenticate with.
+            </p>
+
+            <p class="offline-sub">
+                Restoring one is not something that can be done over the network. It requires
+                access to the Conduit host itself, the same access that protects the
+                credentials this server stores.
+            </p>
+
+            <div class="recovery-steps">
+                <div class="recovery-step">
+                    <span class="recovery-num">1</span>
+                    <span>Sign in to the machine running Conduit, as an administrator.</span>
+                </div>
+                <div class="recovery-step">
+                    <span class="recovery-num">2</span>
+                    <span>Open <code>@_tokenPath</code> and copy the <code>Token</code> value.</span>
+                </div>
+                <div class="recovery-step">
+                    <span class="recovery-num">3</span>
+                    <span>Paste it below and choose the account to create.</span>
+                </div>
+            </div>
+
+            @if (!_tokenOutstanding)
+            {
+                <div class="recovery-warn">
+                    That file is not present right now. Restart Conduit &mdash; the token is
+                    re-issued whenever this state is detected. If it still does not appear,
+                    check the application log for a token-write failure.
+                </div>
+            }
+
+            <div class="recovery-form">
+                <label class="recovery-label" for="rt">Recovery token</label>
+                <input id="rt" type="password" class="recovery-input" autocomplete="off"
+                       @bind="_token" @bind:event="oninput" placeholder="Paste the token" />
+
+                <label class="recovery-label" for="ru">New administrator username</label>
+                <input id="ru" type="text" class="recovery-input" autocomplete="off"
+                       @bind="_userName" @bind:event="oninput" placeholder="Choose a name" />
+
+                <label class="recovery-label" for="rp">Password</label>
+                <input id="rp" type="password" class="recovery-input" autocomplete="new-password"
+                       @bind="_password" @bind:event="oninput" placeholder="At least 8 characters" />
+
+                <label class="recovery-label" for="rc">Confirm password</label>
+                <input id="rc" type="password" class="recovery-input" autocomplete="new-password"
+                       @bind="_confirm" @bind:event="oninput" placeholder="Repeat it" />
+
+                @if (_password.Length > 0 && _confirm.Length > 0 && _password != _confirm)
+                {
+                    <div class="recovery-warn">The passwords do not match.</div>
+                }
+
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="recovery-error">@_error</div>
+                }
+
+                <button type="button" class="offline-reconnect recovery-submit"
+                        disabled="@(!CanSubmit())" @onclick="SubmitAsync">
+                    @(_working ? "Creating…" : "Create administrator")
+                </button>
+            </div>
+
+            <p class="offline-sub recovery-foot">
+                Existing accounts are never reused or reactivated here, even deactivated ones.
+                Recovery only ever creates a new account.
+            </p>
+        }
+    </div>
+</div>
+
+<style>
+    .offline-shell {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+        background: var(--bg, #0A1322);
+    }
+
+    .offline-card {
+        width: 100%;
+        max-width: 520px;
+        background: var(--bg-2, #0E1A2D);
+        border: 1px solid rgba(157, 176, 204, 0.14);
+        border-radius: 16px;
+        padding: 40px 36px;
+        text-align: center;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .offline-mark { margin-bottom: 20px; }
+
+    .offline-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 12px;
+        border-radius: 999px;
+        background: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        color: var(--warn, #F59E0B);
+        font-size: 12.5px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        margin-bottom: 22px;
+    }
+
+    .offline-badge.recovery-ok {
+        background: rgba(34, 197, 94, 0.12);
+        border-color: rgba(34, 197, 94, 0.35);
+        color: #22C55E;
+    }
+
+    .offline-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
+    .offline-title {
+        color: var(--text, #E4EDFB);
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 14px;
+    }
+
+    .offline-lead {
+        color: var(--text-2, #9DB0CC);
+        font-size: 15px;
+        line-height: 1.6;
+        margin: 0 0 12px;
+    }
+
+    .offline-sub {
+        color: var(--text-3, #6B809E);
+        font-size: 13.5px;
+        line-height: 1.6;
+        margin: 0 0 22px;
+    }
+
+    .recovery-steps {
+        text-align: left;
+        margin: 0 0 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .recovery-step {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        color: var(--text-2, #9DB0CC);
+        font-size: 13.5px;
+        line-height: 1.5;
+    }
+
+    .recovery-step code {
+        color: var(--accent, #22D3EE);
+        word-break: break-all;
+    }
+
+    .recovery-num {
+        flex: 0 0 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: rgba(34, 211, 238, 0.12);
+        border: 1px solid rgba(34, 211, 238, 0.35);
+        color: var(--accent, #22D3EE);
+        font-size: 12px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .recovery-form {
+        text-align: left;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .recovery-label {
+        color: var(--text-3, #6B809E);
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 8px;
+    }
+
+    .recovery-input {
+        width: 100%;
+        padding: 9px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(157, 176, 204, 0.22);
+        background: var(--bg, #0A1322);
+        color: var(--text, #E4EDFB);
+        font-size: 14px;
+    }
+
+    .recovery-input:focus {
+        outline: none;
+        border-color: var(--accent, #22D3EE);
+    }
+
+    .recovery-warn {
+        color: var(--warn, #F59E0B);
+        font-size: 12.5px;
+        line-height: 1.5;
+        margin-top: 8px;
+    }
+
+    .recovery-error {
+        color: #F87171;
+        font-size: 12.5px;
+        line-height: 1.5;
+        margin-top: 10px;
+    }
+
+    .offline-reconnect {
+        display: inline-block;
+        padding: 10px 20px;
+        border-radius: 10px;
+        background: var(--accent, #22D3EE);
+        color: #06121F;
+        font-size: 14px;
+        font-weight: 700;
+        text-decoration: none;
+        border: none;
+        cursor: pointer;
+        transition: filter 0.15s ease;
+    }
+
+    .offline-reconnect:hover:not(:disabled) { filter: brightness(1.08); }
+    .offline-reconnect:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .recovery-submit { margin-top: 18px; width: 100%; }
+
+    .recovery-foot { margin: 20px 0 0; font-size: 12.5px; }
+</style>
+
+@code {
+    private string _token = "";
+    private string _userName = "";
+    private string _password = "";
+    private string _confirm = "";
+    private string _error = "";
+    private bool _working;
+    private bool _created;
+    private bool _tokenOutstanding;
+    private string _tokenPath = AdminRecoveryToken.DefaultPath;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Self-evict when this install does not need recovery. The route is anonymous by
+        // design, so on a healthy install it must not render at all. Mirrors the guards in
+        // Setup.razor and DatabaseOffline.razor.
+        if (await SetupService.GetDatabaseStatusAsync() != DatabaseStatus.NeedsAdminRecovery)
+        {
+            Navigation.NavigateTo("/", forceLoad: true);
+            return;
+        }
+
+        // Whether a token EXISTS is safe to show — it tells the operator whether to go
+        // looking for the file. Its value is never read here.
+        _tokenOutstanding = AdminRecoveryToken.IsOutstanding();
+    }
+
+    private bool CanSubmit() =>
+        !_working &&
+        _token.Trim().Length > 0 &&
+        _userName.Trim().Length > 0 &&
+        _password.Length >= 8 &&
+        _password == _confirm;
+
+    private async Task SubmitAsync()
+    {
+        _working = true;
+        _error = "";
+
+        try
+        {
+            var (success, message) = await SetupService.RecoverAdminAsync(_token, _userName, _password);
+            if (success)
+            {
+                _created = true;
+                // Nothing typed here survives the success render.
+                _token = _password = _confirm = "";
+            }
+            else
+            {
+                _error = message;
+                _tokenOutstanding = AdminRecoveryToken.IsOutstanding();
+            }
+        }
+        catch (Exception)
+        {
+            // An unhandled exception in a Blazor Server event handler tears down the circuit.
+            // Recovery failing must never do more than render an inline error, and the text
+            // must not carry driver detail — this page is anonymous.
+            _error = "Recovery could not be completed. Check the application log on the Conduit host.";
+        }
+        finally
+        {
+            _working = false;
+        }
+    }
+}
