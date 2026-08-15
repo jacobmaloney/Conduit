@@ -81,6 +81,45 @@ public class SyncProjectRepository : BaseRepository
     }
 
     /// <summary>
+    /// Resets incremental and skip-unchanged state so the next execution rereads and
+    /// rewrites either one object class or the entire project. The caller must claim
+    /// the project's single-run flag first, preventing a scheduler/manual run from
+    /// advancing a cursor between this reset and execution.
+    /// </summary>
+    public async Task ResetForFullSyncAsync(Guid projectId, Guid sinkTenantId, string? objectClass)
+    {
+        var canonicalClass = string.IsNullOrWhiteSpace(objectClass)
+            ? null
+            : objectClass.Trim().ToLowerInvariant();
+
+        using var conn = CreateConnection();
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            await conn.ExecuteAsync(@"
+                UPDATE s
+                   SET s.IncrementalCursor = NULL,
+                       s.CursorUpdatedAt = NULL
+                  FROM WorkflowSteps s
+                  JOIN Workflows w ON w.Id = s.WorkflowId
+                 WHERE w.SyncProjectId = @ProjectId
+                   AND (@ObjectClass IS NULL OR LOWER(LTRIM(RTRIM(s.ObjectClass))) = @ObjectClass);
+
+                DELETE FROM SinkRecordHashes
+                 WHERE SyncProjectId = @ProjectId
+                   AND SinkTenantId = @SinkTenantId
+                   AND (@ObjectClass IS NULL OR ObjectClass = @ObjectClass OR ObjectClass IS NULL);",
+                new { ProjectId = projectId, SinkTenantId = sinkTenantId, ObjectClass = canonicalClass }, tx);
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Clones a sync project as a brand-new project under <paramref name="newName"/>,
     /// mirroring IC's "Copy Template" action. Deep-copies the config — project row,
     /// project-level scope, project-level (legacy) attribute mappings, AND the full

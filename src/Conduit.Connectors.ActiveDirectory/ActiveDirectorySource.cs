@@ -212,7 +212,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
             "user"     => $"(&(isDeleted=TRUE)(objectClass=user)(whenChanged>={generalized}))",
             "group"    => $"(&(isDeleted=TRUE)(objectClass=group)(whenChanged>={generalized}))",
             "computer" => $"(&(isDeleted=TRUE)(objectClass=computer)(whenChanged>={generalized}))",
-            _          => $"(&(isDeleted=TRUE)(whenChanged>={generalized}))"
+            _          => $"(&(isDeleted=TRUE)(objectClass={EscapeLdapFilterValue(objectClass)})(whenChanged>={generalized}))"
         };
 
         // Tombstones strip most attributes — only objectGUID, sAMAccountName, lastKnownParent etc remain.
@@ -664,8 +664,19 @@ public sealed class ActiveDirectorySource : IConnectorSource
         "group"    => "(objectCategory=group)",
         "computer" => "(objectCategory=computer)",
         "contact"  => "(objectClass=contact)",
-        _          => "(objectClass=*)"
+        // Every discovered AD schema class gets its own workflow. Falling back to
+        // objectClass=* reads the entire directory once per uncommon class and then
+        // relabels every entry as that class (for example, 16k objects presented as
+        // organizationalUnit). Preserve the exact requested class instead.
+        _          => $"(objectClass={EscapeLdapFilterValue(objectClass)})"
     };
+
+    private static string EscapeLdapFilterValue(string value) => value
+        .Replace("\\", "\\5c", StringComparison.Ordinal)
+        .Replace("*", "\\2a", StringComparison.Ordinal)
+        .Replace("(", "\\28", StringComparison.Ordinal)
+        .Replace(")", "\\29", StringComparison.Ordinal)
+        .Replace("\0", "\\00", StringComparison.Ordinal);
 
     private static ConnectorObject EntryToConnectorObject(SearchResultEntry entry, string objectClass)
     {

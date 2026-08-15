@@ -254,6 +254,9 @@
                             <button class="btn btn-run" @onclick="() => SelectThenRun(project)" title="Run Now">
                                 <i class="fas fa-play"></i> Run Now
                             </button>
+                            <button class="btn btn-manage" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects">
+                                <i class="fas fa-arrows-rotate"></i> Full Sync
+                            </button>
                         }
                     }
                     <a href="/sync-history?project=@project.Id" class="btn btn-history" title="View Run History">
@@ -760,6 +763,53 @@
                             <i class="fas fa-play me-1"></i>
                         }
                         Run All
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@* Full-sync confirmation. This is deliberately separate from ordinary Run Now:
+   resetting cursors/hashes is an operator-selected reconciliation action. *@
+@if (showFullSyncConfirmModal && selectedProject != null)
+{
+    <div class="modal show d-block sync-form-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header sync-modal-header-primary">
+                    <h5 class="modal-title"><i class="fas fa-arrows-rotate me-2"></i>Run Full Sync</h5>
+                    <button type="button" class="btn-close" @onclick="CloseFullSyncConfirmModal" disabled="@fullSyncInProgress"></button>
+                </div>
+                <div class="modal-body">
+                    <h6 class="mb-3">@selectedProject.Name</h6>
+                    <div class="alert alert-warning">
+                        This clears the selected class's saved incremental cursor and skip-unchanged hashes,
+                        then rereads and rewrites that population from the source. It does not delete the
+                        connection, project, or target objects.
+                    </div>
+                    <label class="form-label fw-semibold">Object class</label>
+                    <select class="form-select" @bind="fullSyncObjectClass">
+                        <option value="">All object classes</option>
+                        @foreach (var objectClass in FullSyncObjectClasses)
+                        {
+                            <option value="@objectClass">@objectClass</option>
+                        }
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseFullSyncConfirmModal" disabled="@fullSyncInProgress">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="FullSyncConfirmed" disabled="@fullSyncInProgress">
+                        @if (fullSyncInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-arrows-rotate me-1"></i>
+                        }
+                        Run Full Sync
                     </button>
                 </div>
             </div>
@@ -5005,6 +5055,16 @@
     // Run-now / delete / schedule modal state
     private bool runNowInProgress;
     private bool showRunConfirmModal;
+    private bool showFullSyncConfirmModal;
+    private bool fullSyncInProgress;
+    private string fullSyncObjectClass = string.Empty;
+    private IEnumerable<string> FullSyncObjectClasses => selectedProjectSteps
+        .Where(s => s.Enabled && string.Equals(s.StepType, WorkflowStepTypes.Mapping, StringComparison.OrdinalIgnoreCase))
+        .Select(s => s.ObjectClass?.Trim())
+        .Where(c => !string.IsNullOrWhiteSpace(c))
+        .Select(c => c!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(c => c, StringComparer.OrdinalIgnoreCase);
     private bool showDeleteModal;
     private string deleteConfirmText = string.Empty;
     private bool deleteInProgress;
@@ -5380,6 +5440,13 @@
     {
         await HandleSelect(p);
         ShowRunConfirmModal();
+    }
+
+    private async Task SelectThenFullSync(SyncProject p)
+    {
+        await HandleSelect(p);
+        fullSyncObjectClass = string.Empty;
+        showFullSyncConfirmModal = true;
     }
 
     private async Task SelectThenStop(SyncProject p)
@@ -6457,6 +6524,81 @@
         // Take the user to the project's live run history — the Running run row
         // (and its per-step counts) updates there. This is Conduit's existing
         // "View Live Progress" destination for an in-flight project.
+        Navigation.NavigateTo($"/sync-history?project={projectId}");
+    }
+
+    private void CloseFullSyncConfirmModal()
+    {
+        if (fullSyncInProgress) return;
+        showFullSyncConfirmModal = false;
+    }
+
+    private async Task FullSyncConfirmed()
+    {
+        if (selectedProject is null || selectedProject.IsRunning || fullSyncInProgress) return;
+
+        fullSyncInProgress = true;
+        var projectId = selectedProject.Id;
+        var projectName = selectedProject.Name;
+        var selectedClass = string.IsNullOrWhiteSpace(fullSyncObjectClass) ? null : fullSyncObjectClass;
+
+        var claimed = await ProjectRepo.SetRunningAsync(projectId, Guid.Empty);
+        if (!claimed)
+        {
+            fullSyncInProgress = false;
+            showFullSyncConfirmModal = false;
+            toastError = $"'{projectName}' already has a run in progress — full-sync state was not reset.";
+            await Reload();
+            return;
+        }
+
+        try
+        {
+            // Cursor + hash reset is one transaction and happens only after this page
+            // owns the project's single-run claim. If reset fails, release the claim
+            // and do not start a partially-requested full sync.
+            await ProjectRepo.ResetForFullSyncAsync(projectId, selectedProject.SinkTenantId, selectedClass);
+        }
+        catch (Exception ex)
+        {
+            await ProjectRepo.ClearRunningAsync(projectId);
+            fullSyncInProgress = false;
+            showFullSyncConfirmModal = false;
+            toastError = $"Could not prepare full sync: {ex.Message}";
+            await Reload();
+            return;
+        }
+
+        showFullSyncConfirmModal = false;
+        fullSyncInProgress = false;
+        selectedProject.IsRunning = true;
+        await Reload();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = ScopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
+                var trigger = selectedClass is null ? "ManualFull" : $"ManualFull:{selectedClass}";
+                await orchestrator.ExecuteAsync(projectId, trigger, CancellationToken.None, preClaimed: true);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Background Full Sync failed for project {ProjectId} ({ProjectName})", projectId, projectName);
+                try
+                {
+                    using var cleanupScope = ScopeFactory.CreateScope();
+                    await cleanupScope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
+                        .ClearRunningAsync(projectId);
+                }
+                catch (Exception clearEx)
+                {
+                    Logger.LogError(clearEx, "Failed to release IsRunning for project {ProjectId} after a failed Full Sync", projectId);
+                }
+            }
+        });
+
         Navigation.NavigateTo($"/sync-history?project={projectId}");
     }
 
