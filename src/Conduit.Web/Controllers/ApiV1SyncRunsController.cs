@@ -570,44 +570,16 @@ namespace Conduit.Web.Controllers
         /// </summary>
         private static bool IsStepMarker(string message, out string name, out string? stepType)
         {
-            name = string.Empty;
-            stepType = null;
-            if (string.IsNullOrWhiteSpace(message)) return false;
-
-            var trimmed = message.TrimStart();
-
-            // Canonical orchestrator marker: Step '<name>' [<Type>] starting …
-            if (trimmed.StartsWith("Step '", StringComparison.Ordinal)
-                && trimmed.Contains("' starting", StringComparison.Ordinal))
+            if (SyncRunStepMarker.TryParse(message, out var marker))
             {
-                var open = trimmed.IndexOf('\'');
-                var close = trimmed.IndexOf('\'', open + 1);
-                if (close > open)
-                {
-                    name = trimmed.Substring(open + 1, close - open - 1);
-                    var bOpen = trimmed.IndexOf('[', close + 1);
-                    var bClose = bOpen >= 0 ? trimmed.IndexOf(']', bOpen + 1) : -1;
-                    if (bOpen >= 0 && bClose > bOpen)
-                        stepType = trimmed.Substring(bOpen + 1, bClose - bOpen - 1).Trim();
-                    return true;
-                }
-            }
-
-            // Legacy tolerance: "Step: <name> [<type>]" / "Step: <name>".
-            const string prefix = "Step: ";
-            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
-
-            var rest = trimmed.Substring(prefix.Length).Trim();
-            var lOpen = rest.LastIndexOf('[');
-            var lClose = rest.LastIndexOf(']');
-            if (lOpen > 0 && lClose > lOpen && lClose == rest.Length - 1)
-            {
-                name = rest.Substring(0, lOpen).Trim();
-                stepType = rest.Substring(lOpen + 1, lClose - lOpen - 1).Trim();
+                name = marker.Name;
+                stepType = marker.StepType;
                 return true;
             }
-            name = rest;
-            return true;
+
+            name = string.Empty;
+            stepType = null;
+            return false;
         }
     }
 }

@@ -15,10 +15,8 @@
     + SyncProjectRunDetails.razor combined into a single split-pane experience.
     Differences from IC (intentional):
         - One page, not two. The right pane IS the "run detail" view.
-        - No per-step boxes / post-sync tasks / pre-sync optimization. Conduit's
-          orchestrator is one source → mapping → sink loop; there are no steps.
-          IC's step-box rendering belongs to its governance steps (PersonMatch,
-          IdentityManagerAssignment, etc.) which stay in IC.
+        - Step execution is reconstructed from the canonical boundaries emitted
+          by Conduit's workflow orchestrator; run logs predate a separate step table.
         - 2-second polling for any "Running" run (matches IC).
         - ?project=GUID query-string filter so the SyncProjects "History" link
           deep-links into the relevant subset.
@@ -240,7 +238,7 @@
                         {
                             <div class="sync-detail-section-title">
                                 Steps (@steps.Count)
-                                <small class="sync-log-trace-inline">Derived from the run's own step log markers.</small>
+                                <small class="sync-log-trace-inline">Recorded by this run's workflow telemetry.</small>
                             </div>
                             @if (steps.Count == 0)
                             {
@@ -294,6 +292,10 @@
                         }
                         else if (activeDetailTab == "asyncjobs")
                         {
+                            <div class="sync-log-trace-note">
+                                Remote jobs are connector operations accepted by a target for background completion.
+                                Normal AD and Identity Center writes complete inline and do not create remote jobs.
+                            </div>
                             <div class="sync-asyncjobs-toolbar">
                                 <CcFilterTabs Tabs="@asyncJobStateTabs"
                                               ActiveTab="@activeAsyncJobState"
@@ -705,6 +707,7 @@
             ? logs
             : logs.Where(IsHeadlineLine).ToList();
         steps = ParseSteps(logs);
+        RebuildDetailTabs();
 
         // Keep an open step-detail modal in sync with refreshed log data.
         if (stepDetail is not null)
@@ -733,22 +736,21 @@
             var msg = line.Message;
             var trimmed = msg.TrimStart();
 
+            if (SyncRunStepMarker.TryParse(trimmed, out var marker))
+            {
+                current = new StepView
+                {
+                    Name = marker.Name,
+                    StepType = marker.StepType ?? string.Empty
+                };
+                current.Lines.Add(line);
+                result.Add(current);
+                continue;
+            }
+
             if (trimmed.StartsWith("Step '"))
             {
                 var name = ExtractQuoted(trimmed);
-
-                if (trimmed.Contains("' starting"))
-                {
-                    current = new StepView
-                    {
-                        Name = name,
-                        StepType = ExtractBracketed(trimmed)
-                    };
-                    current.Lines.Add(line);
-                    result.Add(current);
-                    continue;
-                }
-
                 if (current is not null && current.Name == name)
                 {
                     current.Lines.Add(line);
@@ -787,16 +789,6 @@
         var open = s.IndexOf('\'');
         if (open < 0) return string.Empty;
         var close = s.IndexOf('\'', open + 1);
-        if (close < 0) return string.Empty;
-        return s.Substring(open + 1, close - open - 1);
-    }
-
-    // "  Step 'Map Users' [Mapping] starting…" → "Mapping"
-    private static string ExtractBracketed(string s)
-    {
-        var open = s.IndexOf('[');
-        if (open < 0) return string.Empty;
-        var close = s.IndexOf(']', open + 1);
         if (close < 0) return string.Empty;
         return s.Substring(open + 1, close - open - 1);
     }
@@ -871,12 +863,19 @@
 
     private void RebuildDetailTabs()
     {
-        detailTabs = new[]
+        var tabs = new List<CcFilterTabs.Tab>
         {
             new CcFilterTabs.Tab("log", "Log", logs.Count),
-            new CcFilterTabs.Tab("steps", "Steps", steps.Count),
-            new CcFilterTabs.Tab("asyncjobs", "Async jobs", allAsyncJobs.Count)
+            new CcFilterTabs.Tab("steps", "Steps", steps.Count)
         };
+
+        // Remote jobs are an advanced connector capability, not a normal phase
+        // of every sync. Reveal the tab only when this run submitted one.
+        if (allAsyncJobs.Count > 0)
+            tabs.Add(new CcFilterTabs.Tab("asyncjobs", "Remote jobs", allAsyncJobs.Count));
+        else if (activeDetailTab == "asyncjobs")
+            activeDetailTab = "log";
+        detailTabs = tabs;
 
         var pending   = allAsyncJobs.Count(j => j.State == "Pending");
         var succeeded = allAsyncJobs.Count(j => j.State == "Succeeded");
