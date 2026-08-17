@@ -1,0 +1,1180 @@
+[
+  {
+    "systemType": "ActiveDirectory",
+    "displayName": "Active Directory",
+    "status": "GA",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": true,
+      "update": true,
+      "delete": true,
+      "move": true,
+      "resetPassword": true
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": true,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "computer",
+      "contact",
+      "organizationalUnit",
+      "container",
+      "domainDNS",
+      "groupPolicyContainer",
+      "msDS-GroupManagedServiceAccount",
+      "msDS-ManagedServiceAccount",
+      "foreignSecurityPrincipal",
+      "trustedDomain",
+      "serviceConnectionPoint",
+      "printQueue",
+      "subnet",
+      "site",
+      "siteLink",
+      "pKICertificateTemplate",
+      "msFVE-RecoveryInformation",
+      "certificationAuthority",
+      "attributeSchema",
+      "classSchema",
+      "dnsNode",
+      "dnsZone"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "ldap",
+        "displayName": "Active Directory Bind",
+        "fields": [
+          {
+            "key": "Username",
+            "label": "Username (UPN or DOMAIN\\user)",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "Password",
+            "label": "Password",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "ExpectedServerCertificateThumbprint",
+            "label": "Pinned server certificate SHA-256 thumbprint",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "AllowUntrustedCertificate",
+            "label": "Allow untrusted server certificate (LAB ONLY)",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [
+      {
+        "fieldName": "Domain",
+        "required": true,
+        "helpText": "LDAP server host. Format: \u0027dc01.demo.local\u0027 or \u0027dc01.demo.local:636\u0027 for LDAPS.",
+        "placeholder": "dc01.demo.local or dc01.demo.local:636"
+      }
+    ],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/ActiveDirectory"
+  },
+  {
+    "systemType": "ActiveRoles",
+    "displayName": "Active Roles",
+    "status": "Pilot",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "computer",
+      "contact",
+      "organizationalUnit",
+      "container",
+      "domainDNS",
+      "groupPolicyContainer",
+      "msDS-GroupManagedServiceAccount",
+      "msDS-ManagedServiceAccount",
+      "foreignSecurityPrincipal",
+      "trustedDomain",
+      "serviceConnectionPoint",
+      "printQueue",
+      "subnet",
+      "site",
+      "siteLink",
+      "pKICertificateTemplate",
+      "msFVE-RecoveryInformation",
+      "certificationAuthority",
+      "attributeSchema",
+      "classSchema",
+      "dnsNode",
+      "dnsZone"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "ars",
+        "displayName": "Active Roles Bind",
+        "fields": [
+          {
+            "key": "arsServiceHost",
+            "label": "AR Administration Service host",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "bindUser",
+            "label": "Bind user (DOMAIN\\user or UPN)",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "bindPassword",
+            "label": "Bind password",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "adHost",
+            "label": "AD host (fast read)",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "arsSqlConnString",
+            "label": "ARS SQL connection (virtual attrs)",
+            "required": false,
+            "secret": true
+          },
+          {
+            "key": "readMode",
+            "label": "Read mode",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [
+      {
+        "fieldName": "Domain",
+        "required": false,
+        "helpText": "Optional Active Roles Administration Service host (EDMS:// target). Leave blank to use the AR ADSI provider\u0027s default service.",
+        "placeholder": "ars01.domain.local"
+      }
+    ],
+    "knownLimitations": [
+      "No Conduit-side test coverage yet."
+    ],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/ActiveRoles"
+  },
+  {
+    "systemType": "AWS",
+    "displayName": "AWS IAM",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "role",
+      "policy",
+      "account",
+      "computer"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "aws",
+        "displayName": "AWS IAM Access Key",
+        "fields": [
+          {
+            "key": "AccessKeyId",
+            "label": "Access Key ID",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "SecretAccessKey",
+            "label": "Secret Access Key",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "Region",
+            "label": "Region",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Create user is Guid-blocked; read \u002B partial write only."
+    ],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/AWS"
+  },
+  {
+    "systemType": "AWSIdentityCenter",
+    "displayName": "AWS IAM Identity Center",
+    "status": "Pilot",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "permissionSet",
+      "application"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "awssso",
+        "displayName": "AWS Identity Center",
+        "fields": [
+          {
+            "key": "AccessKeyId",
+            "label": "Access Key ID",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "SecretAccessKey",
+            "label": "Secret Access Key",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "Region",
+            "label": "Region",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "IdentityStoreId",
+            "label": "Identity Store ID",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "SSOInstanceArn",
+            "label": "SSO Instance ARN",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/AWSIdentityCenter"
+  },
+  {
+    "systemType": "AzureResourceGraph",
+    "displayName": "Azure Resource Graph",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": false,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "azuresubscription",
+      "azureresource"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "azureresourcegraph",
+        "displayName": "Azure Resource Graph App Registration",
+        "fields": [
+          {
+            "key": "TenantId",
+            "label": "Tenant ID",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ClientId",
+            "label": "Client ID (App Registration)",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ClientSecret",
+            "label": "Client Secret",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "ScopeFilter",
+            "label": "Scope filter",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/AzureResourceGraph"
+  },
+  {
+    "systemType": "CertificationCenterSaaS",
+    "displayName": "Identity Center (SaaS Tenant)",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": true,
+      "update": true,
+      "delete": true,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": true,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": true,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "identitycenter",
+        "displayName": "Identity Center (SaaS Tenant)",
+        "fields": [
+          {
+            "key": "BaseUrl",
+            "label": "Service URL",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ApiKey",
+            "label": "API Key",
+            "required": true,
+            "secret": true
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/CertificationCenterSaaS"
+  },
+  {
+    "systemType": "CSV",
+    "displayName": "CSV File",
+    "status": "Pilot",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": false,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "csv",
+        "displayName": "CSV File",
+        "fields": [
+          {
+            "key": "FilePath",
+            "label": "File Path",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "Delimiter",
+            "label": "Delimiter",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "HasHeader",
+            "label": "First row is header",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "IdColumn",
+            "label": "ID Column (column to use as objectGuid)",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/CSV"
+  },
+  {
+    "systemType": "Database",
+    "displayName": "Database (SQL)",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "database",
+        "displayName": "SQL Database",
+        "fields": [
+          {
+            "key": "ConnectionString",
+            "label": "Connection String",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "UserQuery",
+            "label": "User Query (SELECT, must yield objectGuid)",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "GroupQuery",
+            "label": "Group Query (optional)",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "UpsertUserStatement",
+            "label": "Upsert User Statement (optional \u2014 sink)",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/Database"
+  },
+  {
+    "systemType": "Emulator",
+    "displayName": "Conduit Emulator",
+    "status": "Planned",
+    "customerFacing": false,
+    "supportsSource": false,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Internal fixture \u2014 not a customer product."
+    ],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/Emulator"
+  },
+  {
+    "systemType": "EntraID",
+    "displayName": "Entra ID (Microsoft 365)",
+    "status": "GA",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": true,
+      "update": true,
+      "delete": true,
+      "move": false,
+      "resetPassword": true
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": true,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "servicePrincipal",
+      "directoryRole",
+      "application",
+      "device",
+      "administrativeUnit",
+      "conditionalAccessPolicy",
+      "oAuth2PermissionGrant",
+      "domain",
+      "m365usage",
+      "signinlog",
+      "license",
+      "approleassignment"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "entraid",
+        "displayName": "Entra ID App Registration",
+        "fields": [
+          {
+            "key": "TenantId",
+            "label": "Tenant ID",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ClientId",
+            "label": "Client ID (App Registration)",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ClientSecret",
+            "label": "Client Secret",
+            "required": true,
+            "secret": true
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/EntraID"
+  },
+  {
+    "systemType": "GenericLdap",
+    "displayName": "Generic LDAP",
+    "status": "Pilot",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "organizationalUnit"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "ldap",
+        "displayName": "LDAP Bind",
+        "fields": [
+          {
+            "key": "ServerUrl",
+            "label": "Server URL",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "BindDN",
+            "label": "Bind DN",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "BindPassword",
+            "label": "Bind Password",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "UseTls",
+            "label": "Use StartTLS",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "ExpectedServerCertificateThumbprint",
+            "label": "Pinned server certificate SHA-256 thumbprint",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "AllowUntrustedCertificate",
+            "label": "Allow untrusted server certificate (LAB ONLY)",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Write path stubbed at the provisioning layer; treat as a read connector."
+    ],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/GenericLdap"
+  },
+  {
+    "systemType": "GoogleWorkspace",
+    "displayName": "Google Workspace",
+    "status": "Pilot",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "organizationalUnit",
+      "role",
+      "domain",
+      "mobiledevice",
+      "chromeosdevice",
+      "roleAssignment",
+      "calendarresource"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "google",
+        "displayName": "Google Workspace Service Account",
+        "fields": [
+          {
+            "key": "ServiceAccountJson",
+            "label": "Service Account JSON",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "AdminEmail",
+            "label": "Admin Email (impersonation target)",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "Domain",
+            "label": "Domain (optional, leave blank for my_customer)",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Create user is Guid-blocked; read \u002B partial write only."
+    ],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/GoogleWorkspace"
+  },
+  {
+    "systemType": "IdentityCenter",
+    "displayName": "Identity Center",
+    "status": "GA",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": true,
+      "update": true,
+      "delete": true,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": true,
+    "licenseIngest": true,
+    "usageIngest": true,
+    "signInIngest": true,
+    "appRoleIngest": true,
+    "incrementalSupport": true,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "identitycenter",
+        "displayName": "Identity Center",
+        "fields": [
+          {
+            "key": "BaseUrl",
+            "label": "Base URL",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ApiKey",
+            "label": "API Key (required)",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "AgentApiKey",
+            "label": "Agent API Key (optional)",
+            "required": false,
+            "secret": true
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/IdentityCenter"
+  },
+  {
+    "systemType": "LocalDirectory",
+    "displayName": "Local Directory (this Conduit)",
+    "status": "Planned",
+    "customerFacing": false,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": true,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Internal fixture \u2014 not a customer product."
+    ],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/LocalDirectory"
+  },
+  {
+    "systemType": "Okta",
+    "displayName": "Okta",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": true,
+    "supportedObjectClasses": [
+      "user",
+      "group",
+      "application"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "okta",
+        "displayName": "Okta API Token",
+        "fields": [
+          {
+            "key": "OrgUrl",
+            "label": "Org URL",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ApiToken",
+            "label": "API Token",
+            "required": true,
+            "secret": true
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Create user is Guid-blocked; read \u002B partial write only."
+    ],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/Okta"
+  },
+  {
+    "systemType": "Scim",
+    "displayName": "SCIM 2.0",
+    "status": "Pilot",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": true,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": true,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": true,
+    "supportedObjectClasses": [
+      "user",
+      "group"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "scim",
+        "displayName": "SCIM 2.0",
+        "fields": [
+          {
+            "key": "BaseUrl",
+            "label": "Base URL",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "BearerToken",
+            "label": "Bearer Token",
+            "required": true,
+            "secret": true
+          },
+          {
+            "key": "UserEndpoint",
+            "label": "User Endpoint",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "GroupEndpoint",
+            "label": "Group Endpoint",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [
+      "Sink is declarative; no write service today \u2014 do not imply provisioning works."
+    ],
+    "testStatus": "Untested",
+    "docsPath": "/docs/connectors/Scim"
+  },
+  {
+    "systemType": "SharePoint",
+    "displayName": "SharePoint Online",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": false,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "site",
+      "team",
+      "channel",
+      "channelfile",
+      "drive",
+      "list",
+      "subscribedSku",
+      "sharepointgroup"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "sharepoint",
+        "displayName": "SharePoint App Registration",
+        "fields": [
+          {
+            "key": "TenantId",
+            "label": "Tenant ID",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ClientId",
+            "label": "Client ID (Application ID)",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "ClientSecret",
+            "label": "Client Secret",
+            "required": true,
+            "secret": true
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/SharePoint"
+  },
+  {
+    "systemType": "SqlDiscovery",
+    "displayName": "SQL Server Discovery",
+    "status": "Preview",
+    "customerFacing": true,
+    "supportsSource": true,
+    "writesDuringSync": false,
+    "provisioningPrimitives": {
+      "create": false,
+      "update": false,
+      "delete": false,
+      "move": false,
+      "resetPassword": false
+    },
+    "deleteDuringSync": false,
+    "membershipSupport": false,
+    "licenseIngest": false,
+    "usageIngest": false,
+    "signInIngest": false,
+    "appRoleIngest": false,
+    "incrementalSupport": false,
+    "supportedObjectClasses": [
+      "computer"
+    ],
+    "requiredCredentials": [
+      {
+        "name": "sqldiscovery",
+        "displayName": "SQL Discovery Configuration",
+        "fields": [
+          {
+            "key": "Mode",
+            "label": "Enumeration mode",
+            "required": true,
+            "secret": false
+          },
+          {
+            "key": "AdConnectionName",
+            "label": "AD connection name",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "InstanceList",
+            "label": "Manual instance list",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "AuthType",
+            "label": "Scan authentication",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "SqlUsername",
+            "label": "SQL username",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "SqlPassword",
+            "label": "SQL password",
+            "required": false,
+            "secret": true
+          },
+          {
+            "key": "TrustServerCertificate",
+            "label": "Trust server certificate",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "CollectLogins",
+            "label": "Collect server logins",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "Parallelism",
+            "label": "Scan parallelism",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "ConnectTimeoutSeconds",
+            "label": "Connect timeout (seconds)",
+            "required": false,
+            "secret": false
+          },
+          {
+            "key": "DiscoverySourceName",
+            "label": "Discovery source name",
+            "required": false,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "tenantFieldRequirements": [],
+    "knownLimitations": [],
+    "testStatus": "Tested",
+    "docsPath": "/docs/connectors/SqlDiscovery"
+  }
+]
