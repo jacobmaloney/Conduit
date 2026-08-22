@@ -129,7 +129,10 @@ public sealed class EnrollmentService
             catch { /* unreadable credential — cannot prove enrollment from it */ }
             if (string.IsNullOrEmpty(raw)) continue;
 
-            if (EnrollmentClient.CredentialMatchesOrigin(raw, targetOrigin))
+            // Only an AGENT credential counts as already-enrolled. A hand-configured connection to
+            // the same origin holds a sync key and no agent key, and skipping on it makes the
+            // supplied enroll code a permanent no-op -- see CredentialIsAgentEnrolledFor.
+            if (EnrollmentClient.CredentialIsAgentEnrolledFor(raw, targetOrigin))
             {
                 StateDescription = $"Enrolled against {targetOrigin} (connection '{tenant.Name}').";
                 _logger.LogInformation("Already enrolled against {Origin} (connection '{Tenant}'), skipping.", targetOrigin, tenant.Name);
@@ -447,6 +450,37 @@ public sealed class EnrollmentClient
             var enrollUrlOrigin = NormalizeOrigin(GetString(doc.RootElement, "EnrollUrl"));
             return string.Equals(baseUrlOrigin, normalizedOrigin, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(enrollUrlOrigin, normalizedOrigin, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True only when the stored credential is an ENROLLED-AGENT credential for this origin —
+    /// same origin AND a non-empty AgentApiKey.
+    ///
+    /// The distinction is the whole point. A credential composed by enrollment carries three
+    /// fields (BaseUrl, ApiKey, AgentApiKey); a connection configured BY HAND in the UI carries
+    /// only the sync ApiKey, because there is no way to type an agent key in — one is minted, not
+    /// entered. Both match on origin, so origin alone cannot tell "enrolled as an agent" from
+    /// "someone pasted a sync key".
+    ///
+    /// Treating the second as enrolled is not a cosmetic mistake: enrollment then short-circuits
+    /// on every boot, the agent channel (heartbeat + command claim) answers 403 forever because
+    /// there is no agent_id claim to present, the poller quietly falls back to the legacy
+    /// untargeted path, and the status card still reads "Enrolled against &lt;origin&gt;". Observed
+    /// on 2026-08-21: an install whose --enroll-code had been a silent no-op for its whole life.
+    /// </summary>
+    public static bool CredentialIsAgentEnrolledFor(string credentialJson, string normalizedOrigin)
+    {
+        if (!CredentialMatchesOrigin(credentialJson, normalizedOrigin)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(credentialJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
+            return !string.IsNullOrWhiteSpace(GetString(doc.RootElement, "AgentApiKey"));
         }
         catch (JsonException)
         {

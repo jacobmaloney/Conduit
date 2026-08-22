@@ -226,6 +226,49 @@ public class EnrollmentClientTests
         Assert.False(EnrollmentClient.CredentialMatchesOrigin(blob, EnrollmentClient.NormalizeOrigin("https://elsewhere.example.com")!));
     }
 
+    [Fact]
+    public void CredentialIsAgentEnrolledFor_requires_an_agent_key_not_just_the_right_host()
+    {
+        // The live shape on 2026-08-21: an IdentityCenter connection configured by hand in the UI,
+        // holding a sync ApiKey and no AgentApiKey. Enrollment skipped as "already enrolled" on
+        // every boot, so the agent channel had no agent_id claim to present and answered 403
+        // forever -- while the status card read "Enrolled against http://...:8080".
+        var origin = EnrollmentClient.NormalizeOrigin("http://192.168.1.60:8080")!;
+        var handConfigured = """{"BaseUrl":"http://192.168.1.60:8080","ApiKey":"sync-key-typed-by-a-human"}""";
+
+        // Same origin -- so the origin predicate alone cannot tell these apart...
+        Assert.True(EnrollmentClient.CredentialMatchesOrigin(handConfigured, origin));
+        // ...but it is not an agent enrollment, and treating it as one is what made the code a no-op.
+        Assert.False(EnrollmentClient.CredentialIsAgentEnrolledFor(handConfigured, origin));
+    }
+
+    [Fact]
+    public void CredentialIsAgentEnrolledFor_accepts_a_real_enrollment_credential()
+    {
+        var origin = EnrollmentClient.NormalizeOrigin("http://192.168.1.60:8080")!;
+        var enrolled = """{"BaseUrl":"http://192.168.1.60:8080","ApiKey":"sync","AgentApiKey":"agent-scoped"}""";
+
+        Assert.True(EnrollmentClient.CredentialIsAgentEnrolledFor(enrolled, origin));
+        // Still origin-scoped: an agent credential for a DIFFERENT IC must not suppress enrollment
+        // against this one, or pointing an agent at a second server would silently do nothing.
+        Assert.False(EnrollmentClient.CredentialIsAgentEnrolledFor(
+            enrolled, EnrollmentClient.NormalizeOrigin("http://192.168.1.99:8080")!));
+    }
+
+    [Theory]
+    [InlineData("""{"BaseUrl":"http://192.168.1.60:8080","AgentApiKey":""}""")]
+    [InlineData("""{"BaseUrl":"http://192.168.1.60:8080","AgentApiKey":"   "}""")]
+    [InlineData("""{"BaseUrl":"http://192.168.1.60:8080","AgentApiKey":null}""")]
+    [InlineData("not json")]
+    [InlineData("{}")]
+    public void CredentialIsAgentEnrolledFor_treats_an_absent_or_blank_agent_key_as_not_enrolled(string blob)
+    {
+        // A present-but-empty key is the dangerous one: it looks like the field exists, and a
+        // truthiness check on presence alone would call this enrolled.
+        Assert.False(EnrollmentClient.CredentialIsAgentEnrolledFor(
+            blob, EnrollmentClient.NormalizeOrigin("http://192.168.1.60:8080")!));
+    }
+
     // ── Credential blob (LOAD-BEARING field names) ───────────────────────────
 
     [Fact]
