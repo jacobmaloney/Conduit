@@ -945,9 +945,20 @@ public sealed class ActiveDirectorySink : IConnectorSink
         connection.SessionOptions.ProtocolVersion = 3;
         // Shared fail-closed server-certificate policy, wired identically to both
         // the :636 SSL path and the :389 StartTLS upgrade path.
-        connection.SessionOptions.VerifyServerCertificate = Conduit.Sync.Security.LdapServerCertificateValidator.Build(
+        //
+        // Wrapped so we KNOW whether a certificate was actually rejected, rather than inferring it
+        // from the exception type below. TlsOperationException means both "your validator said no"
+        // and "this server does not offer StartTLS at all", and those need opposite handling.
+        var certificateRejected = false;
+        var verify = Conduit.Sync.Security.LdapServerCertificateValidator.Build(
             _logger, _tenantId.ToString(), host,
             creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint);
+        connection.SessionOptions.VerifyServerCertificate = (conn, certificate) =>
+        {
+            var accepted = verify(conn, certificate);
+            if (!accepted) certificateRejected = true;
+            return accepted;
+        };
         isSecure = false;
 
         if (port == 636)
@@ -968,11 +979,24 @@ public sealed class ActiveDirectorySink : IConnectorSink
                 connection.SessionOptions.StartTransportLayerSecurity(null);
                 isSecure = true;
             }
-            catch (TlsOperationException)
+            catch (TlsOperationException) when (certificateRejected)
             {
-                // Cert rejected by the shared validator during the TLS handshake —
-                // do NOT fall back to plaintext.
+                // Our validator refused the server's certificate. Never downgrade: a rejected cert
+                // is an active trust failure, not an absent capability.
                 throw;
+            }
+            catch (TlsOperationException ex)
+            {
+                // The server does not offer StartTLS at all -- a domain controller with no LDAPS
+                // certificate answers the extended operation with "unavailable" and .NET surfaces
+                // that as TlsOperationException too. Rethrowing it here made the documented
+                // best-effort upgrade mandatory in practice: on such a DC EVERY write threw,
+                // including enable/disable, which never required a secure channel. Only password
+                // writes do, and RequireSecureForPasswordWrite still refuses those below because
+                // isSecure stays false.
+                _logger.LogDebug(ex,
+                    "StartTLS not offered by {Host}:{Port} — connection will be plaintext. " +
+                    "Password writes will be refused.", host, port);
             }
             catch (Exception ex)
             {
@@ -983,8 +1007,61 @@ public sealed class ActiveDirectorySink : IConnectorSink
         }
 
         connection.Credential = new NetworkCredential(creds.Username, creds.Password);
+
+        if (!isSecure)
+        {
+            // No LDAPS and no StartTLS, so a simple bind would put the service account's password
+            // on the wire in clear text. Any domain controller with "LDAP server signing
+            // requirements = Require signing" (the default on current Windows Server) refuses that
+            // outright with strongerAuthRequired — which is what the lab DC did.
+            //
+            // Negotiate with signing and sealing encrypts and integrity-protects the channel using
+            // Kerberos/NTLM, with no certificate and no PKI anywhere. It is the standard way to
+            // write to AD over :389, and it is strictly MORE secure than the simple bind it
+            // replaces — this is not a downgrade to make the write succeed.
+            //
+            // The :636 and StartTLS paths keep AuthType.Basic: that channel is already encrypted,
+            // and simple bind there is what non-Windows directories expect.
+            connection.AuthType = AuthType.Negotiate;
+            connection.SessionOptions.Signing = true;
+            connection.SessionOptions.Sealing = true;
+
+            // SASL needs the domain as a SEPARATE field. A simple bind happily takes
+            // "domain.local\Administrator" as one string, but Negotiate rejects that exact value
+            // with "The supplied credential is invalid" — the same account binds fine when the
+            // domain is passed as its own argument. Measured against the lab DC, all three forms.
+            var (bindUser, bindDomain) = SplitDownLevelLogonName(creds.Username);
+            if (bindDomain is not null)
+                connection.Credential = new NetworkCredential(bindUser, creds.Password, bindDomain);
+            _logger.LogDebug(
+                "Binding to {Host}:{Port} with Negotiate sign+seal — the channel is not TLS-protected, "
+                + "so a simple bind would expose credentials and be refused by a signing-required DC.",
+                host, port);
+        }
+
         connection.Bind();
         return connection;
+    }
+
+    /// <summary>
+    /// Splits a down-level logon name ("DOMAIN\user", "domain.local\user") into its parts for a
+    /// SASL bind, which needs the domain as a separate credential field. Returns a null domain for
+    /// anything that is not down-level — a bare username or a UPN ("user@domain.local") — because
+    /// both of those already bind correctly as a single string and splitting them would break them.
+    ///
+    /// Public and static so the parsing is testable without a directory server: this is the piece
+    /// that silently produced "The supplied credential is invalid" against a correct password.
+    /// </summary>
+    public static (string User, string? Domain) SplitDownLevelLogonName(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return (username ?? string.Empty, null);
+
+        var slash = username.IndexOf('\\');
+        if (slash <= 0 || slash == username.Length - 1) return (username, null);
+
+        var domain = username[..slash];
+        var user = username[(slash + 1)..];
+        return string.IsNullOrWhiteSpace(user) ? (username, null) : (user, domain);
     }
 
     private static (string Host, int Port) ParseHostPort(string? domain)
