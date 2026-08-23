@@ -9,6 +9,7 @@ using Conduit.Core.SyncModels;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Security;
+using Conduit.Sync.Provisioning;
 
 namespace Conduit.Sync.Orchestration;
 
@@ -49,7 +50,7 @@ public sealed class SyncProjectOrchestrator
     private readonly SyncRunAsyncJobRepository _asyncJobRepo;
     private readonly WorkflowRepository _workflowRepo;
     private readonly SinkRecordHashRepository _hashRepo;
-    private readonly SinkConnectionCredentialMapRepository _credentialMapRepo;
+    private readonly ProvisioningRouteRegistrar _routeRegistrar;
     private readonly SyncCancellationRegistry _cancellation;
     private readonly Microsoft.Extensions.Configuration.IConfiguration _config;
     private readonly ILogger<SyncProjectOrchestrator> _logger;
@@ -62,7 +63,7 @@ public sealed class SyncProjectOrchestrator
         SyncRunAsyncJobRepository asyncJobRepo,
         WorkflowRepository workflowRepo,
         SinkRecordHashRepository hashRepo,
-        SinkConnectionCredentialMapRepository credentialMapRepo,
+        ProvisioningRouteRegistrar routeRegistrar,
         SyncCancellationRegistry cancellation,
         Microsoft.Extensions.Configuration.IConfiguration config,
         ILogger<SyncProjectOrchestrator> logger)
@@ -74,7 +75,7 @@ public sealed class SyncProjectOrchestrator
         _asyncJobRepo = asyncJobRepo;
         _workflowRepo = workflowRepo;
         _hashRepo = hashRepo;
-        _credentialMapRepo = credentialMapRepo;
+        _routeRegistrar = routeRegistrar;
         _cancellation = cancellation;
         _config = config;
         _logger = logger;
@@ -254,7 +255,7 @@ public sealed class SyncProjectOrchestrator
                 var mappedName = IdentityCenterSourceName.Sanitize(sourceTenant.Name);
                 try
                 {
-                    await _credentialMapRepo.UpsertAsync(mappedName, sourceTenant.Id);
+                    await _routeRegistrar.EnsureForProjectAsync(project);
                 }
                 catch (SinkConnectionCredentialMapCollisionException ex)
                 {
@@ -1448,8 +1449,8 @@ public sealed class SyncProjectOrchestrator
             if (stepTagsCsv is not null && !sinkObj.Attributes.ContainsKey("_tags"))
                 sinkObj.Attributes["_tags"] = stepTagsCsv;
 
-            if (!string.IsNullOrWhiteSpace(scope.BaseDN) && !sinkObj.Attributes.ContainsKey("targetOU"))
-                sinkObj.Attributes["targetOU"] = scope.BaseDN;
+            if (!string.IsNullOrWhiteSpace(project.TargetContainer) && !sinkObj.Attributes.ContainsKey("targetOU"))
+                sinkObj.Attributes["targetOU"] = project.TargetContainer;
 
             // Fix 6: only accumulate the full emitted list when a later step in
             // this workflow actually consumes it — otherwise this is pure memory

@@ -29,15 +29,40 @@
     the create/edit wizard use) so the schedule-edit logic is not forked.
 *@
 
-<PageTitle>Schedule Manager - Conduit</PageTitle>
+<PageTitle>Schedules - Conduit</PageTitle>
 
-<div class="container-fluid identities-container ops-section">
-    <CcTemplate1 Title="Schedule Manager"
-                 Subtitle="Every sync project's schedule in one place — when it runs next, when it last ran, and whether it's enabled."
-                 Icon="fas fa-calendar-alt"
-                 IconAccent="amber" />
+<div class="cc-site container-fluid identities-container governance-v2">
+    <CcTemplate1 Title="Schedules"
+                 Subtitle="Attach sync projects to recurring schedules and monitor every scheduled execution."
+                 Icon="fas fa-calendar-days"
+                 IconAccent="slate">
+        <PrimaryAction>
+            <button class="btn btn-primary" @onclick="OpenAssign" disabled="@(loading || projects.Count == 0)">
+                <i class="fas fa-plus me-1"></i>Assign schedule
+            </button>
+        </PrimaryAction>
+    </CcTemplate1>
 
-    <CcStatRow Stats="@StatItems" />
+    <div class="ic-kpi-strip cols-3 mb-3">
+        <div class="ic-kpi accent-slate">
+            <span class="ic-kpi-accent"></span>
+            <div class="ic-kpi-lbl">Schedules</div>
+            <div class="ic-kpi-val">@projects.Count(p => HasSchedule(p)).ToString("N0")</div>
+            <div class="ic-kpi-meta">Across @projects.Count.ToString("N0") sync projects</div>
+        </div>
+        <div class="ic-kpi accent-teal">
+            <span class="ic-kpi-accent"></span>
+            <div class="ic-kpi-lbl">Next run</div>
+            <div class="ic-kpi-val">@NextScheduledRunText</div>
+            <div class="ic-kpi-meta">Local time</div>
+        </div>
+        <div class="ic-kpi accent-danger">
+            <span class="ic-kpi-accent"></span>
+            <div class="ic-kpi-lbl">Failing</div>
+            <div class="ic-kpi-val">@projects.Count(p => p.LastRunStatus == "Failed").ToString("N0")</div>
+            <div class="ic-kpi-meta">Projects whose last run failed</div>
+        </div>
+    </div>
 
     <CcFilterTabs Tabs="@_tabs"
                   ActiveTab="@activeTab"
@@ -62,15 +87,18 @@
     }
     else
     {
+        <div class="gv-panel">
         <div class="table-responsive">
-            <table class="table table-hover align-middle">
+            <table class="cmp-tbl w-100">
                 <thead>
                     <tr>
-                        <th>Project</th>
-                        <th>Schedule</th>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Cadence</th>
                         <th>Next run</th>
                         <th>Last run</th>
-                        <th>Status</th>
+                        <th>Owner</th>
+                        <th>State</th>
                         <th class="text-end">Actions</th>
                     </tr>
                 </thead>
@@ -79,12 +107,13 @@
                     {
                         <tr>
                             <td>
-                                <div class="fw-bold">@p.Name</div>
+                                <div class="nm-cell">@p.Name</div>
                                 @if (!string.IsNullOrWhiteSpace(p.Description))
                                 {
                                     <div class="text-muted small">@p.Description</div>
                                 }
                             </td>
+                            <td><span class="ic-pill-soft"><i class="fas fa-arrows-rotate me-1"></i>Sync</span></td>
                             <td>
                                 @if (string.IsNullOrWhiteSpace(p.CronSchedule))
                                 {
@@ -98,18 +127,19 @@
                             </td>
                             <td>@NextRunText(p)</td>
                             <td>@LastRunText(p)</td>
+                            <td><a href="/sync-history?project=@p.Id">Sync project</a></td>
                             <td>
                                 @if (!p.IsEnabled)
                                 {
-                                    <span class="badge bg-secondary">Disabled</span>
+                                    <span class="stage-pill">Disabled</span>
                                 }
                                 else if (p.IsRunning)
                                 {
-                                    <span class="badge bg-info">Running</span>
+                                    <span class="stage-pill"><i class="fas fa-spinner fa-spin me-1"></i>Running</span>
                                 }
                                 else
                                 {
-                                    <span class="badge @LastStatusBadge(p.LastRunStatus)">@LastStatusLabel(p.LastRunStatus)</span>
+                                    <span class="stage-pill @LastStatusClass(p.LastRunStatus)">@LastStatusLabel(p.LastRunStatus)</span>
                                 }
                             </td>
                             <td class="text-end">
@@ -162,8 +192,52 @@
                 </tbody>
             </table>
         </div>
+        </div>
     }
 </div>
+
+@if (assignOpen)
+{
+    <div class="modal show d-block" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-calendar-plus me-2"></i>Assign schedule</h5>
+                    <button type="button" class="btn-close" @onclick="CloseAssign" disabled="@assignSaving"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small">Choose the sync project that runs on this cadence. Each execution is recorded in Sync History against that project.</p>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Sync project</label>
+                        <select class="form-select" @bind="assignProjectId">
+                            <option value="">Select a sync project</option>
+                            @foreach (var project in projects.OrderBy(p => p.Name))
+                            {
+                                <option value="@project.Id">@project.Name@(HasSchedule(project) ? " (scheduled)" : "")</option>
+                            }
+                        </select>
+                    </div>
+                    <CcScheduleEditor @bind-Value="assignCron" Error="@assignError" />
+                    <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox" id="enableAssignedProject" @bind="assignEnable" />
+                        <label class="form-check-label" for="enableAssignedProject">Enable this sync project</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseAssign" disabled="@assignSaving">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveAssignment" disabled="@assignSaving">
+                        @if (assignSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Assign schedule
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
 
 @if (!string.IsNullOrEmpty(toast))
 {
@@ -224,6 +298,15 @@
     private Guid? busyId;
 
     private string activeTab = "all";
+
+    // Assign-modal state. Schedules are intentionally stored on sync projects;
+    // runs remain immutable executions linked to the project that created them.
+    private bool assignOpen;
+    private string assignProjectId = string.Empty;
+    private string? assignCron;
+    private string? assignError;
+    private bool assignEnable = true;
+    private bool assignSaving;
 
     private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
     {
@@ -392,6 +475,68 @@
 
     private void HandleTabChanged(string key) => activeTab = key;
 
+    private void OpenAssign()
+    {
+        assignOpen = true;
+        assignProjectId = string.Empty;
+        assignCron = string.Empty;
+        assignError = null;
+        assignEnable = true;
+    }
+
+    private void CloseAssign()
+    {
+        if (assignSaving) return;
+        assignOpen = false;
+        assignError = null;
+    }
+
+    private async Task SaveAssignment()
+    {
+        if (!Guid.TryParse(assignProjectId, out var projectId))
+        {
+            assignError = "Select a sync project.";
+            return;
+        }
+        if (!ScheduledSyncRunnerJob.TryValidate(assignCron, out var validationError))
+        {
+            assignError = validationError ?? "Invalid schedule.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(assignCron))
+        {
+            assignError = "Choose a cadence. Use Edit on an existing row to make a project manual-only.";
+            return;
+        }
+
+        assignSaving = true;
+        assignError = null;
+        try
+        {
+            var project = await ProjectRepo.GetByIdAsync(projectId);
+            if (project is null)
+            {
+                assignError = "Project no longer exists.";
+                return;
+            }
+            project.CronSchedule = assignCron.Trim();
+            project.IsEnabled = assignEnable;
+            await ProjectRepo.UpdateAsync(project);
+            assignOpen = false;
+            toastClass = "text-bg-success";
+            toast = $"Schedule assigned to '{project.Name}'.";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            assignError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            assignSaving = false;
+        }
+    }
+
     // ─── Inline enable / disable ──────────────────────────────────────────────
     // Loads the FULL project row before mutating so UpdateAsync (which writes
     // every column) doesn't null out credential names / SkipUnchanged. Only
@@ -484,14 +629,14 @@
     // Processing Center / Sync History (slices 5-6) render them: PartialSuccess and
     // Cancelled are both real rolled-up statuses shown amber. Kept in lock-step so
     // the same run never shows green here and amber there.
-    private static string LastStatusBadge(string? status) => status switch
+    private static string LastStatusClass(string? status) => status switch
     {
-        "Succeeded"      => "bg-success",
-        "Failed"         => "bg-danger",
-        "Running"        => "bg-info",
-        "PartialSuccess" => "bg-warning text-dark",
-        "Cancelled"      => "bg-warning text-dark",
-        _                => "bg-light text-dark",
+        "Succeeded"      => "active",
+        "Failed"         => "tone-danger",
+        "Running"        => "active",
+        "PartialSuccess" => "review",
+        "Cancelled"      => "review",
+        _                 => string.Empty,
     };
 
     // "PartialSuccess" is a raw enum from the orchestrator; show the friendly label
@@ -536,6 +681,38 @@
         catch
         {
             return "Invalid";
+        }
+    }
+
+    private string NextScheduledRunText
+    {
+        get
+        {
+            var next = projects
+                .Where(p => p.IsEnabled && HasSchedule(p))
+                .Select(TryGetNextRun)
+                .Where(value => value.HasValue)
+                .Select(value => value!.Value)
+                .OrderBy(value => value)
+                .FirstOrDefault();
+            return next == default ? "None" : next.ToLocalTime().ToString("g");
+        }
+    }
+
+    private static DateTime? TryGetNextRun(SyncProject project)
+    {
+        var cron = project.CronSchedule?.Trim();
+        if (string.IsNullOrWhiteSpace(cron) || cron.StartsWith("@", StringComparison.Ordinal)) return null;
+        try
+        {
+            var schedule = CrontabSchedule.Parse(cron);
+            var anchor = project.LastRunAt ?? DateTime.UtcNow;
+            var next = schedule.GetNextOccurrence(anchor);
+            return next < DateTime.UtcNow ? schedule.GetNextOccurrence(DateTime.UtcNow) : next;
+        }
+        catch
+        {
+            return null;
         }
     }
 

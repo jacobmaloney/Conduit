@@ -485,6 +485,7 @@ builder.Services.AddScoped<Conduit.Web.Services.InboundProxyService>();
 // scheduler, and every Blazor circuit so "Stop Sync" can trip the in-flight run.
 builder.Services.AddSingleton<Conduit.Sync.Orchestration.SyncCancellationRegistry>();
 builder.Services.AddScoped<Conduit.Sync.Orchestration.SyncProjectOrchestrator>();
+builder.Services.AddScoped<Conduit.Sync.Provisioning.ProvisioningRouteRegistrar>();
 // Phase 2 — per-connector attribute template catalog + canonical source→sink resolver.
 builder.Services.AddSingleton<Conduit.Sync.Templates.IAttributeMapService, Conduit.Sync.Templates.AttributeMapService>();
 // Phase 3 — per-connector object-class sets → in-memory sync-project graph generator.

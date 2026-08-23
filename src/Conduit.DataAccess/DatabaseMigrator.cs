@@ -1471,6 +1471,34 @@ END;
 "
             });
 
+            // Migration 35: separate source read scope from sink write placement.
+            // Earlier builds reused SyncProjectScopes.BaseDN for both concepts. Preserve
+            // existing AD-destination behavior by backfilling once, then let BaseDN mean
+            // only "where the source read starts" going forward.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 35,
+                Name = "Explicit sync-project target container",
+                Description = "Adds SyncProjects.TargetContainer for hierarchical sinks and backfills existing Active Directory sink projects from their legacy source BaseDN.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.SyncProjects','TargetContainer') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [TargetContainer] NVARCHAR(1024) NULL;
+END;
+
+GO
+
+UPDATE p
+   SET p.TargetContainer = s.BaseDN
+  FROM [dbo].[SyncProjects] p
+  INNER JOIN [dbo].[Tenants] t ON t.Id = p.SinkTenantId
+  INNER JOIN [dbo].[SyncProjectScopes] s ON s.SyncProjectId = p.Id AND s.WorkflowStepId IS NULL
+ WHERE t.SystemType = 'ActiveDirectory'
+   AND p.TargetContainer IS NULL
+   AND s.BaseDN IS NOT NULL;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

@@ -4,6 +4,7 @@
 @using Conduit.Core.SyncModels
 @using Conduit.DataAccess.Repositories
 @using Conduit.Sync.Orchestration
+@using Conduit.Sync.Provisioning
 @using Conduit.Sync.Templates
 @using Conduit.Sync.Connectors
 @using Conduit.Connectors.IdentityCenter
@@ -15,6 +16,7 @@
 @inject ConnectionCredentialRepository CredRepo
 @inject WorkflowRepository WorkflowRepo
 @inject SyncProjectOrchestrator Orchestrator
+@inject ProvisioningRouteRegistrar RouteRegistrar
 @inject IServiceScopeFactory ScopeFactory
 @inject Microsoft.Extensions.Logging.ILogger<SyncProjects> Logger
 @inject Conduit.Sync.Orchestration.SyncCancellationRegistry CancellationRegistry
@@ -1605,6 +1607,19 @@
                                 Include deleted / soft-deleted objects where the source exposes them
                             </label>
                         </div>
+                        @if (SinkIsActiveDirectory)
+                        {
+                            <hr class="my-4" />
+                            <h6 class="fw-semibold">Write destination</h6>
+                            <p class="text-muted">
+                                This is separate from the read scope above. It is used only when this project creates
+                                missing objects in the target Active Directory.
+                            </p>
+                            <label class="form-label fw-semibold">Target container (OU DN)</label>
+                            <input class="form-control" @bind="form.TargetContainer"
+                                   placeholder="OU=Employees,OU=Users,DC=domain,DC=local" />
+                            <small class="form-text text-muted">Leave blank for update-only projects or to use the directory connector's root default.</small>
+                        }
                     }
                     else if (formTab == "mappings")
                     {
@@ -4150,6 +4165,9 @@
             ? t.SystemType
             : string.Empty;
 
+    private bool SinkIsActiveDirectory =>
+        string.Equals(SinkSystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Count of Mapping steps across all workflows (gates "Auto-map all steps").</summary>
     private int MappingStepCount =>
         stepsByWorkflow.Values
@@ -5493,8 +5511,14 @@
                 SourceTenantId = p.SourceTenantId,
                 SinkTenantId = p.SinkTenantId,
                 ObjectClass = p.ObjectClass,
+                SourceCredentialName = p.SourceCredentialName,
+                SinkCredentialName = p.SinkCredentialName,
+                SourceTable = p.SourceTable,
+                SinkTable = p.SinkTable,
+                TargetContainer = p.TargetContainer,
                 CronSchedule = p.CronSchedule,
-                IsEnabled = !p.IsEnabled
+                IsEnabled = !p.IsEnabled,
+                SkipUnchanged = p.SkipUnchanged
             };
             await ProjectRepo.UpdateAsync(copy);
             toastSuccess = $"'{p.Name}' {(copy.IsEnabled ? "enabled" : "disabled")}.";
@@ -5804,6 +5828,7 @@
             SinkCredentialName = selectedProject.SinkCredentialName,
             SourceTable = selectedProject.SourceTable,
             SinkTable = selectedProject.SinkTable,
+            TargetContainer = selectedProject.TargetContainer,
             ObjectClass = selectedProject.ObjectClass,
             CronSchedule = selectedProject.CronSchedule,
             IsEnabled = selectedProject.IsEnabled,
@@ -6306,6 +6331,10 @@
         saving = true;
         try
         {
+            // Configuration establishes the provisioning credential route. A first
+            // sync run is no longer required before an account definition can execute.
+            await RouteRegistrar.EnsureForProjectAsync(form);
+
             SyncProject persisted;
             bool isCreate = !editingId.HasValue;
             if (editingId.HasValue)
@@ -6791,8 +6820,14 @@
                 SourceTenantId = selectedProject.SourceTenantId,
                 SinkTenantId = selectedProject.SinkTenantId,
                 ObjectClass = selectedProject.ObjectClass,
+                SourceCredentialName = selectedProject.SourceCredentialName,
+                SinkCredentialName = selectedProject.SinkCredentialName,
+                SourceTable = selectedProject.SourceTable,
+                SinkTable = selectedProject.SinkTable,
+                TargetContainer = selectedProject.TargetContainer,
                 CronSchedule = string.IsNullOrWhiteSpace(scheduleForm) ? null : scheduleForm.Trim(),
-                IsEnabled = selectedProject.IsEnabled
+                IsEnabled = selectedProject.IsEnabled,
+                SkipUnchanged = selectedProject.SkipUnchanged
             };
             await ProjectRepo.UpdateAsync(copy);
             showScheduleModal = false;
@@ -7005,6 +7040,7 @@
                                          || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase)));
                 }
 
+                await RouteRegistrar.EnsureForProjectAsync(g.Project);
                 await ProjectRepo.CreateAsync(g.Project);
                 foreach (var w in workflowsToPersist)
                 {
@@ -7166,6 +7202,7 @@
                                          || string.Equals(s.Step.ObjectClass, "user", StringComparison.OrdinalIgnoreCase)));
                 }
 
+                await RouteRegistrar.EnsureForProjectAsync(g.Project);
                 await ProjectRepo.CreateAsync(g.Project);
                 foreach (var w in workflowsToPersist)
                 {

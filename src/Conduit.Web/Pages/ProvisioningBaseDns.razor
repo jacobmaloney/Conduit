@@ -49,7 +49,7 @@
                     <div class="form-text">
                         @if (connectionOptions.Count == 0)
                         {
-                            <text>No connections are registered on this agent yet — run a sync from an IdentityCenter connection so it appears here.</text>
+                            <text>No connections are registered on this agent yet — save an IdentityCenter-targeted sync project so its route appears here.</text>
                         }
                         else
                         {
@@ -73,12 +73,16 @@
     {
         <p><em>Loading…</em></p>
     }
-    else if (!anyEffective)
+    else if (connections.Count == 0)
     {
-        <div class="alert alert-secondary">No permitted base DNs are in effect on this agent (database or host config) — every AD create is denied.</div>
+        <div class="alert alert-secondary">No provisioning routes are configured on this agent.</div>
     }
     else
     {
+        @if (!anyEffective)
+        {
+            <div class="alert alert-warning">Routes exist, but no permitted creation base DN is in effect. Every AD create is currently denied.</div>
+        }
         @foreach (var conn in connections)
         {
             <div class="card mb-3">
@@ -176,10 +180,12 @@
                 .GroupBy(e => e.SourceConnectionName)
                 .ToDictionary(g => g.Key, g => g.OrderBy(e => e.BaseDn).ToList());
 
-            // Every connection with EITHER DB entries OR a host-config allow-list, so a config-only
-            // connection is not invisible (the display honesty fix).
+            // Include routed connections even when they have no allow-list entry. Hiding
+            // that state made a valid route look absent instead of correctly "deny-all".
+            var mapped = await CredMapRepo.GetAllSourceConnectionNamesAsync();
             var names = dbByConn.Keys
                 .Concat(Policy.GetConfiguredConnectionNames())
+                .Concat(mapped)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(n => n)
                 .ToList();
@@ -205,7 +211,6 @@
             // Dropdown options: connections Conduit can actually provision to (those with a registered
             // credential mapping) UNION any already in the allow-list — so an operator picks a real
             // connection name instead of typing a stray value that can never match.
-            var mapped = await CredMapRepo.GetAllSourceConnectionNamesAsync();
             connectionOptions = mapped
                 .Concat(names)
                 .Distinct(StringComparer.OrdinalIgnoreCase)

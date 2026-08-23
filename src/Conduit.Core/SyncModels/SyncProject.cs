@@ -58,6 +58,13 @@ public class SyncProject
     /// </summary>
     public string? SinkTable { get; set; }
 
+    /// <summary>
+    /// Optional destination container used only when the sink creates hierarchical
+    /// objects (for example an AD OU). This is deliberately separate from source
+    /// scope.BaseDN, which controls what is read and must never imply where writes land.
+    /// </summary>
+    public string? TargetContainer { get; set; }
+
     /// <summary>Cron expression for scheduled execution. Null = manual run only.</summary>
     public string? CronSchedule { get; set; }
 
