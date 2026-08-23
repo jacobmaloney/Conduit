@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Conduit.Connectors.ActiveRoles;
 using Conduit.Connectors.Database;
 using Conduit.Connectors.Scim;
 using Conduit.Core.SyncModels;
+using Conduit.Sync.Connectors;
 using Conduit.Sync.Templates;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -89,6 +91,68 @@ public class ObjectClassClosedSetTests
             + string.Join(", ", missing.Distinct()));
     }
 
+    public static IEnumerable<object[]> ArsInfraClasses() =>
+        new SyncProjectGenerator(null!).GetObjectClasses("ActiveRoles", GenerationMode.AdInfrastructure)
+            .Where(c => !string.Equals(c, "organizationalUnit", StringComparison.OrdinalIgnoreCase))
+            .Select(c => new object[] { c });
+
+    [Theory]
+    [MemberData(nameof(ArsInfraClasses))]
+    public async Task ActiveRolesSink_refuses_infra_class_before_bind_naming_it(string cls)
+    {
+        // Null resolver: reaching ResolveAsync would be a NullReferenceException, so a
+        // NotSupportedException proves the gate fired first.
+        var sink = new ActiveRolesSink(null!, NullLogger<ActiveRolesSink>.Instance);
+        var obj = new ConnectorObject { SourceId = "CN=x,DC=lab", ObjectClass = cls, Attributes = new Dictionary<string, object?>() };
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => sink.UpsertAsync(obj, CancellationToken.None));
+        Assert.Contains($"'{cls}'", ex.Message);
+        Assert.Contains("user, group, contact, computer, organizationalUnit", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("user")]
+    [InlineData("Group")]
+    [InlineData("contact")]
+    [InlineData("computer")]
+    [InlineData("organizationalunit")]
+    public void ActiveRolesSink_gate_passes_every_writable_class(string cls)
+    {
+        ActiveRolesSink.EnsureSupportedSinkObjectClass(cls);
+    }
+
+    [Theory]
+    [InlineData("mailbox")]
+    [InlineData("*)(objectClass=*")]
+    public async Task ActiveRolesSource_refuses_unknown_class_before_credentials_naming_it(string cls)
+    {
+        var source = new ActiveRolesSource(null!, NullLogger<ActiveRolesSource>.Instance);
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        {
+            await foreach (var _ in source.ReadAsync(cls, new SyncProjectScope(), CancellationToken.None)) { }
+        });
+        Assert.Contains($"'{cls}'", ex.Message);
+        Assert.Contains("trustedDomain", ex.Message);
+    }
+
+    [Fact]
+    public void ActiveRolesSource_closed_set_covers_every_generated_class()
+    {
+        var generator = new SyncProjectGenerator(null!);
+        foreach (var mode in Enum.GetValues<GenerationMode>())
+        foreach (var cls in generator.GetObjectClasses("ActiveRoles", mode))
+            ActiveRolesSource.EnsureSupportedObjectClass(cls);
+    }
+
+    [Fact]
+    public void Catalog_values_cannot_be_mutated_through_a_List_downcast()
+    {
+        foreach (var (systemType, objectClass) in AttributeTemplateCatalog.Keys)
+            Assert.IsNotType<List<AttributeTemplateCatalog.Entry>>(AttributeTemplateCatalog.Get(systemType, objectClass));
+    }
+
+    // ARS aliases the AD templates, which also resolves real LDAP WRITE names for an
+    // AD->ARS project. Parity is safe only because ActiveRolesSink.EnsureSupportedSinkObjectClass
+    // refuses every class beyond user/group/contact/computer/organizationalUnit.
     [Fact]
     public void ActiveRoles_templates_match_ActiveDirectory_for_every_shared_class()
     {

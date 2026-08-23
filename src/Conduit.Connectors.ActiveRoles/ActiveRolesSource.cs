@@ -35,6 +35,30 @@ public sealed class ActiveRolesSource : IConnectorSource
         _logger = logger;
     }
 
+    /// <summary>
+    /// The closed set of classes this source reads — the 24 the generator
+    /// advertises for ActiveRoles and the attribute catalog templates. Checked
+    /// before the class string reaches an LDAP filter or a credential read.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedObjectClasses = new[]
+    {
+        "user", "group", "computer", "contact", "organizationalUnit",
+        "container", "domainDNS", "groupPolicyContainer",
+        "msDS-GroupManagedServiceAccount", "msDS-ManagedServiceAccount",
+        "foreignSecurityPrincipal", "trustedDomain", "serviceConnectionPoint",
+        "printQueue", "subnet", "site", "siteLink", "pKICertificateTemplate",
+        "msFVE-RecoveryInformation", "certificationAuthority", "attributeSchema",
+        "classSchema", "dnsNode", "dnsZone"
+    };
+
+    public static void EnsureSupportedObjectClass(string objectClass)
+    {
+        foreach (var supported in SupportedObjectClasses)
+            if (string.Equals(objectClass, supported, StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException(
+            $"Active Roles source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedObjectClasses)}.");
+    }
+
     public IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
@@ -100,6 +124,7 @@ public sealed class ActiveRolesSource : IConnectorSource
         ReadCompletion completion,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        EnsureSupportedObjectClass(objectClass);
         var settings = await _resolver.ResolveAsync(CredentialSide.Source, cancellationToken);
         if (settings is null)
             throw new InvalidOperationException(

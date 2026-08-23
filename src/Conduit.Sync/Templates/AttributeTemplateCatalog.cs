@@ -237,7 +237,7 @@ public static class AttributeTemplateCatalog
                 E("description", "Description"),
             };
             rows.AddRange(extras);
-            c[(Systems.ActiveDirectory, objectClass)] = rows;
+            c[(Systems.ActiveDirectory, objectClass)] = rows.ToArray();
         }
 
         AddAdInfra("container");
@@ -376,6 +376,9 @@ public static class AttributeTemplateCatalog
         // plain (objectClass=X) filter), so the AD templates are the real attribute
         // set for them. No class-specific Active Roles VAs are pre-seeded here; the
         // fast read still merges whatever CVSAValues holds for each object.
+        // The alias also resolves real LDAP write names on the SINK side; that is
+        // safe only because ActiveRolesSink.EnsureSupportedSinkObjectClass refuses
+        // every class except user/group/contact/computer/organizationalUnit.
         foreach (var objectClass in new[]
                  {
                      "Computer", "Contact", "OrganizationalUnit",

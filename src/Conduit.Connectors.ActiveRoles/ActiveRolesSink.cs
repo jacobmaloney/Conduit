@@ -52,8 +52,28 @@ public sealed class ActiveRolesSink : IConnectorSink, ITombstoneEmittingSink
         _logger = logger;
     }
 
+    /// <summary>
+    /// The only classes this sink will write. The ARS source can READ 24 AD
+    /// classes (and the attribute catalog aliases the AD templates for them), but
+    /// ApplyAttributes writes every non-reserved key it is handed, so without this
+    /// gate an AD→ARS project on trustedDomain / domainDNS / groupPolicyContainer /
+    /// gMSA would become a live write to domain-control objects through the bind
+    /// account. Refused before any bind.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedSinkObjectClasses =
+        new[] { "user", "group", "contact", "computer", "organizationalUnit" };
+
+    public static void EnsureSupportedSinkObjectClass(string objectClass)
+    {
+        foreach (var supported in SupportedSinkObjectClasses)
+            if (string.Equals(objectClass, supported, StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException(
+            $"Active Roles sink does not write object class '{objectClass}'. Supported: {string.Join(", ", SupportedSinkObjectClasses)}.");
+    }
+
     public async Task<SinkWriteResult> UpsertAsync(ConnectorObject obj, CancellationToken cancellationToken)
     {
+        EnsureSupportedSinkObjectClass(obj.ObjectClass);
         // Tombstone marker: never upsert a delete. Phase 1 does not soft-delete
         // through ARS — route to the tombstone path (which is a no-op here).
         if (obj.Attributes.TryGetValue("_deleted", out var dv) && dv is bool db && db)
