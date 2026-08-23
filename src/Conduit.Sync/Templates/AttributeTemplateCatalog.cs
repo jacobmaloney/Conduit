@@ -370,6 +370,26 @@ public static class AttributeTemplateCatalog
             E("member", "member"),
         };
 
+        // The remaining 22 AD classes the generator advertises for ARS (Computer,
+        // Contact, OrganizationalUnit + the 19 infrastructure classes) are read by
+        // the same raw AD LDAP path (FastAdReader / EDMS:// DirectorySearcher with a
+        // plain (objectClass=X) filter), so the AD templates are the real attribute
+        // set for them. No class-specific Active Roles VAs are pre-seeded here; the
+        // fast read still merges whatever CVSAValues holds for each object.
+        foreach (var objectClass in new[]
+                 {
+                     "Computer", "Contact", "OrganizationalUnit",
+                     "container", "domainDNS", "groupPolicyContainer",
+                     "msDS-GroupManagedServiceAccount", "msDS-ManagedServiceAccount",
+                     "foreignSecurityPrincipal", "trustedDomain", "serviceConnectionPoint",
+                     "printQueue", "subnet", "site", "siteLink", "pKICertificateTemplate",
+                     "msFVE-RecoveryInformation", "certificationAuthority", "attributeSchema",
+                     "classSchema", "dnsNode", "dnsZone"
+                 })
+        {
+            c[(Systems.ActiveRoles, objectClass)] = c[(Systems.ActiveDirectory, objectClass)];
+        }
+
         // ──────────────────────────── IdentityCenter ───────────────────────────
         // IC as a SOURCE. The source native names below are EXACTLY the keys the
         // IdentityCenterSource emits into the attribute bag (Convert / ConvertIdentity)

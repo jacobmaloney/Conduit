@@ -32,11 +32,22 @@ public sealed class DatabaseSource : IConnectorSource
         _logger = logger;
     }
 
+    public static readonly IReadOnlyList<string> SupportedObjectClasses = new[] { "user", "group" };
+
+    public static void EnsureSupportedObjectClass(string objectClass)
+    {
+        foreach (var supported in SupportedObjectClasses)
+            if (string.Equals(objectClass, supported, StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException(
+            $"Database source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedObjectClasses)}.");
+    }
+
     public async IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        EnsureSupportedObjectClass(objectClass);
         var creds = await DatabaseCredentialReader.ReadAsync(_protector, _tenantId)
             ?? throw new InvalidOperationException($"No 'database' credential for tenant {_tenantId}.");
         var query = string.Equals(objectClass, "Group", StringComparison.OrdinalIgnoreCase)

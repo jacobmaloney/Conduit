@@ -44,11 +44,34 @@ public sealed class EntraIDSource : IConnectorSource
         _logger = logger;
     }
 
+    /// <summary>
+    /// The closed set of object classes this source can read. Anything else is
+    /// refused up front by <see cref="EnsureSupportedObjectClass"/> rather than
+    /// silently enumerating users.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedObjectClasses = new[]
+    {
+        "user", "group", "ManagerRefresh", "GroupMemberships",
+        M365UsageReportSource.ObjectClassName, EntraSignInLogSource.ObjectClassName,
+        EntraLicenseSource.ObjectClassName, EntraAppRoleSource.ObjectClassName,
+        "application", "servicePrincipal", "directoryRole", "device",
+        "administrativeUnit", "conditionalAccessPolicy", "oAuth2PermissionGrant", "domain"
+    };
+
+    public static void EnsureSupportedObjectClass(string objectClass)
+    {
+        foreach (var supported in SupportedObjectClasses)
+            if (string.Equals(objectClass, supported, StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException(
+            $"EntraID source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedObjectClasses)}.");
+    }
+
     public async IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        EnsureSupportedObjectClass(objectClass);
         var client = await CreateClientAsync();
         var filter = string.IsNullOrWhiteSpace(scope.QueryExpression) ? null : scope.QueryExpression;
         var pageSize = scope.PageSize > 0 && scope.PageSize <= 999 ? scope.PageSize : 999;
@@ -181,7 +204,7 @@ public sealed class EntraIDSource : IConnectorSource
             yield break;
         }
 
-        // Default: User
+        // Only "user" remains after EnsureSupportedObjectClass.
         await foreach (var obj in EnumerateUsersAsync(client, filter, pageSize, cancellationToken))
         {
             if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
@@ -328,6 +351,7 @@ public sealed class EntraIDSource : IConnectorSource
         SyncCursor? cursor,
         CancellationToken cancellationToken)
     {
+        EnsureSupportedObjectClass(objectClass);
         var holder = new DeltaLinkHolder();
         var isIncremental = cursor is not null && !string.IsNullOrWhiteSpace(cursor.Token);
         // Complete-read sentinel. Starts FALSE. The drain-wrapper below flips it true

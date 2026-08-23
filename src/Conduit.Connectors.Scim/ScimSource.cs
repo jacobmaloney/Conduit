@@ -32,6 +32,16 @@ public sealed class ScimSource : IConnectorSource
         _logger = logger;
     }
 
+    public static readonly IReadOnlyList<string> SupportedObjectClasses = new[] { "user", "group" };
+
+    public static void EnsureSupportedObjectClass(string objectClass)
+    {
+        foreach (var supported in SupportedObjectClasses)
+            if (string.Equals(objectClass, supported, StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException(
+            $"SCIM source does not support object class '{objectClass}'. Supported: {string.Join(", ", SupportedObjectClasses)}.");
+    }
+
     public IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
@@ -73,6 +83,7 @@ public sealed class ScimSource : IConnectorSource
         HighWatermark watermark,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        EnsureSupportedObjectClass(objectClass);
         var creds = await ScimCredentialReader.ReadAsync(_protector, _tenantId)
             ?? throw new InvalidOperationException($"No 'scim' credential for tenant {_tenantId}.");
         var client = ScimCredentialReader.BuildClient(_httpFactory, creds);
