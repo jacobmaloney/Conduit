@@ -50,242 +50,121 @@
 
 <PageTitle>Sync Projects - Conduit</PageTitle>
 
-<div class="container-fluid sync-page-container ops-section">
-    <CcTemplate1 Title="Sync Projects"
-                 Subtitle="Pump data between connections. Read from a Source, map, write to a Target — on a schedule or on demand."
-                 Icon="fas fa-exchange-alt"
-                 IconAccent="cyan">
-        <PrimaryAction>
-            <button class="btn btn-primary" @onclick="ShowNewProjectChooser">
-                <i class="fas fa-plus me-1"></i>
-                New Sync Project
+<div class="container-fluid cx-page sync-page-container">
+    <div class="cx-page-head cx-page-head--tight">
+        <div>
+            <div class="cx-page-title">Sync Projects</div>
+            <div class="cx-page-sub">Read from a Source, map, write to a Target — scheduled or on demand.</div>
+        </div>
+        <div class="cx-page-head-spacer"></div>
+        <div class="cx-page-actions">
+            <button class="cx-btn cx-btn--primary" @onclick="ShowNewProjectChooser">
+                <i class="fas fa-plus"></i> New Sync Project
             </button>
-        </PrimaryAction>
-    </CcTemplate1>
+        </div>
+    </div>
 
     @if (!string.IsNullOrEmpty(toastSuccess))
     {
-        <div class="alert alert-success alert-dismissible">
+        <div class="alert alert-success alert-dismissible mb-3">
             <i class="fas fa-check-circle me-2"></i>@toastSuccess
             <button type="button" class="btn-close" @onclick="() => toastSuccess = string.Empty"></button>
         </div>
     }
     @if (!string.IsNullOrEmpty(toastError))
     {
-        <div class="alert alert-danger alert-dismissible">
+        <div class="alert alert-danger alert-dismissible mb-3">
             <i class="fas fa-exclamation-circle me-2"></i>@toastError
             <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
         </div>
     }
 
-    <ul class="nav nav-pills sync-tabs mb-3">
-        <li class="nav-item">
-            <button class="nav-link @(activeTab == "target" ? "active" : "")" @onclick='() => activeTab = "target"'>
-                <i class="fas fa-cloud-upload-alt me-2"></i>Target System Projects
-                <span class="badge bg-secondary ms-2">@targetProjects.Count</span>
-            </button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link @(activeTab == "internal" ? "active" : "")" @onclick='() => activeTab = "internal"'>
-                <i class="fas fa-exchange-alt me-2"></i>Internal Projects
-                <span class="badge bg-secondary ms-2">@internalProjects.Count</span>
-            </button>
-        </li>
-    </ul>
-
-    @* IC SystemCenter parity: stat-card row + project card grid (center-shared.css).
-       The stat cards mirror IC's sync-summary-cards; the project cards mirror IC's
-       RenderProjectCard. Per-card action buttons set selectedProject (so the existing
-       selection-driven modals/handlers fire unchanged) via SelectThen* wrappers. *@
-    <div class="sync-summary-cards">
-        <div class="sync-summary-card">
-            <div class="sync-summary-icon blue">
-                <i class="fas fa-sync-alt"></i>
-            </div>
-            <div class="sync-summary-content">
-                <div class="sync-summary-value">@allProjects.Count</div>
-                <div class="sync-summary-label">Projects</div>
-            </div>
-        </div>
-        <div class="sync-summary-card">
-            <div class="sync-summary-icon green">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div class="sync-summary-content">
-                <div class="sync-summary-value">@allProjects.Count(p => p.IsEnabled)</div>
-                <div class="sync-summary-label">Enabled</div>
-            </div>
-        </div>
-        <div class="sync-summary-card">
-            <div class="sync-summary-icon yellow">
-                <i class="fas fa-clock"></i>
-            </div>
-            <div class="sync-summary-content">
-                <div class="sync-summary-value">@allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule))</div>
-                <div class="sync-summary-label">Scheduled</div>
-            </div>
-        </div>
-        <div class="sync-summary-card">
-            <div class="sync-summary-icon purple">
-                <i class="fas fa-spinner"></i>
-            </div>
-            <div class="sync-summary-content">
-                <div class="sync-summary-value">@allProjects.Count(p => p.IsRunning)</div>
-                <div class="sync-summary-label">Running</div>
-            </div>
-        </div>
+    <div class="cx-filterbar">
+        <span class="cx-fpill @(activeTab == "target" ? "active" : "")" @onclick='() => activeTab = "target"'>Target System · @targetProjects.Count</span>
+        <span class="cx-fpill @(activeTab == "internal" ? "active" : "")" @onclick='() => activeTab = "internal"'>Internal · @internalProjects.Count</span>
+        <span class="cx-filter-spacer"></span>
+        <span class="cx-filter-summary">@allProjects.Count(p => p.IsEnabled) enabled · @allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule)) scheduled · @allProjects.Count(p => p.IsRunning) running</span>
     </div>
 
     @if (filteredProjects.Count == 0)
     {
-        <div class="sync-empty">
-            <i class="fas fa-exchange-alt fa-2x mb-2"></i>
+        <div class="cx-card text-muted" style="text-align:center;">
             @if (activeTab == "internal")
             {
-                <p>No internal projects yet. Internal-only flows (Object↔Identity matching) live in the governance product — they will appear here when that integration lands.</p>
+                <p class="mb-0">No internal projects yet. Internal-only flows (Object↔Identity matching) live in the governance product — they will appear here when that integration lands.</p>
             }
             else if (!string.IsNullOrWhiteSpace(searchTerm))
             {
-                <p>No projects match "@searchTerm".</p>
+                <p class="mb-0">No projects match "@searchTerm".</p>
             }
             else
             {
-                <p>No sync projects yet. Click "New Sync Project" to get started — build one yourself, start from a template, or auto-generate from a connection.</p>
+                <p class="mb-0">No sync projects yet. Click "New Sync Project" to get started — build one yourself, start from a template, or auto-generate from a connection.</p>
             }
         </div>
     }
     else
     {
-        @foreach (var project in filteredProjects)
-        {
-            <div class="sync-project-card">
-                <div class="sync-project-header">
-                    <div>
-                        <h5 class="sync-project-title">
-                            <i class="fas fa-sync-alt"></i>
-                            @project.Name
-                        </h5>
-                        @if (!string.IsNullOrWhiteSpace(project.Description))
-                        {
-                            <p class="sync-project-description">@project.Description</p>
-                        }
+        <div class="cx-rows cx-rows--sp">
+            @foreach (var project in filteredProjects)
+            {
+                <div class="cx-listcard">
+                    <div class="cx-listcard-main">
+                        <div class="cx-listcard-title">@project.Name</div>
+                        <div class="cx-pillrow">
+                            <span class="cx-pill cx-pill--type">@TenantName(project.SourceTenantId)</span>
+                            <span class="cx-arrow">→</span>
+                            <span class="cx-pill cx-pill--target">@TenantName(project.SinkTenantId)</span>
+                            @if (project.IsRunning)
+                            {
+                                <span class="cx-pill cx-pill--sched"><i class="fas fa-spinner fa-spin"></i> Running</span>
+                            }
+                            else if (project.IsEnabled)
+                            {
+                                <span class="cx-pill cx-pill--ok"><span class="cx-pill-dot"></span> Enabled</span>
+                            }
+                            else
+                            {
+                                <span class="cx-pill cx-pill--muted"><i class="fas fa-pause"></i> Disabled</span>
+                            }
+                            @if (!string.IsNullOrEmpty(project.CronSchedule))
+                            {
+                                <span class="cx-pill cx-pill--sched" style="cursor:pointer;" title="@project.CronSchedule" @onclick="() => SelectThenSchedule(project)"><i class="fas fa-clock"></i> Scheduled</span>
+                            }
+                            <span class="cx-meta">@project.SuccessfulRuns/@project.TotalRuns runs · last @(project.LastRunAt is { } lr ? lr.ToString("h:mm tt") : "never")@(project.FailedRuns > 0 ? $" · {project.FailedRuns} failed" : "")</span>
+                        </div>
                     </div>
-                    <div class="sync-project-meta">
-                        @if (project.LastRunAt.HasValue)
+                    <div class="cx-actions">
+                        @if (project.IsRunning)
                         {
-                            <span><i class="fas fa-history me-1"></i>Last Run: @project.LastRunAt.Value.ToString("MMM dd, yyyy HH:mm")</span>
+                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenStop(project)"><i class="fas fa-stop"></i> Stop</button>
+                            <a href="/sync-history?project=@project.Id" class="cx-btn cx-btn--md"><i class="fas fa-chart-line"></i> Progress</a>
+                        }
+                        else if (!project.IsEnabled)
+                        {
+                            <button class="cx-btn cx-btn--run cx-btn--md" @onclick="() => ToggleEnabled(project)"><i class="fas fa-power-off"></i> Enable</button>
+                            <a href="/sync-history?project=@project.Id" class="cx-btn cx-btn--md">History</a>
+                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenEdit(project)"><i class="fas fa-ellipsis"></i></button>
                         }
                         else
                         {
-                            <span><i class="fas fa-history me-1"></i>Never executed</span>
+                            <button class="cx-btn cx-btn--run cx-btn--md" @onclick="() => SelectThenRun(project)"><i class="fas fa-play"></i> Run Now</button>
+                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects"><i class="fas fa-arrows-rotate"></i> Full Sync</button>
+                            <a href="/sync-history?project=@project.Id" class="cx-btn cx-btn--md">History</a>
+                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenEdit(project)" title="Manage"><i class="fas fa-ellipsis"></i></button>
                         }
                     </div>
                 </div>
+            }
+        </div>
 
-                <div class="sync-project-badges">
-                    <span class="sync-badge sync-badge-connection">
-                        <i class="fas fa-plug me-1"></i>
-                        <span class="sync-dir-tag">FROM</span> @TenantName(project.SourceTenantId)
-                        <i class="fas fa-arrow-right mx-1"></i>
-                        <span class="sync-dir-tag">TO</span> @TenantName(project.SinkTenantId)
-                    </span>
-                    @if (project.IsRunning)
-                    {
-                        <span class="sync-badge sync-badge-running">
-                            <i class="fas fa-spinner fa-spin me-1"></i>Running
-                        </span>
-                    }
-                    else if (project.IsEnabled)
-                    {
-                        <span class="sync-badge sync-badge-enabled">
-                            <i class="fas fa-check-circle me-1"></i>Enabled
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="sync-badge sync-badge-disabled">
-                            <i class="fas fa-pause-circle me-1"></i>Disabled
-                        </span>
-                    }
-                    @if (!string.IsNullOrEmpty(project.CronSchedule))
-                    {
-                        <button class="sync-badge sync-badge-scheduled sync-badge-clickable"
-                                title="@project.CronSchedule"
-                                @onclick="() => SelectThenSchedule(project)">
-                            <i class="fas fa-clock me-1"></i>Scheduled
-                        </button>
-                    }
-                    else
-                    {
-                        <button class="sync-badge sync-badge-setschedule sync-badge-clickable"
-                                @onclick="() => SelectThenSchedule(project)">
-                            <i class="fas fa-calendar-plus me-1"></i>Set Schedule
-                        </button>
-                    }
-                    <span class="sync-stat sync-stat-success">
-                        <i class="fas fa-check me-1"></i>@project.SuccessfulRuns/@project.TotalRuns runs
-                    </span>
-                    @if (project.FailedRuns > 0)
-                    {
-                        <span class="sync-stat sync-stat-failed">
-                            <i class="fas fa-times me-1"></i>@project.FailedRuns failed
-                        </span>
-                    }
-                </div>
-
-                <div class="sync-project-actions">
-                    @if (project.IsRunning)
-                    {
-                        <button class="btn btn-warning btn-run" @onclick="() => SelectThenStop(project)" title="Stop Sync">
-                            <i class="fas fa-stop"></i> Stop
-                        </button>
-                        <a href="/sync-history?project=@project.Id" class="btn btn-info" title="View Live Progress">
-                            <i class="fas fa-chart-line"></i> View Progress
-                        </a>
-                    }
-                    else
-                    {
-                        @if (!project.IsEnabled)
-                        {
-                            <button class="btn btn-success" @onclick="() => ToggleEnabled(project)" title="Enable Project">
-                                <i class="fas fa-power-off"></i> Enable
-                            </button>
-                        }
-                        else
-                        {
-                            <button class="btn btn-run" @onclick="() => SelectThenRun(project)" title="Run Now">
-                                <i class="fas fa-play"></i> Run Now
-                            </button>
-                            <button class="btn btn-manage" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects">
-                                <i class="fas fa-arrows-rotate"></i> Full Sync
-                            </button>
-                        }
-                    }
-                    <a href="/sync-history?project=@project.Id" class="btn btn-history" title="View Run History">
-                        <i class="fas fa-history"></i> History
-                    </a>
-                    <button class="btn btn-manage" @onclick="() => SelectThenCopy(project)" title="Copy as Template">
-                        <i class="fas fa-copy"></i> Copy
-                    </button>
-                    <button class="btn btn-manage" @onclick="() => SelectThenEdit(project)" title="Manage">
-                        <i class="fas fa-cog"></i> Manage
-                    </button>
-                    <button class="btn btn-delete" @onclick="() => SelectThenDelete(project)" disabled="@project.IsRunning" title="Delete">
-                        <i class="fas fa-trash"></i> Delete
-                    </button>
-                </div>
-            </div>
-        }
-    }
-
-    @* Search input (kept from the retired list panel; drives ApplyFilter via searchTerm). *@
-    <div class="sync-grid-search mb-3">
-        <div class="input-group">
-            <span class="input-group-text"><i class="fas fa-search"></i></span>
-            <input type="text" class="form-control" placeholder="Search projects..."
+        @* Search input (kept from the retired list panel; drives ApplyFilter via searchTerm). *@
+        <div class="cx-search mt-3" style="width:280px;background:#fff;">
+            <i class="fas fa-search"></i>
+            <input type="text" class="form-control border-0 p-0" style="box-shadow:none;font-size:12.5px;" placeholder="Search projects..."
                    value="@searchTerm" @oninput="OnSearchInput" />
         </div>
-    </div>
+    }
 </div>
 
 @* ───────── New Sync Project chooser — single entry point, three paths that all
