@@ -5,6 +5,8 @@
 @inject OpenAccessState OpenAccess
 @inject NavigationManager NavigationManager
 @inject IWebHostEnvironment Environment
+@inject SyncProjectRepository ProjectRepo
+@inject TenantRepository TenantRepo
 
 <div class="ic-sidebar">
     @* Open-access warning pill (portal authentication is OFF), Development-gated. *@
@@ -17,83 +19,55 @@
     }
 
     <nav>
-        @* Conduit is a directory-sync engine: Connections + Sync Projects are the
-           whole experience. The Synchronization Center hub hosts Projects /
-           History / Schedules / Processing as tabs (see SynchronizationCenter.razor). *@
+        @* Conduit is a directory-sync engine. The rail is the six load-bearing
+           destinations; the old Synchronization Center hub, Quick Connect, API
+           Explorer and API Tokens stay routable by URL but are off the rail, and
+           the former Settings pages are now tabs inside Configuration. *@
         <div class="ic-nav-group section-identity">
             <div class="ic-nav-group-label">Main</div>
             <NavLink class="ic-nav-item" ActiveClass="on-identity" href="" Match="NavLinkMatch.All">
                 <i class="fas fa-gauge-high"></i>
                 <span>Dashboard</span>
             </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="getting-started">
-                <i class="fas fa-list-check"></i>
-                <span>Getting Started</span>
-            </NavLink>
         </div>
 
-        <div class="ic-nav-group section-operations">
+        <div class="ic-nav-group section-identity">
             <div class="ic-nav-group-label">Sync</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-operations" href="synchronization-center">
-                <i class="fas fa-arrows-rotate"></i>
-                <span>Synchronization Center</span>
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="sync-projects">
+                <i class="fas fa-right-left"></i>
+                <span>Sync Projects</span>
+                @if (projectCount is int pc)
+                {
+                    <span class="ic-nav-badge info">@pc</span>
+                }
             </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-operations" href="connected-systems">
-                <i class="fas fa-globe"></i>
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="connected-systems">
+                <i class="fas fa-plug"></i>
                 <span>Connections</span>
+                @if (connectionCount is int cc)
+                {
+                    <span class="ic-nav-badge info">@cc</span>
+                }
             </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-operations" href="schedules">
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="schedules">
                 <i class="fas fa-calendar-days"></i>
                 <span>Schedules</span>
+                @if (scheduleCount is int sc)
+                {
+                    <span class="ic-nav-badge info">@sc</span>
+                }
+            </NavLink>
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="sync-history">
+                <i class="fas fa-clock-rotate-left"></i>
+                <span>History</span>
             </NavLink>
         </div>
 
-        <div class="ic-nav-group section-analytics">
-            <div class="ic-nav-group-label">Tools</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="quick-connect">
-                <i class="fas fa-link"></i>
-                <span>Quick Connect</span>
-            </NavLink>
-            @* API Explorer + API Tokens are SCIM-origin chrome — kept but gated to
-               Development so they don't clutter the primary directory-sync nav. *@
-            @if (ShowDevChrome)
-            {
-                <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="api-explorer">
-                    <i class="fas fa-code"></i>
-                    <span>API Explorer</span>
-                </NavLink>
-                <NavLink class="ic-nav-item" ActiveClass="on-analytics" href="tokens">
-                    <i class="fas fa-key"></i>
-                    <span>API Tokens</span>
-                </NavLink>
-            }
-        </div>
-
-        <div class="ic-nav-group section-configure">
+        <div class="ic-nav-group section-identity">
             <div class="ic-nav-group-label">Settings</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="configuration">
+            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="configuration">
                 <i class="fas fa-gear"></i>
                 <span>Configuration</span>
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="admin/identity-providers">
-                <i class="fas fa-id-card"></i>
-                <span>Identity Providers</span>
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="database-settings">
-                <i class="fas fa-database"></i>
-                <span>Database</span>
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="provisioning-base-dns">
-                <i class="fas fa-shield-alt"></i>
-                <span>AD Creation Base DNs</span>
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="audit-log">
-                <i class="fas fa-list"></i>
-                <span>Audit Log</span>
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-configure" href="logs">
-                <i class="fas fa-bug"></i>
-                <span>Debug Logs</span>
             </NavLink>
         </div>
     </nav>
@@ -119,7 +93,30 @@
 </div>
 
 @code {
-    // SCIM-origin chrome (Open-access pill, API Explorer, API Tokens) is gated to
-    // Development for the directory-sync product — kept off the production nav.
+    // SCIM-origin chrome (the open-access pill) stays gated to Development.
     private bool ShowDevChrome => Environment.IsDevelopment();
+
+    // Rail count badges. Pulled once on load the same way the dashboard/hub do;
+    // any repo failure just leaves the badge off (null) rather than breaking nav.
+    private int? projectCount;
+    private int? scheduleCount;
+    private int? connectionCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var projects = await ProjectRepo.GetAllAsync();
+            projectCount = projects.Count;
+            scheduleCount = projects.Count(p => !string.IsNullOrWhiteSpace(p.CronSchedule));
+        }
+        catch { }
+
+        try
+        {
+            var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
+            connectionCount = tenants.Count;
+        }
+        catch { }
+    }
 }
