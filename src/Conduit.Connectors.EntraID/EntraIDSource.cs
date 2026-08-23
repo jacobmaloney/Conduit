@@ -983,12 +983,15 @@ public sealed class EntraIDSource : IConnectorSource
     }
 
     /// <summary>
-    /// Per-enumeration owner-fetch guard: the first 403 on an owners collection
-    /// disables further owner fetches for that class (one warning, not one per object).
+    /// Per-enumeration owner-fetch guard: the first 403 on an owners collection, or
+    /// <see cref="MaxConsecutiveFailures"/> non-403 Graph errors in a row (throttling),
+    /// disables further owner fetches for that class — one warning, not one per object.
     /// </summary>
     private sealed class OwnerFetchState
     {
-        public bool Forbidden { get; set; }
+        public const int MaxConsecutiveFailures = 5;
+        public bool Disabled { get; set; }
+        public int ConsecutiveFailures { get; set; }
     }
 
     private Task<IReadOnlyList<GraphDirectoryObject>?> TryGetGroupOwnersAsync(
@@ -1015,7 +1018,7 @@ public sealed class EntraIDSource : IConnectorSource
         Func<string, Task<DirectoryObjectCollectionResponse?>> fetchNext,
         OwnerFetchState state, string objectClass, string objectId, string scopeHint)
     {
-        if (state.Forbidden) return null;
+        if (state.Disabled) return null;
         var owners = new List<GraphDirectoryObject>();
         try
         {
@@ -1026,11 +1029,12 @@ public sealed class EntraIDSource : IConnectorSource
                 if (string.IsNullOrEmpty(page.OdataNextLink)) break;
                 page = await fetchNext(page.OdataNextLink);
             }
+            state.ConsecutiveFailures = 0;
             return owners;
         }
         catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
         {
-            state.Forbidden = true;
+            state.Disabled = true;
             _logger.LogWarning(
                 "EntraID: owners not collected for class {ObjectClass} — app registration lacks scope {Scope} (403)",
                 objectClass, scopeHint);
@@ -1038,9 +1042,20 @@ public sealed class EntraIDSource : IConnectorSource
         }
         catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
         {
-            _logger.LogWarning(
-                "EntraID: owners fetch failed for {ObjectClass} {ObjectId}: {Code}",
-                objectClass, objectId, ex.Error?.Code ?? ex.ResponseStatusCode.ToString());
+            var code = ex.Error?.Code ?? ex.ResponseStatusCode.ToString();
+            if (++state.ConsecutiveFailures >= OwnerFetchState.MaxConsecutiveFailures)
+            {
+                state.Disabled = true;
+                _logger.LogWarning(
+                    "EntraID: owners not collected for the rest of class {ObjectClass} — {Count} consecutive Graph errors (last: {Code})",
+                    objectClass, state.ConsecutiveFailures, code);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "EntraID: owners fetch failed for {ObjectClass} {ObjectId}: {Code}",
+                    objectClass, objectId, code);
+            }
             return null;
         }
     }
@@ -1090,9 +1105,10 @@ public sealed class EntraIDSource : IConnectorSource
     // ─── extended directory $select sets (template attributes only) ────────
     // keyCredentials / passwordCredentials ARE selected on application and
     // servicePrincipal, but only their EXPIRY METADATA is emitted (keyId,
-    // displayName, type, usage, start/endDateTime, hint, customKeyIdentifier —
-    // see EntraCredentialMetadata). KeyCredential.Key (the cert blob) and
-    // PasswordCredential.SecretText are never read, emitted, or logged.
+    // displayName, type, usage, start/endDateTime, customKeyIdentifier — see
+    // EntraCredentialMetadata). KeyCredential.Key (the cert blob),
+    // PasswordCredential.SecretText and PasswordCredential.Hint (secret prefix) are
+    // never read, emitted, or logged.
     private static readonly string[] ApplicationSelectFields = new[]
     {
         "id", "displayName", "appId", "signInAudience", "publisherDomain",

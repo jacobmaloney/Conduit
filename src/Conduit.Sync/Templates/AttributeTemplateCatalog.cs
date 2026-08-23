@@ -592,7 +592,7 @@ public static class AttributeTemplateCatalog
             E("createdDateTime", "WhenCreated"),
             // Credential EXPIRY metadata (EntraCredentialMetadata). credentials is a compact
             // JSON array of {keyId, displayName, kind, type, usage, startDateTime,
-            // endDateTime, hint, customKeyIdentifier} — never the key blob or secretText.
+            // endDateTime, customKeyIdentifier} — never the key blob, secretText or hint.
             E("credentialCount", "credentialCount", false, "Integer"),
             E("earliestCredentialExpiry", "earliestCredentialExpiry", false, "DateTime"),
             E("credentials", "credentials"),
@@ -625,7 +625,7 @@ public static class AttributeTemplateCatalog
             E("createdDateTime", "WhenCreated"),
             // Credential EXPIRY metadata (EntraCredentialMetadata). credentials is a compact
             // JSON array of {keyId, displayName, kind, type, usage, startDateTime,
-            // endDateTime, hint, customKeyIdentifier} — never the key blob or secretText.
+            // endDateTime, customKeyIdentifier} — never the key blob, secretText or hint.
             E("credentialCount", "credentialCount", false, "Integer"),
             E("earliestCredentialExpiry", "earliestCredentialExpiry", false, "DateTime"),
             E("credentials", "credentials"),

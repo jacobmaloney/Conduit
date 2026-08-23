@@ -10,10 +10,11 @@ namespace Conduit.Connectors.EntraID;
 /// Projects an application's / service principal's passwordCredentials and
 /// keyCredentials down to EXPIRY METADATA for the NHI / credential-hygiene read
 /// side. The only fields read are keyId, displayName, type, usage, startDateTime,
-/// endDateTime, hint (password) and customKeyIdentifier (key). <c>KeyCredential.Key</c>
-/// (the certificate / public-key blob) and <c>PasswordCredential.SecretText</c> are
-/// never read, serialized or logged — Graph does not return secretText on a read,
-/// but nothing here depends on that.
+/// endDateTime and customKeyIdentifier (key — a public-cert thumbprint).
+/// <c>KeyCredential.Key</c> (the certificate / public-key blob),
+/// <c>PasswordCredential.SecretText</c> AND <c>PasswordCredential.Hint</c> (the first
+/// characters of the live secret) are never read, serialized or logged — Graph does
+/// not return secretText on a read, but nothing here depends on that.
 /// </summary>
 internal static class EntraCredentialMetadata
 {
@@ -32,7 +33,6 @@ internal static class EntraCredentialMetadata
         string? usage,
         string? startDateTime,
         string? endDateTime,
-        string? hint,
         string? customKeyIdentifier)
     {
         [JsonIgnore] public DateTimeOffset? End { get; init; }
@@ -54,13 +54,13 @@ internal static class EntraCredentialMetadata
             foreach (var p in passwords)
                 entries.Add(new Entry(
                     p.KeyId?.ToString(), p.DisplayName, "password", null, null,
-                    Iso(p.StartDateTime), Iso(p.EndDateTime), p.Hint, null)
+                    Iso(p.StartDateTime), Iso(p.EndDateTime), null)
                 { End = p.EndDateTime });
         if (keys is not null)
             foreach (var k in keys)
                 entries.Add(new Entry(
                     k.KeyId?.ToString(), k.DisplayName, "key", k.Type, k.Usage,
-                    Iso(k.StartDateTime), Iso(k.EndDateTime), null,
+                    Iso(k.StartDateTime), Iso(k.EndDateTime),
                     k.CustomKeyIdentifier is { Length: > 0 } ck ? Convert.ToBase64String(ck) : null)
                 { End = k.EndDateTime });
 

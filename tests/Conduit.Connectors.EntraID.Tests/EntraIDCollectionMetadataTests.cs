@@ -81,6 +81,9 @@ public class EntraIDCollectionMetadataTests
         Assert.DoesNotContain(Convert.ToBase64String(KeyBlob), flat);
         Assert.DoesNotContain("PRIVATE KEY BYTES", flat);
         Assert.DoesNotContain("\"key\":", flat, StringComparison.OrdinalIgnoreCase);
+        // hint is the first characters of the live secret — IC never holds the secret, so
+        // it has no consumer and is not stored.
+        Assert.DoesNotContain("hint", flat, StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal(3, obj.Attributes["credentialCount"]);
         Assert.Equal(true, obj.Attributes["hasExpiredCredential"]);
@@ -93,12 +96,11 @@ public class EntraIDCollectionMetadataTests
         // Sorted by endDateTime: expired password, expiring password, cert.
         Assert.Equal("11111111-1111-1111-1111-111111111111", entries[0].GetProperty("keyId").GetString());
         Assert.Equal("password", entries[0].GetProperty("kind").GetString());
-        Assert.Equal("do-", entries[0].GetProperty("hint").GetString());
         Assert.Equal("key", entries[2].GetProperty("kind").GetString());
         Assert.Equal("AsymmetricX509Cert", entries[2].GetProperty("type").GetString());
         Assert.Equal("Verify", entries[2].GetProperty("usage").GetString());
         Assert.Equal(Convert.ToBase64String(new byte[] { 0xAB, 0xCD }), entries[2].GetProperty("customKeyIdentifier").GetString());
-        var allowed = new HashSet<string> { "keyId", "displayName", "kind", "type", "usage", "startDateTime", "endDateTime", "hint", "customKeyIdentifier" };
+        var allowed = new HashSet<string> { "keyId", "displayName", "kind", "type", "usage", "startDateTime", "endDateTime", "customKeyIdentifier" };
         foreach (var e in entries)
             foreach (var prop in e.EnumerateObject())
                 Assert.Contains(prop.Name, allowed);
