@@ -935,12 +935,21 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     }
 
     /// <summary>
+    /// <summary>UTC instant the FIRST license batch of this run reached the sink.
+    /// The sink is constructed once per run (orchestrator CreateSink), so this is
+    /// constant across every license POST of one run — IC uses it as the stale
+    /// threshold (assignments not re-asserted after it get deactivated).</summary>
+    private DateTime? _licenseSyncStartedUtc;
+
     /// License-assignment emit. POSTs each ConnectorObject (built by
     /// <c>EntraLicenseSource.Build</c>) to IC's <c>POST /api/objects/licenses/bulk</c>.
     /// Mirrors the m365-usage path: Source is the sanitized source-connection name (so
     /// IC resolves the SAME DirectoryConnection the user upserts landed under) and
     /// SourceJobServerId/Name carry this installation's provenance. Chunked to &lt;=1000
-    /// rows per POST. Best-effort: a failed chunk is logged and the run proceeds.
+    /// rows per POST. Every payload carries SyncStartedAt (this run's first-license-batch
+    /// instant) so IC can deactivate assignments the run no longer asserts. A chunk whose
+    /// response says usersResolved=0 while rows were sent is a FAILED chunk — nothing
+    /// landed, and reporting Ok there is the false success this path used to produce.
     /// Returns one SinkWriteResult per input object in order so the orchestrator counts
     /// correctly.
     /// </summary>
@@ -950,6 +959,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         IReadOnlyList<ConnectorObject> batch,
         CancellationToken cancellationToken)
     {
+        _licenseSyncStartedUtc ??= DateTime.UtcNow;
         var source = SanitizeSource(LookupAttr(batch[0], "_sourceConnection"));
         const int maxRowsPerPost = 1000;
         var results = new List<SinkWriteResult>(batch.Count);
@@ -969,6 +979,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 Source = source,
                 SourceJobServerId = ConduitInstanceIdentity.InstanceId,
                 SourceJobServerName = ConduitInstanceIdentity.Name,
+                SyncStartedAt = _licenseSyncStartedUtc,
                 Rows = rows
             };
 
@@ -980,16 +991,37 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                     client, $"{creds.BaseUrl}/api/objects/licenses/bulk", body, cancellationToken);
                 if (resp.IsSuccessStatusCode)
                 {
-                    outcome = SinkWriteOutcome.Updated;
                     using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
                     var root = doc.RootElement;
                     int pools = root.TryGetProperty("poolsUpserted", out var poEl) && poEl.ValueKind == JsonValueKind.Number ? poEl.GetInt32() : 0;
                     int persisted = root.TryGetProperty("assignmentsPersisted", out var pEl) && pEl.ValueKind == JsonValueKind.Number ? pEl.GetInt32() : count;
                     int resolved = root.TryGetProperty("usersResolved", out var rEl) && rEl.ValueKind == JsonValueKind.Number ? rEl.GetInt32() : 0;
                     int unresolved = root.TryGetProperty("usersUnresolved", out var uEl) && uEl.ValueKind == JsonValueKind.Number ? uEl.GetInt32() : 0;
-                    _logger.LogInformation(
-                        "IC license chunk pushed (tenant={TenantId}, rows={Rows}, pools={Pools}, assignmentsPersisted={Persisted}, usersResolved={Resolved}, usersUnresolved={Unresolved}).",
-                        _tenantId, count, pools, persisted, resolved, unresolved);
+                    int staleDeactivated = root.TryGetProperty("staleDeactivated", out var sEl) && sEl.ValueKind == JsonValueKind.Number ? sEl.GetInt32() : 0;
+
+                    if (resolved == 0 && count > 0)
+                    {
+                        // IC accepted the POST but resolved NOBODY: every row was dropped
+                        // (users step hasn't landed, wrong Source, UPN mismatch). Nothing
+                        // was persisted — an Ok here would be a green run over zero data.
+                        outcome = SinkWriteOutcome.Failed;
+                        error = $"IC resolved 0 of {count} license rows to user objects (usersUnresolved={unresolved}). "
+                              + "The user sync for this connection must land before license rows can attach.";
+                        _logger.LogError(
+                            "IC license chunk NOT persisted (tenant={TenantId}, rows={Rows}): usersResolved=0, usersUnresolved={Unresolved}.",
+                            _tenantId, count, unresolved);
+                    }
+                    else
+                    {
+                        outcome = SinkWriteOutcome.Updated;
+                        if (unresolved > 0)
+                            _logger.LogWarning(
+                                "IC license chunk partially resolved (tenant={TenantId}, rows={Rows}, usersResolved={Resolved}, usersUnresolved={Unresolved}).",
+                                _tenantId, count, resolved, unresolved);
+                        _logger.LogInformation(
+                            "IC license chunk pushed (tenant={TenantId}, rows={Rows}, pools={Pools}, assignmentsPersisted={Persisted}, usersResolved={Resolved}, usersUnresolved={Unresolved}, staleDeactivated={Stale}).",
+                            _tenantId, count, pools, persisted, resolved, unresolved, staleDeactivated);
+                    }
                 }
                 else
                 {

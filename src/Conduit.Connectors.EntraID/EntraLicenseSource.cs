@@ -28,9 +28,17 @@ namespace Conduit.Connectors.EntraID;
 /// BuildLicenseRow LookupAttr calls.
 ///
 /// Least-privilege app-registration scopes: Organization.Read.All (subscribedSkus)
-/// + User.Read.All (assignedLicenses). A 403 on either call is logged at Warning
-/// naming the scope and yields NOTHING rather than failing the whole run — same
-/// fail-soft contract as the sign-in + usage readers.
+/// + User.Read.All (assignedLicenses + licenseAssignmentStates). A 403 on
+/// /subscribedSkus THROWS (naming the missing scope) so the run goes non-green —
+/// without the SKU inventory the whole license stream is silently empty, and a
+/// green run over an empty read is exactly the fake-pass this class must not
+/// produce. The users call keeps the fail-soft Warning contract of the sign-in +
+/// usage readers.
+///
+/// AssignmentSource per (user, SKU): the user's licenseAssignmentStates entry for
+/// that SKU says whether the license came direct or via group-based licensing
+/// (assignedByGroup) — "Direct" / "Group", or "Unknown" when Graph returned no
+/// states collection (or no entry for that SKU).
 /// </summary>
 internal sealed class EntraLicenseSource
 {
@@ -50,12 +58,12 @@ internal sealed class EntraLicenseSource
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // 1) Pool inventory: skuId -> (name, partNumber, capacity). Without it we
-        //    cannot describe the pools, so a 403 here aborts the whole license stream.
+        //    cannot describe the pools — required: a 403 here THROWS so the run
+        //    fails visibly instead of yielding nothing and reporting green.
         SubscribedSkuCollectionResponse? skus = null;
-        if (!await TryAsync(
-                () => _client.SubscribedSkus.GetAsync(cancellationToken: cancellationToken),
-                r => skus = r, "Organization.Read.All", "subscribedSkus"))
-            yield break;
+        await TryAsync(
+            () => _client.SubscribedSkus.GetAsync(cancellationToken: cancellationToken),
+            r => skus = r, "Organization.Read.All", "subscribedSkus", required: true);
 
         var pools = new Dictionary<string, PoolInfo>(StringComparer.OrdinalIgnoreCase);
         foreach (var s in skus?.Value ?? new List<SubscribedSku>())
@@ -82,7 +90,7 @@ internal sealed class EntraLicenseSource
         if (!await TryAsync(
                 () => _client.Users.GetAsync(req =>
                 {
-                    req.QueryParameters.Select = new[] { "id", "userPrincipalName", "assignedLicenses" };
+                    req.QueryParameters.Select = new[] { "id", "userPrincipalName", "assignedLicenses", "licenseAssignmentStates" };
                     req.QueryParameters.Top = 999;
                 }, cancellationToken),
                 r => page = r, "User.Read.All", "users"))
@@ -142,10 +150,7 @@ internal sealed class EntraLicenseSource
             ["WarningUnits"] = pool.WarningUnits.ToString(CultureInfo.InvariantCulture),
             ["SuspendedUnits"] = pool.SuspendedUnits.ToString(CultureInfo.InvariantCulture),
             ["UserSourceUniqueId"] = userId,
-            // Entra licensing is direct OR group-inherited; Graph's assignedLicenses
-            // doesn't itself say which, so we report "Direct" by default. (Group-based
-            // licensing detail would come from licenseAssignmentStates — a future pass.)
-            ["AssignmentSource"] = "Direct",
+            ["AssignmentSource"] = DeriveAssignmentSource(u.LicenseAssignmentStates, skuId),
         };
         Set(attrs, "SkuPartNumber", pool.SkuPartNumber);
         Set(attrs, "UserPrincipalName", u.UserPrincipalName);
@@ -160,12 +165,38 @@ internal sealed class EntraLicenseSource
     }
 
     /// <summary>
+    /// Group-based vs direct licensing, from the user's licenseAssignmentStates. A
+    /// state entry whose assignedByGroup is non-null came through group-based
+    /// licensing; a null assignedByGroup is a direct grant (which wins when both
+    /// exist for one SKU, because a direct grant is what an operator can act on).
+    /// No evidence — Graph omitted the states collection, or it carries no entry
+    /// for this SKU — means we do not know: "Unknown", never a fabricated
+    /// "Direct". Internal-static for the unit tests.
+    /// </summary>
+    internal static string DeriveAssignmentSource(List<LicenseAssignmentState>? states, string skuId)
+    {
+        if (states is null) return "Unknown";
+
+        var matched = false;
+        foreach (var s in states)
+        {
+            if (!string.Equals(s.SkuId?.ToString(), skuId, StringComparison.OrdinalIgnoreCase)) continue;
+            if (s.AssignedByGroup is null) return "Direct";
+            matched = true;
+        }
+        return matched ? "Group" : "Unknown";
+    }
+
+    /// <summary>
     /// Run a Graph call and assign its result. Returns true to continue. A 403 (the
     /// app registration lacks <paramref name="scope"/>) is logged at Warning naming the
-    /// scope and returns false (yield nothing); any other error propagates. Never logs
-    /// token/secret material. Mirrors EntraSignInLogSource.TryFirstPageAsync.
+    /// scope and returns false (yield nothing) — unless <paramref name="required"/>,
+    /// where the 403 is rethrown wrapped in a message naming the missing scope so the
+    /// orchestrator marks the step (and the run) failed instead of green-empty. Any
+    /// other error propagates. Never logs token/secret material. Mirrors
+    /// EntraSignInLogSource.TryFirstPageAsync.
     /// </summary>
-    private async Task<bool> TryAsync<T>(Func<Task<T?>> fetch, Action<T?> assign, string scope, string what)
+    private async Task<bool> TryAsync<T>(Func<Task<T?>> fetch, Action<T?> assign, string scope, string what, bool required = false)
         where T : class
     {
         try
@@ -175,6 +206,11 @@ internal sealed class EntraLicenseSource
         }
         catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
         {
+            if (required)
+                throw new InvalidOperationException(
+                    $"EntraID license read failed: the app registration lacks Graph scope {scope} (403 on {what}). " +
+                    $"Grant {scope} (application) and admin-consent it, then re-run.", ex);
+
             _logger.LogWarning(
                 "EntraID: skipping class {ObjectClass} ({What}) — app registration lacks scope {Scope} (403)",
                 ObjectClassName, what, scope);

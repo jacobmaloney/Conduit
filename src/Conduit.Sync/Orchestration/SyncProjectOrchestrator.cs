@@ -1244,12 +1244,22 @@ public sealed class SyncProjectOrchestrator
         // means every record is treated as changed and written normally. Failed
         // writes never get a stored hash, so a retry re-writes them. Records with
         // no stable SourceId are never skipped. When in doubt, write.
-        bool skipUnchanged = project.SkipUnchanged;
+        //
+        // The "license" class is EXEMPT: IC's stale-deactivate pass treats any
+        // assignment the run did not re-assert as revoked, so a hash-skipped (but
+        // still present) license row would be falsely deactivated. Every license
+        // row must reach the sink every run. Row counts are small (per-user,
+        // per-SKU); the hourly re-POST is cheap and kills hash-suppression as a
+        // fake-pass source.
+        var isLicenseClass = string.Equals(objectClass, "license", StringComparison.OrdinalIgnoreCase);
+        bool skipUnchanged = project.SkipUnchanged && !isLicenseClass;
         Dictionary<string, SinkHashEntry> priorHashes = skipUnchanged
             ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, objectClass)
             : new Dictionary<string, SinkHashEntry>(StringComparer.Ordinal);
         if (skipUnchanged)
             await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es) for class '{objectClass}'.");
+        else if (project.SkipUnchanged && isLicenseClass)
+            await Log(run, "Info", "    Skip-unchanged EXEMPT for class 'license': every row is re-asserted each run so IC's stale-deactivate pass stays truthful.");
         var writtenHashes = new List<KeyValuePair<string, string>>(256);
 
         // Source-declared volatile attributes (per-attempt timestamps) are excluded
@@ -1306,6 +1316,16 @@ public sealed class SyncProjectOrchestrator
         {
             await Log(run, "Info",
                 "    Delete-detection DISABLED for class 'signinlog': sign-in events are append-only and age out at the source — a missing event is expiry, not deletion. Upsert-only.");
+            tombstoneSink = null;
+        }
+        // License rows are not directory objects: their SourceIds ("{userId}:{skuId}")
+        // match nothing in IC's Objects table, and revocation is handled by the sink's
+        // SyncStartedAt stale-deactivate pass. Tombstone-diffing this class would only
+        // emit mis-keyed soft-deletes at the objects endpoint.
+        if (tombstoneSink is not null && isLicenseClass)
+        {
+            await Log(run, "Info",
+                "    Delete-detection DISABLED for class 'license': revocation is handled by IC's SyncStartedAt stale-deactivate pass, and license SourceIds are not object ids. Upsert-only.");
             tombstoneSink = null;
         }
         var deleteDetectionOn = tombstoneSink is not null;
