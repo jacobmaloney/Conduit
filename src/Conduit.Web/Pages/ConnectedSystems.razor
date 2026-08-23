@@ -29,45 +29,34 @@
 
 <PageTitle>Connections - Conduit</PageTitle>
 
-<div class="container-fluid ops-section">
-    @* Connections single-sourced on the SHARED center-shared.css component
-       classes (sync-summary-card stat row + sync-project-card list rows +
-       sync-badge + btn-history/manage/delete), exactly like the re-skinned
-       Sync Projects page. The page wrapper is .ops-section, which re-sources
-       the accent to the OPERATIONS orange token (--sec-operations) and bridges
-       IC's design-token names to Conduit's palette so center-shared.css renders
-       directly — no per-page copy of the component rules. Header uses the same
-       CcTemplate1 as Sync Projects for sibling parity. The only Connections-
-       specific CSS that remains in conduit.css is the small set center-shared
-       does not cover: .sync-summary-icon.orange, .sync-badge-warn, .btn-test,
-       .card-test-result (now scoped under .ops-section). All real Conduit
-       actions (Test/Edit/Rename/Deactivate/Delete + dev chrome) are preserved. *@
-    <CcTemplate1 Title="Directory Connections"
-                 Subtitle="Directory and target systems Conduit syncs identities to and from."
-                 Icon="fas fa-plug"
-                 IconAccent="cyan">
-        <PrimaryAction>
-            <button class="btn btn-outline-secondary" @onclick="SeedDemo" disabled="@seeding">
+<div class="container-fluid cx-page ops-section">
+    <div class="cx-page-head cx-page-head--tight">
+        <div>
+            <div class="cx-page-title">Connections</div>
+            <div class="cx-page-sub">Directory and target systems Conduit syncs identities to and from.</div>
+        </div>
+        <div class="cx-page-head-spacer"></div>
+        <div class="cx-page-actions">
+            <button class="cx-btn" @onclick="SeedDemo" disabled="@seeding">
                 @if (seeding)
                 {
                     <span class="spinner-border spinner-border-sm" role="status"></span>
                 }
                 else
                 {
-                    <i class="oi oi-data-transfer-download me-1"></i>
+                    <i class="fas fa-download"></i>
                 }
                 <span>Seed Demo Data</span>
             </button>
-            <button class="btn btn-primary" @onclick="ShowCreateModal">
-                <i class="fas fa-plus me-1"></i>
-                <span>New Connection</span>
+            <button class="cx-btn cx-btn--primary" @onclick="ShowCreateModal">
+                <i class="fas fa-plus"></i> New Connection
             </button>
-        </PrimaryAction>
-    </CcTemplate1>
+        </div>
+    </div>
 
     @if (!string.IsNullOrEmpty(toastError))
     {
-        <div class="alert alert-danger alert-dismissible">
+        <div class="alert alert-danger alert-dismissible mb-3">
             <i class="fas fa-exclamation-circle me-2"></i>@toastError
             <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
         </div>
@@ -75,7 +64,7 @@
 
     @if (lastSeedResult != null)
     {
-        <div class="alert alert-success">
+        <div class="alert alert-success mb-3">
             <h5 class="alert-heading">Demo seed complete</h5>
             <p class="mb-1">
                 Created: <strong>@lastSeedResult.ConnectedSystemsCreated</strong> connected systems,
@@ -109,186 +98,92 @@
     }
     else if (!stats.Any())
     {
-        <div class="alert alert-info">
-            <h4 class="alert-heading">No connected systems yet</h4>
-            <p>Connect one to get started.</p>
-            <button class="btn btn-primary btn-sm" @onclick="ShowCreateModal">
-                <i class="oi oi-plus"></i> Connect a system
+        <div class="cx-card text-center">
+            <h5 class="mb-2">No connected systems yet</h5>
+            <p class="text-muted">Connect one to get started.</p>
+            <button class="cx-btn cx-btn--primary" @onclick="ShowCreateModal">
+                <i class="fas fa-plus"></i> Connect a system
             </button>
         </div>
     }
     else
     {
-        @* ── Stat row (IC sync-summary-card parity) ──────────────────────────
-           Total Connections + Active are direct IC equivalents. IC's third/
-           fourth cards (Authoritative / Test Passed) have NO honest Conduit
-           per-connection field — authoritative is decided per sync project,
-           and test results aren't persisted on TenantStats — so rather than
-           fake them, cards 3 & 4 map to real Conduit directory metrics that
-           are already tracked per connection: Users synced and Groups synced. *@
-        <div class="sync-summary-cards">
-            <div class="sync-summary-card">
-                <div class="sync-summary-icon orange"><i class="fas fa-plug"></i></div>
-                <div class="sync-summary-content">
-                    <div class="sync-summary-value">@stats.Count</div>
-                    <div class="sync-summary-label">Total Connections</div>
+        <div class="cx-rows cx-rows--sp">
+            @foreach (var s in stats)
+            {
+                var missing = GetMissingRequiredTenantFields(s);
+                var missingTitle = missing.Count > 0 ? string.Concat("Configuration incomplete — missing: ", string.Join(", ", missing), ". Open Edit to fix.") : string.Empty;
+                <div>
+                    <div class="cx-listcard">
+                        <span class="cx-listcard-icon"><i class="@ConnIcon(s.SystemType)"></i></span>
+                        <div class="cx-listcard-main">
+                            <div class="cx-listcard-title">@s.Name</div>
+                            <div class="cx-pillrow">
+                                <span class="cx-pill cx-pill--type">@s.SystemType</span>
+                                @if (s.IsActive)
+                                {
+                                    <span class="cx-pill cx-pill--ok"><span class="cx-pill-dot"></span> Active</span>
+                                }
+                                else
+                                {
+                                    <span class="cx-pill cx-pill--muted"><i class="fas fa-pause"></i> Inactive</span>
+                                }
+                                @if (missing.Count > 0)
+                                {
+                                    <span class="cx-pill cx-pill--warn" title="@missingTitle"><i class="fas fa-exclamation-triangle"></i> Config incomplete</span>
+                                }
+                                <span class="cx-meta">@(string.IsNullOrWhiteSpace(s.Slug) ? s.Domain : s.Slug) · never synced</span>
+                            </div>
+                        </div>
+                        <div class="cx-actions">
+                            @if (HasAdapter(s.SystemType))
+                            {
+                                <button class="cx-btn cx-btn--md cx-btn--teal" @onclick="() => TestCardConnectionAsync(s)" disabled="@(cardTestBusyId == s.TenantId)" title="Test Connection — real bind using stored credentials">
+                                    @if (cardTestBusyId == s.TenantId)
+                                    {
+                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                    }
+                                    else
+                                    {
+                                        <i class="fas fa-bolt"></i>
+                                    }
+                                    <span>Test</span>
+                                </button>
+                            }
+                            <button class="cx-btn cx-btn--md" @onclick="() => EditSystem(s.TenantId)" title="Edit connection"><i class="fas fa-edit"></i> Edit</button>
+                            <button class="cx-btn cx-btn--md" @onclick="GoToSyncHistory" title="View sync history">History</button>
+                            @if (HasCredentialFields(s.SystemType))
+                            {
+                                <button class="cx-btn cx-btn--md" @onclick="() => ShowCredentialsModal(s)" title="Credentials & test (directory bind)"><i class="fas fa-key"></i></button>
+                            }
+                            <button class="cx-btn cx-btn--md" @onclick="() => ShowRenameModal(s)" title="Rename connection"><i class="fas fa-tag"></i></button>
+                            @if (ShowDevChrome)
+                            {
+                                @if (IsConnectorType(s.SystemType))
+                                {
+                                    <button class="cx-btn cx-btn--md" @onclick="() => ShowQuickSyncModal(s)" title="[Dev] Quick Sync — clone into a local browser tenant"><i class="fas fa-download"></i></button>
+                                }
+                                <button class="cx-btn cx-btn--md" @onclick="() => ShowEndpoints(s)" title="[Dev] View SCIM/REST endpoints + tokens"><i class="fas fa-external-link-alt"></i></button>
+                                <button class="cx-btn cx-btn--md" @onclick="() => ToggleLegalHold(s)" title="@(s.LegalHold ? "[Dev] Legal hold ON — click to release." : "[Dev] Put on legal hold.")"><i class="fas @(s.LegalHold ? "fa-lock" : "fa-lock-open")"></i></button>
+                                <button class="cx-btn cx-btn--md" @onclick="() => ClearData(s)" disabled="@(clearInProgress || s.LegalHold)" title="@(s.LegalHold ? "[Dev] Refused — legal hold." : "[Dev] Clear users + groups")"><i class="fas fa-eraser"></i></button>
+                            }
+                            @if (s.TenantId != TenantRepository.DefaultTenantId)
+                            {
+                                <button class="cx-btn cx-btn--md" @onclick="() => DeactivateSystem(s)" disabled="@s.LegalHold" title="@(s.LegalHold ? "Refused — legal hold." : (s.IsActive ? "Deactivate (soft delete)" : "Already inactive"))"><i class="fas @(s.IsActive ? "fa-toggle-on" : "fa-toggle-off")"></i></button>
+                                <button class="cx-btn cx-btn--md" @onclick="() => ShowDeleteModal(s)" disabled="@s.LegalHold" title="@(s.LegalHold ? "Refused — legal hold." : "Delete forever")"><i class="fas fa-trash-alt"></i></button>
+                            }
+                        </div>
+                    </div>
+                    @if (cardTestResultId == s.TenantId && !string.IsNullOrEmpty(cardTestMessage))
+                    {
+                        <div class="card-test-result @(cardTestSuccess ? "ok" : "err")">
+                            <i class="fas @(cardTestSuccess ? "fa-check-circle" : "fa-times-circle")"></i>
+                            <span>@cardTestMessage</span>
+                        </div>
+                    }
                 </div>
-            </div>
-            <div class="sync-summary-card">
-                <div class="sync-summary-icon green"><i class="fas fa-check-circle"></i></div>
-                <div class="sync-summary-content">
-                    <div class="sync-summary-value">@stats.Count(c => c.IsActive)</div>
-                    <div class="sync-summary-label">Active</div>
-                </div>
-            </div>
-            <div class="sync-summary-card">
-                <div class="sync-summary-icon blue"><i class="fas fa-user"></i></div>
-                <div class="sync-summary-content">
-                    <div class="sync-summary-value">@stats.Sum(c => c.UserCount)</div>
-                    <div class="sync-summary-label">Users</div>
-                </div>
-            </div>
-            <div class="sync-summary-card">
-                <div class="sync-summary-icon purple"><i class="fas fa-users"></i></div>
-                <div class="sync-summary-content">
-                    <div class="sync-summary-value">@stats.Sum(c => c.GroupCount)</div>
-                    <div class="sync-summary-label">Groups</div>
-                </div>
-            </div>
+            }
         </div>
-
-        @* ── Connection LIST (IC sync-project-card rows) ─────────────────────
-           One vertical row per connection: title + type subline, last-sync /
-           never-synced note on the right, a badge row (type + active state +
-           config-incomplete), and the inline action set. Every action is a
-           real Conduit operation — none are stubs. *@
-        @foreach (var s in stats)
-        {
-            var missing = GetMissingRequiredTenantFields(s);
-            <div class="sync-project-card @(s.IsActive ? "" : "is-inactive")">
-                <div class="sync-project-header">
-                    <div>
-                        <h5 class="sync-project-title">
-                            <i class="fas fa-plug"></i>
-                            @s.Name
-                        </h5>
-                        <p class="sync-project-description">@s.SystemType Connection · @(string.IsNullOrWhiteSpace(s.Domain) ? s.Slug : s.Domain)</p>
-                    </div>
-                    <div class="sync-project-meta">
-                        <span><i class="fas fa-sync me-1"></i>Never synced</span>
-                    </div>
-                </div>
-
-                <div class="sync-project-badges">
-                    <span class="sync-badge sync-badge-connection">
-                        <i class="fas fa-plug"></i>
-                        @s.SystemType
-                    </span>
-                    @if (s.IsActive)
-                    {
-                        <span class="sync-badge sync-badge-enabled">
-                            <i class="fas fa-check-circle"></i>
-                            Active
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="sync-badge sync-badge-disabled">
-                            <i class="fas fa-pause-circle"></i>
-                            Inactive
-                        </span>
-                    }
-                    @if (missing.Count > 0)
-                    {
-                        <span class="sync-badge sync-badge-warn" title="@($"Configuration incomplete — missing: {string.Join(", ", missing)}. Open Edit to fix.")">
-                            <i class="fas fa-exclamation-triangle"></i>
-                            Config incomplete
-                        </span>
-                    }
-                </div>
-
-                <div class="sync-project-actions">
-                    @* History → real /sync-history route. Edit → real edit modal.
-                       Test → real adapter bind. Active → real soft-delete toggle.
-                       Rename + Delete → real. Dev chrome (Quick Sync/Endpoints/
-                       Legal Hold/Clear) preserved behind the existing flag. *@
-                    <button class="btn btn-history" @onclick="GoToSyncHistory" title="View sync history">
-                        <i class="fas fa-history"></i> History
-                    </button>
-                    <button class="btn btn-manage" @onclick="() => EditSystem(s.TenantId)" title="Edit connection">
-                        <i class="fas fa-edit"></i> Edit
-                    </button>
-                    @if (HasAdapter(s.SystemType))
-                    {
-                        <button class="btn btn-test"
-                                @onclick="() => TestCardConnectionAsync(s)"
-                                disabled="@(cardTestBusyId == s.TenantId)"
-                                title="Test Connection — perform a real bind against this system using its stored credentials">
-                            @if (cardTestBusyId == s.TenantId)
-                            {
-                                <span class="spinner-border spinner-border-sm" role="status"></span>
-                            }
-                            else
-                            {
-                                <i class="fas fa-bolt"></i>
-                            }
-                            <span>Test</span>
-                        </button>
-                    }
-                    @if (HasCredentialFields(s.SystemType))
-                    {
-                        <button class="btn btn-manage" @onclick="() => ShowCredentialsModal(s)" title="Credentials & test (directory bind)">
-                            <i class="fas fa-key"></i> Credentials
-                        </button>
-                    }
-                    <button class="btn btn-manage" @onclick="() => ShowRenameModal(s)" title="Rename connection (updates credential map + sync project names)">
-                        <i class="fas fa-tag"></i> Rename
-                    </button>
-                    @if (ShowDevChrome)
-                    {
-                        @if (IsConnectorType(s.SystemType))
-                        {
-                            <button class="btn btn-manage" @onclick="() => ShowQuickSyncModal(s)" title="[Dev] Quick Sync — clone this system into a local browser tenant">
-                                <i class="fas fa-download"></i> Quick Sync
-                            </button>
-                        }
-                        <button class="btn btn-manage" @onclick="() => ShowEndpoints(s)" title="[Dev] View SCIM/REST endpoints + tokens">
-                            <i class="fas fa-external-link-alt"></i> Endpoints
-                        </button>
-                        <button class="btn btn-manage" @onclick="() => ToggleLegalHold(s)"
-                                title="@(s.LegalHold ? "[Dev] Legal hold ON — destructive actions are refused. Click to release." : "[Dev] Put on legal hold — refuses Clear/Deactivate/Delete.")">
-                            <i class="fas @(s.LegalHold ? "fa-lock" : "fa-lock-open")"></i>
-                        </button>
-                        <button class="btn btn-manage" @onclick="() => ClearData(s)"
-                                disabled="@(clearInProgress || s.LegalHold)"
-                                title="@(s.LegalHold ? "[Dev] Refused — system is on legal hold." : "[Dev] Clear users + groups (keeps the system, tokens, config)")">
-                            <i class="fas fa-eraser"></i>
-                        </button>
-                    }
-                    @if (s.TenantId != TenantRepository.DefaultTenantId)
-                    {
-                        <button class="btn btn-manage" @onclick="() => DeactivateSystem(s)"
-                                disabled="@s.LegalHold"
-                                title="@(s.LegalHold ? "Refused — system is on legal hold." : (s.IsActive ? "Deactivate (soft delete — data stays)" : "Already inactive"))">
-                            <i class="fas @(s.IsActive ? "fa-toggle-on" : "fa-toggle-off")"></i> Active
-                        </button>
-                        <button class="btn btn-delete" @onclick="() => ShowDeleteModal(s)"
-                                disabled="@s.LegalHold"
-                                title="@(s.LegalHold ? "Refused — system is on legal hold." : "Delete forever (purges users, groups, tokens, memberships)")">
-                            <i class="fas fa-trash-alt"></i>
-                        </button>
-                    }
-                </div>
-
-                @if (cardTestResultId == s.TenantId && !string.IsNullOrEmpty(cardTestMessage))
-                {
-                    <div class="card-test-result @(cardTestSuccess ? "ok" : "err")">
-                        <i class="fas @(cardTestSuccess ? "fa-check-circle" : "fa-times-circle")"></i>
-                        <span>@cardTestMessage</span>
-                    </div>
-                }
-            </div>
-        }
     }
 </div>
 
@@ -1771,6 +1666,20 @@
     // real Test Connection bind is possible. Drives the per-card Test button.
     private bool HasAdapter(string? systemType) =>
         !string.IsNullOrEmpty(systemType) && ConnectorRegistry.Get(systemType) is not null;
+
+    // Rounded icon tile glyph per system type (redesign Connections rows).
+    private static string ConnIcon(string? systemType) => (systemType ?? string.Empty).ToLowerInvariant() switch
+    {
+        "activedirectory" => "fas fa-server",
+        "entraid" or "azuread" => "fas fa-cloud",
+        "azureresourcegraph" => "fas fa-diagram-project",
+        "sharepoint" => "fas fa-share-nodes",
+        "identitycenter" => "fas fa-id-badge",
+        "okta" => "fas fa-circle-nodes",
+        "google" or "googleworkspace" => "fab fa-google",
+        "scim" => "fas fa-arrows-turn-to-dots",
+        _ => "fas fa-plug"
+    };
 
     // True when the adapter declares any credential type — i.e. there are
     // directory-bind credentials worth opening the Credentials & test modal for.
