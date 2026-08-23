@@ -86,9 +86,12 @@ public class EntraIDCollectionMetadataTests
         Assert.DoesNotContain("hint", flat, StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal(3, obj.Attributes["credentialCount"]);
+        Assert.Equal(1, obj.Attributes["expiredCredentialCount"]);
         Assert.Equal(true, obj.Attributes["hasExpiredCredential"]);
         Assert.Equal(true, obj.Attributes["hasCredentialExpiringWithin30d"]);
         Assert.Equal(Now.AddDays(-35).ToString("o"), obj.Attributes["earliestCredentialExpiry"]);
+        // Rotation staleness = the earliest startDateTime across both credential kinds.
+        Assert.Equal(Now.AddDays(-400).ToString("o"), obj.Attributes["oldestCredentialCreatedAt"]);
 
         using var doc = JsonDocument.Parse((string)obj.Attributes["credentials"]!);
         var entries = doc.RootElement.EnumerateArray().ToList();
@@ -111,10 +114,13 @@ public class EntraIDCollectionMetadataTests
     {
         var obj = EntraIDSource.ConvertServicePrincipal(new ServicePrincipal { Id = "sp-0", DisplayName = "Gallery app" }, null, Now);
         Assert.Equal(0, obj.Attributes["credentialCount"]);
+        Assert.Equal(0, obj.Attributes["expiredCredentialCount"]);
         Assert.Equal(false, obj.Attributes["hasExpiredCredential"]);
         Assert.Equal(false, obj.Attributes["hasCredentialExpiringWithin30d"]);
         Assert.False(obj.Attributes.ContainsKey("credentials"));
+        // Date rollups are ABSENT (NULL on IC) when nothing carries the date — never MinValue.
         Assert.False(obj.Attributes.ContainsKey("earliestCredentialExpiry"));
+        Assert.False(obj.Attributes.ContainsKey("oldestCredentialCreatedAt"));
         Assert.False(obj.Attributes.ContainsKey("ownerCount"));
     }
 
@@ -130,8 +136,12 @@ public class EntraIDCollectionMetadataTests
         var flat = Flatten(obj);
         Assert.DoesNotContain(Convert.ToBase64String(KeyBlob), flat);
         Assert.Equal(1, obj.Attributes["credentialCount"]);
+        Assert.Equal(0, obj.Attributes["expiredCredentialCount"]);
         Assert.Equal(false, obj.Attributes["hasExpiredCredential"]);
         Assert.Equal(true, obj.Attributes["hasCredentialExpiringWithin30d"]);
+        // The credential exists but carries no startDateTime: no created-at rollup,
+        // never a MinValue placeholder.
+        Assert.False(obj.Attributes.ContainsKey("oldestCredentialCreatedAt"));
     }
 
     [Fact]
@@ -147,6 +157,7 @@ public class EntraIDCollectionMetadataTests
 
         Assert.Equal(2, obj.Attributes["ownerCount"]);
         Assert.Equal(new[] { "u-1", "sp-9" }, Assert.IsAssignableFrom<IEnumerable<string>>(obj.Attributes["ownerIds"]));
+        Assert.Equal(new[] { "Ada", "Automation" }, Assert.IsAssignableFrom<IEnumerable<string>>(obj.Attributes["ownerNames"]));
         using var doc = JsonDocument.Parse((string)obj.Attributes["owners"]!);
         var arr = doc.RootElement.EnumerateArray().ToList();
         Assert.Equal("ada@contoso.com", arr[0].GetProperty("upn").GetString());
@@ -160,9 +171,21 @@ public class EntraIDCollectionMetadataTests
         var withEmpty = EntraIDSource.ConvertApplication(new Application { Id = "a" }, new List<DirectoryObject>(), Now);
         Assert.Equal(0, withEmpty.Attributes["ownerCount"]);
         Assert.False(withEmpty.Attributes.ContainsKey("owners"));
+        Assert.False(withEmpty.Attributes.ContainsKey("ownerNames"));
 
         var notFetched = EntraIDSource.ConvertApplication(new Application { Id = "a" }, null, Now);
         Assert.False(notFetched.Attributes.ContainsKey("ownerCount"));
+    }
+
+    [Fact]
+    public void Single_owner_without_display_name_keeps_the_join_id_but_stamps_no_names()
+    {
+        var owners = new List<DirectoryObject> { new User { Id = "u-1" } };
+        var obj = EntraIDSource.ConvertApplication(new Application { Id = "a" }, owners, Now);
+
+        Assert.Equal(1, obj.Attributes["ownerCount"]);
+        Assert.Equal(new[] { "u-1" }, Assert.IsAssignableFrom<IEnumerable<string>>(obj.Attributes["ownerIds"]));
+        Assert.False(obj.Attributes.ContainsKey("ownerNames"));
     }
 
     [Fact]
@@ -242,9 +265,14 @@ public class EntraIDCollectionMetadataTests
     [Theory]
     [InlineData("ServicePrincipal", "credentials")]
     [InlineData("ServicePrincipal", "earliestCredentialExpiry")]
+    [InlineData("ServicePrincipal", "oldestCredentialCreatedAt")]
+    [InlineData("ServicePrincipal", "expiredCredentialCount")]
     [InlineData("ServicePrincipal", "hasCredentialExpiringWithin30d")]
     [InlineData("ServicePrincipal", "owners")]
+    [InlineData("ServicePrincipal", "ownerNames")]
     [InlineData("Application", "credentialCount")]
+    [InlineData("Application", "oldestCredentialCreatedAt")]
+    [InlineData("Application", "ownerNames")]
     [InlineData("OAuth2PermissionGrant", "clientServicePrincipalSourceUniqueId")]
     [InlineData("OAuth2PermissionGrant", "scopes")]
     public void New_attributes_reach_the_IdentityCenter_sink_under_their_own_names(string objectClass, string attribute)
@@ -269,6 +297,7 @@ public class EntraIDCollectionMetadataTests
     [InlineData("owners")]
     [InlineData("ownerCount")]
     [InlineData("ownerIds")]
+    [InlineData("ownerNames")]
     public void Entra_group_owners_survive_the_IdentityCenter_Group_inner_join(string attribute)
     {
         var mappings = AttributeMapResolver.Resolve(

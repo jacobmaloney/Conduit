@@ -520,6 +520,7 @@ public static class AttributeTemplateCatalog
             E("owners", "owners", sinkOnly: true),
             E("ownerCount", "ownerCount", false, "Integer", sinkOnly: true),
             E("ownerIds", "ownerIds", sinkOnly: true),
+            E("ownerNames", "ownerNames", sinkOnly: true),
         };
 
         // ─────────────────────────────── EntraID ────────────────────────────────
@@ -579,6 +580,7 @@ public static class AttributeTemplateCatalog
             E("owners", "owners"),
             E("ownerCount", "ownerCount", false, "Integer"),
             E("ownerIds", "ownerIds"),
+            E("ownerNames", "ownerNames"),
         };
         c[(Systems.EntraID, "ServicePrincipal")] = new[]
         {
@@ -594,7 +596,9 @@ public static class AttributeTemplateCatalog
             // JSON array of {keyId, displayName, kind, type, usage, startDateTime,
             // endDateTime, customKeyIdentifier} — never the key blob, secretText or hint.
             E("credentialCount", "credentialCount", false, "Integer"),
+            E("expiredCredentialCount", "expiredCredentialCount", false, "Integer"),
             E("earliestCredentialExpiry", "earliestCredentialExpiry", false, "DateTime"),
+            E("oldestCredentialCreatedAt", "oldestCredentialCreatedAt", false, "DateTime"),
             E("credentials", "credentials"),
             E("hasExpiredCredential", "hasExpiredCredential", false, "Boolean"),
             E("hasCredentialExpiringWithin30d", "hasCredentialExpiringWithin30d", false, "Boolean"),
@@ -604,6 +608,7 @@ public static class AttributeTemplateCatalog
             E("owners", "owners"),
             E("ownerCount", "ownerCount", false, "Integer"),
             E("ownerIds", "ownerIds"),
+            E("ownerNames", "ownerNames"),
         };
         c[(Systems.EntraID, "DirectoryRole")] = new[]
         {
@@ -627,7 +632,9 @@ public static class AttributeTemplateCatalog
             // JSON array of {keyId, displayName, kind, type, usage, startDateTime,
             // endDateTime, customKeyIdentifier} — never the key blob, secretText or hint.
             E("credentialCount", "credentialCount", false, "Integer"),
+            E("expiredCredentialCount", "expiredCredentialCount", false, "Integer"),
             E("earliestCredentialExpiry", "earliestCredentialExpiry", false, "DateTime"),
+            E("oldestCredentialCreatedAt", "oldestCredentialCreatedAt", false, "DateTime"),
             E("credentials", "credentials"),
             E("hasExpiredCredential", "hasExpiredCredential", false, "Boolean"),
             E("hasCredentialExpiringWithin30d", "hasCredentialExpiringWithin30d", false, "Boolean"),
@@ -637,6 +644,7 @@ public static class AttributeTemplateCatalog
             E("owners", "owners"),
             E("ownerCount", "ownerCount", false, "Integer"),
             E("ownerIds", "ownerIds"),
+            E("ownerNames", "ownerNames"),
         };
         c[(Systems.EntraID, "Device")] = new[]
         {
