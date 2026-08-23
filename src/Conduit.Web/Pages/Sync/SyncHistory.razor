@@ -37,6 +37,17 @@
 
     <CcStatRow Stats="@statRows" />
 
+    @if (ProjectFilterActive)
+    {
+        <div class="alert alert-info d-flex align-items-center justify-content-between py-2 mb-3" role="status">
+            <span>
+                <i class="fas fa-filter me-2"></i>
+                Showing runs for <strong>@ProjectName(Guid.Parse(selectedProjectIdRaw))</strong> only — the counts above and the status tabs are scoped to this project. Other projects' history is intact.
+            </span>
+            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="ShowAllProjects">Show all projects</button>
+        </div>
+    }
+
     <CcFilterTabs Tabs="@statusTabs"
                   ActiveTab="@activeStatusTab"
                   OnTabChanged="HandleStatusTabChanged" />
@@ -590,10 +601,35 @@
         }
     }
 
+    private bool ProjectFilterActive => Guid.TryParse(selectedProjectIdRaw, out _);
+
+    private async Task ShowAllProjects()
+    {
+        selectedProjectIdRaw = string.Empty;
+        await ReloadList();
+    }
+
+    /// <summary>
+    /// Keep ?project= in the address bar in step with the select so refresh / back / share
+    /// reproduce what the user is looking at, and clearing the filter clears the URL.
+    /// </summary>
+    private void SyncProjectQueryString(Guid? projectFilter)
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        var current = query.TryGetValue("project", out var v) ? v.ToString() : string.Empty;
+        var wanted = projectFilter?.ToString() ?? string.Empty;
+        if (string.Equals(current, wanted, StringComparison.OrdinalIgnoreCase)) return;
+        var path = uri.GetLeftPart(UriPartial.Path);
+        var target = string.IsNullOrEmpty(wanted) ? path : $"{path}?project={wanted}";
+        Navigation.NavigateTo(target, forceLoad: false, replace: true);
+    }
+
     private async Task ReloadList()
     {
         Guid? projectFilter = null;
         if (Guid.TryParse(selectedProjectIdRaw, out var pg)) projectFilter = pg;
+        SyncProjectQueryString(projectFilter);
 
         string? statusFilter = activeStatusTab == "all" ? null : activeStatusTab;
 
