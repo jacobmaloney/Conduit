@@ -8,87 +8,67 @@
 @inject SyncProjectRepository ProjectRepo
 @inject TenantRepository TenantRepo
 
-<div class="ic-sidebar">
+<div class="cx-sidebar">
     @* Open-access warning pill (portal authentication is OFF), Development-gated. *@
     @if (ShowDevChrome && OpenAccess.IsEnabled)
     {
-        <a class="open-access-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
+        <a class="cx-openaccess-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
             <i class="fas fa-triangle-exclamation"></i>
             <span>Open access</span>
         </a>
     }
 
     <nav>
-        @* Conduit is a directory-sync engine. The rail is the six load-bearing
-           destinations; the old Synchronization Center hub, Quick Connect, API
-           Explorer and API Tokens stay routable by URL but are off the rail, and
-           the former Settings pages are now tabs inside Configuration. *@
-        <div class="ic-nav-group section-identity">
-            <div class="ic-nav-group-label">Main</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="" Match="NavLinkMatch.All">
-                <i class="fas fa-gauge-high"></i>
-                <span>Dashboard</span>
-            </NavLink>
-        </div>
+        @* Redesign rail: MAIN (Dashboard, Sync Projects) · SYNC (Connections,
+           Schedules) · SETTINGS (Configuration). History lives on the dashboard
+           "Run history" button; Identity Providers/Database/Audit are tabs inside
+           Configuration; Quick Connect is off the rail. *@
+        <div class="cx-nav-label">Main</div>
+        <NavLink class="cx-nav" ActiveClass="active" href="" Match="NavLinkMatch.All">
+            <span class="cx-nav-left"><i class="fas fa-gauge-high"></i><span>Dashboard</span></span>
+        </NavLink>
+        <NavLink class="cx-nav" ActiveClass="active" href="sync-projects">
+            <span class="cx-nav-left"><i class="fas fa-right-left"></i><span>Sync Projects</span></span>
+            @if (projectCount is int pc)
+            {
+                <span class="cx-nav-badge">@pc</span>
+            }
+        </NavLink>
 
-        <div class="ic-nav-group section-identity">
-            <div class="ic-nav-group-label">Sync</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="sync-projects">
-                <i class="fas fa-right-left"></i>
-                <span>Sync Projects</span>
-                @if (projectCount is int pc)
-                {
-                    <span class="ic-nav-badge info">@pc</span>
-                }
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="connected-systems">
-                <i class="fas fa-plug"></i>
-                <span>Connections</span>
-                @if (connectionCount is int cc)
-                {
-                    <span class="ic-nav-badge info">@cc</span>
-                }
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="schedules">
-                <i class="fas fa-calendar-days"></i>
-                <span>Schedules</span>
-                @if (scheduleCount is int sc)
-                {
-                    <span class="ic-nav-badge info">@sc</span>
-                }
-            </NavLink>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="sync-history">
-                <i class="fas fa-clock-rotate-left"></i>
-                <span>History</span>
-            </NavLink>
-        </div>
+        <div class="cx-nav-label">Sync</div>
+        <NavLink class="cx-nav" ActiveClass="active" href="connected-systems">
+            <span class="cx-nav-left"><i class="fas fa-plug"></i><span>Connections</span></span>
+            @if (connectionCount is int cc)
+            {
+                <span class="cx-nav-badge">@cc</span>
+            }
+        </NavLink>
+        <NavLink class="cx-nav" ActiveClass="active" href="schedules">
+            <span class="cx-nav-left"><i class="fas fa-calendar-days"></i><span>Schedules</span></span>
+            @if (scheduleCount is int sc)
+            {
+                <span class="cx-nav-badge">@sc</span>
+            }
+        </NavLink>
 
-        <div class="ic-nav-group section-identity">
-            <div class="ic-nav-group-label">Settings</div>
-            <NavLink class="ic-nav-item" ActiveClass="on-identity" href="configuration">
-                <i class="fas fa-gear"></i>
-                <span>Configuration</span>
-            </NavLink>
-        </div>
+        <div class="cx-nav-label">Settings</div>
+        <NavLink class="cx-nav" ActiveClass="active" href="configuration">
+            <span class="cx-nav-left"><i class="fas fa-gear"></i><span>Configuration</span></span>
+        </NavLink>
     </nav>
 
-    <div class="ic-sidebar-scope">
+    <div class="cx-sidebar-spacer"></div>
+
+    <div class="cx-sidebar-foot">
         <AuthorizeView>
             <Authorized>
-                <div class="mb-2">
-                    <strong>Signed in as</strong>
-                    @context.User.Identity?.Name
-                </div>
-                <a class="btn btn-sm btn-outline-secondary w-100" href="/logout">Sign out</a>
+                Signed in as <b>@(context.User.Identity?.Name ?? "admin")</b><br />
+                <a href="/logout">Sign out</a>
             </Authorized>
             <NotAuthorized>
-                <a class="btn btn-sm btn-outline-primary w-100" href="/login">Sign in</a>
+                <a href="/login">Sign in</a>
             </NotAuthorized>
         </AuthorizeView>
-        <div class="mt-2">
-            <div>Identity synchronization</div>
-            <div>Version 1.0.0</div>
-        </div>
     </div>
 </div>
 

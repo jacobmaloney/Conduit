@@ -2,32 +2,31 @@
 
 <PageTitle>Conduit</PageTitle>
 
-<div class="ic-shell">
-    <nav class="ic-topbar">
-        @* Brand lockup (IC .ic-logo idiom). Base-relative href so it stays inside
-           any tenant base path. Retires the old cyan ConduitMark from the shell. *@
-        <a href="" class="ic-logo">
+<div class="cx-shell">
+    <div class="cx-topbar">
+        @* Brand lockup — shield + teal "Con" + ink "duit", per the redesign
+           canvas. Base-relative href so it stays inside any tenant base path. *@
+        <a href="" class="cx-brand">
             <i class="fas fa-shield-alt"></i>
-            <span class="ic-logo-text">Con<span>duit</span></span>
+            <span><span class="cx-brand-con">Con</span>duit</span>
         </a>
+        <span class="cx-verpill">v1.0.0</span>
 
-        <div class="ic-topbar-right ms-auto">
-            <a href="/api-explorer" class="top-bar-link mono">
-                <i class="fas fa-code"></i> API Docs
-            </a>
-            <a href="/health" target="_blank" class="top-bar-link mono health">
-                Health
-            </a>
+        <div class="cx-topbar-spacer"></div>
+
+        <div class="cx-search">
+            <i class="fas fa-search"></i>
+            <span>Search connections, projects…</span>
         </div>
-    </nav>
+        <span class="cx-pill cx-pill--ok cx-pill--lg"><span class="cx-pill-dot"></span> Healthy</span>
+        <div class="cx-avatar">AD</div>
+    </div>
 
-    <div class="ic-body">
+    <div class="cx-body">
         <NavMenu />
 
-        <div class="ic-content">
-            <main>
-                @Body
-            </main>
-        </div>
+        <main class="cx-main">
+            @Body
+        </main>
     </div>
 </div>
