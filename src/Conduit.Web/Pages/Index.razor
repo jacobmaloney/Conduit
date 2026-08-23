@@ -1,30 +1,29 @@
 @page "/"
 @attribute [Authorize]
+@using Conduit.Core.SyncModels
 @inject Conduit.DataAccess.Repositories.UserRepository UserRepository
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+@inject Conduit.DataAccess.Repositories.SyncProjectRepository ProjectRepo
+@inject Conduit.DataAccess.Repositories.SyncRunRepository RunRepo
 @inject Conduit.DataAccess.Repositories.SystemConfigurationRepository Config
 @inject IWebHostEnvironment Environment
 
 <PageTitle>Conduit — move identities across connected systems.</PageTitle>
 
-<div class="hero-section mx-n4 mt-n4">
-    <div class="hero-content">
-        <h1 class="hero-title">Conduit</h1>
-        <p class="hero-subtitle">Move identities, accounts, and entitlements across every connected system — one project, one clean schema.</p>
-        <div class="hero-actions">
-            <a href="/synchronization-center" class="btn btn-hero-primary">
-                <i class="oi oi-loop-circular"></i> Synchronization Center
+<div class="container-fluid identities-container dashboard-container">
+    <CcTemplate1 Title="Dashboard"
+                 Subtitle="Everything that moves identities, at a glance."
+                 Icon="fas fa-gauge-high"
+                 IconAccent="cyan">
+        <PrimaryAction>
+            <a href="/sync-projects" class="btn btn-primary">
+                <i class="fas fa-right-left me-1"></i> Open Sync Projects
             </a>
-            <a href="/connected-systems" class="btn btn-hero-secondary">
-                <i class="oi oi-plug"></i> Connections
-            </a>
-        </div>
-    </div>
-</div>
+        </PrimaryAction>
+    </CcTemplate1>
 
-@if (_showGettingStarted)
-{
-    <div class="container-fluid mt-4">
+    @if (_showGettingStarted)
+    {
         <div class="alert alert-info d-flex justify-content-between align-items-center flex-wrap gap-2" role="alert">
             <div>
                 <i class="fas fa-list-check me-2"></i>
@@ -35,24 +34,20 @@
                 <button type="button" class="btn-close" aria-label="Dismiss" @onclick="DismissGettingStarted"></button>
             </div>
         </div>
-    </div>
-}
+    }
 
-<div class="container-fluid features-section">
+    <CcStatRow Stats="@StatItems" />
+
     <div class="section-header">
         <h2>What Conduit does</h2>
         <p>Move identity, accounts, and entitlements across connected systems.</p>
     </div>
 
-    @* The landing leads with the SYNC story to match the nav (Sync section above
-       Directory). Connections → Sync Projects → Sync History → Schedule are the
-       primary path through a directory-sync pump; Users/Groups are the records
-       that flow THROUGH it and come after. *@
     <div class="row">
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="surface-card h-100">
                 <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(2,132,199,0.12); color: #0284c7; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
+                    <div class="ic-qa-icon" style="background: rgba(14,116,144,0.12); color: #0e7490; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
                         <i class="fas fa-plug"></i>
                     </div>
                     <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Connections</h3>
@@ -64,8 +59,8 @@
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="surface-card h-100">
                 <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(99,102,241,0.12); color: var(--color-indigo); width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="oi oi-loop-square"></i>
+                    <div class="ic-qa-icon" style="background: rgba(14,116,144,0.12); color: #0e7490; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
+                        <i class="fas fa-right-left"></i>
                     </div>
                     <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Sync Projects</h3>
                     <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Define source → target, auto-map attributes per object class, schedule it, and watch every run.</p>
@@ -76,8 +71,8 @@
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="surface-card h-100">
                 <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(20,184,166,0.12); color: var(--color-teal); width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="oi oi-list-rich"></i>
+                    <div class="ic-qa-icon" style="background: rgba(14,116,144,0.12); color: #0e7490; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
+                        <i class="fas fa-clock-rotate-left"></i>
                     </div>
                     <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Sync History</h3>
                     <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Every run, every object: read / created / updated / skipped / failed, with live progress and per-step logs.</p>
@@ -88,212 +83,226 @@
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="surface-card h-100">
                 <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(245,158,11,0.12); color: var(--color-warning); width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="oi oi-clock"></i>
+                    <div class="ic-qa-icon" style="background: rgba(180,83,9,0.12); color: #b45309; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
+                        <i class="fas fa-calendar-days"></i>
                     </div>
                     <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Schedule</h3>
                     <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Every project's schedule in one place — when it runs next, when it last ran, and whether it's enabled.</p>
-                    <a href="/schedule-manager" class="ic-card-hdr-action">Manage schedules <i class="oi oi-arrow-right"></i></a>
+                    <a href="/schedules" class="ic-card-hdr-action">Manage schedules <i class="oi oi-arrow-right"></i></a>
                 </div>
             </div>
         </div>
         <div class="col-lg-4 col-md-6 mb-4">
             <div class="surface-card h-100">
                 <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(34,197,94,0.12); color: var(--color-success); width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="oi oi-cog"></i>
+                    <div class="ic-qa-icon" style="background: rgba(58,74,102,0.12); color: #3a4a66; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
+                        <i class="fas fa-gear"></i>
                     </div>
                     <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Configuration</h3>
-                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Schemas, attributes, and server settings. Edit them where you need to.</p>
+                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Portal security, identity providers, database, provisioning, and logs — governed in one place.</p>
                     <a href="/configuration" class="ic-card-hdr-action">Configure <i class="oi oi-arrow-right"></i></a>
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<div class="stats-section">
-    <div class="container-fluid">
-        <div class="row">
-            <div class="col-md-3 col-sm-6 mb-4">
-                <div class="stat-card">
-                    <div class="stat-icon text-primary">
-                        <i class="oi oi-people"></i>
+    <div class="row g-3 dashboard-activity">
+        <div class="col-lg-7 mb-3">
+            <div class="surface-card h-100">
+                <div class="surface-card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0;">Sync projects</h3>
+                        <a href="/sync-projects" class="ic-card-hdr-action">Open sync projects <i class="oi oi-arrow-right"></i></a>
                     </div>
-                    <div class="stat-content">
-                        <h3>@userCount</h3>
-                        <p>Total Users</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3 col-sm-6 mb-4">
-                <div class="stat-card">
-                    <div class="stat-icon text-success">
-                        <i class="oi oi-plug"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3>@connectionCount</h3>
-                        <p>Connections</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3 col-sm-6 mb-4">
-                <div class="stat-card">
-                    <div class="stat-icon text-warning">
-                        <i class="oi oi-badge"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3>@groupCount</h3>
-                        <p>Groups</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3 col-sm-6 mb-4">
-                <div class="stat-card">
-                    <div class="stat-icon text-info">
-                        <i class="oi oi-key"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3>@tokenCount</h3>
-                        <p>API Tokens</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="container-fluid mt-4">
-    <div class="section-header">
-        <h2>Connected systems</h2>
-        <p>External identity targets this server talks to. <a href="/connected-systems">Manage →</a></p>
-    </div>
-    @if (systemStats.Count == 0)
-    {
-        <div class="alert alert-info">
-            No connected systems configured yet. <a href="/connected-systems">Connect one →</a>
-        </div>
-    }
-    else
-    {
-        <div class="row">
-            @foreach (var s in systemStats)
-            {
-                <div class="col-md-6 col-lg-4 mb-3">
-                    <div class="card h-100">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div>
-                                    <h5 class="card-title mb-1">@s.Name</h5>
-                                    <small class="text-muted"><code>@s.Slug</code></small>
+                    @if (projectList.Count == 0)
+                    {
+                        <div class="text-muted small">No sync projects yet. <a href="/sync-projects">Create one →</a></div>
+                    }
+                    else
+                    {
+                        <div class="d-grid gap-2">
+                            @foreach (var p in projectList.Take(6))
+                            {
+                                <div class="d-flex align-items-center gap-3" style="border: 1px solid #eef2f4; border-radius: 10px; padding: 9px 12px;">
+                                    <span style="width: 8px; height: 8px; border-radius: 50%; flex: none; background: @StatusDotColor(p.LastRunStatus);"></span>
+                                    <div class="flex-grow-1" style="min-width: 0;">
+                                        <div class="fw-bold text-truncate" style="font-size: 13px;">@p.Name</div>
+                                        <div class="text-muted" style="font-size: 11.5px; font-weight: 600;">
+                                            @TenantName(p.SourceTenantId) → @TenantName(p.SinkTenantId) · @p.ObjectClass
+                                        </div>
+                                    </div>
+                                    <span class="text-muted" style="font-size: 11.5px; font-weight: 700; white-space: nowrap;">
+                                        @p.TotalRuns runs · @(p.LastRunAt is { } lr ? RelativeTime(lr) : "never")
+                                    </span>
                                 </div>
-                                @if (s.SystemType == "Real")
-                                {
-                                    <span class="badge bg-success">REAL</span>
-                                }
-                                else
-                                {
-                                    <span class="badge bg-warning text-dark">EMULATOR</span>
-                                }
-                            </div>
-                            <div class="row text-center mt-3">
-                                <div class="col"><div class="fw-bold">@s.UserCount</div><small class="text-muted">Users</small></div>
-                                <div class="col"><div class="fw-bold">@s.GroupCount</div><small class="text-muted">Groups</small></div>
-                                <div class="col"><div class="fw-bold">@s.TokenCount</div><small class="text-muted">Tokens</small></div>
-                            </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-5 mb-3">
+            <div class="d-grid gap-3">
+                <div class="surface-card">
+                    <div class="surface-card-body">
+                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0 0 0.5rem;">Next scheduled run</h3>
+                        <div style="font-size: 1.35rem; font-weight: 800; color: #0e7490;">@NextRunLabel</div>
+                        <div class="text-muted" style="font-size: 12px; font-weight: 600; margin-top: 2px;">
+                            @scheduledCount scheduled · @failingCount failing
+                        </div>
+                        <div class="d-flex gap-2 mt-3">
+                            <a href="/schedules" class="btn btn-sm btn-outline-secondary">Schedules</a>
+                            <a href="/sync-history" class="btn btn-sm btn-outline-secondary">Run history</a>
                         </div>
                     </div>
                 </div>
-            }
-        </div>
-    }
-</div>
-
-@* SCIM endpoint reference is developer chrome (SCIMServer origin) — kept for
-   dev/debugging but gated off the production front door so the directory-sync
-   story leads during a walkthrough. *@
-@if (Environment.IsDevelopment())
-{
-<div class="api-section">
-    <div class="container-fluid">
-        <div class="section-header">
-            <h2>SCIM 2.0 endpoints</h2>
-            <p>Standard verb set on Users and Groups. RFC 7644 compliant.</p>
-        </div>
-        <div class="api-grid">
-            <div class="api-endpoint">
-                <span class="method get">GET</span>
-                <code>/scim/v2/Users</code>
-                <span class="description">List all users with pagination and filtering</span>
-            </div>
-            <div class="api-endpoint">
-                <span class="method post">POST</span>
-                <code>/scim/v2/Users</code>
-                <span class="description">Create a new user resource</span>
-            </div>
-            <div class="api-endpoint">
-                <span class="method get">GET</span>
-                <code>/scim/v2/Users/{id}</code>
-                <span class="description">Retrieve a specific user by ID</span>
-            </div>
-            <div class="api-endpoint">
-                <span class="method put">PUT</span>
-                <code>/scim/v2/Users/{id}</code>
-                <span class="description">Replace an entire user resource</span>
-            </div>
-            <div class="api-endpoint">
-                <span class="method patch">PATCH</span>
-                <code>/scim/v2/Users/{id}</code>
-                <span class="description">Partially update a user resource</span>
-            </div>
-            <div class="api-endpoint">
-                <span class="method delete">DELETE</span>
-                <code>/scim/v2/Users/{id}</code>
-                <span class="description">Remove a user from the system</span>
+                <div class="surface-card">
+                    <div class="surface-card-body">
+                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0 0 0.5rem;">Recent activity</h3>
+                        @if (recentRuns.Count == 0)
+                        {
+                            <div class="text-muted small">No runs recorded yet.</div>
+                        }
+                        else
+                        {
+                            <div class="d-grid gap-2">
+                                @foreach (var r in recentRuns.Take(6))
+                                {
+                                    <div style="font-size: 12.5px; font-weight: 600; color: #475569;">
+                                        <span style="color: @StatusDotColor(r.Status); font-weight: 800;">@StatusGlyph(r.Status)</span>
+                                        @ProjectName(r.SyncProjectId) — @r.ObjectsRead read, @r.ObjectsCreated created, @r.ObjectsUpdated updated
+                                        <span class="text-muted">· @RelativeTime(r.CompletedAt ?? r.StartedAt)</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
-}
 
 @code {
     private int userCount = 0;
     private int connectionCount = 0;
-    private int groupCount = 0;
-    private int tokenCount = 0;
-    private List<Conduit.DataAccess.Repositories.TenantStats> systemStats = new();
+    private int projectCount = 0;
+    private int scheduledCount = 0;
+    private int failingCount = 0;
+    private int runsTodayCount = 0;
+
+    private string? lastRunStatus;
+    private DateTime? lastRunWhen;
+    private DateTime? nextScheduledRun;
+
+    private List<SyncProject> projectList = new();
+    private List<SyncRun> recentRuns = new();
+    private Dictionary<Guid, string> tenantNames = new();
+    private Dictionary<Guid, string> projectNames = new();
+
     private bool _showGettingStarted;
+
+    private IReadOnlyList<CcStatRow.StatItem> StatItems => new List<CcStatRow.StatItem>
+    {
+        new("Total Users", userCount.ToString("N0")),
+        new("Connections", connectionCount.ToString("N0")),
+        new("Sync Projects", projectCount.ToString("N0")),
+        new("Runs Today", runsTodayCount.ToString("N0"), runsTodayCount > 0 ? "text-success" : "text-primary"),
+        new("Last Run", LastRunLabel, LastRunColor),
+    };
+
+    private string LastRunLabel => lastRunWhen is { } w ? RelativeTime(w) : "—";
+
+    private string LastRunColor => lastRunStatus switch
+    {
+        "Completed" or "Succeeded" => "text-success",
+        "Failed" or "Error" => "text-danger",
+        "Running" => "text-info",
+        _ => "text-primary"
+    };
+
+    private string NextRunLabel => nextScheduledRun is { } n ? n.ToLocalTime().ToString("ddd, h:mm tt") : "No schedule";
 
     protected override async Task OnInitializedAsync()
     {
         // Onboarding banner shows until the operator dismisses the Getting Started
-        // checklist (persisted per-instance in SystemConfiguration). Defensive: a config
-        // read failure just hides the banner rather than breaking the dashboard.
+        // checklist. A config read failure just hides the banner.
         try { _showGettingStarted = !string.Equals(await Config.GetValueAsync("GettingStarted.Dismissed"), "true", StringComparison.OrdinalIgnoreCase); }
         catch { _showGettingStarted = false; }
 
         try
         {
-            // Count-only fetch: the total comes from the COUNT(*) in the same query,
-            // not from the returned page (Count=1 keeps the SELECT cheap).
             var (_, count) = await UserRepository.GetAllAsync(new Conduit.Core.Models.ScimQueryOptions { Count = 1 });
             userCount = count;
         }
-        catch
-        {
-            userCount = 0;
-        }
+        catch { userCount = 0; }
+
         try
         {
-            systemStats = await TenantRepo.GetStatsAsync();
-            connectionCount = systemStats.Count;
-            groupCount = systemStats.Sum(s => s.GroupCount);
-            tokenCount = systemStats.Sum(s => s.TokenCount);
+            var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
+            connectionCount = tenants.Count;
+            tenantNames = tenants.ToDictionary(t => t.Id, t => t.Name);
         }
-        catch
+        catch { connectionCount = 0; }
+
+        try
         {
-            systemStats = new();
+            projectList = await ProjectRepo.GetAllAsync();
+            projectCount = projectList.Count;
+            scheduledCount = projectList.Count(p => !string.IsNullOrWhiteSpace(p.CronSchedule));
+            failingCount = projectList.Count(p => p.LastRunStatus == "Failed");
+            projectNames = projectList.ToDictionary(p => p.Id, p => p.Name);
+            nextScheduledRun = projectList
+                .Where(p => p.IsEnabled && p.NextScheduledRunAt.HasValue)
+                .Select(p => p.NextScheduledRunAt!.Value)
+                .DefaultIfEmpty()
+                .Min();
+            if (nextScheduledRun == default(DateTime)) nextScheduledRun = null;
         }
+        catch { projectList = new(); }
+
+        try
+        {
+            recentRuns = await RunRepo.GetRecentAsync(take: 200);
+            var today = DateTime.UtcNow.Date;
+            runsTodayCount = recentRuns.Count(r => r.StartedAt.Date == today);
+            var latest = recentRuns.OrderByDescending(r => r.CompletedAt ?? r.StartedAt).FirstOrDefault();
+            if (latest is not null)
+            {
+                lastRunStatus = latest.Status;
+                lastRunWhen = latest.CompletedAt ?? latest.StartedAt;
+            }
+        }
+        catch { recentRuns = new(); }
+    }
+
+    private string TenantName(Guid id) => tenantNames.TryGetValue(id, out var n) ? n : "—";
+    private string ProjectName(Guid id) => projectNames.TryGetValue(id, out var n) ? n : "Sync project";
+
+    private static string StatusDotColor(string? status) => status switch
+    {
+        "Completed" or "Succeeded" => "#16a34a",
+        "Failed" or "Error" => "#dc2626",
+        "Running" => "#0e7490",
+        _ => "#94a3b8"
+    };
+
+    private static string StatusGlyph(string? status) => status switch
+    {
+        "Completed" or "Succeeded" => "✓",
+        "Failed" or "Error" => "✗",
+        "Running" => "●",
+        _ => "•"
+    };
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc;
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}m ago";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}h ago";
+        return $"{(int)span.TotalDays}d ago";
     }
 
     private async Task DismissGettingStarted()
