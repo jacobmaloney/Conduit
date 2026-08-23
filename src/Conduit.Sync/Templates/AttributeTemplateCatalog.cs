@@ -515,6 +515,11 @@ public static class AttributeTemplateCatalog
             E("member", "member", sinkOnly: true),
             E("whenChanged", "WhenChanged"),
             E("whenCreated", "WhenCreated"),
+            // Entra group owners (owners JSON / ownerCount / ownerIds). SINK-ONLY: a
+            // read-side projection IC never authors back into a directory.
+            E("owners", "owners", sinkOnly: true),
+            E("ownerCount", "ownerCount", false, "Integer", sinkOnly: true),
+            E("ownerIds", "ownerIds", sinkOnly: true),
         };
 
         // ─────────────────────────────── EntraID ────────────────────────────────
@@ -568,6 +573,12 @@ public static class AttributeTemplateCatalog
             E("groupTypes", "GroupTypes"),
             E("mailEnabled", "MailEnabled", false, "Boolean"),
             E("createdDateTime", "WhenCreated"),
+            // Owners (EntraOwnerMetadata): owners = JSON [{id, displayName, upn}]; ownerIds =
+            // semicolon list of the owners' Entra object ids (= their IC SourceUniqueId).
+            // Attribute-only — IC has no multi-owner edge table.
+            E("owners", "owners"),
+            E("ownerCount", "ownerCount", false, "Integer"),
+            E("ownerIds", "ownerIds"),
         };
         c[(Systems.EntraID, "ServicePrincipal")] = new[]
         {
@@ -579,6 +590,20 @@ public static class AttributeTemplateCatalog
             E("servicePrincipalNames", "ServicePrincipalNames"),
             E("accountEnabled", "IsActive", false, "Boolean"),
             E("createdDateTime", "WhenCreated"),
+            // Credential EXPIRY metadata (EntraCredentialMetadata). credentials is a compact
+            // JSON array of {keyId, displayName, kind, type, usage, startDateTime,
+            // endDateTime, hint, customKeyIdentifier} — never the key blob or secretText.
+            E("credentialCount", "credentialCount", false, "Integer"),
+            E("earliestCredentialExpiry", "earliestCredentialExpiry", false, "DateTime"),
+            E("credentials", "credentials"),
+            E("hasExpiredCredential", "hasExpiredCredential", false, "Boolean"),
+            E("hasCredentialExpiringWithin30d", "hasCredentialExpiringWithin30d", false, "Boolean"),
+            // Owners (EntraOwnerMetadata): owners = JSON [{id, displayName, upn}]; ownerIds =
+            // semicolon list of the owners' Entra object ids (= their IC SourceUniqueId).
+            // Attribute-only — IC has no multi-owner edge table.
+            E("owners", "owners"),
+            E("ownerCount", "ownerCount", false, "Integer"),
+            E("ownerIds", "ownerIds"),
         };
         c[(Systems.EntraID, "DirectoryRole")] = new[]
         {
@@ -598,6 +623,20 @@ public static class AttributeTemplateCatalog
             E("identifierUris", "IdentifierUris"),
             E("tags", "Tags"),
             E("createdDateTime", "WhenCreated"),
+            // Credential EXPIRY metadata (EntraCredentialMetadata). credentials is a compact
+            // JSON array of {keyId, displayName, kind, type, usage, startDateTime,
+            // endDateTime, hint, customKeyIdentifier} — never the key blob or secretText.
+            E("credentialCount", "credentialCount", false, "Integer"),
+            E("earliestCredentialExpiry", "earliestCredentialExpiry", false, "DateTime"),
+            E("credentials", "credentials"),
+            E("hasExpiredCredential", "hasExpiredCredential", false, "Boolean"),
+            E("hasCredentialExpiringWithin30d", "hasCredentialExpiringWithin30d", false, "Boolean"),
+            // Owners (EntraOwnerMetadata): owners = JSON [{id, displayName, upn}]; ownerIds =
+            // semicolon list of the owners' Entra object ids (= their IC SourceUniqueId).
+            // Attribute-only — IC has no multi-owner edge table.
+            E("owners", "owners"),
+            E("ownerCount", "ownerCount", false, "Integer"),
+            E("ownerIds", "ownerIds"),
         };
         c[(Systems.EntraID, "Device")] = new[]
         {
@@ -613,8 +652,11 @@ public static class AttributeTemplateCatalog
             E("isManaged", "IsManaged", false, "Boolean"),
             E("isCompliant", "IsCompliant", false, "Boolean"),
             E("accountEnabled", "IsActive", false, "Boolean"),
+            // Graph's approximateLastSignInDateTime / registrationDateTime, emitted by
+            // EntraIDSource under these names so the two mappings land (V180 LastLogonAt).
             E("lastSignInDateTime", "LastLogonTimestamp"),
             E("createdDateTime", "WhenCreated"),
+            E("registrationDateTime", "RegistrationDateTime"),
         };
         c[(Systems.EntraID, "AdministrativeUnit")] = new[]
         {
@@ -639,6 +681,13 @@ public static class AttributeTemplateCatalog
             E("principalId", "PrincipalId"),
             E("resourceId", "ResourceId"),
             E("scope", "Scope"),
+            // Join keys: clientId / resourceId are service-principal object ids and
+            // principalId a user object id — re-emitted under names that say which IC
+            // Objects.SourceUniqueId they join to. scopes = scope split on whitespace.
+            E("clientServicePrincipalSourceUniqueId", "clientServicePrincipalSourceUniqueId"),
+            E("resourceServicePrincipalSourceUniqueId", "resourceServicePrincipalSourceUniqueId"),
+            E("principalUserSourceUniqueId", "principalUserSourceUniqueId"),
+            E("scopes", "scopes"),
         };
         c[(Systems.EntraID, "Domain")] = new[]
         {
@@ -818,6 +867,11 @@ public static class AttributeTemplateCatalog
             // second pass reads Attributes["members"] and pushes the edges to IC
             // /api/objects/group-memberships/bulk (identical to AD group "member").
             E("members", "members"),
+            // Team owners = /teams/{id}/members whose roles contain "owner". Same shape
+            // as the Entra group owners (owners JSON / ownerCount / ownerIds), attribute-only.
+            E("owners", "owners"),
+            E("ownerCount", "ownerCount", false, "Integer"),
+            E("ownerIds", "ownerIds"),
         };
         c[(Systems.SharePoint, "Drive")] = new[]
         {

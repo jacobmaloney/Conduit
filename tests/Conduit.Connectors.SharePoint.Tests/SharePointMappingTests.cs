@@ -137,6 +137,49 @@ public class SharePointMappingTests
         Assert.Equal("membership-3", SharePointSource.MemberSourceId(aadNoUser));
     }
 
+    [Fact]
+    public void IsTeamOwner_reads_the_owner_role_case_insensitively()
+    {
+        Assert.True(SharePointSource.IsTeamOwner(new ConversationMember { Roles = new List<string> { "Owner" } }));
+        Assert.True(SharePointSource.IsTeamOwner(new ConversationMember { Roles = new List<string> { "guest", "owner" } }));
+        Assert.False(SharePointSource.IsTeamOwner(new ConversationMember { Roles = new List<string>() }));
+        Assert.False(SharePointSource.IsTeamOwner(new ConversationMember { Roles = null }));
+    }
+
+    [Fact]
+    public void MapTeam_emits_owners_json_count_and_join_ids()
+    {
+        var team = new Team { Id = "t1", DisplayName = "Engineering" };
+        var owners = new List<ConversationMember>
+        {
+            new AadUserConversationMember { Id = "m-1", UserId = "u-1", DisplayName = "Ada", Email = "ada@contoso.com", Roles = new List<string> { "owner" } },
+            new AadUserConversationMember { Id = "m-2", UserId = "u-2", DisplayName = "Bob", Roles = new List<string> { "owner" } },
+        };
+
+        var obj = SharePointSource.MapTeam(team, new List<string> { "u-1", "u-2", "u-3" }, owners);
+
+        Assert.Equal(2, obj.Attributes["ownerCount"]);
+        Assert.Equal(new[] { "u-1", "u-2" }, Assert.IsAssignableFrom<List<string>>(obj.Attributes["ownerIds"]));
+        using var doc = System.Text.Json.JsonDocument.Parse((string)obj.Attributes["owners"]!);
+        var arr = doc.RootElement.EnumerateArray().ToList();
+        Assert.Equal("u-1", arr[0].GetProperty("id").GetString());
+        Assert.Equal("ada@contoso.com", arr[0].GetProperty("upn").GetString());
+        Assert.False(arr[1].TryGetProperty("upn", out _));
+
+        // Every owner attribute is in the Team template so the resolver keeps it.
+        var template = AttributeTemplateCatalog.Get("SharePoint", "Team")!;
+        foreach (var key in new[] { "owners", "ownerCount", "ownerIds" })
+            Assert.Contains(template, e => e.SourceAttribute == key);
+    }
+
+    [Fact]
+    public void MapTeam_without_a_roster_stamps_no_owner_attributes()
+    {
+        var obj = SharePointSource.MapTeam(new Team { Id = "t1" }, new List<string>(), owners: null);
+        Assert.False(obj.Attributes.ContainsKey("ownerCount"));
+        Assert.False(obj.Attributes.ContainsKey("owners"));
+    }
+
     // ─── (c) Channel mapping (teamId parent ref) ─────────────────────────────
 
     [Fact]

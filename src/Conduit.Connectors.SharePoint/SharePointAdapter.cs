@@ -176,9 +176,9 @@ public sealed class SharePointSource : IConnectorSource
                 foreach (var t in teams.Value)
                 {
                     if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
-                    var members = await TryGetTeamMembersAsync(client, t.Id, cancellationToken);
+                    var roster = await TryGetTeamRosterAsync(client, t.Id, cancellationToken);
                     emitted++;
-                    yield return MapTeam(t, members);
+                    yield return MapTeam(t, roster.Members, roster.Owners);
                 }
                 if (string.IsNullOrEmpty(teams.OdataNextLink)) break;
                 teams = await client.Teams.WithUrl(teams.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -518,15 +518,23 @@ public sealed class SharePointSource : IConnectorSource
     }
 
     /// <summary>
-    /// Lists a team's members and returns their stable member source ids. A 403
-    /// (TeamMember.Read.All missing) warns and returns an empty list — the team
-    /// still emits, just without membership edges.
+    /// A team's roster from one /teams/{id}/members walk: every member's stable source
+    /// id, plus the members whose <c>roles</c> carry "owner". Owners is null when the
+    /// walk did not happen (403) so MapTeam stamps nothing rather than ownerCount=0.
     /// </summary>
-    private async Task<List<string>> TryGetTeamMembersAsync(
+    internal sealed record TeamRoster(List<string> Members, IReadOnlyList<Microsoft.Graph.Models.ConversationMember>? Owners);
+
+    /// <summary>
+    /// Lists a team's members and returns their stable member source ids plus the
+    /// owner subset. A 403 (TeamMember.Read.All missing) warns and returns an empty
+    /// member list with null owners — the team still emits, just without edges.
+    /// </summary>
+    private async Task<TeamRoster> TryGetTeamRosterAsync(
         GraphServiceClient client, string? teamId, CancellationToken cancellationToken)
     {
         var ids = new List<string>();
-        if (string.IsNullOrEmpty(teamId)) return ids;
+        if (string.IsNullOrEmpty(teamId)) return new TeamRoster(ids, null);
+        var owners = new List<Microsoft.Graph.Models.ConversationMember>();
         try
         {
             var page = await client.Teams[teamId].Members.GetAsync(cancellationToken: cancellationToken);
@@ -536,6 +544,7 @@ public sealed class SharePointSource : IConnectorSource
                 {
                     var id = MemberSourceId(m);
                     if (!string.IsNullOrEmpty(id)) ids.Add(id!);
+                    if (IsTeamOwner(m)) owners.Add(m);
                 }
                 if (string.IsNullOrEmpty(page.OdataNextLink)) break;
                 page = await client.Teams[teamId].Members
@@ -547,9 +556,15 @@ public sealed class SharePointSource : IConnectorSource
             _logger.LogWarning(
                 "SharePoint: skipping members for team {TeamId} — app registration lacks scope TeamMember.Read.All (403).",
                 teamId);
+            return new TeamRoster(ids, null);
         }
-        return ids;
+        return new TeamRoster(ids, owners);
     }
+
+    /// <summary>Team owners are the conversation members whose roles include "owner".</summary>
+    internal static bool IsTeamOwner(Microsoft.Graph.Models.ConversationMember member) =>
+        member.Roles is { Count: > 0 } roles &&
+        roles.Any(r => string.Equals(r, "owner", StringComparison.OrdinalIgnoreCase));
 
     // ── Pure mapping / hierarchy helpers (unit-tested without live Graph) ────────
 
@@ -719,8 +734,16 @@ public sealed class SharePointSource : IConnectorSource
         };
     }
 
+    private static readonly JsonSerializerOptions OwnerJsonOptions = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private sealed record TeamOwner(string id, string? displayName, string? upn);
+
     internal static ConnectorObject MapTeam(
-        Microsoft.Graph.Models.Team t, List<string> members)
+        Microsoft.Graph.Models.Team t, List<string> members,
+        IReadOnlyList<Microsoft.Graph.Models.ConversationMember>? owners = null)
     {
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -735,6 +758,29 @@ public sealed class SharePointSource : IConnectorSource
             // carry these to IC /api/objects/group-memberships/bulk (no sink change).
             ["members"] = members
         };
+        // Owners land as attributes only: IC has no multi-owner edge table (Objects.OwnerObjectId
+        // is bound from the single-valued AD managedBy DN). ownerIds = the owners' AAD user ids
+        // (their SourceUniqueId on IC) so the read side can JOIN without parsing the JSON.
+        // upn is the AadUserConversationMember email — /teams/{id}/members carries no UPN.
+        if (owners is not null)
+        {
+            var projected = new List<TeamOwner>(owners.Count);
+            var ids = new List<string>(owners.Count);
+            foreach (var o in owners)
+            {
+                var id = MemberSourceId(o);
+                if (string.IsNullOrEmpty(id)) continue;
+                ids.Add(id!);
+                projected.Add(new TeamOwner(id!, o.DisplayName,
+                    (o as Microsoft.Graph.Models.AadUserConversationMember)?.Email));
+            }
+            attrs["ownerCount"] = projected.Count;
+            if (projected.Count > 0)
+            {
+                attrs["owners"] = JsonSerializer.Serialize(projected, OwnerJsonOptions);
+                attrs["ownerIds"] = ids;
+            }
+        }
         return new ConnectorObject
         {
             SourceId = t.Id ?? string.Empty,

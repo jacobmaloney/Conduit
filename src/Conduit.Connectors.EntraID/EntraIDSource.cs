@@ -13,6 +13,7 @@ using Microsoft.Graph.Models;
 // NOTE: do NOT add `using Microsoft.Graph.Users.Delta;` / `using Microsoft.Graph.Groups.Delta;`
 // — both namespaces define a sibling `DeltaGetResponse` and importing both makes
 // the type name ambiguous. We fully-qualify per-call below.
+using GraphDirectoryObject = Microsoft.Graph.Models.DirectoryObject;
 using GraphGroup = Microsoft.Graph.Models.Group;
 using GraphUser = Microsoft.Graph.Models.User;
 
@@ -570,13 +571,15 @@ public sealed class EntraIDSource : IConnectorSource
             if (!string.IsNullOrWhiteSpace(filter)) req.QueryParameters.Filter = filter;
         }, cancellationToken);
 
+        var ownerState = new OwnerFetchState();
         while (page?.Value != null)
         {
             foreach (var g in page.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var members = await TryGetGroupMembersAsync(client, g.Id, cancellationToken);
-                yield return ConvertGroup(g, members);
+                var owners = await TryGetGroupOwnersAsync(client, g.Id, ownerState, cancellationToken);
+                yield return ConvertGroup(g, members, owners);
             }
             if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
             page = await client.Groups.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -605,13 +608,23 @@ public sealed class EntraIDSource : IConnectorSource
             r => page = r, "application", "Application.Read.All"))
             yield break;
 
+        var ownerState = new OwnerFetchState();
+        var now = DateTimeOffset.UtcNow;
         while (page?.Value != null)
         {
             foreach (var a in page.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrEmpty(a.Id)) continue;
-                yield return ConvertApplication(a);
+                var owners = await TryGetOwnersAsync(
+                    () => client.Applications[a.Id].Owners.GetAsync(req =>
+                    {
+                        req.QueryParameters.Top = 999;
+                        req.QueryParameters.Select = EntraOwnerMetadata.OwnerSelect;
+                    }, cancellationToken),
+                    link => client.Applications[a.Id].Owners.WithUrl(link).GetAsync(cancellationToken: cancellationToken),
+                    ownerState, "application", a.Id, "Application.Read.All");
+                yield return ConvertApplication(a, owners, now);
             }
             if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
             page = await client.Applications.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -633,13 +646,23 @@ public sealed class EntraIDSource : IConnectorSource
             r => page = r, "servicePrincipal", "Application.Read.All"))
             yield break;
 
+        var ownerState = new OwnerFetchState();
+        var now = DateTimeOffset.UtcNow;
         while (page?.Value != null)
         {
             foreach (var sp in page.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrEmpty(sp.Id)) continue;
-                yield return ConvertServicePrincipal(sp);
+                var owners = await TryGetOwnersAsync(
+                    () => client.ServicePrincipals[sp.Id].Owners.GetAsync(req =>
+                    {
+                        req.QueryParameters.Top = 999;
+                        req.QueryParameters.Select = EntraOwnerMetadata.OwnerSelect;
+                    }, cancellationToken),
+                    link => client.ServicePrincipals[sp.Id].Owners.WithUrl(link).GetAsync(cancellationToken: cancellationToken),
+                    ownerState, "servicePrincipal", sp.Id, "Application.Read.All");
+                yield return ConvertServicePrincipal(sp, owners, now);
             }
             if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
             page = await client.ServicePrincipals.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -905,6 +928,7 @@ public sealed class EntraIDSource : IConnectorSource
             }, cancellationToken);
         }
 
+        var ownerState = new OwnerFetchState();
         while (page?.Value != null)
         {
             foreach (var g in page.Value)
@@ -914,10 +938,14 @@ public sealed class EntraIDSource : IConnectorSource
                 // collapses it, so fetch the live roster per group (N+1, mirrors the
                 // legacy full path) to stamp attrs["members"] for membership capture.
                 // Removed/tombstoned groups are being deleted — skip the member fetch.
-                var members = IsRemoved(g.AdditionalData)
+                var removed = IsRemoved(g.AdditionalData);
+                var members = removed
                     ? new List<string>()
                     : await TryGetGroupMembersAsync(client, g.Id, cancellationToken);
-                yield return ConvertGroupDelta(g, members);
+                var owners = removed
+                    ? null
+                    : await TryGetGroupOwnersAsync(client, g.Id, ownerState, cancellationToken);
+                yield return ConvertGroupDelta(g, members, owners);
             }
 
             if (!string.IsNullOrEmpty(page.OdataDeltaLink))
@@ -952,6 +980,69 @@ public sealed class EntraIDSource : IConnectorSource
         }
         catch { /* swallow — membership is best-effort */ }
         return ids;
+    }
+
+    /// <summary>
+    /// Per-enumeration owner-fetch guard: the first 403 on an owners collection
+    /// disables further owner fetches for that class (one warning, not one per object).
+    /// </summary>
+    private sealed class OwnerFetchState
+    {
+        public bool Forbidden { get; set; }
+    }
+
+    private Task<IReadOnlyList<GraphDirectoryObject>?> TryGetGroupOwnersAsync(
+        GraphServiceClient client, string? groupId, OwnerFetchState state, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(groupId)) return Task.FromResult<IReadOnlyList<GraphDirectoryObject>?>(null);
+        return TryGetOwnersAsync(
+            () => client.Groups[groupId].Owners.GetAsync(req =>
+            {
+                req.QueryParameters.Top = 999;
+                req.QueryParameters.Select = EntraOwnerMetadata.OwnerSelect;
+            }, cancellationToken),
+            link => client.Groups[groupId].Owners.WithUrl(link).GetAsync(cancellationToken: cancellationToken),
+            state, "group", groupId, "Group.Read.All");
+    }
+
+    /// <summary>
+    /// Pages an /owners collection. Null means the fetch did not happen (403, already
+    /// forbidden this run, or a Graph error on this object) so the converter stamps
+    /// nothing rather than a false ownerCount=0. Never logs token/secret material.
+    /// </summary>
+    private async Task<IReadOnlyList<GraphDirectoryObject>?> TryGetOwnersAsync(
+        Func<Task<DirectoryObjectCollectionResponse?>> fetchFirst,
+        Func<string, Task<DirectoryObjectCollectionResponse?>> fetchNext,
+        OwnerFetchState state, string objectClass, string objectId, string scopeHint)
+    {
+        if (state.Forbidden) return null;
+        var owners = new List<GraphDirectoryObject>();
+        try
+        {
+            var page = await fetchFirst();
+            while (page?.Value != null)
+            {
+                owners.AddRange(page.Value);
+                if (string.IsNullOrEmpty(page.OdataNextLink)) break;
+                page = await fetchNext(page.OdataNextLink);
+            }
+            return owners;
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+        {
+            state.Forbidden = true;
+            _logger.LogWarning(
+                "EntraID: owners not collected for class {ObjectClass} — app registration lacks scope {Scope} (403)",
+                objectClass, scopeHint);
+            return null;
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            _logger.LogWarning(
+                "EntraID: owners fetch failed for {ObjectClass} {ObjectId}: {Code}",
+                objectClass, objectId, ex.Error?.Code ?? ex.ResponseStatusCode.ToString());
+            return null;
+        }
     }
 
     // ─── converters (parity with IC GraphQueryService) ────────────────────
@@ -997,18 +1088,23 @@ public sealed class EntraIDSource : IConnectorSource
     };
 
     // ─── extended directory $select sets (template attributes only) ────────
-    // Deliberately NO keyCredentials / passwordCredentials on application or
-    // servicePrincipal — secrets are never selected, emitted, or logged.
+    // keyCredentials / passwordCredentials ARE selected on application and
+    // servicePrincipal, but only their EXPIRY METADATA is emitted (keyId,
+    // displayName, type, usage, start/endDateTime, hint, customKeyIdentifier —
+    // see EntraCredentialMetadata). KeyCredential.Key (the cert blob) and
+    // PasswordCredential.SecretText are never read, emitted, or logged.
     private static readonly string[] ApplicationSelectFields = new[]
     {
         "id", "displayName", "appId", "signInAudience", "publisherDomain",
-        "description", "identifierUris", "tags", "createdDateTime"
+        "description", "identifierUris", "tags", "createdDateTime",
+        "passwordCredentials", "keyCredentials"
     };
 
     private static readonly string[] ServicePrincipalSelectFields = new[]
     {
         "id", "displayName", "appId", "servicePrincipalType", "appDisplayName",
-        "servicePrincipalNames", "accountEnabled"
+        "servicePrincipalNames", "accountEnabled",
+        "passwordCredentials", "keyCredentials"
         // NOTE: createdDateTime (template WhenCreated) is not a property on the
         // Graph 5.61 ServicePrincipal model — omitted; template field stays unset.
     };
@@ -1022,11 +1118,12 @@ public sealed class EntraIDSource : IConnectorSource
     {
         "id", "displayName", "deviceId", "operatingSystem", "operatingSystemVersion",
         "trustType", "managementType", "manufacturer", "model",
-        "isManaged", "isCompliant", "accountEnabled"
-        // NOTE: lastSignInDateTime / createdDateTime (template LastLogonTimestamp /
-        // WhenCreated) are not directly selectable top-level Device properties on
-        // the Graph 5.61 model (the entity exposes approximateLastSignInDateTime /
-        // registrationDateTime instead) — omitted; those template fields stay unset.
+        "isManaged", "isCompliant", "accountEnabled",
+        // The Graph device entity has no lastSignInDateTime / createdDateTime; its
+        // approximateLastSignInDateTime / registrationDateTime are emitted under the
+        // template's names (lastSignInDateTime → LastLogonTimestamp, createdDateTime →
+        // WhenCreated) so the existing mappings land them.
+        "approximateLastSignInDateTime", "registrationDateTime"
     };
 
     private static readonly string[] AdministrativeUnitSelectFields = new[]
@@ -1149,7 +1246,8 @@ public sealed class EntraIDSource : IConnectorSource
         return obj;
     }
 
-    private static ConnectorObject ConvertGroup(GraphGroup g, List<string> memberIds)
+    private static ConnectorObject ConvertGroup(
+        GraphGroup g, List<string> memberIds, IReadOnlyList<GraphDirectoryObject>? owners)
     {
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1184,6 +1282,7 @@ public sealed class EntraIDSource : IConnectorSource
             attrs["whenCreated"] = g.CreatedDateTime.Value.ToString("o");
         if (memberIds.Count > 0)
             attrs["members"] = memberIds;
+        EntraOwnerMetadata.Apply(attrs, owners);
 
         return new ConnectorObject
         {
@@ -1193,9 +1292,10 @@ public sealed class EntraIDSource : IConnectorSource
         };
     }
 
-    private static ConnectorObject ConvertGroupDelta(GraphGroup g, List<string> memberIds)
+    private static ConnectorObject ConvertGroupDelta(
+        GraphGroup g, List<string> memberIds, IReadOnlyList<GraphDirectoryObject>? owners)
     {
-        var obj = ConvertGroup(g, memberIds);
+        var obj = ConvertGroup(g, memberIds, owners);
         if (IsRemoved(g.AdditionalData))
         {
             obj.Attributes["_deleted"] = true;
@@ -1209,7 +1309,8 @@ public sealed class EntraIDSource : IConnectorSource
     // `id`, NOT appId. For domain `id` is the domain name (Graph's natural key).
     // Attributes["objectClass"] mirrors the generator's native camelCase string.
 
-    private static ConnectorObject ConvertApplication(Application a)
+    internal static ConnectorObject ConvertApplication(
+        Application a, IReadOnlyList<GraphDirectoryObject>? owners, DateTimeOffset now)
     {
         var attrs = NewDirectoryAttrs("application", a.Id);
         Set(attrs, "displayName", a.DisplayName);
@@ -1223,10 +1324,13 @@ public sealed class EntraIDSource : IConnectorSource
             attrs["tags"] = string.Join(";", a.Tags);
         if (a.CreatedDateTime.HasValue)
             attrs["createdDateTime"] = a.CreatedDateTime.Value.ToString("o");
+        EntraCredentialMetadata.Apply(attrs, a.PasswordCredentials, a.KeyCredentials, now);
+        EntraOwnerMetadata.Apply(attrs, owners);
         return DirectoryObject("application", a.Id, attrs);
     }
 
-    private static ConnectorObject ConvertServicePrincipal(ServicePrincipal sp)
+    internal static ConnectorObject ConvertServicePrincipal(
+        ServicePrincipal sp, IReadOnlyList<GraphDirectoryObject>? owners, DateTimeOffset now)
     {
         var attrs = NewDirectoryAttrs("servicePrincipal", sp.Id);
         Set(attrs, "displayName", sp.DisplayName);
@@ -1237,6 +1341,8 @@ public sealed class EntraIDSource : IConnectorSource
             attrs["servicePrincipalNames"] = string.Join(";", sp.ServicePrincipalNames);
         if (sp.AccountEnabled.HasValue)
             attrs["accountEnabled"] = sp.AccountEnabled.Value;
+        EntraCredentialMetadata.Apply(attrs, sp.PasswordCredentials, sp.KeyCredentials, now);
+        EntraOwnerMetadata.Apply(attrs, owners);
         return DirectoryObject("servicePrincipal", sp.Id, attrs);
     }
 
@@ -1249,7 +1355,7 @@ public sealed class EntraIDSource : IConnectorSource
         return DirectoryObject("directoryRole", r.Id, attrs);
     }
 
-    private static ConnectorObject ConvertDevice(Device d)
+    internal static ConnectorObject ConvertDevice(Device d)
     {
         var attrs = NewDirectoryAttrs("device", d.Id);
         Set(attrs, "displayName", d.DisplayName);
@@ -1257,11 +1363,19 @@ public sealed class EntraIDSource : IConnectorSource
         Set(attrs, "operatingSystem", d.OperatingSystem);
         Set(attrs, "operatingSystemVersion", d.OperatingSystemVersion);
         Set(attrs, "trustType", d.TrustType);
+        Set(attrs, "managementType", d.ManagementType);
         Set(attrs, "manufacturer", d.Manufacturer);
         Set(attrs, "model", d.Model);
         if (d.IsManaged.HasValue) attrs["isManaged"] = d.IsManaged.Value;
         if (d.IsCompliant.HasValue) attrs["isCompliant"] = d.IsCompliant.Value;
         if (d.AccountEnabled.HasValue) attrs["accountEnabled"] = d.AccountEnabled.Value;
+        if (d.ApproximateLastSignInDateTime.HasValue)
+            attrs["lastSignInDateTime"] = d.ApproximateLastSignInDateTime.Value.ToString("o");
+        if (d.RegistrationDateTime.HasValue)
+        {
+            attrs["registrationDateTime"] = d.RegistrationDateTime.Value.ToString("o");
+            attrs["createdDateTime"] = d.RegistrationDateTime.Value.ToString("o");
+        }
         return DirectoryObject("device", d.Id, attrs);
     }
 
@@ -1287,7 +1401,11 @@ public sealed class EntraIDSource : IConnectorSource
     }
 
     // No displayName on this Graph type — template's DisplayName stays unset.
-    private static ConnectorObject ConvertOAuth2PermissionGrant(OAuth2PermissionGrant g)
+    // clientId / resourceId ARE the client and resource service principals' object
+    // ids (= their SourceUniqueId on IC), and principalId is the consenting user's;
+    // re-emitted under join-named attributes so the read side can JOIN to the SP /
+    // user rows without a Graph call. scope is a space-delimited string — split too.
+    internal static ConnectorObject ConvertOAuth2PermissionGrant(OAuth2PermissionGrant g)
     {
         var attrs = NewDirectoryAttrs("oAuth2PermissionGrant", g.Id);
         Set(attrs, "clientId", g.ClientId);
@@ -1295,8 +1413,18 @@ public sealed class EntraIDSource : IConnectorSource
         Set(attrs, "principalId", g.PrincipalId);
         Set(attrs, "resourceId", g.ResourceId);
         Set(attrs, "scope", g.Scope);
+        Set(attrs, "clientServicePrincipalSourceUniqueId", g.ClientId);
+        Set(attrs, "resourceServicePrincipalSourceUniqueId", g.ResourceId);
+        Set(attrs, "principalUserSourceUniqueId", g.PrincipalId);
+        var scopes = SplitScopes(g.Scope);
+        if (scopes.Count > 0) attrs["scopes"] = scopes;
         return DirectoryObject("oAuth2PermissionGrant", g.Id, attrs);
     }
+
+    internal static List<string> SplitScopes(string? scope) =>
+        string.IsNullOrWhiteSpace(scope)
+            ? new List<string>()
+            : new List<string>(scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     // Domain's id IS the domain name; mirror it to displayName so the template's
     // DisplayName mapping has a value (the Graph type has no displayName).
