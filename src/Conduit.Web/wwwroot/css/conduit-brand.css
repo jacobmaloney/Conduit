@@ -1,0 +1,467 @@
+/* ============================================================================
+   conduit-brand.css — the single source of truth for the Conduit Redesign look.
+
+   Semantic .cx-* classes reproduce the "Conduit Redesign" design canvas 1:1
+   (top bar, sidebar, page heads, stat band, cards, list rows, pills, buttons,
+   schedule table). Every reusable visual lives here — pages carry NO inline
+   style for anything the brand owns. Loaded LAST in _Layout so it wins.
+   ========================================================================== */
+
+/* ---- Font ---------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap');
+
+/* ============================================================================
+   SHELL
+   ========================================================================== */
+.cx-shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background: #f4f7f8;
+    font-family: 'Nunito', system-ui, -apple-system, Segoe UI, sans-serif;
+    color: #1e293b;
+}
+.cx-shell button,
+.cx-shell input,
+.cx-shell select,
+.cx-shell textarea {
+    font-family: 'Nunito', system-ui, -apple-system, Segoe UI, sans-serif;
+}
+
+/* ---- Top bar ------------------------------------------------------------- */
+.cx-topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 24px;
+    background: #fff;
+    border-bottom: 1px solid #e2eaee;
+    height: 54px;
+    flex: none;
+}
+.cx-brand {
+    font-weight: 800;
+    font-size: 17px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #1e293b;
+    text-decoration: none;
+}
+.cx-brand:hover { color: #1e293b; }
+.cx-brand > i { color: #0e7490; font-size: 16px; }
+.cx-brand .cx-brand-con { color: #0e7490; }
+.cx-topbar-spacer { flex: 1; }
+.cx-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    padding: 6px 15px;
+    font-size: 12.5px;
+    color: #94a3b8;
+    font-weight: 600;
+    width: 220px;
+}
+.cx-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #0e7490;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 12px;
+    flex: none;
+}
+
+/* ---- Body split ---------------------------------------------------------- */
+.cx-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ---- Sidebar ------------------------------------------------------------- */
+.cx-sidebar {
+    width: 216px;
+    flex: none;
+    background: #fff;
+    border-right: 1px solid #e2eaee;
+    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.cx-sidebar nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.cx-nav-label {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    color: #94a3b8;
+    padding: 12px 12px 6px;
+    text-transform: uppercase;
+}
+.cx-nav {
+    color: #475569;
+    font-weight: 700;
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    text-decoration: none;
+    background: transparent;
+}
+.cx-nav:hover { background: #f1f5f9; color: #475569; }
+.cx-nav.active,
+.cx-nav.on-identity {
+    background: #0e7490;
+    color: #fff;
+    font-weight: 800;
+}
+.cx-nav.active:hover,
+.cx-nav.on-identity:hover { background: #0e7490; color: #fff; }
+.cx-nav-left {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+}
+.cx-nav-left > i { width: 15px; text-align: center; font-size: 13px; }
+.cx-nav-badge {
+    background: #eef4f6;
+    color: #64748b;
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 1px 7px;
+    border-radius: 999px;
+    flex: none;
+}
+.cx-nav.active .cx-nav-badge,
+.cx-nav.on-identity .cx-nav-badge {
+    background: rgba(255, 255, 255, .25);
+    color: #fff;
+}
+.cx-sidebar-spacer { flex: 1; }
+.cx-sidebar-foot {
+    border-top: 1px solid #e2eaee;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 600;
+}
+.cx-sidebar-foot a { color: #0e7490; }
+
+/* Dev-only open-access pill (Development chrome). */
+.cx-openaccess-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 2px 8px;
+    padding: 7px 12px;
+    border-radius: 10px;
+    background: #fef3c7;
+    color: #b45309;
+    font-size: 12px;
+    font-weight: 800;
+    text-decoration: none;
+}
+
+/* ---- Main scroll region -------------------------------------------------- */
+.cx-main {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    padding: 20px 26px;
+}
+/* Neutralize Bootstrap container padding for pages still wrapping in one. */
+.cx-main .container-fluid { padding-left: 0; padding-right: 0; max-width: none; width: 100%; }
+
+/* ============================================================================
+   PAGE HEAD
+   ========================================================================== */
+.cx-page-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+}
+.cx-page-head--tight { margin-bottom: 14px; }
+.cx-page-title { font-weight: 800; font-size: 19px; margin: 0; line-height: 1.2; }
+.cx-page-sub { font-size: 12.5px; color: #64748b; font-weight: 600; margin: 0; }
+.cx-page-sub b { color: #0e7490; }
+.cx-page-head-spacer { flex: 1; }
+.cx-page-actions { display: flex; align-items: center; gap: 10px; }
+
+/* ============================================================================
+   BUTTONS
+   ========================================================================== */
+.cx-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: inherit;
+    font-weight: 800;
+    font-size: 12.5px;
+    line-height: 1;
+    padding: 8px 15px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #475569;
+    cursor: pointer;
+    white-space: nowrap;
+    text-decoration: none;
+    transition: border-color .12s, background .12s, color .12s;
+}
+.cx-btn:hover { border-color: #94a3b8; color: #475569; }
+.cx-btn:disabled { opacity: .55; cursor: default; }
+
+.cx-btn--primary,
+.cx-btn--run {
+    border: none;
+    background: #0e7490;
+    color: #fff;
+    padding: 8px 17px;
+}
+.cx-btn--primary:hover,
+.cx-btn--run:hover { background: #155e75; color: #fff; border: none; }
+
+/* size modifiers */
+.cx-btn--md { font-size: 12px; padding: 7px 13px; border-radius: 9px; }
+.cx-btn--xs { font-size: 11.5px; padding: 6px 12px; border-radius: 8px; }
+.cx-btn--run.cx-btn--md { padding: 7px 14px; }
+
+/* teal-text secondary (Test action) */
+.cx-btn--teal { color: #0e7490; }
+.cx-btn--teal:hover { color: #0e7490; }
+
+/* ============================================================================
+   STAT BAND (dashboard)
+   ========================================================================== */
+.cx-statband {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.cx-stat {
+    background: #fff;
+    border: 1px solid #e2eaee;
+    border-radius: 12px;
+    padding: 12px 15px;
+}
+.cx-stat-label {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    color: #94a3b8;
+    text-transform: uppercase;
+}
+.cx-stat-val { font-size: 22px; font-weight: 800; color: #0e7490; margin-top: 2px; }
+.cx-stat-val.ok { color: #15803d; }
+.cx-stat-val.muted { color: #64748b; }
+.cx-stat-sub { font-size: 11px; font-weight: 700; color: #64748b; }
+
+/* ============================================================================
+   CARDS
+   ========================================================================== */
+.cx-card {
+    background: #fff;
+    border: 1px solid #e2eaee;
+    border-radius: 14px;
+    padding: 16px 18px;
+}
+.cx-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.cx-card-title { font-weight: 800; font-size: 14.5px; margin: 0; }
+.cx-card-link { font-size: 12px; font-weight: 800; color: #0e7490; }
+.cx-bigtime { font-size: 20px; font-weight: 800; color: #0e7490; }
+.cx-card-sub { font-size: 12px; color: #64748b; font-weight: 600; margin-top: 2px; }
+
+/* dashboard two-column grid */
+.cx-dash-grid {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 14px;
+    align-items: start;
+}
+.cx-col-stack { display: grid; gap: 14px; }
+
+/* ---- Rows (list stacks) -------------------------------------------------- */
+.cx-rows { display: grid; gap: 6px; }
+.cx-rows--sp { gap: 8px; }
+
+/* compact dashboard sync-project row */
+.cx-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid #eef2f4;
+    border-radius: 10px;
+    padding: 9px 12px;
+}
+.cx-row-main { min-width: 0; flex: 1; }
+.cx-row-name {
+    font-weight: 800;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cx-row-meta { font-size: 11.5px; color: #64748b; font-weight: 600; }
+.cx-row-time { font-size: 11.5px; color: #94a3b8; font-weight: 700; flex: none; }
+
+/* dot */
+.cx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #16a34a; }
+.cx-dot--fail { background: #dc2626; }
+.cx-dot--run { background: #0e7490; }
+.cx-dot--idle { background: #94a3b8; }
+
+/* activity list */
+.cx-activity { display: grid; gap: 8px; font-size: 12.5px; font-weight: 600; color: #475569; }
+.cx-activity .ok { color: #15803d; font-weight: 800; }
+.cx-activity .add { color: #0e7490; font-weight: 800; }
+
+/* ---- Full-width list card (sync projects / connections) ------------------ */
+.cx-listcard {
+    background: #fff;
+    border: 1px solid #e2eaee;
+    border-radius: 12px;
+    padding: 13px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.cx-listcard-main { min-width: 0; flex: 1; }
+.cx-listcard-title { font-weight: 800; font-size: 14px; margin: 0; }
+.cx-listcard-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: #e0f4f8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    color: #0e7490;
+    flex: none;
+}
+.cx-pillrow {
+    display: flex;
+    gap: 7px;
+    margin-top: 5px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.cx-meta { font-size: 11px; color: #64748b; font-weight: 700; }
+.cx-actions { display: flex; gap: 6px; flex: none; }
+
+/* ============================================================================
+   PILLS
+   ========================================================================== */
+.cx-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 2px 10px;
+    border-radius: 999px;
+    line-height: 1.55;
+    white-space: nowrap;
+}
+.cx-pill--ok { background: #dcfce7; color: #15803d; }
+.cx-pill--sched { background: #fef3c7; color: #b45309; }
+.cx-pill--type { background: #eef4f6; color: #475569; }
+.cx-pill--target { background: #e0f4f8; color: #0e7490; }
+.cx-pill--muted { background: #eef4f6; color: #64748b; }
+.cx-pill--warn { background: #fef3c7; color: #b45309; }
+.cx-pill--fail { background: #fee2e2; color: #b91c1c; }
+.cx-pill--runs { background: #dcfce7; color: #15803d; font-size: 10.5px; flex: none; }
+.cx-pill--lg { font-size: 11.5px; padding: 4px 12px; }
+.cx-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.cx-arrow { color: #94a3b8; font-weight: 800; }
+
+/* version pill in top bar */
+.cx-verpill {
+    background: #eef4f6;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: 999px;
+}
+
+/* filter pill bar */
+.cx-filterbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    font-size: 12.5px;
+    font-weight: 800;
+    align-items: center;
+}
+.cx-fpill {
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    color: #64748b;
+    padding: 6px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.cx-fpill.active { background: #0e7490; border-color: #0e7490; color: #fff; }
+.cx-filter-spacer { flex: 1; }
+.cx-filter-summary { color: #64748b; font-weight: 700; align-self: center; }
+
+/* ============================================================================
+   SCHEDULE TABLE
+   ========================================================================== */
+.cx-tablecard {
+    background: #fff;
+    border: 1px solid #e2eaee;
+    border-radius: 14px;
+    overflow: hidden;
+}
+.cx-table { width: 100%; border-collapse: collapse; }
+.cx-table thead th {
+    background: #f8fafc;
+    border-bottom: 1px solid #e2eaee;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    color: #94a3b8;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 10px 16px;
+}
+.cx-table thead th.text-end { text-align: right; }
+.cx-table tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #eef2f4;
+    font-size: 13px;
+    vertical-align: middle;
+}
+.cx-table tbody tr:last-child td { border-bottom: none; }
+.cx-table .cx-cell-name { font-weight: 800; }
+.cx-table .cx-cell-sub { font-size: 11px; color: #94a3b8; font-weight: 600; }
+.cx-table .cx-cell-cadence { font-weight: 700; color: #475569; }
+.cx-table .cx-cell-next { font-weight: 800; color: #0e7490; }
+.cx-table .cx-cell-last { font-weight: 600; color: #64748b; }
+.cx-table .cx-cell-actions { text-align: right; }
+.cx-table .cx-cell-actions .cx-actions { justify-content: flex-end; }

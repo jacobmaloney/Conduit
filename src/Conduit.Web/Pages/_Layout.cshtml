@@ -51,6 +51,9 @@
        overrides (.cc-*, .nav-*, .card, .btn) still win where they overlap. *@
     <link href="css/ic-design-system.css" rel="stylesheet" asp-append-version="true" />
     <link href="css/conduit.css" rel="stylesheet" asp-append-version="true" />
+    @* Conduit Redesign brand sheet — the .cx-* shell/pages look. Loaded LAST so
+       its rules win over every earlier design system. *@
+    <link href="css/conduit-brand.css" rel="stylesheet" asp-append-version="true" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
 </head>
