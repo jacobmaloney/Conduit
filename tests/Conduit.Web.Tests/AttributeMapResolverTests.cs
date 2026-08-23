@@ -26,7 +26,25 @@ public class AttributeMapResolverTests
     public void AdUserAndIcUserTemplates_HaveTheExpectedSize()
     {
         Assert.Equal(25, AttributeTemplateCatalog.Get(Ad, "User")!.Count);
-        Assert.Equal(27, AttributeTemplateCatalog.Get(Ic, "User")!.Count);
+        Assert.Equal(33, AttributeTemplateCatalog.Get(Ic, "User")!.Count);
+    }
+
+    [Theory]
+    [InlineData("proxyAddresses", "proxyAddresses")]
+    [InlineData("onPremisesImmutableId", "onPremisesImmutableId")]
+    [InlineData("onPremisesSyncEnabled", "onPremisesSyncEnabled")]
+    [InlineData("onPremisesSamAccountName", "onPremisesSamAccountName")]
+    [InlineData("mail", "mail")]
+    [InlineData("accountEnabled", "accountEnabled")]
+    public void EntraUserToIc_HybridTwinKeys_LandUnderTheirGraphNames(string sourceAttribute, string sinkAttribute)
+    {
+        // The live 2026-08-22 Entra sync landed 9 users with ONLY SourceUniqueId in IC's
+        // ObjectAttributes: the selected-but-uncanonical attributes were dropped by the INNER JOIN,
+        // and the typed-column ones never reach ObjectAttributes at all.
+        var mappings = AttributeMapResolver.Resolve(AttributeTemplateCatalog.Systems.EntraID, Ic, "User", out var dropped);
+
+        Assert.DoesNotContain(dropped, d => string.Equals(d.SourceAttribute, sourceAttribute, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(mappings, m => m.SourceAttribute == sourceAttribute && m.SinkAttribute == sinkAttribute);
     }
 
     [Fact]

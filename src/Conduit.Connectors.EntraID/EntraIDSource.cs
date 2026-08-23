@@ -963,6 +963,7 @@ public sealed class EntraIDSource : IConnectorSource
         "mobilePhone", "businessPhones", "streetAddress", "city", "state",
         "postalCode", "country", "employeeId", "employeeType",
         "accountEnabled", "onPremisesSamAccountName", "onPremisesDistinguishedName",
+        "onPremisesImmutableId", "onPremisesSyncEnabled",
         "createdDateTime", "mailNickname", "proxyAddresses", "faxNumber",
         // signInActivity requires the AuditLog.Read.All app scope (consented) and
         // Entra ID P1+ — if the scope were missing Graph 403s the whole user read.
@@ -1104,6 +1105,10 @@ public sealed class EntraIDSource : IConnectorSource
         Set(attrs, "onPremisesDistinguishedName", u.OnPremisesDistinguishedName);
         if (!string.IsNullOrEmpty(u.OnPremisesDistinguishedName))
             attrs["distinguishedName"] = u.OnPremisesDistinguishedName;
+        // Hybrid-twin correlation keys: ImmutableId is base64(AD objectGUID) for a synced user.
+        Set(attrs, "onPremisesImmutableId", u.OnPremisesImmutableId);
+        if (u.OnPremisesSyncEnabled.HasValue)
+            attrs["onPremisesSyncEnabled"] = u.OnPremisesSyncEnabled.Value;
         var cn = u.MailNickname ?? u.DisplayName ?? u.UserPrincipalName;
         if (!string.IsNullOrEmpty(cn)) attrs["cn"] = cn;
         if (u.AccountEnabled.HasValue)

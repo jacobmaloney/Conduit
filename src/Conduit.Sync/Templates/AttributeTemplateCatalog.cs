@@ -463,6 +463,19 @@ public static class AttributeTemplateCatalog
             E("LastLogon", "LastLogon", sinkOnly: true),
             E("whenChanged", "WhenChanged"),
             E("whenCreated", "WhenCreated"),
+            // Hybrid-twin keys (AD <-> Entra correlation). These land in IC's ObjectAttributes
+            // under the Graph spelling; the typed Objects columns (Username, Email, IsActive)
+            // do not tell IC whether the value came from on-prem or the cloud. The Entra User
+            // template sources them; AD's ProxyAddresses canonical finally has a sink here too.
+            // SINK-ONLY for the same reason as UserAccountControl: ObjectAttributes is
+            // app-writable, and proxyAddresses / immutableId written back INTO a directory
+            // would be a mailbox-routing / join-key change nothing in IC is authorised to make.
+            E("ProxyAddresses", "ProxyAddresses", sinkAttribute: "proxyAddresses", sinkOnly: true),
+            E("OnPremisesImmutableId", "OnPremisesImmutableId", sinkAttribute: "onPremisesImmutableId", sinkOnly: true),
+            E("OnPremisesSyncEnabled", "OnPremisesSyncEnabled", false, "Boolean", sinkAttribute: "onPremisesSyncEnabled", sinkOnly: true),
+            E("OnPremisesSamAccountName", "OnPremisesSamAccountName", sinkAttribute: "onPremisesSamAccountName", sinkOnly: true),
+            E("Mail", "Mail", sinkAttribute: "mail", sinkOnly: true),
+            E("AccountEnabled", "AccountEnabled", false, "Boolean", sinkAttribute: "accountEnabled", sinkOnly: true),
         };
         c[(Systems.IdentityCenter, "Group")] = new[]
         {
@@ -529,6 +542,19 @@ public static class AttributeTemplateCatalog
             // its canonical last-logon attribute key is "LastLogonTimestamp" (the same
             // key IC's own AD + Entra-device syncs use), landing in ObjectAttributes.
             E("lastSignInDateTime", "LastLogonTimestamp"),
+            // Hybrid-twin keys. Graph only returns what is $select-ed (EntraIDSource.UserSelectFields)
+            // and the resolver INNER-JOINs on canonical, so an attribute that is selected but has
+            // no canonical here (proxyAddresses was) is dropped before it reaches the sink. The four
+            // that already map to typed IC columns above (UPN, Username, Email, IsActive) are
+            // re-declared under their Graph names so the raw Entra value is preserved alongside.
+            // userPrincipalName has no second entry: IC's bulk allow-list matches column names
+            // case-insensitively, so a "userPrincipalName" attribute is the typed column again.
+            E("proxyAddresses", "ProxyAddresses"),
+            E("onPremisesImmutableId", "OnPremisesImmutableId"),
+            E("onPremisesSyncEnabled", "OnPremisesSyncEnabled", false, "Boolean"),
+            E("onPremisesSamAccountName", "OnPremisesSamAccountName"),
+            E("mail", "Mail"),
+            E("accountEnabled", "AccountEnabled", false, "Boolean"),
         };
         c[(Systems.EntraID, "Group")] = new[]
         {
