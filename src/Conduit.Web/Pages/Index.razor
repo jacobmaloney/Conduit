@@ -10,21 +10,22 @@
 
 <PageTitle>Conduit — move identities across connected systems.</PageTitle>
 
-<div class="container-fluid identities-container dashboard-container">
-    <CcTemplate1 Title="Dashboard"
-                 Subtitle="Everything that moves identities, at a glance."
-                 Icon="fas fa-gauge-high"
-                 IconAccent="cyan">
-        <PrimaryAction>
-            <a href="/sync-projects" class="btn btn-primary">
-                <i class="fas fa-right-left me-1"></i> Open Sync Projects
-            </a>
-        </PrimaryAction>
-    </CcTemplate1>
+<div class="cx-page">
+    <div class="cx-page-head">
+        <div>
+            <div class="cx-page-title">Dashboard</div>
+            <div class="cx-page-sub">Everything that moves identities, at a glance.</div>
+        </div>
+        <div class="cx-page-head-spacer"></div>
+        <div class="cx-page-actions">
+            <a href="/getting-started" class="cx-btn"><i class="fas fa-list-check"></i> Getting Started</a>
+            <a href="/sync-projects" class="cx-btn cx-btn--primary"><i class="fas fa-play"></i> Run All Syncs</a>
+        </div>
+    </div>
 
     @if (_showGettingStarted)
     {
-        <div class="alert alert-info d-flex justify-content-between align-items-center flex-wrap gap-2" role="alert">
+        <div class="alert alert-info d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3" role="alert">
             <div>
                 <i class="fas fa-list-check me-2"></i>
                 <strong>New to Conduit?</strong> Finish setting up — connect a system, point it at IdentityCenter, and run your first sync.
@@ -36,149 +37,93 @@
         </div>
     }
 
-    <CcStatRow Stats="@StatItems" />
-
-    <div class="section-header">
-        <h2>What Conduit does</h2>
-        <p>Move identity, accounts, and entitlements across connected systems.</p>
-    </div>
-
-    <div class="row">
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="surface-card h-100">
-                <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(14,116,144,0.12); color: #0e7490; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="fas fa-plug"></i>
-                    </div>
-                    <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Connections</h3>
-                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Connect Active Directory, Entra ID, Okta, Google, SCIM, databases, and more. Test the bind, then sync.</p>
-                    <a href="/connected-systems" class="ic-card-hdr-action">Manage connections <i class="oi oi-arrow-right"></i></a>
-                </div>
-            </div>
+    <div class="cx-statband">
+        <div class="cx-stat">
+            <div class="cx-stat-label">Total Users</div>
+            <div class="cx-stat-val">@userCount.ToString("N0")</div>
+            <div class="cx-stat-sub">across systems</div>
         </div>
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="surface-card h-100">
-                <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(14,116,144,0.12); color: #0e7490; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="fas fa-right-left"></i>
-                    </div>
-                    <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Sync Projects</h3>
-                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Define source → target, auto-map attributes per object class, schedule it, and watch every run.</p>
-                    <a href="/sync-projects" class="ic-card-hdr-action">Open sync projects <i class="oi oi-arrow-right"></i></a>
-                </div>
-            </div>
+        <div class="cx-stat">
+            <div class="cx-stat-label">Connections</div>
+            <div class="cx-stat-val">@connectionCount.ToString("N0")</div>
+            <div class="cx-stat-sub">@activeConnectionCount active</div>
         </div>
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="surface-card h-100">
-                <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(14,116,144,0.12); color: #0e7490; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="fas fa-clock-rotate-left"></i>
-                    </div>
-                    <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Sync History</h3>
-                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Every run, every object: read / created / updated / skipped / failed, with live progress and per-step logs.</p>
-                    <a href="/sync-history" class="ic-card-hdr-action">View run history <i class="oi oi-arrow-right"></i></a>
-                </div>
-            </div>
+        <div class="cx-stat">
+            <div class="cx-stat-label">Sync Projects</div>
+            <div class="cx-stat-val">@projectCount.ToString("N0")</div>
+            <div class="cx-stat-sub">@EnabledProjectsSub</div>
         </div>
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="surface-card h-100">
-                <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(180,83,9,0.12); color: #b45309; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="fas fa-calendar-days"></i>
-                    </div>
-                    <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Schedule</h3>
-                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Every project's schedule in one place — when it runs next, when it last ran, and whether it's enabled.</p>
-                    <a href="/schedules" class="ic-card-hdr-action">Manage schedules <i class="oi oi-arrow-right"></i></a>
-                </div>
-            </div>
+        <div class="cx-stat">
+            <div class="cx-stat-label">Runs Today</div>
+            <div class="cx-stat-val @(runsTodayCount > 0 ? "ok" : "")">@runsTodayCount.ToString("N0")</div>
+            <div class="cx-stat-sub">@failedTodayCount failed</div>
         </div>
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="surface-card h-100">
-                <div class="surface-card-body">
-                    <div class="ic-qa-icon" style="background: rgba(58,74,102,0.12); color: #3a4a66; width: 46px; height: 46px; font-size: 1.15rem; margin-bottom: 1rem;">
-                        <i class="fas fa-gear"></i>
-                    </div>
-                    <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Configuration</h3>
-                    <p style="color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-bottom: 1rem;">Portal security, identity providers, database, provisioning, and logs — governed in one place.</p>
-                    <a href="/configuration" class="ic-card-hdr-action">Configure <i class="oi oi-arrow-right"></i></a>
-                </div>
-            </div>
+        <div class="cx-stat">
+            <div class="cx-stat-label">Last Run</div>
+            <div class="cx-stat-val @LastRunValueClass">@LastRunShort</div>
+            <div class="cx-stat-sub">@LastRunSub</div>
         </div>
     </div>
 
-    <div class="row g-3 dashboard-activity">
-        <div class="col-lg-7 mb-3">
-            <div class="surface-card h-100">
-                <div class="surface-card-body">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0;">Sync projects</h3>
-                        <a href="/sync-projects" class="ic-card-hdr-action">Open sync projects <i class="oi oi-arrow-right"></i></a>
-                    </div>
-                    @if (projectList.Count == 0)
+    <div class="cx-dash-grid">
+        <div class="cx-card">
+            <div class="cx-card-head">
+                <span class="cx-card-title">Sync projects</span>
+                <a href="/sync-projects" class="cx-card-link">Open Sync Center →</a>
+            </div>
+            @if (projectList.Count == 0)
+            {
+                <div class="text-muted small">No sync projects yet. <a href="/sync-projects">Create one →</a></div>
+            }
+            else
+            {
+                <div class="cx-rows">
+                    @foreach (var p in projectList.Take(6))
                     {
-                        <div class="text-muted small">No sync projects yet. <a href="/sync-projects">Create one →</a></div>
-                    }
-                    else
-                    {
-                        <div class="d-grid gap-2">
-                            @foreach (var p in projectList.Take(6))
-                            {
-                                <div class="d-flex align-items-center gap-3" style="border: 1px solid #eef2f4; border-radius: 10px; padding: 9px 12px;">
-                                    <span style="width: 8px; height: 8px; border-radius: 50%; flex: none; background: @StatusDotColor(p.LastRunStatus);"></span>
-                                    <div class="flex-grow-1" style="min-width: 0;">
-                                        <div class="fw-bold text-truncate" style="font-size: 13px;">@p.Name</div>
-                                        <div class="text-muted" style="font-size: 11.5px; font-weight: 600;">
-                                            @TenantName(p.SourceTenantId) → @TenantName(p.SinkTenantId) · @p.ObjectClass
-                                        </div>
-                                    </div>
-                                    <span class="text-muted" style="font-size: 11.5px; font-weight: 700; white-space: nowrap;">
-                                        @p.TotalRuns runs · @(p.LastRunAt is { } lr ? RelativeTime(lr) : "never")
-                                    </span>
-                                </div>
-                            }
+                        <div class="cx-row">
+                            <span class="cx-dot @StatusDotClass(p.LastRunStatus)"></span>
+                            <div class="cx-row-main">
+                                <div class="cx-row-name">@p.Name</div>
+                                <div class="cx-row-meta">@TenantName(p.SourceTenantId) → @TenantName(p.SinkTenantId) · @p.ObjectClass</div>
+                            </div>
+                            <span class="cx-pill cx-pill--runs">@p.SuccessfulRuns/@p.TotalRuns runs</span>
+                            <span class="cx-row-time">@(p.LastRunAt is { } lr ? RelativeTime(lr) : "never")</span>
+                            <a href="/sync-projects" class="cx-btn cx-btn--run cx-btn--xs"><i class="fas fa-play"></i> Run</a>
                         </div>
                     }
                 </div>
-            </div>
+            }
         </div>
 
-        <div class="col-lg-5 mb-3">
-            <div class="d-grid gap-3">
-                <div class="surface-card">
-                    <div class="surface-card-body">
-                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0 0 0.5rem;">Next scheduled run</h3>
-                        <div style="font-size: 1.35rem; font-weight: 800; color: #0e7490;">@NextRunLabel</div>
-                        <div class="text-muted" style="font-size: 12px; font-weight: 600; margin-top: 2px;">
-                            @scheduledCount scheduled · @failingCount failing
-                        </div>
-                        <div class="d-flex gap-2 mt-3">
-                            <a href="/schedules" class="btn btn-sm btn-outline-secondary">Schedules</a>
-                            <a href="/sync-history" class="btn btn-sm btn-outline-secondary">Run history</a>
-                        </div>
-                    </div>
+        <div class="cx-col-stack">
+            <div class="cx-card">
+                <div class="cx-card-title" style="margin-bottom:10px;">Next scheduled run</div>
+                <div class="cx-bigtime">@NextRunLabel</div>
+                <div class="cx-card-sub">@scheduledCount schedules · @failingCount failing</div>
+                <div class="d-flex gap-2 mt-3">
+                    <a href="/schedules" class="cx-btn cx-btn--md">Schedules</a>
+                    <a href="/sync-history" class="cx-btn cx-btn--md">Run history</a>
                 </div>
-                <div class="surface-card">
-                    <div class="surface-card-body">
-                        <h3 style="font-size: 1rem; font-weight: 700; margin: 0 0 0.5rem;">Recent activity</h3>
-                        @if (recentRuns.Count == 0)
+            </div>
+            <div class="cx-card">
+                <div class="cx-card-title" style="margin-bottom:10px;">Recent activity</div>
+                @if (recentRuns.Count == 0)
+                {
+                    <div class="text-muted small">No runs recorded yet.</div>
+                }
+                else
+                {
+                    <div class="cx-activity">
+                        @foreach (var r in recentRuns.Take(6))
                         {
-                            <div class="text-muted small">No runs recorded yet.</div>
-                        }
-                        else
-                        {
-                            <div class="d-grid gap-2">
-                                @foreach (var r in recentRuns.Take(6))
-                                {
-                                    <div style="font-size: 12.5px; font-weight: 600; color: #475569;">
-                                        <span style="color: @StatusDotColor(r.Status); font-weight: 800;">@StatusGlyph(r.Status)</span>
-                                        @ProjectName(r.SyncProjectId) — @r.ObjectsRead read, @r.ObjectsCreated created, @r.ObjectsUpdated updated
-                                        <span class="text-muted">· @RelativeTime(r.CompletedAt ?? r.StartedAt)</span>
-                                    </div>
-                                }
+                            <div>
+                                <span class="@StatusGlyphClass(r.Status)">@StatusGlyph(r.Status)</span>
+                                @ProjectName(r.SyncProjectId) — @r.ObjectsRead read, @r.ObjectsCreated created, @r.ObjectsUpdated updated
+                                <span class="text-muted">· @RelativeTime(r.CompletedAt ?? r.StartedAt)</span>
                             </div>
                         }
                     </div>
-                </div>
+                }
             </div>
         </div>
     </div>
@@ -187,10 +132,13 @@
 @code {
     private int userCount = 0;
     private int connectionCount = 0;
+    private int activeConnectionCount = 0;
     private int projectCount = 0;
+    private int enabledProjectCount = 0;
     private int scheduledCount = 0;
     private int failingCount = 0;
     private int runsTodayCount = 0;
+    private int failedTodayCount = 0;
 
     private string? lastRunStatus;
     private DateTime? lastRunWhen;
@@ -203,31 +151,22 @@
 
     private bool _showGettingStarted;
 
-    private IReadOnlyList<CcStatRow.StatItem> StatItems => new List<CcStatRow.StatItem>
-    {
-        new("Total Users", userCount.ToString("N0")),
-        new("Connections", connectionCount.ToString("N0")),
-        new("Sync Projects", projectCount.ToString("N0")),
-        new("Runs Today", runsTodayCount.ToString("N0"), runsTodayCount > 0 ? "text-success" : "text-primary"),
-        new("Last Run", LastRunLabel, LastRunColor),
-    };
-
-    private string LastRunLabel => lastRunWhen is { } w ? RelativeTime(w) : "—";
-
-    private string LastRunColor => lastRunStatus switch
-    {
-        "Completed" or "Succeeded" => "text-success",
-        "Failed" or "Error" => "text-danger",
-        "Running" => "text-info",
-        _ => "text-primary"
-    };
+    private string EnabledProjectsSub =>
+        projectCount > 0 && enabledProjectCount == projectCount ? "all enabled" : $"{enabledProjectCount} enabled";
 
     private string NextRunLabel => nextScheduledRun is { } n ? n.ToLocalTime().ToString("ddd, h:mm tt") : "No schedule";
 
+    private string LastRunShort => lastRunWhen is { } w ? ShortRelative(w) : "—";
+    private string LastRunSub => lastRunWhen is null ? "no runs yet" : $"ago · {(lastRunStatus ?? "unknown").ToLowerInvariant()}";
+    private string LastRunValueClass => lastRunStatus switch
+    {
+        "Completed" or "Succeeded" => "ok",
+        "Failed" or "Error" => "muted",
+        _ => ""
+    };
+
     protected override async Task OnInitializedAsync()
     {
-        // Onboarding banner shows until the operator dismisses the Getting Started
-        // checklist. A config read failure just hides the banner.
         try { _showGettingStarted = !string.Equals(await Config.GetValueAsync("GettingStarted.Dismissed"), "true", StringComparison.OrdinalIgnoreCase); }
         catch { _showGettingStarted = false; }
 
@@ -242,6 +181,7 @@
         {
             var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
             connectionCount = tenants.Count;
+            activeConnectionCount = tenants.Count(t => t.IsActive);
             tenantNames = tenants.ToDictionary(t => t.Id, t => t.Name);
         }
         catch { connectionCount = 0; }
@@ -250,6 +190,7 @@
         {
             projectList = await ProjectRepo.GetAllAsync();
             projectCount = projectList.Count;
+            enabledProjectCount = projectList.Count(p => p.IsEnabled);
             scheduledCount = projectList.Count(p => !string.IsNullOrWhiteSpace(p.CronSchedule));
             failingCount = projectList.Count(p => p.LastRunStatus == "Failed");
             projectNames = projectList.ToDictionary(p => p.Id, p => p.Name);
@@ -267,6 +208,7 @@
             recentRuns = await RunRepo.GetRecentAsync(take: 200);
             var today = DateTime.UtcNow.Date;
             runsTodayCount = recentRuns.Count(r => r.StartedAt.Date == today);
+            failedTodayCount = recentRuns.Count(r => r.StartedAt.Date == today && (r.Status == "Failed" || r.Status == "Error"));
             var latest = recentRuns.OrderByDescending(r => r.CompletedAt ?? r.StartedAt).FirstOrDefault();
             if (latest is not null)
             {
@@ -280,12 +222,12 @@
     private string TenantName(Guid id) => tenantNames.TryGetValue(id, out var n) ? n : "—";
     private string ProjectName(Guid id) => projectNames.TryGetValue(id, out var n) ? n : "Sync project";
 
-    private static string StatusDotColor(string? status) => status switch
+    private static string StatusDotClass(string? status) => status switch
     {
-        "Completed" or "Succeeded" => "#16a34a",
-        "Failed" or "Error" => "#dc2626",
-        "Running" => "#0e7490",
-        _ => "#94a3b8"
+        "Completed" or "Succeeded" => "",
+        "Failed" or "Error" => "cx-dot--fail",
+        "Running" => "cx-dot--run",
+        _ => "cx-dot--idle"
     };
 
     private static string StatusGlyph(string? status) => status switch
@@ -293,7 +235,14 @@
         "Completed" or "Succeeded" => "✓",
         "Failed" or "Error" => "✗",
         "Running" => "●",
-        _ => "•"
+        _ => "＋"
+    };
+
+    private static string StatusGlyphClass(string? status) => status switch
+    {
+        "Failed" or "Error" => "add",
+        "Running" => "add",
+        _ => "ok"
     };
 
     private static string RelativeTime(DateTime utc)
@@ -305,6 +254,15 @@
         return $"{(int)span.TotalDays}d ago";
     }
 
+    private static string ShortRelative(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc;
+        if (span.TotalMinutes < 1) return "now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}m";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}h";
+        return $"{(int)span.TotalDays}d";
+    }
+
     private async Task DismissGettingStarted()
     {
         try
@@ -312,7 +270,7 @@
             await Config.UpsertAsync("GettingStarted.Dismissed", "true", "Boolean",
                 "Getting Started checklist dismissed by the operator.");
         }
-        catch { /* non-fatal — worst case the banner reappears next load */ }
+        catch { }
         _showGettingStarted = false;
     }
 }
