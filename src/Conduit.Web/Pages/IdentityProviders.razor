@@ -27,7 +27,8 @@
         <i class="oi oi-info"></i>
         Single sign-on is <strong>optional</strong>. With no enabled providers, the portal uses local
         username/password only. A successful SSO sign-in must match an <strong>existing active admin</strong>
-        by username or email — no accounts are auto-created. Changes take effect after an app restart.
+        by username or email — no accounts are auto-created; manage those accounts under
+        <a href="/admin/portal-admins">Portal Admins</a>. Changes take effect after an app restart.
     </div>
 
     @if (!string.IsNullOrEmpty(actionMessage))

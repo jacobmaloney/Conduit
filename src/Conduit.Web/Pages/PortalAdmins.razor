@@ -1,0 +1,300 @@
+@page "/admin/portal-admins"
+@attribute [Authorize]
+@using System.Security.Claims
+@using Conduit.DataAccess
+@using Conduit.DataAccess.Repositories
+@inject PortalAdminRepository AdminRepo
+@inject AuthenticationStateProvider AuthState
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Portal Admins - Conduit</PageTitle>
+
+<div class="container-fluid identities-container">
+    <CcTemplate1 Icon="oi oi-people" IconAccent="slate"
+                 Title="Portal Admins"
+                 Subtitle="Who can sign in to this Conduit portal — locally or via single sign-on.">
+        <PrimaryAction>
+            <button class="btn btn-primary" @onclick="OpenCreate">
+                <i class="oi oi-plus"></i> Add admin
+            </button>
+        </PrimaryAction>
+    </CcTemplate1>
+
+    <div class="alert alert-info">
+        <i class="oi oi-info"></i>
+        Single sign-on maps to the accounts on this page by <strong>username or email</strong> — it never
+        creates accounts, so an admin must exist here before their IdP login works. Providers are managed
+        under <a href="/admin/identity-providers">Identity Providers</a>. The last active admin can never
+        be deactivated or deleted.
+    </div>
+
+    @if (!string.IsNullOrEmpty(actionMessage))
+    {
+        <div class="alert @(actionOk ? "alert-success" : "alert-danger") alert-dismissible d-flex align-items-center">
+            <i class="oi @(actionOk ? "oi-check" : "oi-warning") me-2"></i>
+            <div>@actionMessage</div>
+            <button type="button" class="btn-close ms-auto" @onclick="() => actionMessage = null"></button>
+        </div>
+    }
+
+    @if (loading)
+    {
+        <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Display name</th>
+                                <th>Status</th>
+                                <th>Last login</th>
+                                <th>Created</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in admins)
+                            {
+                                <tr>
+                                    <td>
+                                        <strong>@a.UserName</strong>
+                                        @if (IsSelf(a))
+                                        {
+                                            <span class="badge bg-info ms-1">you</span>
+                                        }
+                                    </td>
+                                    <td>@(a.DisplayName ?? "—")</td>
+                                    <td>
+                                        @if (a.Active)
+                                        {
+                                            <span class="badge bg-success">Active</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-secondary">Inactive</span>
+                                        }
+                                    </td>
+                                    <td><small class="text-muted">@(a.LastLoginAt?.ToString("yyyy-MM-dd HH:mm") ?? "never")</small></td>
+                                    <td><small class="text-muted">@a.Created.ToString("yyyy-MM-dd")</small></td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenResetPassword(a)">
+                                            <i class="oi oi-key"></i> Reset password
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-warning" @onclick="() => ToggleActive(a)"
+                                                disabled="@(IsSelf(a) && a.Active)"
+                                                title="@(IsSelf(a) && a.Active ? "You cannot deactivate the account you are signed in with." : null)">
+                                            @(a.Active ? "Deactivate" : "Activate")
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAdmin(a)"
+                                                disabled="@IsSelf(a)"
+                                                title="@(IsSelf(a) ? "You cannot delete the account you are signed in with." : null)">
+                                            <i class="oi oi-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="modal @(showModal ? "show d-block" : "")" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">@(resetTarget == null ? "Add admin" : $"Reset password — {resetTarget.UserName}")</h5>
+                <button type="button" class="btn-close" @onclick="CloseModal"></button>
+            </div>
+            <div class="modal-body">
+                @if (!string.IsNullOrEmpty(formError))
+                {
+                    <div class="alert alert-danger py-2">@formError</div>
+                }
+                <form>
+                    @if (resetTarget == null)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Username * <small class="text-muted">(or email — SSO matches on this value)</small></label>
+                            <input type="text" class="form-control" @bind="formUserName" placeholder="e.g., jane or jane@contoso.com" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Display name</label>
+                            <input type="text" class="form-control" @bind="formDisplayName" placeholder="e.g., Jane Doe" />
+                        </div>
+                    }
+                    <div class="mb-3">
+                        <label class="form-label">Password * <small class="text-muted">(minimum 8 characters)</small></label>
+                        <input type="password" class="form-control" @bind="formPassword" autocomplete="new-password" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Confirm password *</label>
+                        <input type="password" class="form-control" @bind="formPasswordConfirm" autocomplete="new-password" />
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
+                <button class="btn btn-primary" @onclick="SaveModal" disabled="@saving">
+                    @(resetTarget == null ? "Create admin" : "Set password")
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+@if (showModal)
+{
+    <div class="modal-backdrop show"></div>
+}
+
+@code {
+    private List<PortalAdmin> admins = new();
+    private bool loading = true;
+    private bool saving;
+    private bool showModal;
+    private string? actionMessage;
+    private bool actionOk;
+    private string? formError;
+    private string formUserName = "";
+    private string formDisplayName = "";
+    private string formPassword = "";
+    private string formPasswordConfirm = "";
+    private PortalAdmin? resetTarget;
+    private string? currentUserName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        currentUserName = state.User.FindFirst(ClaimTypes.Name)?.Value ?? state.User.Identity?.Name;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        admins = await AdminRepo.GetAllAsync();
+        loading = false;
+    }
+
+    private bool IsSelf(PortalAdmin a) =>
+        !string.IsNullOrEmpty(currentUserName) &&
+        string.Equals(a.UserName, currentUserName, StringComparison.OrdinalIgnoreCase);
+
+    private void OpenCreate()
+    {
+        resetTarget = null;
+        formUserName = ""; formDisplayName = ""; formPassword = ""; formPasswordConfirm = "";
+        formError = null;
+        showModal = true;
+    }
+
+    private void OpenResetPassword(PortalAdmin a)
+    {
+        resetTarget = a;
+        formPassword = ""; formPasswordConfirm = "";
+        formError = null;
+        showModal = true;
+    }
+
+    private void CloseModal()
+    {
+        showModal = false;
+        resetTarget = null;
+    }
+
+    private async Task SaveModal()
+    {
+        formError = null;
+
+        // Same minimum SetupService enforces for the first admin — one password policy, not two.
+        if (string.IsNullOrWhiteSpace(formPassword) || formPassword.Length < 8)
+        {
+            formError = "Password must be at least 8 characters.";
+            return;
+        }
+        if (!string.Equals(formPassword, formPasswordConfirm, StringComparison.Ordinal))
+        {
+            formError = "Passwords do not match.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            if (resetTarget == null)
+            {
+                var userName = formUserName.Trim();
+                if (string.IsNullOrWhiteSpace(userName))
+                {
+                    formError = "Username is required.";
+                    return;
+                }
+                if (await AdminRepo.GetByUserNameAsync(userName) != null)
+                {
+                    formError = $"An admin named '{userName}' already exists.";
+                    return;
+                }
+
+                var (hash, salt) = PasswordHasher.Hash(formPassword);
+                await AdminRepo.CreateAsync(userName,
+                    string.IsNullOrWhiteSpace(formDisplayName) ? null : formDisplayName.Trim(),
+                    hash, salt);
+                ShowResult(true, $"Admin '{userName}' created. They can sign in locally now — and via SSO once a provider matches this username.");
+            }
+            else
+            {
+                var (hash, salt) = PasswordHasher.Hash(formPassword);
+                await AdminRepo.UpdatePasswordAsync(resetTarget.Id, hash, salt);
+                ShowResult(true, $"Password updated for '{resetTarget.UserName}'.");
+            }
+
+            CloseModal();
+            await LoadAsync();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ToggleActive(PortalAdmin a)
+    {
+        // The repository refuses to deactivate the last active admin (returns false) — surface
+        // the refusal instead of pretending it worked. Lockout recovery needs host access.
+        var ok = await AdminRepo.SetActiveAsync(a.Id, !a.Active);
+        if (ok)
+            ShowResult(true, $"'{a.UserName}' is now {(!a.Active ? "active" : "inactive")}.");
+        else
+            ShowResult(false, "Refused: that would leave no active admin able to sign in.");
+        await LoadAsync();
+    }
+
+    private async Task DeleteAdmin(PortalAdmin a)
+    {
+        var confirmed = await JSRuntime.InvokeAsync<bool>("confirm",
+            $"Delete admin '{a.UserName}'? This cannot be undone.");
+        if (!confirmed) return;
+
+        var ok = await AdminRepo.DeleteAsync(a.Id);
+        if (ok)
+            ShowResult(true, $"Admin '{a.UserName}' deleted.");
+        else
+            ShowResult(false, "Refused: that would leave no active admin able to sign in.");
+        await LoadAsync();
+    }
+
+    private void ShowResult(bool ok, string message)
+    {
+        actionOk = ok;
+        actionMessage = message;
+    }
+}
