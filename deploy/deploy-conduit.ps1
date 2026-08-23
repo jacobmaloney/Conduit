@@ -220,6 +220,12 @@ Write-Step "Mirroring publish -> server"
 $roArgs = @($PublishDir, $RemotePath, "/MIR", "/NJH", "/NJS", "/NP", "/FP", "/R:2", "/W:2")
 $roArgs += "/XD"
 $roArgs += $xdPaths
+# Server-owned config: the box's appsettings*.json carry its own Kestrel binding and
+# secrets overlay. Mirroring the repo copies over them shipped a localhost-only Kestrel
+# block to .60 on 2026-08-23 and took the off-host UI down (Kestrel endpoint config
+# overrides ASPNETCORE_URLS). Same /XF pattern as deploy-webportal.ps1 / deploy-api.ps1.
+$roArgs += "/XF"
+$roArgs += @("appsettings.json", "appsettings.Production.json", "appsettings.Development.json")
 if ($DryRun) { $roArgs += "/L" }
 
 Write-Host "    robocopy $($roArgs -join ' ')" -ForegroundColor DarkGray
