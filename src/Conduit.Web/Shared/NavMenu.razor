@@ -20,9 +20,8 @@
 
     <nav>
         @* Redesign rail: MAIN (Dashboard, Sync Projects) · SYNC (Connections,
-           Schedules) · SETTINGS (Configuration). History lives on the dashboard
-           "Run history" button; Identity Providers/Database/Audit are tabs inside
-           Configuration; Quick Connect is off the rail. *@
+           Schedules, Sync History) · SETTINGS (Configuration). Identity Providers /
+           Database / Audit are tabs inside Configuration; Quick Connect is off the rail. *@
         <div class="cx-nav-label">Main</div>
         <NavLink class="cx-nav" ActiveClass="active" href="" Match="NavLinkMatch.All">
             <span class="cx-nav-left"><i class="fas fa-gauge-high"></i><span>Dashboard</span></span>
@@ -49,6 +48,9 @@
             {
                 <span class="cx-nav-badge">@sc</span>
             }
+        </NavLink>
+        <NavLink class="cx-nav" ActiveClass="active" href="sync-history">
+            <span class="cx-nav-left"><i class="fas fa-clock-rotate-left"></i><span>Sync History</span></span>
         </NavLink>
 
         <div class="cx-nav-label">Settings</div>
