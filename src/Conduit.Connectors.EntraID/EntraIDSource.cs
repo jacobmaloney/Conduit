@@ -983,13 +983,16 @@ public sealed class EntraIDSource : IConnectorSource
         return ids;
     }
 
-    // Directory-role holders (the role is the container). Same best-effort shape as the group
-    // member fetch — a 403 or throttle yields an empty list rather than failing the role read.
-    private static async Task<List<string>> TryGetDirectoryRoleMembersAsync(
+    // Directory-role holders (the role is the container). Returns null when the fetch FAILED
+    // (403 / throttle) so the converter can emit NO memberCount and IC reads the role as "not
+    // collected yet" — never a false "no holders" for what may be a populated privileged role. A
+    // non-null empty list is a genuine zero. Unlike a group's best-effort empty, a role's holders
+    // are crown-jewel data: hiding them behind a swallowed error is the wrong direction to fail.
+    private static async Task<List<string>?> TryGetDirectoryRoleMembersAsync(
         GraphServiceClient client, string? roleId, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrEmpty(roleId)) return new List<string>();
         var ids = new List<string>();
-        if (string.IsNullOrEmpty(roleId)) return ids;
         try
         {
             var page = await client.DirectoryRoles[roleId].Members.GetAsync(req =>
@@ -1005,7 +1008,8 @@ public sealed class EntraIDSource : IConnectorSource
                 page = await client.DirectoryRoles[roleId].Members.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
             }
         }
-        catch { /* swallow — membership is best-effort */ }
+        catch (OperationCanceledException) { throw; }
+        catch { return null; }
         return ids;
     }
 
@@ -1389,21 +1393,25 @@ public sealed class EntraIDSource : IConnectorSource
         return DirectoryObject("servicePrincipal", sp.Id, attrs);
     }
 
-    private static ConnectorObject ConvertDirectoryRole(DirectoryRole r, List<string> memberIds)
+    private static ConnectorObject ConvertDirectoryRole(DirectoryRole r, List<string>? memberIds)
     {
         var attrs = NewDirectoryAttrs("directoryRole", r.Id);
         Set(attrs, "displayName", r.DisplayName);
         Set(attrs, "description", r.Description);
         Set(attrs, "roleTemplateId", r.RoleTemplateId);
-        // members (capture-only, dropped by the resolver like a group's) drives the role -> holder
-        // membership second pass. memberCount + roleMemberIds are templated so they reach the sink:
-        // the IC detail pane reads them to tell "no holders" from "not collected", and to surface a
-        // holder whose directory object isn't synced rather than dropping it.
-        attrs["memberCount"] = memberIds.Count;
-        if (memberIds.Count > 0)
+        // memberIds == null means the holder fetch FAILED — emit NO memberCount so IC reads the role
+        // as "not collected yet", never a false "no holders" for a role that may be populated. A
+        // non-null list is authoritative: members (capture-only, dropped by the resolver like a
+        // group's) drives the role -> holder second pass; memberCount + roleMemberIds are templated
+        // so the IC pane can tell "no holders" from "not collected" and surface an unsynced holder.
+        if (memberIds != null)
         {
-            attrs["members"] = memberIds;
-            attrs["roleMemberIds"] = string.Join(";", memberIds.Select(id => id.ToUpperInvariant()));
+            attrs["memberCount"] = memberIds.Count;
+            if (memberIds.Count > 0)
+            {
+                attrs["members"] = memberIds;
+                attrs["roleMemberIds"] = string.Join(";", memberIds.Select(id => id.ToUpperInvariant()));
+            }
         }
         return DirectoryObject("directoryRole", r.Id, attrs);
     }
