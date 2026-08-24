@@ -844,10 +844,23 @@ public static class AttributeTemplateCatalog
             // Site-tree hierarchy ref: parent site's SourceId (empty for roots).
             // Derived by webUrl path containment in the connector (no Graph call).
             E("parentSiteId", "ParentSiteId"),
-            // Storage joined from getSharePointSiteUsageDetail (Reports.Read.All).
+            // Group-connected sites: the backing M365 group id (IC's site member
+            // write path resolves the target group from this ObjectAttributes row)
+            // + its member ids, same shape as the Team template. Classic sites
+            // carry neither — the attributes are simply absent.
+            E("groupId", "groupId"),
+            E("members", "members"),
+            // Backing-group owners — same trio as Team/Entra owners, attribute-only
+            // (IC has no multi-owner edge table).
+            E("owners", "owners"),
+            E("ownerCount", "ownerCount", false, "Integer"),
+            E("ownerIds", "ownerIds"),
+            // Joined from getSharePointSiteUsageDetail (Reports.Read.All): storage
+            // + the report's lastActivityDate (ISO 8601) for orphan/dormancy policy.
             E("StorageUsedBytes", "StorageUsedBytes", false, "Integer"),
             E("StorageAllocatedBytes", "StorageAllocatedBytes", false, "Integer"),
             E("FileCount", "FileCount", false, "Integer"),
+            E("lastActivityDate", "lastActivityDate", false, "DateTime"),
         };
         // Per-site SharePoint groups. NOTE: enumeration is deferred in the Graph-
         // only connector (requires the SharePoint REST API); the template is
@@ -880,6 +893,9 @@ public static class AttributeTemplateCatalog
             E("owners", "owners"),
             E("ownerCount", "ownerCount", false, "Integer"),
             E("ownerIds", "ownerIds"),
+            // From getTeamsTeamActivityDetail (Reports.Read.All), ISO 8601 — feeds
+            // the orphaned-Team dormancy check.
+            E("lastActivityDate", "lastActivityDate", false, "DateTime"),
         };
         c[(Systems.SharePoint, "Drive")] = new[]
         {

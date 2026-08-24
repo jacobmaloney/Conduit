@@ -101,6 +101,100 @@ public class SharePointMappingTests
         Assert.Equal(1024L, obj.Attributes["StorageUsedBytes"]);
         Assert.Equal(4096L, obj.Attributes["StorageAllocatedBytes"]);
         Assert.Equal(7L, obj.Attributes["FileCount"]);
+        // No lastActivityDate in the report row -> no attribute stamped.
+        Assert.False(obj.Attributes.ContainsKey("lastActivityDate"));
+    }
+
+    [Fact]
+    public void MapSite_emits_createdDateTime_under_the_template_mapped_key()
+    {
+        // Regression: MapSite used to emit "whenCreated" while the Site template
+        // mapped "createdDateTime" -> WhenCreated, so the value never landed.
+        var created = new System.DateTimeOffset(2024, 3, 1, 10, 0, 0, System.TimeSpan.Zero);
+        var modified = new System.DateTimeOffset(2026, 8, 20, 9, 30, 0, System.TimeSpan.Zero);
+        var s = new Site
+        {
+            Id = "s1",
+            WebUrl = "https://contoso.sharepoint.com/sites/hr",
+            DisplayName = "HR",
+            CreatedDateTime = created,
+            LastModifiedDateTime = modified
+        };
+
+        var obj = SharePointSource.MapSite(s, parentSiteId: null, storageByUrl: null);
+
+        Assert.Equal(created.ToString("o"), obj.Attributes["createdDateTime"]);
+        Assert.Equal(modified.ToString("o"), obj.Attributes["lastModifiedDateTime"]);
+        Assert.False(obj.Attributes.ContainsKey("whenCreated"));
+
+        var template = AttributeTemplateCatalog.Get("SharePoint", "Site")!;
+        Assert.Contains(template, e => e.SourceAttribute == "createdDateTime" && e.Canonical == "WhenCreated");
+        Assert.Contains(template, e => e.SourceAttribute == "lastModifiedDateTime" && e.Canonical == "WhenChanged");
+        Assert.DoesNotContain(template, e => e.SourceAttribute == "whenCreated");
+    }
+
+    [Fact]
+    public void MapSite_joins_lastActivityDate_from_the_usage_report()
+    {
+        var s = Site("s1", "https://contoso.sharepoint.com/sites/hr");
+        var iso = new System.DateTime(2026, 8, 20).ToString("o");
+        var storage = new Dictionary<string, SharePointSource.SiteStorage>
+        {
+            ["https://contoso.sharepoint.com/sites/hr"] =
+                new SharePointSource.SiteStorage(1024, 4096, 7, iso)
+        };
+
+        var obj = SharePointSource.MapSite(s, parentSiteId: null, storageByUrl: storage);
+
+        Assert.Equal(iso, obj.Attributes["lastActivityDate"]);
+        var template = AttributeTemplateCatalog.Get("SharePoint", "Site")!;
+        Assert.Contains(template, e => e.SourceAttribute == "lastActivityDate" && e.DataType == "DateTime");
+    }
+
+    [Fact]
+    public void MapSite_emits_backing_group_owner_trio_with_the_team_shape()
+    {
+        var s = Site("s1", "https://contoso.sharepoint.com/sites/hr");
+        var owners = new List<DirectoryObject>
+        {
+            new User { Id = "u-1", DisplayName = "Ada", UserPrincipalName = "ada@contoso.com" },
+            new ServicePrincipal { Id = "sp-1", DisplayName = "Automation" },
+        };
+
+        var obj = SharePointSource.MapSite(
+            s, parentSiteId: null, storageByUrl: null,
+            backingGroupId: "g-1", memberIds: new List<string> { "u-1", "u-2" }, owners: owners);
+
+        Assert.Equal("g-1", obj.Attributes["groupId"]);
+        Assert.Equal(new[] { "u-1", "u-2" }, Assert.IsAssignableFrom<List<string>>(obj.Attributes["members"]));
+        Assert.Equal(2, obj.Attributes["ownerCount"]);
+        Assert.Equal(new[] { "u-1", "sp-1" }, Assert.IsAssignableFrom<List<string>>(obj.Attributes["ownerIds"]));
+        using var doc = System.Text.Json.JsonDocument.Parse((string)obj.Attributes["owners"]!);
+        var arr = doc.RootElement.EnumerateArray().ToList();
+        Assert.Equal("u-1", arr[0].GetProperty("id").GetString());
+        Assert.Equal("ada@contoso.com", arr[0].GetProperty("upn").GetString());
+        Assert.Equal("Automation", arr[1].GetProperty("displayName").GetString());
+        Assert.False(arr[1].TryGetProperty("upn", out _));
+
+        // Every new attribute is in the Site template so the resolver keeps it.
+        var template = AttributeTemplateCatalog.Get("SharePoint", "Site")!;
+        foreach (var key in new[] { "groupId", "members", "owners", "ownerCount", "ownerIds" })
+            Assert.Contains(template, e => e.SourceAttribute == key);
+    }
+
+    [Fact]
+    public void MapSite_without_an_owner_walk_stamps_no_owner_attributes()
+    {
+        // Null owners = the walk did not happen (403 / classic site): stamping
+        // ownerCount=0 would read as "orphaned" to IC's policy, so stamp nothing.
+        var obj = SharePointSource.MapSite(
+            Site("s1", "https://contoso.sharepoint.com/sites/hr"),
+            parentSiteId: null, storageByUrl: null, backingGroupId: "g-1", memberIds: null, owners: null);
+
+        Assert.Equal("g-1", obj.Attributes["groupId"]);
+        Assert.False(obj.Attributes.ContainsKey("ownerCount"));
+        Assert.False(obj.Attributes.ContainsKey("owners"));
+        Assert.False(obj.Attributes.ContainsKey("ownerIds"));
     }
 
     // ─── (b) Team mapping + member edges ─────────────────────────────────────
@@ -178,6 +272,36 @@ public class SharePointMappingTests
         var obj = SharePointSource.MapTeam(new Team { Id = "t1" }, new List<string>(), owners: null);
         Assert.False(obj.Attributes.ContainsKey("ownerCount"));
         Assert.False(obj.Attributes.ContainsKey("owners"));
+    }
+
+    [Fact]
+    public void MapTeam_stamps_lastActivityDate_only_when_the_report_supplied_one()
+    {
+        var iso = new System.DateTime(2026, 8, 19).ToString("o");
+        var withActivity = SharePointSource.MapTeam(
+            new Team { Id = "t1" }, new List<string>(), owners: null, lastActivityDate: iso);
+        Assert.Equal(iso, withActivity.Attributes["lastActivityDate"]);
+
+        var without = SharePointSource.MapTeam(new Team { Id = "t1" }, new List<string>());
+        Assert.False(without.Attributes.ContainsKey("lastActivityDate"));
+
+        var template = AttributeTemplateCatalog.Get("SharePoint", "Team")!;
+        Assert.Contains(template, e => e.SourceAttribute == "lastActivityDate" && e.DataType == "DateTime");
+    }
+
+    [Fact]
+    public void ReadReportDate_normalizes_report_dates_and_skips_empty_cells()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(
+            "{\"lastActivityDate\":\"2026-08-20\",\"empty\":\"\",\"unparseable\":\"n/a\"}");
+        var root = doc.RootElement;
+
+        Assert.Equal(new System.DateTime(2026, 8, 20).ToString("o"),
+            SharePointSource.ReadReportDate(root, "lastActivityDate"));
+        Assert.Null(SharePointSource.ReadReportDate(root, "empty"));
+        Assert.Null(SharePointSource.ReadReportDate(root, "missing"));
+        // A value the report emits that is not a date passes through untouched.
+        Assert.Equal("n/a", SharePointSource.ReadReportDate(root, "unparseable"));
     }
 
     // ─── (c) Channel mapping (teamId parent ref) ─────────────────────────────

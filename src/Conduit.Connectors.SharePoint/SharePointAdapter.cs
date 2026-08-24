@@ -116,9 +116,11 @@ public sealed class SharePointSource : IConnectorSource
     //   Sites.Read.All     — /sites enumeration + /sites/{id}/sites subsite
     //                        hierarchy + the getSharePointSiteUsageDetail storage
     //                        report used to enrich "site" objects.
-    //   Group.Read.All     — Microsoft 365 / Teams group reads.
-    //   Reports.Read.All   — usage reports (site storage). Optional; a 403 only
-    //                        drops storage enrichment, the site still emits.
+    //   Group.Read.All     — Microsoft 365 / Teams group reads, incl. the backing
+    //                        group's members and owners for group-connected sites.
+    //   Reports.Read.All   — usage reports (site storage + lastActivityDate, Teams
+    //                        team activity). Optional; a 403 only drops the
+    //                        enrichment, the site/team still emits.
     //   Team.ReadBasic.All — /teams listing ("team" class spine).
     //   TeamMember.Read.All — /teams/{id}/members (team membership edges).
     //   Channel.ReadBasic.All — /teams/{id}/channels ("channel" class spine).
@@ -171,14 +173,20 @@ public sealed class SharePointSource : IConnectorSource
                     "SharePoint: skipping class team — app registration lacks scope Team.ReadBasic.All (403).");
                 yield break;
             }
+            // Per-team last activity from getTeamsTeamActivityDetail — same report
+            // pattern (and the same 403-skips-enrichment guard) as site storage.
+            var activityByTeamId = await TryGetTeamActivityAsync(creds, cancellationToken);
             while (teams?.Value != null)
             {
                 foreach (var t in teams.Value)
                 {
                     if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
                     var roster = await TryGetTeamRosterAsync(client, t.Id, cancellationToken);
+                    string? lastActivity = null;
+                    if (activityByTeamId is not null && !string.IsNullOrEmpty(t.Id))
+                        activityByTeamId.TryGetValue(t.Id!, out lastActivity);
                     emitted++;
-                    yield return MapTeam(t, roster.Members, roster.Owners);
+                    yield return MapTeam(t, roster.Members, roster.Owners, lastActivity);
                 }
                 if (string.IsNullOrEmpty(teams.OdataNextLink)) break;
                 teams = await client.Teams.WithUrl(teams.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -383,9 +391,10 @@ public sealed class SharePointSource : IConnectorSource
         var allSites = await ListAllSitesAsync(client, cancellationToken);
 
         // Group-connected (modern) sites: resolve the backing M365 group per site and
-        // carry its member ids, so sites get member edges like teams do and IC's
-        // member add/remove can target the backing group. Best-effort — Graph has no
-        // per-site membership surface, so classic sites simply have no entry here.
+        // carry its member ids + owners, so sites get member edges like teams do,
+        // IC's member add/remove can target the backing group, and orphan policies
+        // can read ownerCount. Best-effort — Graph has no per-site membership
+        // surface, so classic sites simply have no entry here (absent is honest).
         var backingBySiteId = await TryGetSiteBackingGroupsAsync(client, cancellationToken);
 
         var parentById = BuildSiteHierarchy(allSites);
@@ -395,21 +404,25 @@ public sealed class SharePointSource : IConnectorSource
             parentById.TryGetValue(s.Id ?? string.Empty, out var parentSiteId);
             backingBySiteId.TryGetValue(s.Id ?? string.Empty, out var backing);
             emitted++;
-            yield return MapSite(s, parentSiteId, storageByUrl, backing.GroupId, backing.MemberIds);
+            yield return MapSite(s, parentSiteId, storageByUrl, backing.GroupId, backing.MemberIds, backing.Owners);
         }
     }
 
     /// <summary>
-    /// Maps root-site id -> (backing Unified group id, that group's member ids).
-    /// One pass over the tenant's Unified groups: per group, /groups/{id}/sites/root
-    /// gives the connected site; /groups/{id}/members gives the ids. Per-group
+    /// Maps root-site id -> (backing Unified group id, that group's member ids, its
+    /// owners). One pass over the tenant's Unified groups: per group,
+    /// /groups/{id}/sites/root gives the connected site; /groups/{id}/members gives
+    /// the ids; /groups/{id}/owners gives the owners (own guard: a 403 disables the
+    /// owner walk for the run and stamps nothing; 5 consecutive non-403 Graph errors
+    /// also disable it — throttling should not warn once per group). Per-group
     /// failures skip that group only; a listing failure returns an empty map (sites
     /// still emit, minus membership).
     /// </summary>
-    private async Task<Dictionary<string, (string GroupId, List<string> MemberIds)>> TryGetSiteBackingGroupsAsync(
+    private async Task<Dictionary<string, (string GroupId, List<string> MemberIds, IReadOnlyList<Microsoft.Graph.Models.DirectoryObject>? Owners)>> TryGetSiteBackingGroupsAsync(
         GraphServiceClient client, CancellationToken cancellationToken)
     {
-        var map = new Dictionary<string, (string, List<string>)>(StringComparer.Ordinal);
+        var map = new Dictionary<string, (string, List<string>, IReadOnlyList<Microsoft.Graph.Models.DirectoryObject>?)>(StringComparer.Ordinal);
+        var ownerState = new OwnerFetchState();
         try
         {
             var groups = await client.Groups.GetAsync(req =>
@@ -446,7 +459,8 @@ public sealed class SharePointSource : IConnectorSource
                                 .WithUrl(members.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
                         }
 
-                        map[rootSite!.Id!] = (g.Id!, memberIds);
+                        var owners = await TryGetGroupOwnersAsync(client, g.Id!, ownerState, cancellationToken);
+                        map[rootSite!.Id!] = (g.Id!, memberIds, owners);
                     }
                     catch (Microsoft.Graph.Models.ODataErrors.ODataError)
                     {
@@ -464,6 +478,73 @@ public sealed class SharePointSource : IConnectorSource
                 ex.Message);
         }
         return map;
+    }
+
+    /// <summary>
+    /// Per-enumeration owner-fetch guard (same as the Entra owner walk): the first
+    /// 403, or <see cref="MaxConsecutiveFailures"/> non-403 Graph errors in a row
+    /// (throttling), disables further owner fetches for the run — one warning, not
+    /// one per group.
+    /// </summary>
+    private sealed class OwnerFetchState
+    {
+        public const int MaxConsecutiveFailures = 5;
+        public bool Disabled { get; set; }
+        public int ConsecutiveFailures { get; set; }
+    }
+
+    /// <summary>
+    /// Pages a backing group's /owners. Null means the fetch did not happen (403,
+    /// already disabled this run, or a Graph error on this group) so MapSite stamps
+    /// nothing rather than a false ownerCount=0. Never throws ODataError — a per-
+    /// group owner failure must not discard the group's member edges.
+    /// </summary>
+    private async Task<IReadOnlyList<Microsoft.Graph.Models.DirectoryObject>?> TryGetGroupOwnersAsync(
+        GraphServiceClient client, string groupId, OwnerFetchState state, CancellationToken cancellationToken)
+    {
+        if (state.Disabled) return null;
+        var owners = new List<Microsoft.Graph.Models.DirectoryObject>();
+        try
+        {
+            var page = await client.Groups[groupId].Owners.GetAsync(req =>
+            {
+                req.QueryParameters.Top = 999;
+                req.QueryParameters.Select = new[] { "id", "displayName", "userPrincipalName" };
+            }, cancellationToken);
+            while (page?.Value != null)
+            {
+                owners.AddRange(page.Value);
+                if (string.IsNullOrEmpty(page.OdataNextLink)) break;
+                page = await client.Groups[groupId].Owners
+                    .WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+            state.ConsecutiveFailures = 0;
+            return owners;
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex) when (IsForbidden(ex))
+        {
+            state.Disabled = true;
+            _logger.LogWarning(
+                "SharePoint: site backing-group owners not collected — app registration lacks scope Group.Read.All (403).");
+            return null;
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            var code = ex.Error?.Code ?? ex.ResponseStatusCode.ToString();
+            if (++state.ConsecutiveFailures >= OwnerFetchState.MaxConsecutiveFailures)
+            {
+                state.Disabled = true;
+                _logger.LogWarning(
+                    "SharePoint: site backing-group owners not collected for the rest of the run — {Count} consecutive Graph errors (last: {Code}).",
+                    state.ConsecutiveFailures, code);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "SharePoint: owners fetch failed for backing group {GroupId}: {Code}.", groupId, code);
+            }
+            return null;
+        }
     }
 
     /// <summary>The flat tenant /sites collection, fully paged. Shared by site/drive/list.</summary>
@@ -624,7 +705,8 @@ public sealed class SharePointSource : IConnectorSource
         string? parentSiteId,
         IReadOnlyDictionary<string, SiteStorage>? storageByUrl,
         string? backingGroupId = null,
-        List<string>? memberIds = null)
+        List<string>? memberIds = null,
+        IReadOnlyList<Microsoft.Graph.Models.DirectoryObject>? owners = null)
     {
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -637,18 +719,46 @@ public sealed class SharePointSource : IConnectorSource
             ["webUrl"] = s.WebUrl,
             ["name"] = s.Name,
             ["parentSiteId"] = parentSiteId,
-            ["whenCreated"] = s.CreatedDateTime?.ToString("o")
+            // Emitted under the template's source key. This used to be "whenCreated",
+            // which the Site template never mapped — WhenCreated silently never landed.
+            ["createdDateTime"] = s.CreatedDateTime?.ToString("o"),
+            ["lastModifiedDateTime"] = s.LastModifiedDateTime?.ToString("o")
         };
         // Group-connected sites: the backing M365 group id (IC's member add/remove
         // targets this) + its member ids (feed the membership second pass).
         if (!string.IsNullOrEmpty(backingGroupId)) attrs["groupId"] = backingGroupId;
         if (memberIds is { Count: > 0 }) attrs["members"] = memberIds;
+        // Backing-group owners, same attribute shape as Team/Entra owners. Null =
+        // the walk did not happen (403 / classic site): stamp nothing, not count 0.
+        if (owners is not null)
+        {
+            var projected = new List<OwnerRef>(owners.Count);
+            var ids = new List<string>(owners.Count);
+            foreach (var o in owners)
+            {
+                if (string.IsNullOrEmpty(o.Id)) continue;
+                ids.Add(o.Id!);
+                projected.Add(o switch
+                {
+                    Microsoft.Graph.Models.User u => new OwnerRef(o.Id!, u.DisplayName, u.UserPrincipalName),
+                    Microsoft.Graph.Models.ServicePrincipal sp => new OwnerRef(o.Id!, sp.DisplayName, null),
+                    _ => new OwnerRef(o.Id!, null, null)
+                });
+            }
+            attrs["ownerCount"] = projected.Count;
+            if (projected.Count > 0)
+            {
+                attrs["owners"] = JsonSerializer.Serialize(projected, OwnerJsonOptions);
+                attrs["ownerIds"] = ids;
+            }
+        }
         if (storageByUrl is not null && !string.IsNullOrEmpty(s.WebUrl) &&
             storageByUrl.TryGetValue(s.WebUrl!, out var storage))
         {
             if (storage.UsedBytes.HasValue) attrs["StorageUsedBytes"] = storage.UsedBytes.Value;
             if (storage.AllocatedBytes.HasValue) attrs["StorageAllocatedBytes"] = storage.AllocatedBytes.Value;
             if (storage.FileCount.HasValue) attrs["FileCount"] = storage.FileCount.Value;
+            if (!string.IsNullOrEmpty(storage.LastActivityDate)) attrs["lastActivityDate"] = storage.LastActivityDate;
         }
         return new ConnectorObject
         {
@@ -739,11 +849,12 @@ public sealed class SharePointSource : IConnectorSource
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
-    private sealed record TeamOwner(string id, string? displayName, string? upn);
+    private sealed record OwnerRef(string id, string? displayName, string? upn);
 
     internal static ConnectorObject MapTeam(
         Microsoft.Graph.Models.Team t, List<string> members,
-        IReadOnlyList<Microsoft.Graph.Models.ConversationMember>? owners = null)
+        IReadOnlyList<Microsoft.Graph.Models.ConversationMember>? owners = null,
+        string? lastActivityDate = null)
     {
         var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -764,14 +875,14 @@ public sealed class SharePointSource : IConnectorSource
         // upn is the AadUserConversationMember email — /teams/{id}/members carries no UPN.
         if (owners is not null)
         {
-            var projected = new List<TeamOwner>(owners.Count);
+            var projected = new List<OwnerRef>(owners.Count);
             var ids = new List<string>(owners.Count);
             foreach (var o in owners)
             {
                 var id = MemberSourceId(o);
                 if (string.IsNullOrEmpty(id)) continue;
                 ids.Add(id!);
-                projected.Add(new TeamOwner(id!, o.DisplayName,
+                projected.Add(new OwnerRef(id!, o.DisplayName,
                     (o as Microsoft.Graph.Models.AadUserConversationMember)?.Email));
             }
             attrs["ownerCount"] = projected.Count;
@@ -781,6 +892,9 @@ public sealed class SharePointSource : IConnectorSource
                 attrs["ownerIds"] = ids;
             }
         }
+        // From getTeamsTeamActivityDetail — null when the report was not fetched
+        // (403) or carried no row for this team: stamp nothing, absent is honest.
+        if (!string.IsNullOrEmpty(lastActivityDate)) attrs["lastActivityDate"] = lastActivityDate;
         return new ConnectorObject
         {
             SourceId = t.Id ?? string.Empty,
@@ -851,16 +965,79 @@ public sealed class SharePointSource : IConnectorSource
             || string.Equals(code, "Forbidden", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal readonly record struct SiteStorage(long? UsedBytes, long? AllocatedBytes, long? FileCount);
+    internal readonly record struct SiteStorage(
+        long? UsedBytes, long? AllocatedBytes, long? FileCount, string? LastActivityDate = null);
 
     /// <summary>
     /// Fetches getSharePointSiteUsageDetail(period='D30') as JSON and indexes
-    /// storage figures by site URL. Returns null when the report 403s (missing
-    /// Reports.Read.All) so the caller can warn + skip enrichment without aborting.
-    /// Uses a raw bearer token because the Graph SDK report endpoints are awkward.
+    /// storage + last-activity figures by site URL. Returns null when the report
+    /// 403s (missing Reports.Read.All) so the caller can warn + skip enrichment
+    /// without aborting.
     /// </summary>
     private async Task<Dictionary<string, SiteStorage>?> TryGetSiteStorageAsync(
         SharePointCredentials creds, CancellationToken cancellationToken)
+    {
+        var byUrl = new Dictionary<string, SiteStorage>(StringComparer.OrdinalIgnoreCase);
+        var ok = await TryReadUsageReportAsync(
+            creds,
+            "https://graph.microsoft.com/beta/reports/getSharePointSiteUsageDetail(period='D30')?$format=application/json",
+            "site-storage",
+            el =>
+            {
+                var siteUrl = ReadString(el, "siteUrl");
+                if (string.IsNullOrEmpty(siteUrl)) return;
+                byUrl[siteUrl!] = new SiteStorage(
+                    ReadLong(el, "storageUsedInBytes"),
+                    ReadLong(el, "storageAllocatedInBytes"),
+                    ReadLong(el, "fileCount"),
+                    ReadReportDate(el, "lastActivityDate"));
+            },
+            cancellationToken);
+        return ok ? byUrl : null;
+    }
+
+    /// <summary>
+    /// Fetches getTeamsTeamActivityDetail(period='D30') and indexes lastActivityDate
+    /// (ISO 8601) by team id. Null when the report 403s — teams still emit, minus
+    /// the activity attribute. Same Reports.Read.All scope as the site report.
+    /// </summary>
+    private async Task<Dictionary<string, string>?> TryGetTeamActivityAsync(
+        SharePointCredentials creds, CancellationToken cancellationToken)
+    {
+        var byTeamId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var ok = await TryReadUsageReportAsync(
+            creds,
+            "https://graph.microsoft.com/beta/reports/getTeamsTeamActivityDetail(period='D30')?$format=application/json",
+            "team-activity",
+            el =>
+            {
+                var teamId = ReadString(el, "teamId") ?? ReadString(el, "id");
+                if (string.IsNullOrEmpty(teamId)) return;
+                var last = ReadReportDate(el, "lastActivityDate");
+                if (last is null && el.TryGetProperty("details", out var det) && det.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var d in det.EnumerateArray())
+                    {
+                        last = ReadReportDate(d, "lastActivityDate");
+                        if (last is not null) break;
+                    }
+                }
+                if (!string.IsNullOrEmpty(last)) byTeamId[teamId!] = last!;
+            },
+            cancellationToken);
+        return ok ? byTeamId : null;
+    }
+
+    /// <summary>
+    /// Pages one beta usage report as JSON, invoking <paramref name="onRow"/> per
+    /// "value" row. False when the report 403s (missing Reports.Read.All — one
+    /// warning, enrichment skipped); other HTTP failures throw as before. Uses a
+    /// raw bearer token because the Graph SDK report endpoints are awkward; the
+    /// nextLink host guard keeps the token from ever leaving graph.microsoft.com.
+    /// </summary>
+    private async Task<bool> TryReadUsageReportAsync(
+        SharePointCredentials creds, string firstUrl, string enrichmentName,
+        Action<JsonElement> onRow, CancellationToken cancellationToken)
     {
         var credential = new ClientSecretCredential(creds.TenantId, creds.ClientId, creds.ClientSecret);
         var ctx = new Azure.Core.TokenRequestContext(new[] { "https://graph.microsoft.com/.default" });
@@ -872,17 +1049,16 @@ public sealed class SharePointSource : IConnectorSource
         http.DefaultRequestHeaders.Accept.Add(
             new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
-        var byUrl = new Dictionary<string, SiteStorage>(StringComparer.OrdinalIgnoreCase);
-        var url = "https://graph.microsoft.com/beta/reports/getSharePointSiteUsageDetail(period='D30')?$format=application/json";
-
+        var url = firstUrl;
         while (!string.IsNullOrEmpty(url))
         {
             using var resp = await http.GetAsync(url, cancellationToken);
             if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
                 _logger.LogWarning(
-                    "SharePoint: skipping site-storage enrichment — app registration lacks scope Reports.Read.All (403). Sites still emit without storage.");
-                return null;
+                    "SharePoint: skipping {Enrichment} enrichment — app registration lacks scope Reports.Read.All (403). Objects still emit without it.",
+                    enrichmentName);
+                return false;
             }
             resp.EnsureSuccessStatusCode();
 
@@ -892,14 +1068,7 @@ public sealed class SharePointSource : IConnectorSource
             if (root.TryGetProperty("value", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
                 foreach (var el in arr.EnumerateArray())
-                {
-                    var siteUrl = el.TryGetProperty("siteUrl", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
-                    if (string.IsNullOrEmpty(siteUrl)) continue;
-                    byUrl[siteUrl!] = new SiteStorage(
-                        ReadLong(el, "storageUsedInBytes"),
-                        ReadLong(el, "storageAllocatedInBytes"),
-                        ReadLong(el, "fileCount"));
-                }
+                    onRow(el);
             }
 
             var nextLink = root.TryGetProperty("@odata.nextLink", out var next) && next.ValueKind == JsonValueKind.String
@@ -908,14 +1077,31 @@ public sealed class SharePointSource : IConnectorSource
             if (!string.IsNullOrEmpty(nextLink) && !IsGraphHost(nextLink!))
             {
                 _logger.LogWarning(
-                    "SharePoint: refusing to follow non-Graph nextLink host {Host} on site-storage report; stopping paging.",
-                    SafeHost(nextLink!));
+                    "SharePoint: refusing to follow non-Graph nextLink host {Host} on {Enrichment} report; stopping paging.",
+                    SafeHost(nextLink!), enrichmentName);
                 break;
             }
             url = nextLink;
         }
+        return true;
+    }
 
-        return byUrl;
+    private static string? ReadString(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String ? el.GetString() : null;
+
+    /// <summary>
+    /// Usage reports emit dates as "yyyy-MM-dd" (often empty). Normalizes to ISO
+    /// 8601 round-trip form when parseable, passes the raw string through otherwise,
+    /// null when absent/empty — same contract as the M365 usage-report source.
+    /// </summary>
+    internal static string? ReadReportDate(JsonElement obj, string name)
+    {
+        var raw = ReadString(obj, name);
+        if (string.IsNullOrEmpty(raw)) return null;
+        return DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var dt)
+            ? dt.ToString("o")
+            : raw;
     }
 
     /// <summary>
