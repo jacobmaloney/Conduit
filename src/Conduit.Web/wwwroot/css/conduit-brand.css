@@ -498,3 +498,32 @@
 /* keep semantic alerts readable on paper */
 .cx-main .card .alert-warning { background: #fef3c7; border-color: #fde68a; color: #b45309; }
 .cx-main .card .alert-danger  { background: #fee2e2; border-color: #fecaca; color: #b91c1c; }
+
+/* ── Sync History: light the dark leftovers from the old theme ────────────
+   .sync-history-filter (navy #0e1422 panel), .sync-run-count (dark inset
+   chips), and form controls all predate the light shell. Repaint inside
+   .cx-main so they read as paper. */
+.cx-main .sync-history-filter {
+    background: #f8fafc;
+    border: 1px solid #e2eaee;
+}
+.cx-main .sync-history-filter .form-label { color: #64748b; }
+.cx-main .sync-run-count {
+    background: #eef4f6;
+    color: #475569;
+}
+.cx-main .sync-run-count.is-zero { background: transparent; color: #94a3b8; }
+/* Light form controls throughout the shell (dark inputs on paper are the
+   same class of leftover). Semantic .form-select-* keep their own colors. */
+.cx-main .form-select,
+.cx-main .form-control {
+    background-color: #fff;
+    border: 1px solid #cbd5e1;
+    color: #1e293b;
+}
+.cx-main .form-select:focus,
+.cx-main .form-control:focus {
+    border-color: #0e7490;
+    box-shadow: 0 0 0 2px rgba(14,116,144,0.15);
+}
+.cx-main .form-select option { color: #1e293b; background: #fff; }
