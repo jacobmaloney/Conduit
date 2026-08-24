@@ -527,3 +527,28 @@
     box-shadow: 0 0 0 2px rgba(14,116,144,0.15);
 }
 .cx-main .form-select option { color: #1e293b; background: #fff; }
+
+/* ── Paper tokens for the whole shell content (Configuration tabs, etc.) ──
+   The old dark theme's page-content paper remap was scoped to .ic-content;
+   the redesign shell wraps content in .cx-main instead, so re-hosted pages
+   (Identity Providers / Database / AD Base DNs / Audit Log / Debug Logs) fell
+   back to the dark :root tokens. Apply the SAME paper values to .cx-main.
+   Deliberately NOT remapping --accent (keeps the Conduit teal, not IC blue).
+   conduit-brand.css uses no var()s, so the redesign screens are unaffected. */
+.cx-main {
+    --bg: #faf9f6; --bg-2: #fff; --panel: #fff; --panel-2: #f4f2ec; --panel-hi: #ece9e0;
+    --surface: #fff; --surface-2: #f4f2ec; --surface-inset: #f4f2ec;
+    --text: #0f172a; --text-2: #475569; --text-3: #6b7e99;
+    --ink: #0f172a; --ink-2: #475569; --muted: #6b7e99; --muted-2: #94a3b8;
+    --border: rgba(11,20,36,0.10); --border-2: rgba(11,20,36,0.16); --border-strong: rgba(11,20,36,0.16);
+    --line: rgba(11,20,36,0.08); --line-2: rgba(11,20,36,0.10); --line-3: rgba(11,20,36,0.06);
+    --color-surface: #fff; --color-surface-card: #fff; --color-panel: #f4f2ec;
+    --color-surface-inset: #f4f2ec; --color-surface-hover: #f4f2ec;
+    --color-text-primary: #0f172a; --color-text-secondary: #475569; --color-text-tertiary: #6b7e99;
+    --color-ink: #0f172a; --color-ink-2: #3a4a63; --color-ink-3: #6b7e99;
+    --color-border: #e2e8f0; --color-border-default: #e2e8f0; --color-line: rgba(11,20,36,0.08);
+    --color-cyan-deep: #0e7490;
+    --text-primary: #0f172a; --text-secondary: #475569; --text-tertiary: #6b7e99;
+}
+.cx-main .btn-manage { background: #f4f2ec; border: 1px solid #e2e8f0; color: #334155; }
+.cx-main .btn-manage:hover { background: #ece9e0; border-color: #cbd5e1; color: #0f172a; }
