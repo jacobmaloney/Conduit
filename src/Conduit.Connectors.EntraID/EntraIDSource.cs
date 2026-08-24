@@ -689,7 +689,8 @@ public sealed class EntraIDSource : IConnectorSource
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrEmpty(r.Id)) continue;
-                yield return ConvertDirectoryRole(r);
+                var members = await TryGetDirectoryRoleMembersAsync(client, r.Id, cancellationToken);
+                yield return ConvertDirectoryRole(r, members);
             }
             if (string.IsNullOrEmpty(page.OdataNextLink)) yield break;
             page = await client.DirectoryRoles.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
@@ -976,6 +977,32 @@ public sealed class EntraIDSource : IConnectorSource
                     if (!string.IsNullOrEmpty(m.Id)) ids.Add(m.Id);
                 if (string.IsNullOrEmpty(page.OdataNextLink)) break;
                 page = await client.Groups[groupId].Members.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
+            }
+        }
+        catch { /* swallow — membership is best-effort */ }
+        return ids;
+    }
+
+    // Directory-role holders (the role is the container). Same best-effort shape as the group
+    // member fetch — a 403 or throttle yields an empty list rather than failing the role read.
+    private static async Task<List<string>> TryGetDirectoryRoleMembersAsync(
+        GraphServiceClient client, string? roleId, CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        if (string.IsNullOrEmpty(roleId)) return ids;
+        try
+        {
+            var page = await client.DirectoryRoles[roleId].Members.GetAsync(req =>
+            {
+                req.QueryParameters.Top = 999;
+                req.QueryParameters.Select = new[] { "id" };
+            }, cancellationToken);
+            while (page?.Value != null)
+            {
+                foreach (var m in page.Value)
+                    if (!string.IsNullOrEmpty(m.Id)) ids.Add(m.Id);
+                if (string.IsNullOrEmpty(page.OdataNextLink)) break;
+                page = await client.DirectoryRoles[roleId].Members.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
             }
         }
         catch { /* swallow — membership is best-effort */ }
@@ -1362,12 +1389,22 @@ public sealed class EntraIDSource : IConnectorSource
         return DirectoryObject("servicePrincipal", sp.Id, attrs);
     }
 
-    private static ConnectorObject ConvertDirectoryRole(DirectoryRole r)
+    private static ConnectorObject ConvertDirectoryRole(DirectoryRole r, List<string> memberIds)
     {
         var attrs = NewDirectoryAttrs("directoryRole", r.Id);
         Set(attrs, "displayName", r.DisplayName);
         Set(attrs, "description", r.Description);
         Set(attrs, "roleTemplateId", r.RoleTemplateId);
+        // members (capture-only, dropped by the resolver like a group's) drives the role -> holder
+        // membership second pass. memberCount + roleMemberIds are templated so they reach the sink:
+        // the IC detail pane reads them to tell "no holders" from "not collected", and to surface a
+        // holder whose directory object isn't synced rather than dropping it.
+        attrs["memberCount"] = memberIds.Count;
+        if (memberIds.Count > 0)
+        {
+            attrs["members"] = memberIds;
+            attrs["roleMemberIds"] = string.Join(";", memberIds.Select(id => id.ToUpperInvariant()));
+        }
         return DirectoryObject("directoryRole", r.Id, attrs);
     }
 

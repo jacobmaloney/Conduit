@@ -1399,10 +1399,14 @@ public sealed class SyncProjectOrchestrator
         // Conduit native class names are lowercase; compare case-insensitively.
         // "team" and "site" carry member edges in Attributes["members"] exactly like
         // "group" (a site's members are its backing M365 group's members).
+        // "directoryrole" carries its holders in Attributes["members"] the same way a group does, and
+        // the IC membership endpoint resolves the container by SourceUniqueId regardless of class — so
+        // a directory role persists role -> holder edges through the identical second pass.
         var captureGroupMembership =
             (string.Equals(objectClass, "group", StringComparison.OrdinalIgnoreCase)
              || string.Equals(objectClass, "team", StringComparison.OrdinalIgnoreCase)
-             || string.Equals(objectClass, "site", StringComparison.OrdinalIgnoreCase))
+             || string.Equals(objectClass, "site", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(objectClass, "directoryrole", StringComparison.OrdinalIgnoreCase))
             && sink is IGroupMembershipEmittingSink;
         int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, ttlRefreshed = 0;
 

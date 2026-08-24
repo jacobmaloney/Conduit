@@ -616,6 +616,12 @@ public static class AttributeTemplateCatalog
             E("displayName", "DisplayName", true),
             E("description", "Description"),
             E("roleTemplateId", "RoleTemplateId"),
+            // Role holders: memberCount is the honesty marker (written even at zero so IC can tell
+            // "no holders" from "not collected"); roleMemberIds carries the raw holder ids so one
+            // whose object isn't synced is still surfaced. The `members` list itself is capture-only
+            // (dropped by the resolver, like a group's) and drives the membership second pass.
+            E("memberCount", "memberCount", false, "Integer"),
+            E("roleMemberIds", "roleMemberIds"),
         };
         c[(Systems.EntraID, "Application")] = new[]
         {
