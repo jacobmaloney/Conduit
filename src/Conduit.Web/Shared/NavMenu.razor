@@ -1,80 +1,50 @@
+@implements IDisposable
 @using Conduit.Core.Models
 @using Conduit.Core.Services
 @using Conduit.DataAccess.Repositories
 @using Conduit.Web.Services
+@using IdentityCenter.Brand.Components.Navigation
 @inject OpenAccessState OpenAccess
 @inject NavigationManager NavigationManager
 @inject IWebHostEnvironment Environment
 @inject SyncProjectRepository ProjectRepo
 @inject TenantRepository TenantRepo
 
-<div class="cx-sidebar">
-    @* Open-access warning pill (portal authentication is OFF), Development-gated. *@
+<BrandSidebar PreferenceKey="conduit.sidebar.collapsed">
+    @if (ActiveSection == "configure")
+    {
+        <BrandSidebarHeading Label="Settings" Icon="fas fa-cogs" Section="configure" />
+        <div class="ic-nav-group section-configure">
+            <BrandNavigationItem Href="configuration" Label="Configuration" Icon="fas fa-gear" Section="configure" Active='@IsActive("configuration")' />
+        </div>
+    }
+    else
+    {
+        <BrandSidebarHeading Label="Sync" Icon="fas fa-right-left" Section="identity" />
+        <div class="ic-nav-group section-identity">
+            <BrandNavigationItem Href="" Label="Dashboard" Icon="fas fa-gauge-high" Active='@IsActive("")' />
+            <BrandNavigationItem Href="sync-projects" Label="Sync Projects" Icon="fas fa-right-left" Count="@projectCount" Active='@IsActive("sync-projects")' />
+            <BrandNavigationItem Href="connected-systems" Label="Connections" Icon="fas fa-plug" Count="@connectionCount" Active='@IsActive("connected-systems")' />
+            <BrandNavigationItem Href="schedules" Label="Schedules" Icon="fas fa-calendar-days" Count="@scheduleCount" Active='@IsActive("schedules")' />
+            <BrandNavigationItem Href="sync-history" Label="Sync History" Icon="fas fa-clock-rotate-left" Active='@IsActive("sync-history")' />
+        </div>
+    }
     @if (ShowDevChrome && OpenAccess.IsEnabled)
     {
-        <a class="cx-openaccess-pill" href="configuration" title="Portal authentication is OFF — click to manage in Configuration">
-            <i class="fas fa-triangle-exclamation"></i>
-            <span>Open access</span>
-        </a>
+        <BrandNavigationItem Href="configuration" Label="Open access: portal authentication is off" Icon="fas fa-triangle-exclamation" />
     }
-
-    <nav>
-        @* Redesign rail: MAIN (Dashboard, Sync Projects) · SYNC (Connections,
-           Schedules, Sync History) · SETTINGS (Configuration). Identity Providers /
-           Database / Audit are tabs inside Configuration; Quick Connect is off the rail. *@
-        <div class="cx-nav-label">Main</div>
-        <NavLink class="cx-nav" ActiveClass="active" href="" Match="NavLinkMatch.All">
-            <span class="cx-nav-left"><i class="fas fa-gauge-high"></i><span>Dashboard</span></span>
-        </NavLink>
-        <NavLink class="cx-nav" ActiveClass="active" href="sync-projects">
-            <span class="cx-nav-left"><i class="fas fa-right-left"></i><span>Sync Projects</span></span>
-            @if (projectCount is int pc)
-            {
-                <span class="cx-nav-badge">@pc</span>
-            }
-        </NavLink>
-
-        <div class="cx-nav-label">Sync</div>
-        <NavLink class="cx-nav" ActiveClass="active" href="connected-systems">
-            <span class="cx-nav-left"><i class="fas fa-plug"></i><span>Connections</span></span>
-            @if (connectionCount is int cc)
-            {
-                <span class="cx-nav-badge">@cc</span>
-            }
-        </NavLink>
-        <NavLink class="cx-nav" ActiveClass="active" href="schedules">
-            <span class="cx-nav-left"><i class="fas fa-calendar-days"></i><span>Schedules</span></span>
-            @if (scheduleCount is int sc)
-            {
-                <span class="cx-nav-badge">@sc</span>
-            }
-        </NavLink>
-        <NavLink class="cx-nav" ActiveClass="active" href="sync-history">
-            <span class="cx-nav-left"><i class="fas fa-clock-rotate-left"></i><span>Sync History</span></span>
-        </NavLink>
-
-        <div class="cx-nav-label">Settings</div>
-        <NavLink class="cx-nav" ActiveClass="active" href="configuration">
-            <span class="cx-nav-left"><i class="fas fa-gear"></i><span>Configuration</span></span>
-        </NavLink>
-    </nav>
-
-    <div class="cx-sidebar-spacer"></div>
-
-    <div class="cx-sidebar-foot">
-        <AuthorizeView>
-            <Authorized>
-                Signed in as <b>@(context.User.Identity?.Name ?? "admin")</b><br />
-                <a href="/logout">Sign out</a>
-            </Authorized>
-            <NotAuthorized>
-                <a href="/login">Sign in</a>
-            </NotAuthorized>
-        </AuthorizeView>
-    </div>
-</div>
+</BrandSidebar>
 
 @code {
+    [Parameter] public string ActiveSection { get; set; } = "identity";
+    private bool IsActive(string href) {
+        var current = NavigationManager.ToBaseRelativePath(NavigationManager.Uri).Split('?', '#')[0].Trim('/');
+        return current.Equals(href, StringComparison.OrdinalIgnoreCase) || (href.Length > 0 && current.StartsWith(href + "/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void LocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+    public void Dispose() => NavigationManager.LocationChanged -= LocationChanged;
+
     // SCIM-origin chrome (the open-access pill) stays gated to Development.
     private bool ShowDevChrome => Environment.IsDevelopment();
 
@@ -86,6 +56,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        NavigationManager.LocationChanged += LocationChanged;
         try
         {
             var projects = await ProjectRepo.GetAllAsync();

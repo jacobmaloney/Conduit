@@ -17,7 +17,8 @@
 *@
 
 @implements IDisposable
-@using Conduit.Shared.SyncUI
+@using IdentityCenter.Brand.Models.Scope
+@using IdentityCenter.Brand.Components.Tree
 @using Conduit.Web.Shared.Design
 @inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
@@ -38,7 +39,7 @@
                     @if (ScopeMode)
                     {
                         @* OPTION-A PILOT: scope mode now renders the SHARED ScopeTree
-                           (Conduit.Shared.SyncUI) — the same component IC runs — driven by
+                           (IdentityCenter.Brand.Models.Scope) — the same component IC runs — driven by
                            a ConduitScopeDataSource over the live container browser. The
                            component carries its own legend, 4-state icons (self-contained
                            inline SVG, no font dependency → fixes the blank-icon drift), and
@@ -60,7 +61,7 @@
                         }
                         else if (_scopeDataSource is not null)
                         {
-                            <ScopeTree DataSource="_scopeDataSource"
+                            <BrandScopeTree DataSource="_scopeDataSource"
                                        SelectedScopes="includedScopes"
                                        BlockedScopes="blockedScopes"
                                        DefaultRootWhenEmpty="false"
@@ -95,7 +96,7 @@
                         }
                         else if (_scopeDataSource is not null)
                         {
-                            <ScopeTree DataSource="_scopeDataSource"
+                            <BrandScopeTree DataSource="_scopeDataSource"
                                        SelectionMode="ScopeSelectionMode.Single"
                                        SelectedDistinguishedName="selectedDn"
                                        SelectedDistinguishedNameChanged="OnSingleDnChanged"
