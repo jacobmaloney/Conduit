@@ -149,14 +149,14 @@
             {
                 <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => ToggleEnabled(project)"><i class="fas fa-power-off"></i> Enable</button>
                 <a href="/sync-history?project=@project.Id" class="icb-list-action">History</a>
-                <button type="button" class="icb-list-action" title="Manage" aria-label="Manage" @onclick="() => SelectThenEdit(project)"><i class="fas fa-ellipsis"></i></button>
+                <button type="button" class="icb-list-action" title="Edit this project's setup, scope and mappings" @onclick="() => SelectThenEdit(project)"><i class="fas fa-pen-to-square"></i> Manage</button>
             }
             else
             {
                 <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => SelectThenRun(project)"><i class="fas fa-play"></i> Run Now</button>
                 <button type="button" class="icb-list-action" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects"><i class="fas fa-arrows-rotate"></i> Full Sync</button>
                 <a href="/sync-history?project=@project.Id" class="icb-list-action">History</a>
-                <button type="button" class="icb-list-action" title="Manage" aria-label="Manage" @onclick="() => SelectThenEdit(project)"><i class="fas fa-ellipsis"></i></button>
+                <button type="button" class="icb-list-action" title="Edit this project's setup, scope and mappings" @onclick="() => SelectThenEdit(project)"><i class="fas fa-pen-to-square"></i> Manage</button>
             }
             @if (!string.IsNullOrEmpty(project.CronSchedule))
             {

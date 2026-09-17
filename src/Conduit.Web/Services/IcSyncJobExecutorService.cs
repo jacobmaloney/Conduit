@@ -136,7 +136,7 @@ public sealed class IcSyncJobExecutorService : BackgroundService
             });
             if (drift && _identityDriftLogged.Add(endpoint.BaseUrl))
                 _logger.LogWarning(
-                    "IdentityCenter sync job executor at {BaseUrl} is enrolled as agent {EnrolledId}, which differs from this instance's provenance id {InstanceId}. Jobs claimed here were pinned to {EnrolledId}. Re-enroll in IdentityCenter using this instance's Instance ID if that is not intended.",
+                    "IdentityCenter sync job executor at {BaseUrl} is enrolled as agent {EnrolledId}, which differs from this instance's provenance id {InstanceId}. Jobs claimed here were pinned to the enrolled id, not the provenance id. Re-enroll in IdentityCenter using this instance's Instance ID if that is not intended.",
                     endpoint.BaseUrl, agentId.Value, ConduitInstanceIdentity.InstanceId);
             else if (!drift)
                 _identityDriftLogged.Remove(endpoint.BaseUrl);
