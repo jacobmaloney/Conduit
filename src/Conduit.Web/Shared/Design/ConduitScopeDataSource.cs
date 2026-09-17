@@ -1,4 +1,4 @@
-using Conduit.Shared.SyncUI;
+using IdentityCenter.Brand.Models.Scope;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Security;
 

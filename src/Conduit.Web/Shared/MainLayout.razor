@@ -1,32 +1,39 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@using IdentityCenter.Brand.Components.Navigation
+@using IdentityCenter.Brand.Models
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider Authentication
 
 <PageTitle>Conduit</PageTitle>
-
-<div class="cx-shell">
-    <div class="cx-topbar">
-        @* Brand lockup — shield + teal "Con" + ink "duit", per the redesign
-           canvas. Base-relative href so it stays inside any tenant base path. *@
-        <a href="" class="cx-brand">
-            <i class="fas fa-shield-alt"></i>
-            <span><span class="cx-brand-con">Con</span>duit</span>
-        </a>
-        <span class="cx-verpill">v1.0.0</span>
-
-        <div class="cx-topbar-spacer"></div>
-
-        <div class="cx-search">
-            <i class="fas fa-search"></i>
-            <span>Search connections, projects…</span>
-        </div>
-        <span class="cx-pill cx-pill--ok cx-pill--lg"><span class="cx-pill-dot"></span> Healthy</span>
-        <div class="cx-avatar">AD</div>
-    </div>
-
-    <div class="cx-body">
-        <NavMenu />
-
-        <main class="cx-main">
-            @Body
-        </main>
+<div class="ic-shell">
+    <BrandTopBar Identity="ProductIdentities.Conduit" UserName="@userName" SignInHref="login" OnSignOut="@(signedIn ? EventCallback.Factory.Create(this, SignOut) : default(EventCallback))">
+        <Sections>
+            <BrandSectionTab Label="Sync" Icon="fas fa-right-left" Section="identity" Active='@(section == "identity")' OnClick='() => Navigation.NavigateTo("")' />
+            <BrandSectionTab Label="Settings" Icon="fas fa-cogs" Section="configure" Active='@(section == "configure")' OnClick='() => Navigation.NavigateTo("configuration")' />
+        </Sections>
+    </BrandTopBar>
+    <div class="ic-body">
+        <NavMenu ActiveSection="@(section)" />
+        <main class="ic-content icb-product-main">@Body</main>
     </div>
 </div>
+@code {
+    private string section = "identity";
+    private string? userName;
+    private bool signedIn;
+    protected override async Task OnInitializedAsync() {
+        UpdateSection();
+        Navigation.LocationChanged += LocationChanged;
+        var auth = await Authentication.GetAuthenticationStateAsync();
+        signedIn = auth.User.Identity?.IsAuthenticated == true;
+        userName = signedIn ? auth.User.Identity?.Name : null;
+    }
+    private void UpdateSection() {
+        var path = Navigation.ToBaseRelativePath(Navigation.Uri).Split('?', '#')[0].Trim('/');
+        section = path.Equals("configuration", StringComparison.OrdinalIgnoreCase) || path.StartsWith("configuration/", StringComparison.OrdinalIgnoreCase) ? "configure" : "identity";
+    }
+    private void LocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) { UpdateSection(); _ = InvokeAsync(StateHasChanged); }
+    private void SignOut() => Navigation.NavigateTo("logout", forceLoad: true);
+    public void Dispose() => Navigation.LocationChanged -= LocationChanged;
+}
