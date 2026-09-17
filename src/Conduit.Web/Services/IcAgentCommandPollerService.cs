@@ -1,9 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Conduit.Connectors.IdentityCenter;
-using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Orchestration;
-using Conduit.Sync.Security;
 
 namespace Conduit.Web.Services;
 
@@ -49,7 +47,6 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandCreateAdAccount = "CreateAdAccount";
     private const string CommandBrowseContainers = "BrowseContainers";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
-    private const string IcCredentialName = "identitycenter";
 
     private static readonly string[] DefaultCapabilities = { "AdIdentitySync", "SqlDiscovery" };
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(60);
@@ -58,6 +55,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IConfiguration _config;
+    private readonly IcEndpointDirectory _endpoints;
     private readonly IcAgentStatusService _status;
     private readonly SqlDiscoveryRunner _discoveryRunner;
     private readonly ILogger<IcAgentCommandPollerService> _logger;
@@ -75,6 +73,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpFactory,
         IConfiguration config,
+        IcEndpointDirectory endpoints,
         IcAgentStatusService status,
         SqlDiscoveryRunner discoveryRunner,
         ILogger<IcAgentCommandPollerService> logger)
@@ -82,6 +81,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         _scopeFactory = scopeFactory;
         _httpFactory = httpFactory;
         _config = config;
+        _endpoints = endpoints;
         _status = status;
         _discoveryRunner = discoveryRunner;
         _logger = logger;
@@ -127,55 +127,20 @@ public sealed class IcAgentCommandPollerService : BackgroundService
 
     private async Task PollOnceAsync(CancellationToken ct)
     {
-        // Fresh scope per tick — repositories and the credential protector are scoped.
-        using var scope = _scopeFactory.CreateScope();
-        var tenants = scope.ServiceProvider.GetRequiredService<TenantRepository>();
-        var protector = scope.ServiceProvider.GetRequiredService<CredentialProtector>();
-
-        var icEndpoints = new List<(string BaseUrl, string ApiKey, string? AgentApiKey)>();
-        foreach (var tenant in await tenants.GetAllAsync())
-        {
-            if (!string.Equals(tenant.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
-                continue;
-            string? raw = null;
-            try { raw = await protector.RetrieveAsync(tenant.Id, IcCredentialName); }
-            catch { /* unreadable credential — skip this connection */ }
-            if (string.IsNullOrEmpty(raw)) continue;
-            try
-            {
-                using var doc = JsonDocument.Parse(raw);
-                var baseUrl = doc.RootElement.TryGetProperty("BaseUrl", out var uEl) ? uEl.GetString() : null;
-                var apiKey = doc.RootElement.TryGetProperty("ApiKey", out var kEl) ? kEl.GetString() : null;
-                var agentApiKey = doc.RootElement.TryGetProperty("AgentApiKey", out var aEl) ? aEl.GetString() : null;
-                if (string.IsNullOrWhiteSpace(agentApiKey)) agentApiKey = null;
-                if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(apiKey)) continue;
-
-                // Dedup by BaseUrl, but deterministically prefer the connection that
-                // carries an AgentApiKey over one that does not (enumeration order of
-                // the tenants must not decide which key drives the channel).
-                var normalized = baseUrl!.TrimEnd('/');
-                var existing = icEndpoints.FindIndex(e => string.Equals(e.BaseUrl, normalized, StringComparison.OrdinalIgnoreCase));
-                if (existing < 0)
-                    icEndpoints.Add((normalized, apiKey!, agentApiKey));
-                else if (icEndpoints[existing].AgentApiKey is null && agentApiKey is not null)
-                    icEndpoints[existing] = (normalized, apiKey!, agentApiKey);
-            }
-            catch (JsonException) { /* malformed blob — skip */ }
-        }
-
-        foreach (var (baseUrl, apiKey, agentApiKey) in icEndpoints)
+        // Endpoint discovery and key selection live in IcEndpointDirectory, shared with
+        // the job-queue executor (SYNC-SERVICE-06); this service consumes the result.
+        foreach (var endpoint in await _endpoints.DiscoverAsync())
         {
             ct.ThrowIfCancellationRequested();
             // AgentApiKey (per-agent key) drives claim + heartbeat when present;
             // the legacy pending/ack path always uses the shared ApiKey.
-            var channelKey = agentApiKey ?? apiKey;
-            _status.Update(baseUrl, s =>
+            _status.Update(endpoint.BaseUrl, s =>
             {
                 s.KeyConfigured = true;
-                s.KeySource = agentApiKey is not null ? "AgentApiKey" : "ApiKey";
+                s.KeySource = endpoint.KeySource;
             });
-            await HeartbeatIfDueAsync(baseUrl, channelKey, ct);
-            await PollEndpointAsync(baseUrl, channelKey, apiKey, ct);
+            await HeartbeatIfDueAsync(endpoint.BaseUrl, endpoint.ChannelKey, ct);
+            await PollEndpointAsync(endpoint.BaseUrl, endpoint.ChannelKey, endpoint.ApiKey, ct);
         }
     }
 

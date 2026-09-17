@@ -573,8 +573,22 @@ builder.Services.AddScoped<Conduit.Web.Services.SqlServiceAgentExecutor>();
 builder.Services.AddScoped<Conduit.Web.Services.AwsAgentWriteExecutor>();
 // Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
 builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
+// The one reader of this installation's IC endpoints + key selection, shared by the command
+// poller and the job executor so the two channels cannot drift apart on which key drives which.
+builder.Services.AddSingleton<Conduit.Web.Services.IcEndpointDirectory>();
 builder.Services.AddSingleton<Conduit.Web.Services.SqlDiscoveryRunner>();
 builder.Services.AddHostedService<Conduit.Web.Services.IcAgentCommandPollerService>();
+
+// SYNC-SERVICE-06: claim the sync jobs IdentityCenter pinned to THIS installation and run them
+// through the same admission CAS + orchestrator the manual Run-Now path uses. Same hardening as
+// the poller's client: 1 MB response cap and no auto-redirect (X-API-Key is a default header, so
+// following a 302 would replay the key to another host).
+builder.Services.AddHttpClient("IcSyncJobExecutor")
+    .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 1024 * 1024)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<Conduit.Web.Services.IIcSyncProjectJobRunner, Conduit.Web.Services.IcSyncProjectJobRunner>();
+builder.Services.AddSingleton<Conduit.Web.Services.IcSyncJobPump>();
+builder.Services.AddHostedService<Conduit.Web.Services.IcSyncJobExecutorService>();
 // Near-real-time SQL spin-up detection via AD SPN diffing (SqlSpnWatch:Enabled / :IntervalSeconds).
 builder.Services.AddHostedService<Conduit.Web.Services.SqlSpnWatchService>();
 // One-shot startup enrollment against an IC tenant portal (--enroll-url/--enroll-code).

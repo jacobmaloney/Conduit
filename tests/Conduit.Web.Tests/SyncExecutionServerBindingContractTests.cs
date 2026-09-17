@@ -87,16 +87,27 @@ public class SyncExecutionServerBindingContractTests
         Assert.Contains("[Authorize]", Between(source, "[ApiController]", "public class ApiV1SyncRunsController"));
     }
 
+    /// <summary>
+    /// The execution leg landed in SYNC-SERVICE-06 as its OWN service; the V140 command channel is
+    /// unchanged and must stay that way. The IdentityCenter-side key gap is still open — AgentPolicy
+    /// requires scope=agent and Conduit's enrolled keys carry agent:commands + agent:heartbeat — so the
+    /// executor must report a refused key as a permanent condition rather than as an empty queue.
+    /// </summary>
     [Fact]
-    public void Execution_leg_is_not_wired_because_IdentityCenter_AgentPolicy_rejects_enrolled_keys()
+    public void Command_poller_stays_the_command_channel_and_the_job_queue_lives_in_its_own_service()
     {
-        // D6 stop: AgentPolicy = RequireClaim("scope","agent"); Conduit's enrolled keys carry
-        // agent:commands + agent:heartbeat (per-agent) or tenant (sync key). Nothing here may pretend otherwise.
         var poller = Read("src/Conduit.Web/Services/IcAgentCommandPollerService.cs");
         Assert.DoesNotContain("api/jobs/claim", poller);
         Assert.DoesNotContain("api/agents/register", poller);
         Assert.DoesNotContain("ExecutionServerApiKey", poller);
         Assert.Contains("/api/agent/commands/claim", poller);   // the V140 channel still runs
+
+        var channel = Read("src/Conduit.Web/Services/IcSyncJobChannel.cs");
+        Assert.Contains("/api/jobs/claim", channel);
+        Assert.DoesNotContain("api/agents/register", channel);   // registration is still enrollment's job, not the executor's
+
+        var pump = Read("src/Conduit.Web/Services/IcSyncJobPump.cs");
+        Assert.Contains("AgentPolicy requires a scope=agent claim", pump);
     }
 
     private static string Normalize(string sql) => System.Text.RegularExpressions.Regex.Replace(sql, @"\s+", " ").Trim();
