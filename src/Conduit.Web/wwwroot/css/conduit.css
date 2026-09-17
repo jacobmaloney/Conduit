@@ -2301,7 +2301,11 @@ details summary::-webkit-details-marker { color: var(--accent); }
 
 .sync-page-container {
     padding: 16px 20px;
-    height: calc(100vh - 60px);
+    /* min-height, not height: the old fixed calc(100vh - 60px) assumed a 60px chrome. When the
+       shell grew taller the container's bottom fell below the viewport and its overflow-hidden
+       children clipped the rest, so run logs and steps could not be reached. A minimum keeps the
+       full-height look on short pages and lets a long detail pane extend and scroll with the page. */
+    min-height: calc(100vh - 60px);
     display: flex;
     flex-direction: column;
 }

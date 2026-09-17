@@ -57,8 +57,8 @@
                      Label="Run status"
                      CountDescription="runs" />
 
-    <div class="row flex-grow-1 overflow-hidden mt-3">
-        <div class="col-md-4 d-flex flex-column gap-2 overflow-hidden">
+    <div class="row flex-grow-1 mt-3">
+        <div class="col-md-4 d-flex flex-column gap-2">
             <div class="icb-form-field">
                 <label class="icb-form-label" for="sh-project">Project filter</label>
                 <select id="sh-project" class="icb-form-select" @bind="selectedProjectIdRaw" @bind:after="ReloadList">
@@ -100,7 +100,7 @@
             </BrandListPanel>
         </div>
 
-        <div class="col-md-8 overflow-auto">
+        <div class="col-md-8">
             @if (selectedRun is null)
             {
                 <div class="icb-detail-empty">
@@ -136,25 +136,25 @@
                             <div class="icb-detail-label">TRIGGER</div>
                             <div class="icb-detail-value">@selectedRun.TriggeredBy</div>
                         </div>
-                        <div class="icb-detail-cell">
+                        <div class="icb-detail-cell icb-detail-cell--metric">
                             <div class="icb-detail-label">READ</div>
-                            <div class="icb-detail-value">@selectedRun.ObjectsRead</div>
+                            <div class="icb-detail-value icb-detail-value--metric">@selectedRun.ObjectsRead</div>
                         </div>
-                        <div class="icb-detail-cell">
+                        <div class="icb-detail-cell icb-detail-cell--metric">
                             <div class="icb-detail-label">CREATED</div>
-                            <div class="icb-detail-value text-success">@selectedRun.ObjectsCreated</div>
+                            <div class="icb-detail-value icb-detail-value--metric text-success">@selectedRun.ObjectsCreated</div>
                         </div>
-                        <div class="icb-detail-cell">
+                        <div class="icb-detail-cell icb-detail-cell--metric">
                             <div class="icb-detail-label">UPDATED</div>
-                            <div class="icb-detail-value text-info">@selectedRun.ObjectsUpdated</div>
+                            <div class="icb-detail-value icb-detail-value--metric text-info">@selectedRun.ObjectsUpdated</div>
                         </div>
-                        <div class="icb-detail-cell">
+                        <div class="icb-detail-cell icb-detail-cell--metric">
                             <div class="icb-detail-label">SKIPPED</div>
-                            <div class="icb-detail-value text-muted">@selectedRun.ObjectsSkipped</div>
+                            <div class="icb-detail-value icb-detail-value--metric text-muted">@selectedRun.ObjectsSkipped</div>
                         </div>
-                        <div class="icb-detail-cell">
+                        <div class="icb-detail-cell icb-detail-cell--metric">
                             <div class="icb-detail-label">FAILED</div>
-                            <div class="icb-detail-value text-danger">@selectedRun.ObjectsFailed</div>
+                            <div class="icb-detail-value icb-detail-value--metric text-danger">@selectedRun.ObjectsFailed</div>
                         </div>
                     </div>
 
