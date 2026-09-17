@@ -8,6 +8,8 @@
 @using Conduit.Sync.Templates
 @using Conduit.Sync.Connectors
 @using Conduit.Connectors.IdentityCenter
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @using Microsoft.Extensions.DependencyInjection
 @inject ConnectorRegistry Connectors
 @inject SyncProjectRepository ProjectRepo
@@ -80,96 +82,92 @@
         </div>
     }
 
-    <div class="cx-filterbar">
-        <span class="cx-fpill @(activeTab == "target" ? "active" : "")" @onclick='() => activeTab = "target"'>Target System · @targetProjects.Count</span>
-        <span class="cx-fpill @(activeTab == "internal" ? "active" : "")" @onclick='() => activeTab = "internal"'>Internal · @internalProjects.Count</span>
-        <span class="cx-filter-spacer"></span>
-        <span class="cx-filter-summary">@allProjects.Count(p => p.IsEnabled) enabled · @allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule)) scheduled · @allProjects.Count(p => p.IsRunning) running</span>
-    </div>
+    @{
+        var projectTabs = new BrandFilterTabs.Tab[]
+        {
+            new("target", "Target System", targetProjects.Count),
+            new("internal", "Internal", internalProjects.Count, DisabledReason: internalProjects.Count == 0 ? "Arrives with the governance integration" : null)
+        };
+    }
+    <BrandFilterTabs Tabs="@projectTabs" ActiveTab="@activeTab" OnTabChanged="@(tab => activeTab = tab)" Label="Sync project scope" CountDescription="sync projects, before the list search" />
+    <p class="icb-table-note">@allProjects.Count(p => p.IsEnabled) enabled · @allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule)) scheduled · @allProjects.Count(p => p.IsRunning) running</p>
 
-    @if (filteredProjects.Count == 0)
-    {
-        <div class="cx-card text-muted" style="text-align:center;">
+    <BrandListPanel TItem="SyncProject" Width="BrandListWidth.Fill" Title="Sync projects" Items="@filteredProjects" ShowPaging="false" ShowSearch="true"
+                    SearchValue="@searchTerm" OnSearchChanged="HandleSearchChanged" SearchPlaceholder="Search projects..." SearchLabel="Search sync projects">
+        <EmptyTemplate>
             @if (activeTab == "internal")
             {
-                <p class="mb-0">No internal projects yet. Internal-only flows (Object↔Identity matching) live in the governance product — they will appear here when that integration lands.</p>
+                <p>No internal projects yet. Internal-only flows (Object↔Identity matching) live in the governance product — they will appear here when that integration lands.</p>
             }
             else if (!string.IsNullOrWhiteSpace(searchTerm))
             {
-                <p class="mb-0">No projects match "@searchTerm".</p>
+                <p>No projects match "@searchTerm".</p>
             }
             else
             {
-                <p class="mb-0">No sync projects yet. Click "New Sync Project" to get started — build one yourself, start from a template, or auto-generate from a connection.</p>
+                <p>No sync projects yet. Click "New Sync Project" to get started — build one yourself, start from a template, or auto-generate from a connection.</p>
             }
-        </div>
-    }
-    else
-    {
-        <div class="cx-rows cx-rows--sp">
-            @foreach (var project in filteredProjects)
+        </EmptyTemplate>
+        <RowTemplate Context="project">
+            @{
+                var runMeta = $"{project.SuccessfulRuns}/{project.TotalRuns} runs · last {(project.LastRunAt is { } lr ? lr.ToString("h:mm tt") : "never")}{(project.FailedRuns > 0 ? $" · {project.FailedRuns} failed" : "")}";
+            }
+            <BrandSummaryRow Title="@project.Name" Meta="@runMeta">
+                <Badges>
+                    <BrandBadge Text="@TenantName(project.SourceTenantId)" Soft="true" />
+                    <span class="icb-list-summary-arrow" aria-hidden="true">→</span>
+                    <BrandBadge Text="@TenantName(project.SinkTenantId)" Soft="true" />
+                    @if (project.IsRunning)
+                    {
+                        <BrandBadge Text="Running" Tone="BrandBadgeTone.Info" Icon="fas fa-spinner fa-spin" Soft="true" />
+                    }
+                    else if (project.IsEnabled)
+                    {
+                        <BrandBadge Text="Enabled" Tone="BrandBadgeTone.Success" Dot="true" Soft="true" />
+                    }
+                    else
+                    {
+                        <BrandBadge Text="Disabled" Tone="BrandBadgeTone.Neutral" Icon="fas fa-pause" Soft="true" />
+                    }
+                    @if (!string.IsNullOrEmpty(project.CronSchedule))
+                    {
+                        <BrandBadge Text="Scheduled" Icon="fas fa-clock" Description="@project.CronSchedule" Soft="true" />
+                    }
+                </Badges>
+            </BrandSummaryRow>
+        </RowTemplate>
+        <RowActions Context="project">
+            @{
+                var browseReason = BrowseUnavailableReason(project.SourceTenantId);
+            }
+            @if (project.IsRunning)
             {
-                <div class="cx-listcard">
-                    <div class="cx-listcard-main">
-                        <div class="cx-listcard-title">@project.Name</div>
-                        <div class="cx-pillrow">
-                            <span class="cx-pill cx-pill--type">@TenantName(project.SourceTenantId)</span>
-                            <span class="cx-arrow">→</span>
-                            <span class="cx-pill cx-pill--target">@TenantName(project.SinkTenantId)</span>
-                            @if (project.IsRunning)
-                            {
-                                <span class="cx-pill cx-pill--sched"><i class="fas fa-spinner fa-spin"></i> Running</span>
-                            }
-                            else if (project.IsEnabled)
-                            {
-                                <span class="cx-pill cx-pill--ok"><span class="cx-pill-dot"></span> Enabled</span>
-                            }
-                            else
-                            {
-                                <span class="cx-pill cx-pill--muted"><i class="fas fa-pause"></i> Disabled</span>
-                            }
-                            @if (!string.IsNullOrEmpty(project.CronSchedule))
-                            {
-                                <span class="cx-pill cx-pill--sched" style="cursor:pointer;" title="@project.CronSchedule" @onclick="() => SelectThenSchedule(project)"><i class="fas fa-clock"></i> Scheduled</span>
-                            }
-                            <span class="cx-meta">@project.SuccessfulRuns/@project.TotalRuns runs · last @(project.LastRunAt is { } lr ? lr.ToString("h:mm tt") : "never")@(project.FailedRuns > 0 ? $" · {project.FailedRuns} failed" : "")</span>
-                        </div>
-                    </div>
-                    <div class="cx-actions">
-                        <div>
-                            <button type="button" class="icb-list-action" disabled="@(BrowseUnavailableReason(project.SourceTenantId) != null)" aria-describedby="@($"browse-reason-{project.Id}")" @onclick="() => sourceBrowse = new(project.SourceTenantId, project.Id)">Browse source</button>
-                            @if (BrowseUnavailableReason(project.SourceTenantId) is { } browseReason) { <p id="@($"browse-reason-{project.Id}")" class="icb-table-note">@browseReason</p> }
-                        </div>
-                        @if (project.IsRunning)
-                        {
-                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenStop(project)"><i class="fas fa-stop"></i> Stop</button>
-                            <a href="/sync-history?project=@project.Id" class="cx-btn cx-btn--md"><i class="fas fa-chart-line"></i> Progress</a>
-                        }
-                        else if (!project.IsEnabled)
-                        {
-                            <button class="cx-btn cx-btn--run cx-btn--md" @onclick="() => ToggleEnabled(project)"><i class="fas fa-power-off"></i> Enable</button>
-                            <a href="/sync-history?project=@project.Id" class="cx-btn cx-btn--md">History</a>
-                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenEdit(project)"><i class="fas fa-ellipsis"></i></button>
-                        }
-                        else
-                        {
-                            <button class="cx-btn cx-btn--run cx-btn--md" @onclick="() => SelectThenRun(project)"><i class="fas fa-play"></i> Run Now</button>
-                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects"><i class="fas fa-arrows-rotate"></i> Full Sync</button>
-                            <a href="/sync-history?project=@project.Id" class="cx-btn cx-btn--md">History</a>
-                            <button class="cx-btn cx-btn--md" @onclick="() => SelectThenEdit(project)" title="Manage"><i class="fas fa-ellipsis"></i></button>
-                        }
-                    </div>
-                </div>
+                <button type="button" class="icb-list-action" @onclick="() => SelectThenStop(project)"><i class="fas fa-stop"></i> Stop</button>
+                <a href="/sync-history?project=@project.Id" class="icb-list-action"><i class="fas fa-chart-line"></i> Progress</a>
             }
-        </div>
-
-        @* Search input (kept from the retired list panel; drives ApplyFilter via searchTerm). *@
-        <div class="cx-search mt-3" style="width:280px;background:#fff;">
-            <i class="fas fa-search"></i>
-            <input type="text" class="form-control border-0 p-0" style="box-shadow:none;font-size:12.5px;" placeholder="Search projects..."
-                   value="@searchTerm" @oninput="OnSearchInput" />
-        </div>
-    }
+            else if (!project.IsEnabled)
+            {
+                <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => ToggleEnabled(project)"><i class="fas fa-power-off"></i> Enable</button>
+                <a href="/sync-history?project=@project.Id" class="icb-list-action">History</a>
+                <button type="button" class="icb-list-action" title="Manage" aria-label="Manage" @onclick="() => SelectThenEdit(project)"><i class="fas fa-ellipsis"></i></button>
+            }
+            else
+            {
+                <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => SelectThenRun(project)"><i class="fas fa-play"></i> Run Now</button>
+                <button type="button" class="icb-list-action" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects"><i class="fas fa-arrows-rotate"></i> Full Sync</button>
+                <a href="/sync-history?project=@project.Id" class="icb-list-action">History</a>
+                <button type="button" class="icb-list-action" title="Manage" aria-label="Manage" @onclick="() => SelectThenEdit(project)"><i class="fas fa-ellipsis"></i></button>
+            }
+            @if (!string.IsNullOrEmpty(project.CronSchedule))
+            {
+                <button type="button" class="icb-list-action" title="@project.CronSchedule" @onclick="() => SelectThenSchedule(project)"><i class="fas fa-clock"></i> Schedule</button>
+            }
+            <div>
+                <button type="button" class="icb-list-action" disabled="@(browseReason is not null)" aria-describedby="@(browseReason is not null ? $"browse-reason-{project.Id}" : null)" @onclick="() => sourceBrowse = new(project.SourceTenantId, project.Id)">Browse source</button>
+                @if (browseReason is not null) { <p id="@($"browse-reason-{project.Id}")" class="icb-table-note">@browseReason</p> }
+            </div>
+        </RowActions>
+    </BrandListPanel>
 </div>
 
 @* ───────── New Sync Project chooser — single entry point, three paths that all
