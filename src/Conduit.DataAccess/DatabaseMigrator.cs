@@ -1499,6 +1499,32 @@ UPDATE p
 "
             });
 
+            // Migration 36 (SYNC-SERVICE-05): bind a local project to the IdentityCenter sync project
+            // whose execution is pinned to this Conduit. One IC project binds to at most one local
+            // project (filtered unique index); the binding is written only by
+            // SyncProjectRepository.SetIdentityCenterBindingAsync. No Conduit UI yet.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 36,
+                Name = "IdentityCenter project binding",
+                Description = "Adds SyncProjects.IdentityCenterProjectId (nullable) plus a filtered unique index so an IdentityCenter sync project executes through at most one local project.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.SyncProjects','IdentityCenterProjectId') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [IdentityCenterProjectId] UNIQUEIDENTIFIER NULL;
+END;
+
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_SyncProjects_IdentityCenterProjectId' AND object_id = OBJECT_ID('dbo.SyncProjects'))
+BEGIN
+    CREATE UNIQUE NONCLUSTERED INDEX [UX_SyncProjects_IdentityCenterProjectId]
+        ON [dbo].[SyncProjects]([IdentityCenterProjectId])
+        WHERE [IdentityCenterProjectId] IS NOT NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

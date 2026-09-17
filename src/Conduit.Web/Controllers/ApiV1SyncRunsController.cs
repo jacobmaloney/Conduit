@@ -428,6 +428,53 @@ namespace Conduit.Web.Controllers
         /// <c>Manual:{caller}:{reason}</c> string fits well under the 100-char
         /// SyncRuns.TriggeredBy column limit. Worf HIGH-2.
         /// </summary>
+        // ─── PUT /api/v1/sync-projects/{projectId}/identity-center-binding ──────
+
+        /// <summary>Body for <see cref="SetIdentityCenterBinding"/>; null clears the binding.</summary>
+        public sealed class IdentityCenterBindingRequest
+        {
+            public Guid? IdentityCenterProjectId { get; set; }
+        }
+
+        /// <summary>
+        /// SYNC-SERVICE-05: binds this local project to the IdentityCenter sync project whose
+        /// execution server is this Conduit. One IC project executes through at most one local
+        /// project: a second binding is refused with the holder named, nothing written.
+        /// </summary>
+        [HttpPut("sync-projects/{projectId:guid}/identity-center-binding")]
+        public async Task<IActionResult> SetIdentityCenterBinding(
+            Guid projectId,
+            [FromBody] IdentityCenterBindingRequest? body,
+            CancellationToken ct)
+        {
+            var project = await _projects.GetByIdAsync(projectId).ConfigureAwait(false);
+            if (project is null)
+                return NotFound(new { error = $"SyncProject {projectId} not found." });
+
+            var scopeError = AuthorizeForProject(project);
+            if (scopeError is not null) return scopeError;
+
+            var identityCenterProjectId = body?.IdentityCenterProjectId;
+            if (identityCenterProjectId == Guid.Empty)
+                return BadRequest(new { error = "identityCenterProjectId must be a non-empty GUID, or null to clear the binding." });
+
+            var changed = await _projects.SetIdentityCenterBindingAsync(projectId, identityCenterProjectId).ConfigureAwait(false);
+            if (!changed)
+            {
+                if (identityCenterProjectId is { } wanted)
+                {
+                    var holder = await _projects.GetByIdentityCenterProjectIdAsync(wanted).ConfigureAwait(false);
+                    if (holder is not null && holder.Id != projectId)
+                        return Conflict(new { error = SyncProjectRepository.BindingRefusedReason(wanted, holder.Name, holder.Id) });
+                }
+                return NotFound(new { error = $"SyncProject {projectId} not found." });
+            }
+
+            _logger.LogInformation("SyncProject {ProjectId} IdentityCenter binding set to {IdentityCenterProjectId} by {Caller}",
+                projectId, identityCenterProjectId, User.Identity?.Name ?? "api");
+            return Ok(new { projectId, identityCenterProjectId });
+        }
+
         internal static string SanitizeTriggeredBy(string? caller, string? reason)
         {
             var safeCaller = StripControl(caller);

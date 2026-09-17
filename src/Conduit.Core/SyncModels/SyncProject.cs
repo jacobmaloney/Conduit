@@ -79,6 +79,14 @@ public class SyncProject
     /// </summary>
     public bool SkipUnchanged { get; set; }
 
+    /// <summary>
+    /// SYNC-SERVICE-05: the IdentityCenter sync project (IC SyncProjects.Id) this local project
+    /// executes on behalf of when IC pins that project's execution server to this Conduit. NULL =
+    /// not bound. At most one local project may hold a given id (migration 36 filtered unique index);
+    /// written only by <c>SyncProjectRepository.SetIdentityCenterBindingAsync</c>, never copied by Clone.
+    /// </summary>
+    public Guid? IdentityCenterProjectId { get; set; }
+
     public DateTime? LastRunAt { get; set; }
     public string? LastRunStatus { get; set; }
     public Guid? LastRunId { get; set; }

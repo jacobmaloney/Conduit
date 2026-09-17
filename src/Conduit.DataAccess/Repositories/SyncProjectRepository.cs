@@ -534,4 +534,37 @@ public class SyncProjectRepository : BaseRepository
             throw;
         }
     }
+
+    // ─── IdentityCenter binding (SYNC-SERVICE-05) ────────────────────────────
+
+    /// <summary>
+    /// One predicated UPDATE: NULL always clears; a non-null id is written only when no OTHER local
+    /// project already holds it. 0 rows means the caller must read the holder and refuse by name.
+    /// </summary>
+    public const string SetIdentityCenterBindingSql = @"
+        UPDATE SyncProjects
+           SET IdentityCenterProjectId = @IdentityCenterProjectId,
+               LastModified = @LastModified
+         WHERE Id = @Id
+           AND (@IdentityCenterProjectId IS NULL
+                OR NOT EXISTS (SELECT 1 FROM SyncProjects o
+                                WHERE o.IdentityCenterProjectId = @IdentityCenterProjectId AND o.Id <> @Id));";
+
+    public Task<SyncProject?> GetByIdentityCenterProjectIdAsync(Guid identityCenterProjectId) =>
+        QuerySingleOrDefaultAsync<SyncProject>(
+            "SELECT * FROM SyncProjects WHERE IdentityCenterProjectId = @IdentityCenterProjectId",
+            new { IdentityCenterProjectId = identityCenterProjectId });
+
+    /// <summary>True when the row changed; false when the project is missing or another project holds the id.</summary>
+    public async Task<bool> SetIdentityCenterBindingAsync(Guid projectId, Guid? identityCenterProjectId)
+    {
+        if (identityCenterProjectId == Guid.Empty)
+            throw new ArgumentException("An IdentityCenter project id must be a real GUID or null.", nameof(identityCenterProjectId));
+        var rows = await ExecuteAsync(SetIdentityCenterBindingSql,
+            new { Id = projectId, IdentityCenterProjectId = identityCenterProjectId, LastModified = DateTime.UtcNow });
+        return rows == 1;
+    }
+
+    public static string BindingRefusedReason(Guid identityCenterProjectId, string holderName, Guid holderId) =>
+        $"Binding refused: IdentityCenter project {identityCenterProjectId} is already bound to Conduit project '{holderName}' ({holderId}). Unbind it there first.";
 }
