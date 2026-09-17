@@ -1,3 +1,5 @@
+> **Superseded 2026-09-16.** The `brand` CSS repository this plan describes is retired; both products now reference the IdentityCenter.Brand project directly and its docs/shared-components-contract.md is the canonical contract. Kept for history only.
+
 # Shared brand CSS — single source of truth (DECIDED + IMPLEMENTED)
 
 _Status (2026-06-20): **Option B chosen and built.** Standalone `brand` repo is
