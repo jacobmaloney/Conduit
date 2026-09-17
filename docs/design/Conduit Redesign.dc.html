@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#e8eef0;font-family:'Nunito',sans-serif;color:#1e293b}
+a{color:#0e7490;text-decoration:none} a:hover{color:#155e75}
+</style>
+</helmet>
+<div style="display:flex;flex-direction:column;min-height:100vh;background:#f4f7f8">
+  <!-- top bar -->
+  <div style="display:flex;align-items:center;gap:16px;padding:0 24px;background:#fff;border-bottom:1px solid #e2eaee;height:54px;flex:none">
+    <div style="font-weight:800;font-size:17px;display:flex;align-items:center;gap:8px"><span style="color:#0e7490">🛡</span><span style="color:#0e7490">Con</span>duit</div>
+    <span style="background:#eef4f6;color:#64748b;font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px">v1.0.0</span>
+    <div style="flex:1"></div>
+    <div style="border:1px solid #cbd5e1;border-radius:999px;padding:6px 15px;font-size:12.5px;color:#94a3b8;font-weight:600;width:220px">🔍 Search connections, projects…</div>
+    <span style="font-size:12.5px;font-weight:700;color:#64748b">⌁ API Docs</span>
+    <span style="background:#dcfce7;color:#15803d;font-size:11.5px;font-weight:800;padding:4px 12px;border-radius:999px">● Healthy</span>
+    <div style="width:32px;height:32px;border-radius:50%;background:#0e7490;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px">AD</div>
+  </div>
+  <div style="display:flex;flex:1;min-height:0">
+    <!-- sidebar -->
+    <div style="width:216px;flex:none;background:#fff;border-right:1px solid #e2eaee;padding:14px 10px;display:flex;flex-direction:column;gap:2px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+        <sc-if value="{{ n.isGroup }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:10.5px;font-weight:800;letter-spacing:.08em;color:#94a3b8;padding:12px 12px 6px">{{ n.label }}</div>
+        </sc-if>
+        <sc-if value="{{ n.isItem }}" hint-placeholder-val="{{ true }}">
+          <div onClick="{{ n.select }}" style="background:{{ n.bg }};color:{{ n.fg }};font-weight:{{ n.weight }};font-size:13px;padding:8px 12px;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+            <span>{{ n.icon }} {{ n.label }}</span>
+            <sc-if value="{{ n.badge }}" hint-placeholder-val="{{ false }}"><span style="background:{{ n.badgeBg }};color:{{ n.badgeFg }};font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:999px">{{ n.badge }}</span></sc-if>
+          </div>
+        </sc-if>
+      </sc-for>
+      <div style="flex:1"></div>
+      <div style="border-top:1px solid #e2eaee;padding:10px 12px;font-size:12px;color:#64748b;font-weight:600">Signed in as <b>admin</b><br><a href="#">Sign out</a></div>
+    </div>
+    <!-- main -->
+    <div style="flex:1;min-width:0;overflow:auto;padding:20px 26px">
+
+      <!-- ===== DASHBOARD ===== -->
+      <sc-if value="{{ showDashboard }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+            <div><div style="font-weight:800;font-size:19px">Dashboard</div><div style="font-size:12.5px;color:#64748b;font-weight:600">Everything that moves identities, at a glance.</div></div>
+            <div style="flex:1"></div>
+            <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12.5px;padding:8px 15px;border-radius:10px;font-family:inherit;cursor:pointer">≡ Getting Started</button>
+            <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:12.5px;padding:8px 17px;border-radius:10px;font-family:inherit;cursor:pointer">▶ Run All Syncs</button>
+          </div>
+          <!-- stat band -->
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px">
+            <sc-for list="{{ stats }}" as="st" hint-placeholder-count="6">
+              <div style="background:#fff;border:1px solid #e2eaee;border-radius:12px;padding:12px 15px">
+                <div style="font-size:10.5px;font-weight:800;letter-spacing:.06em;color:#94a3b8">{{ st.label }}</div>
+                <div style="font-size:22px;font-weight:800;color:{{ st.color }};margin-top:2px">{{ st.value }}</div>
+                <div style="font-size:11px;font-weight:700;color:#64748b">{{ st.sub }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px;align-items:start">
+            <!-- sync health -->
+            <div style="background:#fff;border:1px solid #e2eaee;border-radius:14px;padding:16px 18px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <span style="font-weight:800;font-size:14.5px">Sync projects</span>
+                <a href="#" style="font-size:12px;font-weight:800">Open Sync Center →</a>
+              </div>
+              <div style="display:grid;gap:6px">
+                <sc-for list="{{ projects }}" as="p" hint-placeholder-count="4">
+                  <div style="display:flex;align-items:center;gap:12px;border:1px solid #eef2f4;border-radius:10px;padding:9px 12px">
+                    <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex:none"></span>
+                    <div style="min-width:0;flex:1">
+                      <div style="font-weight:800;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</div>
+                      <div style="font-size:11.5px;color:#64748b;font-weight:600">{{ p.from }} → {{ p.to }} · {{ p.classes }}</div>
+                    </div>
+                    <span style="background:#dcfce7;color:#15803d;font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:999px;flex:none">{{ p.runs }}</span>
+                    <span style="font-size:11.5px;color:#94a3b8;font-weight:700;flex:none">{{ p.last }}</span>
+                    <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:11.5px;padding:6px 13px;border-radius:8px;font-family:inherit;cursor:pointer;flex:none">▶ Run</button>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- right column -->
+            <div style="display:grid;gap:14px">
+              <div style="background:#fff;border:1px solid #e2eaee;border-radius:14px;padding:16px 18px">
+                <div style="font-weight:800;font-size:14.5px;margin-bottom:10px">Next scheduled run</div>
+                <div style="font-size:20px;font-weight:800;color:#0e7490">Today, 5:00 PM</div>
+                <div style="font-size:12px;color:#64748b;font-weight:600;margin-top:2px">4 schedules · every hour · 0 failing</div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 13px;border-radius:9px;font-family:inherit;cursor:pointer">Schedules</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 13px;border-radius:9px;font-family:inherit;cursor:pointer">Run history</button>
+                </div>
+              </div>
+              <div style="background:#fff;border:1px solid #e2eaee;border-radius:14px;padding:16px 18px">
+                <div style="font-weight:800;font-size:14.5px;margin-bottom:10px">Recent activity</div>
+                <div style="display:grid;gap:8px;font-size:12.5px;font-weight:600;color:#475569">
+                  <div><span style="color:#15803d;font-weight:800">✓</span> Domain.local full sync — 24 classes, 4:00 PM</div>
+                  <div><span style="color:#15803d;font-weight:800">✓</span> M365 full sync — 8 classes, 4:00 PM</div>
+                  <div><span style="color:#15803d;font-weight:800">✓</span> Graph core sync — 2 classes, 4:00 PM</div>
+                  <div><span style="color:#0e7490;font-weight:800">＋</span> Connection "Certification-Center.com" tested OK</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ===== SYNC PROJECTS ===== -->
+      <sc-if value="{{ showSync }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+            <div><div style="font-weight:800;font-size:19px">Sync Projects</div><div style="font-size:12.5px;color:#64748b;font-weight:600">Read from a Source, map, write to a Target — scheduled or on demand.</div></div>
+            <div style="flex:1"></div>
+            <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:12.5px;padding:8px 17px;border-radius:10px;font-family:inherit;cursor:pointer">＋ New Sync Project</button>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:14px;font-size:12.5px;font-weight:800">
+            <span style="background:#0e7490;color:#fff;padding:6px 14px;border-radius:999px">Target System · 4</span>
+            <span style="background:#fff;border:1px solid #cbd5e1;color:#64748b;padding:6px 14px;border-radius:999px">Internal · 0</span>
+            <span style="flex:1"></span>
+            <span style="color:#64748b;font-weight:700;align-self:center">4 enabled · 4 scheduled · 0 running</span>
+          </div>
+          <div style="display:grid;gap:8px">
+            <sc-for list="{{ projects }}" as="p" hint-placeholder-count="4">
+              <div style="background:#fff;border:1px solid #e2eaee;border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:14px">
+                <div style="min-width:0;flex:1">
+                  <div style="font-weight:800;font-size:14px">{{ p.name }}</div>
+                  <div style="display:flex;gap:7px;margin-top:5px;flex-wrap:wrap;align-items:center">
+                    <span style="background:#eef4f6;color:#475569;font-size:11px;font-weight:800;padding:2px 10px;border-radius:999px">{{ p.from }}</span>
+                    <span style="color:#94a3b8;font-weight:800">→</span>
+                    <span style="background:#e0f4f8;color:#0e7490;font-size:11px;font-weight:800;padding:2px 10px;border-radius:999px">{{ p.to }}</span>
+                    <span style="background:#dcfce7;color:#15803d;font-size:11px;font-weight:800;padding:2px 10px;border-radius:999px">● Enabled</span>
+                    <span style="background:#fef3c7;color:#b45309;font-size:11px;font-weight:800;padding:2px 10px;border-radius:999px">🕐 Scheduled</span>
+                    <span style="font-size:11px;color:#64748b;font-weight:700">{{ p.classes }} · {{ p.runs }} runs · last {{ p.last }}</span>
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;flex:none">
+                  <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:12px;padding:7px 14px;border-radius:9px;font-family:inherit;cursor:pointer">▶ Run Now</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 12px;border-radius:9px;font-family:inherit;cursor:pointer">Full Sync</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 12px;border-radius:9px;font-family:inherit;cursor:pointer">History</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 12px;border-radius:9px;font-family:inherit;cursor:pointer">⋯</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ===== CONNECTIONS ===== -->
+      <sc-if value="{{ showConnections }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+            <div><div style="font-weight:800;font-size:19px">Connections</div><div style="font-size:12.5px;color:#64748b;font-weight:600">Directory and target systems Conduit syncs identities to and from.</div></div>
+            <div style="flex:1"></div>
+            <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12.5px;padding:8px 15px;border-radius:10px;font-family:inherit;cursor:pointer">⇩ Seed Demo Data</button>
+            <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:12.5px;padding:8px 17px;border-radius:10px;font-family:inherit;cursor:pointer">＋ New Connection</button>
+          </div>
+          <div style="display:grid;gap:8px">
+            <sc-for list="{{ connections }}" as="c" hint-placeholder-count="5">
+              <div style="background:#fff;border:1px solid #e2eaee;border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:14px">
+                <span style="width:38px;height:38px;border-radius:10px;background:#e0f4f8;display:flex;align-items:center;justify-content:center;font-size:16px;flex:none">{{ c.icon }}</span>
+                <div style="min-width:0;flex:1">
+                  <div style="font-weight:800;font-size:14px">{{ c.name }}</div>
+                  <div style="display:flex;gap:7px;margin-top:4px;align-items:center;flex-wrap:wrap">
+                    <span style="background:#eef4f6;color:#475569;font-size:11px;font-weight:800;padding:2px 10px;border-radius:999px">{{ c.type }}</span>
+                    <span style="background:#dcfce7;color:#15803d;font-size:11px;font-weight:800;padding:2px 10px;border-radius:999px">● Active</span>
+                    <span style="font-size:11px;color:#94a3b8;font-weight:700">{{ c.slug }} · {{ c.synced }}</span>
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;flex:none">
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#0e7490;font-weight:800;font-size:12px;padding:7px 13px;border-radius:9px;font-family:inherit;cursor:pointer">⚡ Test</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 13px;border-radius:9px;font-family:inherit;cursor:pointer">Edit</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 13px;border-radius:9px;font-family:inherit;cursor:pointer">History</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:12px;padding:7px 12px;border-radius:9px;font-family:inherit;cursor:pointer">⋯</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ===== SCHEDULES ===== -->
+      <sc-if value="{{ showSchedules }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+            <div><div style="font-weight:800;font-size:19px">Schedules</div><div style="font-size:12.5px;color:#64748b;font-weight:600">Recurring runs across all sync projects. Next run <b style="color:#0e7490">today 5:00 PM</b> · 0 failing.</div></div>
+            <div style="flex:1"></div>
+            <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:12.5px;padding:8px 17px;border-radius:10px;font-family:inherit;cursor:pointer">＋ Assign Schedule</button>
+          </div>
+          <div style="background:#fff;border:1px solid #e2eaee;border-radius:14px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:2.2fr .8fr 1fr 1fr .8fr 1.2fr;gap:12px;padding:10px 16px;background:#f8fafc;border-bottom:1px solid #e2eaee;font-size:10.5px;font-weight:800;letter-spacing:.06em;color:#94a3b8">
+              <span>NAME</span><span>CADENCE</span><span>NEXT RUN</span><span>LAST RUN</span><span>STATE</span><span style="text-align:right">ACTIONS</span>
+            </div>
+            <sc-for list="{{ schedules }}" as="s" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:2.2fr .8fr 1fr 1fr .8fr 1.2fr;gap:12px;padding:12px 16px;border-bottom:1px solid #eef2f4;font-size:13px;align-items:center">
+                <div><div style="font-weight:800">{{ s.name }}</div><div style="font-size:11px;color:#94a3b8;font-weight:600">{{ s.sub }}</div></div>
+                <span style="font-weight:700;color:#475569">Every hour</span>
+                <span style="font-weight:800;color:#0e7490">5:00 PM</span>
+                <span style="font-weight:600;color:#64748b">4:00 PM</span>
+                <span><span style="background:#dcfce7;color:#15803d;font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:999px">SUCCEEDED</span></span>
+                <div style="display:flex;gap:6px;justify-content:flex-end">
+                  <button style="border:none;background:#0e7490;color:#fff;font-weight:800;font-size:11.5px;padding:6px 12px;border-radius:8px;font-family:inherit;cursor:pointer">▶ Run</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:11.5px;padding:6px 11px;border-radius:8px;font-family:inherit;cursor:pointer">Edit</button>
+                  <button style="border:1px solid #cbd5e1;background:#fff;color:#475569;font-weight:800;font-size:11.5px;padding:6px 11px;border-radius:8px;font-family:inherit;cursor:pointer">Disable</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { active: 'dashboard' };
+  renderVals() {
+    const a = this.state.active;
+    const items = [
+      {group:'MAIN'},
+      {id:'dashboard', icon:'◉', label:'Dashboard'},
+      {id:'sync', icon:'⇄', label:'Sync Projects', badge:'4'},
+      {group:'SYNC'},
+      {id:'connections', icon:'⌁', label:'Connections', badge:'6'},
+      {id:'schedules', icon:'▦', label:'Schedules', badge:'4'},
+      {group:'TOOLS'},
+      {id:'quick', icon:'⚡', label:'Quick Connect'},
+      {group:'SETTINGS'},
+      {id:'config', icon:'⚙', label:'Configuration'},
+      {id:'idp', icon:'▤', label:'Identity Providers'},
+      {id:'db', icon:'▥', label:'Database'},
+      {id:'audit', icon:'≣', label:'Audit Log'}
+    ];
+    const nav = items.map(n => n.group
+      ? {isGroup:true, isItem:false, label:n.group}
+      : {isGroup:false, isItem:true, icon:n.icon, label:n.label,
+         badge:n.badge || false, badgeBg: a===n.id?'rgba(255,255,255,.25)':'#eef4f6', badgeFg: a===n.id?'#fff':'#64748b',
+         bg: a===n.id?'#0e7490':'transparent', fg: a===n.id?'#fff':'#475569', weight: a===n.id?800:700,
+         select: () => this.setState({active:n.id})});
+    return {
+      nav,
+      showDashboard: a==='dashboard' || !['sync','connections','schedules'].includes(a),
+      showSync: a==='sync', showConnections: a==='connections', showSchedules: a==='schedules',
+      stats: [
+        {label:'TOTAL USERS', value:'0', sub:'across systems', color:'#0e7490'},
+        {label:'CONNECTIONS', value:'6', sub:'5 active', color:'#0e7490'},
+        {label:'SYNC PROJECTS', value:'4', sub:'all enabled', color:'#0e7490'},
+        {label:'RUNS TODAY', value:'54', sub:'0 failed', color:'#15803d'},
+        {label:'LAST RUN', value:'2m', sub:'ago · succeeded', color:'#15803d'},
+        {label:'API TOKENS', value:'0', sub:'none issued', color:'#64748b'}
+      ],
+      projects: [
+        {name:'Certification-Center Graph → IC-ic17 (Core)', from:'Cert-Center Graph', to:'IdentityCenter-ic17', classes:'2 object classes', runs:'5/5 runs', last:'4:00 PM'},
+        {name:'Certification-Center.com M365 → IC-ic17 (Full)', from:'Cert-Center M365', to:'IdentityCenter-ic17', classes:'8 object classes', runs:'4/4 runs', last:'4:00 PM'},
+        {name:'Certification-Center.com → IC-ic17 (Full)', from:'Cert-Center.com', to:'IdentityCenter-ic17', classes:'14 object classes', runs:'4/4 runs', last:'4:00 PM'},
+        {name:'Domain.local → IC-ic17 (Full)', from:'Domain.local', to:'IdentityCenter-ic17', classes:'24 object classes', runs:'6/6 runs', last:'4:00 PM'}
+      ],
+      connections: [
+        {icon:'☁', name:'Certification-Center Graph', type:'AzureResourceGraph', slug:'certification-center-graph', synced:'never synced'},
+        {icon:'▲', name:'Certification-Center.com', type:'EntraID', slug:'certification-center-com', synced:'never synced'},
+        {icon:'▣', name:'Certification-Center.com M365', type:'SharePoint', slug:'certification-center-com-m365', synced:'never synced'},
+        {icon:'⌂', name:'Domain.local', type:'ActiveDirectory', slug:'domain-local', synced:'synced 4:00 PM'},
+        {icon:'◈', name:'IdentityCenter-ic17', type:'IdentityCenter', slug:'identitycenter-ic17', synced:'synced 4:00 PM'}
+      ],
+      schedules: [
+        {name:'Cert-Center Graph → IC-ic17 (Core)', sub:'2 object classes'},
+        {name:'Cert-Center.com M365 → IC-ic17 (Full)', sub:'8 object classes'},
+        {name:'Cert-Center.com → IC-ic17 (Full)', sub:'14 object classes'},
+        {name:'Domain.local → IC-ic17 (Full)', sub:'24 object classes'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

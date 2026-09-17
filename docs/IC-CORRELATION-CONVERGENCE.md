@@ -1,0 +1,13 @@
+# IC / Conduit convergence - CC-01 (2026-09-15)
+
+Jacob confirmed the local source is current and authorized convergence toward Conduit libraries hosted locally inside IC or remotely as Conduit. This first slice converges person matching, which remains an IC governance responsibility. It does not embed Conduit into IC yet.
+
+Owner: IC `CorrelationMatching` via `CorrelationProbeService`, `CorrelationRepository` and `/api/identities/match[/batch]`. Conduit's `IdentityCenterSink` consumes this decision; it does not reimplement scoring. `IConnectorSink.MatchPeopleAsync` supports ordered batches, and the existing orchestrator uses `PersonCreationDispatch` for the actual create-call boundary.
+
+New Conduit requires the updated IC batch endpoint. Upgrade the IC API first. Old/unavailable API, incomplete or malformed batches, contradictory results, missing preceding matches and unresolved outcomes block creation and appear in run logs. Batches are limited to 250; IC refuses incomplete directory reads beyond its 100,000-person bound. Only an explicit Unmatched + CanCreate result permits a following Create step. That flag is a current creation candidate, not a persisted reservation or write authorization. An explicitly configured standalone Create step retains its existing behavior.
+
+Canonical source-connection naming reuses `IdentityCenterSourceName.Sanitize`. IC scopes retained account links to that connection, detects duplicates instead of selecting TOP 1, and retains existing links. Legacy IC manager/provisioning helpers with only a stable key can bridge only an unambiguous account across the tenant.
+
+Verification and remaining paths: [IC acceptance plan](../../IdentityCenter/Documentation/Quality/conduit-correlation-convergence.md). Focused connector tests live in `tests/Conduit.Connectors.IdentityCenter.Tests/IdentityCenterCorrelationTests.cs`; they use fake HTTP and credential stores, with no live database or directory. The additional cross-product in-memory protocol harness and result logs are retained in `../_review/conduit-correlation-20260915`.
+
+Follow-on [CC-02](IC-LOCAL-MAPPING.md) embeds Conduit.Mapping in IC for text transformations, and [CC-03](IC-FIELD-PROJECTION.md) shares field projection/default handling. A shared read-only connector path is next; full connector/orchestrator hosting remains separate. Governance decisions, identity lifecycle persistence and certification evidence stay in IC. This supersedes assumptions that the two products must maintain separate copies of connector and mapping logic; it does not reinstate the retired plan to copy all IC governance columns into Conduit.

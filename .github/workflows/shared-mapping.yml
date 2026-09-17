@@ -1,0 +1,47 @@
+name: Shared mapping and CSV reader contracts
+on:
+  push:
+    paths:
+      - 'src/Conduit.Mapping/**'
+      - 'src/Conduit.Readers.Csv/**'
+      - 'src/Conduit.Connectors.Csv/**'
+      - 'tests/Conduit.Connectors.Csv.Tests/**'
+      - 'src/Conduit.Sync/**'
+      - 'tests/Conduit.Connectors.IdentityCenter.Tests/**'
+      - '.github/workflows/shared-mapping.yml'
+  pull_request:
+    paths:
+      - 'src/Conduit.Mapping/**'
+      - 'src/Conduit.Readers.Csv/**'
+      - 'src/Conduit.Connectors.Csv/**'
+      - 'tests/Conduit.Connectors.Csv.Tests/**'
+      - 'src/Conduit.Sync/**'
+      - 'tests/Conduit.Connectors.IdentityCenter.Tests/**'
+      - '.github/workflows/shared-mapping.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mapping:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify shared mapping and Conduit adapter
+        shell: pwsh
+        run: |
+          $env:LAB_SQL_PASSWORD = $null
+          $env:IC_REQUIRE_LAB_SQL = $null
+          dotnet test tests/Conduit.Connectors.IdentityCenter.Tests/Conduit.Connectors.IdentityCenter.Tests.csproj --configuration Release --filter 'FullyQualifiedName~SharedMappingTests|FullyQualifiedName~SharedFieldProjectionTests|FullyQualifiedName~ConnectorMappingPlanTests' --nologo
+          exit $LASTEXITCODE
+      - name: Verify shared CSV reader and Conduit source
+        shell: pwsh
+        run: |
+          $env:LAB_SQL_PASSWORD = $null
+          $env:IC_REQUIRE_LAB_SQL = $null
+          dotnet test tests/Conduit.Connectors.Csv.Tests/Conduit.Connectors.Csv.Tests.csproj --configuration Release --nologo
+          exit $LASTEXITCODE
