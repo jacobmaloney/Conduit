@@ -15,7 +15,7 @@ public class FullSyncMenuTests
         Assert.Contains("All object classes", page);
         Assert.Contains("FullSyncObjectClasses", page);
         Assert.Contains("ResetForFullSyncAsync", page);
-        Assert.Contains("SetRunningAsync(projectId, Guid.Empty)", page);
+        Assert.Contains("SetRunningAsync(projectId, ownerRunId)", page);
     }
 
     [Fact]

@@ -7,6 +7,8 @@
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Logging
 @using NCrontab
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject SyncProjectRepository ProjectRepo
 @inject SyncCancellationRegistry CancellationRegistry
 @inject IServiceScopeFactory ScopeFactory
@@ -45,119 +47,88 @@
         </div>
     </div>
 
-    @if (loading)
-    {
-        <div class="text-center text-muted py-5">
-            <span class="spinner-border spinner-border-sm me-2"></span> Loading schedules…
-        </div>
-    }
-    else if (loadError is not null)
-    {
-        <div class="alert alert-danger">@loadError</div>
-    }
-    else if (Filtered.Count == 0)
-    {
-        <div class="cx-card text-center text-muted">
-            <i class="fas fa-calendar-times fa-2x mb-2 d-block"></i>
-            No sync projects to schedule yet.
-        </div>
-    }
-    else
-    {
-        <div class="cx-tablecard">
-            <table class="cx-table">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Cadence</th>
-                        <th>Next run</th>
-                        <th>Last run</th>
-                        <th>State</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var p in Filtered)
+    <BrandListTable TItem="SyncProject" Title="Schedules" Items="@Filtered" TotalCount="@Filtered.Count"
+                    PageSize="@Math.Max(1, Filtered.Count)" State="@(loading ? BrandListState.Loading : loadError != null ? BrandListState.Failed : BrandListState.Ready)"
+                    StateReason="@loadError" OnRetry="Reload" EmptyMessage="No sync projects to schedule yet.">
+        <HeaderTemplate>
+            <th scope="col">Name</th><th scope="col">Cadence</th><th scope="col">Next run</th>
+            <th scope="col">Last run</th><th scope="col">State</th><th scope="col">Actions</th>
+        </HeaderTemplate>
+        <RowTemplate Context="p">
+            <td class="nm-cell">
+                <div class="fw-semibold">@p.Name</div>
+                @if (!string.IsNullOrWhiteSpace(p.Description))
+                {
+                    <div class="icb-table-note">@p.Description</div>
+                }
+            </td>
+            <td>
+                @if (string.IsNullOrWhiteSpace(p.CronSchedule))
+                {
+                    <span class="text-muted">Manual only</span>
+                }
+                else
+                {
+                    @Humanize(p.CronSchedule)
+                }
+            </td>
+            <td class="fw-semibold">@NextRunText(p)</td>
+            <td>@LastRunText(p)</td>
+            <td>
+                @if (!p.IsEnabled)
+                {
+                    <BrandBadge Text="Disabled" Tone="BrandBadgeTone.Neutral" Soft="true" />
+                }
+                else if (p.IsRunning || CancellationRegistry.IsRunningHere(p.Id))
+                {
+                    <BrandBadge Text="Running" Tone="BrandBadgeTone.Info" Icon="fas fa-spinner fa-spin" Soft="true" />
+                }
+                else
+                {
+                    <BrandBadge Text="@LastStatusLabel(p.LastRunStatus)" Tone="@StatusTone(p.LastRunStatus)" Soft="true" />
+                }
+            </td>
+            <td>
+                <div class="icb-table-actions">
+                    @if (p.IsEnabled && !p.IsRunning && !CancellationRegistry.IsRunningHere(p.Id))
                     {
-                        <tr>
-                            <td>
-                                <div class="cx-cell-name">@p.Name</div>
-                                @if (!string.IsNullOrWhiteSpace(p.Description))
-                                {
-                                    <div class="cx-cell-sub">@p.Description</div>
-                                }
-                            </td>
-                            <td class="cx-cell-cadence">
-                                @if (string.IsNullOrWhiteSpace(p.CronSchedule))
-                                {
-                                    <span class="text-muted">Manual only</span>
-                                }
-                                else
-                                {
-                                    @Humanize(p.CronSchedule)
-                                }
-                            </td>
-                            <td class="cx-cell-next">@NextRunText(p)</td>
-                            <td class="cx-cell-last">@LastRunText(p)</td>
-                            <td>
-                                @if (!p.IsEnabled)
-                                {
-                                    <span class="cx-pill cx-pill--muted">DISABLED</span>
-                                }
-                                else if (p.IsRunning || CancellationRegistry.IsRunningHere(p.Id))
-                                {
-                                    <span class="cx-pill cx-pill--sched"><i class="fas fa-spinner fa-spin"></i> RUNNING</span>
-                                }
-                                else
-                                {
-                                    <span class="cx-pill @StatePillClass(p.LastRunStatus)">@(LastStatusLabel(p.LastRunStatus).ToUpperInvariant())</span>
-                                }
-                            </td>
-                            <td class="cx-cell-actions">
-                                <div class="cx-actions">
-                                    @if (p.IsEnabled && !p.IsRunning && !CancellationRegistry.IsRunningHere(p.Id))
-                                    {
-                                        <button class="cx-btn cx-btn--run cx-btn--xs" @onclick="() => RunNow(p)" disabled="@(busyId is not null)">
-                                            @if (runningRowId == p.Id)
-                                            {
-                                                <span class="spinner-border spinner-border-sm"></span>
-                                            }
-                                            else
-                                            {
-                                                <i class="fas fa-play"></i>
-                                            }
-                                            Run
-                                        </button>
-                                    }
-                                    else if (p.IsRunning || CancellationRegistry.IsRunningHere(p.Id))
-                                    {
-                                        <button class="cx-btn cx-btn--xs" disabled>
-                                            <i class="fas fa-spinner fa-spin"></i> Running…
-                                        </button>
-                                    }
-                                    <button class="cx-btn cx-btn--xs" @onclick="() => OpenEdit(p)" disabled="@(busyId == p.Id)">
-                                        <i class="fas fa-clock"></i> Edit
-                                    </button>
-                                    @if (p.IsEnabled)
-                                    {
-                                        <button class="cx-btn cx-btn--xs" @onclick="() => ToggleEnabled(p)" disabled="@(busyId == p.Id)">
-                                            <i class="fas fa-pause"></i> Disable
-                                        </button>
-                                    }
-                                    else
-                                    {
-                                        <button class="cx-btn cx-btn--xs" @onclick="() => ToggleEnabled(p)" disabled="@(busyId == p.Id)">
-                                            <i class="fas fa-play"></i> Enable
-                                        </button>
-                                    }
-                                </div>
-                            </td>
-                        </tr>
+                        <button type="button" class="icb-list-action" @onclick="() => RunNow(p)" disabled="@(busyId is not null)">
+                            @if (runningRowId == p.Id)
+                            {
+                                <span class="spinner-border spinner-border-sm"></span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-play"></i>
+                            }
+                            Run
+                        </button>
                     }
-                </tbody>
-            </table>
-        </div>
-    }
+                    else if (p.IsRunning || CancellationRegistry.IsRunningHere(p.Id))
+                    {
+                        <button type="button" class="icb-list-action" disabled>
+                            <i class="fas fa-spinner fa-spin"></i> Running…
+                        </button>
+                    }
+                    <button type="button" class="icb-list-action" @onclick="() => OpenEdit(p)" disabled="@(busyId == p.Id)">
+                        <i class="fas fa-clock"></i> Edit
+                    </button>
+                    @if (p.IsEnabled)
+                    {
+                        <button type="button" class="icb-list-action" @onclick="() => ToggleEnabled(p)" disabled="@(busyId == p.Id)">
+                            <i class="fas fa-pause"></i> Disable
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" class="icb-list-action" @onclick="() => ToggleEnabled(p)" disabled="@(busyId == p.Id)">
+                            <i class="fas fa-play"></i> Enable
+                        </button>
+                    }
+                </div>
+            </td>
+        </RowTemplate>
+    </BrandListTable>
 </div>
 
 @if (assignOpen)
@@ -333,15 +304,12 @@
         busyId = projectId;
         lastRunId = null;
 
-        // Pre-claim the single-run flag (atomic 0→1 CAS) BEFORE firing. Guid.Empty
-        // is the placeholder run id — the orchestrator stamps the real one once the
-        // run row exists. A lost CAS means a run started between the dialog opening
-        // and Confirm (another operator, the scheduler, the API): show the
-        // already-running message and do NOT fire a second run.
+        // Claim a unique run owner before dispatch; a concurrent winner is refused.
+        var ownerRunId = Guid.NewGuid();
         bool claimed;
         try
         {
-            claimed = await ProjectRepo.SetRunningAsync(projectId, Guid.Empty);
+            claimed = await ProjectRepo.SetRunningAsync(projectId, ownerRunId);
         }
         catch (Exception ex)
         {
@@ -372,7 +340,7 @@
                 var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
                 // preClaimed: this page won the CAS above; the orchestrator owns the
                 // release from here on every exit path.
-                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None, preClaimed: true);
+                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None, claimedRunId: ownerRunId);
             }
             catch (Exception ex)
             {
@@ -387,7 +355,7 @@
                 {
                     using var cleanupScope = ScopeFactory.CreateScope();
                     await cleanupScope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
-                        .ClearRunningAsync(projectId);
+                        .ClearRunningAsync(projectId, ownerRunId);
                 }
                 catch (Exception clearEx)
                 {
@@ -607,13 +575,13 @@
     private int FailingCount => projects.Count(p => p.LastRunStatus == "Failed");
 
     // Redesign state-pill colour by last run status.
-    private static string StatePillClass(string? status) => status switch
+    private static BrandBadgeTone StatusTone(string? status) => status switch
     {
-        "Succeeded"      => "cx-pill--ok",
-        "Failed"         => "cx-pill--fail",
-        "PartialSuccess" => "cx-pill--warn",
-        "Cancelled"      => "cx-pill--warn",
-        _                => "cx-pill--muted",
+        "Succeeded"      => BrandBadgeTone.Success,
+        "Failed"         => BrandBadgeTone.Danger,
+        "PartialSuccess" => BrandBadgeTone.Warning,
+        "Cancelled"      => BrandBadgeTone.Warning,
+        _                => BrandBadgeTone.Neutral,
     };
 
     // "PartialSuccess" is a raw enum from the orchestrator; show the friendly label

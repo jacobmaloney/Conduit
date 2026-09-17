@@ -189,6 +189,25 @@ public sealed class ActiveDirectorySink : IConnectorSink
 
     // ─── User upsert ───────────────────────────────────────────────────────
 
+    private static readonly string[][] UserWriteFields = [
+        ["displayName"], ["givenName"], ["sn", "familyName"], ["mail", "email"], ["title"],
+        ["department"], ["company"], ["employeeID", "employeeNumber"], ["telephoneNumber", "phoneNumber"]
+    ];
+
+    public static Conduit.SourceBrowsing.SourceMappingSchema? MappingSchema(string objectClass)
+    {
+        string[] names;
+        if (objectClass.Equals("User", StringComparison.OrdinalIgnoreCase))
+            names = UserWriteFields.SelectMany(f => f).Concat(["sAMAccountName", "userName", "userPrincipalName", "cn", "active"]).ToArray();
+        else if (objectClass.Equals("Group", StringComparison.OrdinalIgnoreCase))
+            names = ["sAMAccountName", "displayName", "cn", "description", "member", "members"];
+        else return null;
+        return new("Active Directory " + objectClass, names.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n)
+            .Select(n => new Conduit.SourceBrowsing.SourceMappingTarget(n, "", n == "active" ? "Boolean" : "String", AliasOf:
+                n == "userName" ? "sAMAccountName" : n == "members" ? "member" : UserWriteFields.FirstOrDefault(f => f.Contains(n))?.First())).ToArray(),
+            "Fields consumed by the AD connector's user/group upsert. Directory schema extensions, permissions, creation requirements and full membership changes are checked at execution. Secret mappings require the project editor.");
+    }
+
     private SinkWriteResult UpsertUser(LdapConnection conn, ConnectorObject obj, bool isSecure)
     {
         string? sam = GetStr(obj, "sAMAccountName") ?? GetStr(obj, "userName") ?? GetStr(obj, "UserName");
@@ -224,15 +243,7 @@ public sealed class ActiveDirectorySink : IConnectorSink
             new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "user" }));
         addRequest.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam));
         if (!string.IsNullOrEmpty(upn)) addRequest.Attributes.Add(new DirectoryAttribute("userPrincipalName", upn));
-        AppendIfPresent(addRequest, obj, "displayName");
-        AppendIfPresent(addRequest, obj, "givenName");
-        AppendIfPresent(addRequest, obj, "sn", "familyName");
-        AppendIfPresent(addRequest, obj, "mail", "email");
-        AppendIfPresent(addRequest, obj, "title");
-        AppendIfPresent(addRequest, obj, "department");
-        AppendIfPresent(addRequest, obj, "company");
-        AppendIfPresent(addRequest, obj, "employeeID", "employeeNumber");
-        AppendIfPresent(addRequest, obj, "telephoneNumber", "phoneNumber");
+        foreach (var field in UserWriteFields) AppendIfPresent(addRequest, obj, field);
 
         // New accounts are created disabled by default until a password lands;
         // we'll flip the enable bit after the password write below.
@@ -263,15 +274,7 @@ public sealed class ActiveDirectorySink : IConnectorSink
     private void ModifyUser(LdapConnection conn, string dn, ConnectorObject obj, bool isSecure)
     {
         var mods = new List<DirectoryAttributeModification>();
-        AddReplace(mods, obj, "displayName");
-        AddReplace(mods, obj, "givenName");
-        AddReplace(mods, obj, "sn", "familyName");
-        AddReplace(mods, obj, "mail", "email");
-        AddReplace(mods, obj, "title");
-        AddReplace(mods, obj, "department");
-        AddReplace(mods, obj, "company");
-        AddReplace(mods, obj, "employeeID", "employeeNumber");
-        AddReplace(mods, obj, "telephoneNumber", "phoneNumber");
+        foreach (var field in UserWriteFields) AddReplace(mods, obj, field);
         AddReplace(mods, obj, "userPrincipalName", "UserPrincipalName");
 
         if (mods.Count > 0)

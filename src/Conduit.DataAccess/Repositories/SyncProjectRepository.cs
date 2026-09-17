@@ -87,8 +87,9 @@ public class SyncProjectRepository : BaseRepository
     /// the project's single-run flag first, preventing a scheduler/manual run from
     /// advancing a cursor between this reset and execution.
     /// </summary>
-    public async Task ResetForFullSyncAsync(Guid projectId, Guid sinkTenantId, string? objectClass)
+    public async Task ResetForFullSyncAsync(Guid projectId, Guid sinkTenantId, string? objectClass, Guid ownerRunId)
     {
+        SyncRunOwnership.RequireOwner(ownerRunId);
         var canonicalClass = string.IsNullOrWhiteSpace(objectClass)
             ? null
             : objectClass.Trim().ToLowerInvariant();
@@ -97,6 +98,12 @@ public class SyncProjectRepository : BaseRepository
         using var tx = conn.BeginTransaction();
         try
         {
+            var owns = await conn.ExecuteScalarAsync<int>(@"
+                SELECT COUNT(*) FROM SyncProjects WITH (UPDLOCK,HOLDLOCK)
+                 WHERE Id = @ProjectId AND IsRunning = 1 AND LastRunId = @OwnerRunId;",
+                new { ProjectId = projectId, OwnerRunId = ownerRunId }, tx);
+            if (owns != 1)
+                throw new SyncRunOwnershipException("RunOwnershipLost", "Full-sync state was not reset because this run no longer owns the project.");
             await conn.ExecuteAsync(@"
                 UPDATE s
                    SET s.IncrementalCursor = NULL,
@@ -351,16 +358,10 @@ public class SyncProjectRepository : BaseRepository
             DELETE FROM SyncProjects      WHERE Id = @Id;",
             new { Id = id });
 
-    /// <summary>
-    /// Atomic compare-and-swap of <c>IsRunning</c> from 0 → 1. Returns
-    /// <c>true</c> when this caller won the swap (row updated), <c>false</c>
-    /// when the project was already running. The controller calls this BEFORE
-    /// firing the orchestrator to make manual Run-Now race-safe; the
-    /// orchestrator also calls it on entry and treats a <c>false</c> return as
-    /// a no-op (the row's already in the right state from the controller).
-    /// </summary>
-    public async Task<bool> SetRunningAsync(Guid projectId, Guid runId)
+    /// <summary>Atomically admits one uniquely identified run. Manual callers may run disabled schedules.</summary>
+    public async Task<bool> SetRunningAsync(Guid projectId, Guid runId, bool requireEnabled = false)
     {
+        SyncRunOwnership.RequireOwner(runId);
         var rows = await ExecuteScalarAsync<int>(@"
             UPDATE SyncProjects
                SET IsRunning = 1,
@@ -369,54 +370,67 @@ public class SyncProjectRepository : BaseRepository
                    LastRunStatus = 'Running',
                    TotalRuns = TotalRuns + 1,
                    LastModified = SYSUTCDATETIME()
-             WHERE Id = @ProjectId
-               AND IsRunning = 0;
+             WHERE Id = @ProjectId AND IsRunning = 0
+               AND (@RequireEnabled = 0 OR IsEnabled = 1);
             SELECT @@ROWCOUNT;",
-            new { ProjectId = projectId, RunId = runId });
+            new { ProjectId = projectId, RunId = runId, RequireEnabled = requireEnabled });
         return rows > 0;
     }
 
-    /// <summary>
-    /// Stamps the real SyncRun id onto a project AFTER a pre-claimed CAS. The
-    /// pre-claim happens before the run row exists, so callers CAS with a
-    /// placeholder id; the orchestrator calls this once the run row is created.
-    /// Guarded on IsRunning = 1 so a finished/force-released project is never
-    /// retro-stamped.
-    /// </summary>
-    public Task StampLastRunIdAsync(Guid projectId, Guid runId) =>
-        ExecuteAsync(@"
-            UPDATE SyncProjects
-               SET LastRunId = @RunId
-             WHERE Id = @ProjectId
-               AND IsRunning = 1;",
-            new { ProjectId = projectId, RunId = runId });
+    /// <summary>Only the admission owner can release its claim; late cleanup cannot release another run.</summary>
+    public Task ClearRunningAsync(Guid projectId, Guid ownerRunId)
+    {
+        SyncRunOwnership.RequireOwner(ownerRunId);
+        return ExecuteAsync(@"
+            UPDATE SyncProjects SET IsRunning = 0, LastModified = SYSUTCDATETIME()
+             WHERE Id = @ProjectId AND IsRunning = 1 AND LastRunId = @OwnerRunId;",
+            new { ProjectId = projectId, OwnerRunId = ownerRunId });
+    }
 
-    /// <summary>
-    /// Releases the <c>IsRunning</c> flag for a project given ONLY its id, with
-    /// no run-stats stamping. Used by the orchestrator's early-failure guard
-    /// (Worf HIGH-1) when a run row may not exist yet (e.g. GetById returned
-    /// null or CreateAsync threw) — in that case there is nothing to stamp, we
-    /// just need the project unstuck so the next Run-Now isn't a permanent 409.
-    /// </summary>
-    public Task ClearRunningAsync(Guid projectId) =>
-        ExecuteAsync(@"
-            UPDATE SyncProjects
-               SET IsRunning = 0,
-                   LastModified = SYSUTCDATETIME()
-             WHERE Id = @ProjectId;",
-            new { ProjectId = projectId });
-
-    /// <summary>Stamps the post-run state on the project.</summary>
-    public Task FinishRunAsync(Guid projectId, string status) =>
-        ExecuteAsync(@"
+    /// <summary>Owner-fenced terminal update; LastRunId remains available to history readers.</summary>
+    public Task FinishRunAsync(Guid projectId, Guid ownerRunId, string status)
+    {
+        SyncRunOwnership.RequireOwner(ownerRunId);
+        return ExecuteAsync(@"
             UPDATE SyncProjects
                SET IsRunning = 0,
                    LastRunStatus = @Status,
                    SuccessfulRuns = SuccessfulRuns + CASE WHEN @Status = 'Succeeded' THEN 1 ELSE 0 END,
-                   FailedRuns     = FailedRuns     + CASE WHEN @Status = 'Failed'    THEN 1 ELSE 0 END,
+                   FailedRuns = FailedRuns + CASE WHEN @Status = 'Failed' THEN 1 ELSE 0 END,
                    LastModified = SYSUTCDATETIME()
-             WHERE Id = @ProjectId;",
-            new { ProjectId = projectId, Status = status });
+             WHERE Id = @ProjectId AND IsRunning = 1 AND LastRunId = @OwnerRunId;",
+            new { ProjectId = projectId, OwnerRunId = ownerRunId, Status = status });
+    }
+
+    /// <summary>
+    /// Repairs a flag only after the exact owner has durably finished. Running/missing
+    /// owners require a future lease-based recovery mechanism, never process-local inference.
+    /// </summary>
+    public async Task RecoverCompletedRunAsync(Guid projectId, Guid expectedRunId)
+    {
+        if (expectedRunId == Guid.Empty)
+            throw new SyncRunOwnershipException("RunOwnershipUnverified", "A missing admission owner cannot be recovered without proof of completion.");
+        var project = await GetByIdAsync(projectId)
+            ?? throw new SyncRunOwnershipException("RunOwnershipUnverified", "The project is no longer available.");
+        var owner = await QuerySingleOrDefaultAsync<SyncRun>(
+            "SELECT * FROM SyncRuns WHERE Id = @RunId AND SyncProjectId = @ProjectId",
+            new { RunId = expectedRunId, ProjectId = projectId });
+        SyncRunOwnership.RequireRecoverable(project, owner, expectedRunId);
+        // Recheck the whole proof in the write itself. No history rows are rewritten.
+        var rows = await ExecuteAsync(@"
+            UPDATE p
+               SET IsRunning = 0, LastRunStatus = r.Status,
+                   SuccessfulRuns = SuccessfulRuns + CASE WHEN r.Status = 'Succeeded' THEN 1 ELSE 0 END,
+                   FailedRuns = FailedRuns + CASE WHEN r.Status = 'Failed' THEN 1 ELSE 0 END,
+                   LastModified = SYSUTCDATETIME()
+              FROM SyncProjects p
+              JOIN SyncRuns r WITH (UPDLOCK,HOLDLOCK) ON r.Id = p.LastRunId AND r.SyncProjectId = p.Id
+             WHERE p.Id = @ProjectId AND p.IsRunning = 1 AND p.LastRunId = @RunId
+               AND r.Status IN @TerminalStatuses;",
+            new { ProjectId = projectId, RunId = expectedRunId, SyncRunOwnership.TerminalStatuses });
+        if (rows != 1)
+            throw new SyncRunOwnershipException("RunOwnershipUnverified", "The persisted owner changed; recovery made no change. Reload the project.");
+    }
 
     // ─── SyncProjectScope ────────────────────────────────────────────────
 

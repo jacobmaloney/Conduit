@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Conduit.Core\Conduit.Core.csproj" />
     <ProjectReference Include="..\Conduit.Sync\Conduit.Sync.csproj" />
+    <ProjectReference Include="..\Conduit.Readers.ActiveDirectory\Conduit.Readers.ActiveDirectory.csproj" />
   </ItemGroup>
 
 </Project>

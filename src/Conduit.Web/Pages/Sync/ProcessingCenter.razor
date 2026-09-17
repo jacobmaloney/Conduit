@@ -105,7 +105,7 @@
                         <tbody>
                             @foreach (var r in runningRuns)
                             {
-                                var cancellable = CancellationRegistry.IsRunningHere(r.SyncProjectId);
+                                var cancellable = CancellationRegistry.IsRunningHere(r.SyncProjectId, r.Id);
                                 <tr>
                                     <td>@ProjectName(r.SyncProjectId)</td>
                                     <td><span class="badge bg-secondary">@r.TriggeredBy</span></td>
@@ -488,7 +488,7 @@
             // Same cancellation path Stop Sync uses on SyncProjects — trip the CTS
             // the orchestrator threads through its sink loop. A false return means
             // the run isn't executing in THIS process (single-node honesty).
-            var signalled = CancellationRegistry.RequestCancel(run.SyncProjectId);
+            var signalled = CancellationRegistry.RequestCancel(run.SyncProjectId, run.Id);
             if (signalled)
             {
                 var name = ProjectName(run.SyncProjectId);
@@ -496,7 +496,7 @@
             }
             else
             {
-                stopError = "No in-flight run was found for this project in this process. It may have already finished — refresh to confirm.";
+                stopError = "RunOwnershipUnverified: this exact run is not cancellable in this process. It may have already finished — refresh to confirm.";
             }
             await ReloadAll();
         }

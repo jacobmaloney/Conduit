@@ -32,7 +32,7 @@ namespace Conduit.Sync.Orchestration;
 ///
 /// Run ownership (Fix 3): the tick pre-claims the project's IsRunning flag via
 /// the atomic CAS BEFORE firing; a lost CAS means another run is in flight and
-/// the tick skips. The fired run gets preClaimed: true so the orchestrator
+/// the tick skips. The fired run gets claimedRunId: ownerRunId so the orchestrator
 /// honors (and releases) the claim instead of re-claiming.
 /// </summary>
 public sealed class ScheduledSyncRunnerJob : IScheduledJob
@@ -65,14 +65,13 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
             if (project.IsRunning) continue;
             if (!IsDue(project.CronSchedule, project.LastRunAt, now)) continue;
 
-            // Pre-claim the single-run flag (atomic 0→1 CAS). Guid.Empty is the
-            // placeholder run id — the orchestrator stamps the real one once the
-            // run row exists. A lost CAS = another run started between our read
-            // and now; skip this tick.
+            // Admit a unique run owner, rechecking enabled state atomically.
+            // Due-occurrence arbitration remains separate from this running guard.
+            var ownerRunId = Guid.NewGuid();
             bool claimed;
             try
             {
-                claimed = await _projectRepo.SetRunningAsync(project.Id, Guid.Empty);
+                claimed = await _projectRepo.SetRunningAsync(project.Id, ownerRunId, requireEnabled: true);
             }
             catch (Exception ex)
             {
@@ -100,7 +99,7 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
                 try
                 {
                     var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
-                    await orchestrator.ExecuteAsync(projectId, "Scheduled", CancellationToken.None, preClaimed: true);
+                    await orchestrator.ExecuteAsync(projectId, "Scheduled", CancellationToken.None, claimedRunId: ownerRunId);
                 }
                 catch (Exception ex)
                 {
@@ -113,7 +112,7 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
                     try
                     {
                         await scope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
-                            .ClearRunningAsync(projectId);
+                            .ClearRunningAsync(projectId, ownerRunId);
                     }
                     catch (Exception clearEx)
                     {

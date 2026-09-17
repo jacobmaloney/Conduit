@@ -374,9 +374,9 @@ namespace Conduit.Web.Controllers
 
             // Atomic IsRunning 0 → 1 claim BEFORE firing the orchestrator
             // (Worf HIGH-1). Two concurrent POSTs cannot both win this swap;
-            // the loser gets 409. The orchestrator's own SetRunningAsync call
-            // becomes a no-op for the winner (the SQL guard already matched).
-            var claimed = await _projects.SetRunningAsync(projectId, Guid.Empty).ConfigureAwait(false);
+            // the loser gets 409. The winner passes its exact owner to execution.
+            var ownerRunId = Guid.NewGuid();
+            var claimed = await _projects.SetRunningAsync(projectId, ownerRunId).ConfigureAwait(false);
             if (!claimed)
                 return Conflict(new { error = "Project run already in progress" });
 
@@ -390,7 +390,7 @@ namespace Conduit.Web.Controllers
                     // preClaimed: this controller won the IsRunning CAS above, so
                     // the orchestrator must not re-claim (it would see the flag
                     // already set and skip its own run).
-                    await _orchestrator.ExecuteAsync(projectId, triggeredBy, CancellationToken.None, preClaimed: true)
+                    await _orchestrator.ExecuteAsync(projectId, triggeredBy, CancellationToken.None, claimedRunId: ownerRunId)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -407,7 +407,7 @@ namespace Conduit.Web.Controllers
                     // never want the cleanup to mask the original error.
                     try
                     {
-                        await _projects.ClearRunningAsync(projectId).ConfigureAwait(false);
+                        await _projects.ClearRunningAsync(projectId, ownerRunId).ConfigureAwait(false);
                     }
                     catch (Exception clearEx)
                     {

@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Conduit.Core.SyncModels;
+using Conduit.Readers.ActiveDirectory;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Security;
@@ -23,7 +24,7 @@ namespace Conduit.Connectors.ActiveDirectory;
 /// BaseDN. Credentials come from ConnectionCredentials (CredentialName="ldap"),
 /// stored as JSON {"Username":"...","Password":"..."}.
 ///
-/// Phase 1A keeps it deliberately small: simple bind, paged search, one
+/// The host owns the authenticated bind; the shared reader pages one
 /// objectClass at a time, all attributes returned dropped into ConnectorObject.
 /// </summary>
 public sealed class ActiveDirectorySource : IConnectorSource
@@ -212,7 +213,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
             "user"     => $"(&(isDeleted=TRUE)(objectClass=user)(whenChanged>={generalized}))",
             "group"    => $"(&(isDeleted=TRUE)(objectClass=group)(whenChanged>={generalized}))",
             "computer" => $"(&(isDeleted=TRUE)(objectClass=computer)(whenChanged>={generalized}))",
-            _          => $"(&(isDeleted=TRUE)(objectClass={EscapeLdapFilterValue(objectClass)})(whenChanged>={generalized}))"
+            _          => $"(&(isDeleted=TRUE)(objectClass={AdQuery.Escape(objectClass)})(whenChanged>={generalized}))"
         };
 
         // Tombstones strip most attributes — only objectGUID, sAMAccountName, lastKnownParent etc remain.
@@ -302,250 +303,39 @@ public sealed class ActiveDirectorySource : IConnectorSource
     }
 
     private async IAsyncEnumerable<ConnectorObject> EnumerateInternalAsync(
-        string objectClass,
-        SyncProjectScope scope,
-        string? sinceIsoUtc,
-        AdWatermark watermark,
-        ReadCompletion? completion,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        string objectClass, SyncProjectScope scope, string? sinceIsoUtc, AdWatermark watermark,
+        ReadCompletion? completion, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        Conduit.SourceBrowsing.SourceBrowseScope.ValidateLists(scope.IncludedBaseDNs, scope.ExcludedBaseDNs);
         var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
-            ?? throw new InvalidOperationException($"Tenant {_tenantId} not found.");
-
+            ?? throw new InvalidOperationException("The source connection is unavailable.");
+        var creds = await ReadCredsAsync() ?? throw new InvalidOperationException("The selected source LDAP credential is unavailable.");
+        cancellationToken.ThrowIfCancellationRequested();
         var (host, port) = ParseHostPort(tenant.Domain);
-        var baseFilter = !string.IsNullOrWhiteSpace(scope.LdapFilter)
-            ? scope.LdapFilter!
-            : DefaultFilterForClass(objectClass);
-        // Phase 2: splice whenChanged>=cursor onto the base filter when incremental.
-        var ldapFilter = !string.IsNullOrWhiteSpace(sinceIsoUtc)
-            ? $"(&{baseFilter}(whenChanged>={ToGeneralizedTime(sinceIsoUtc!)}))"
-            : baseFilter;
-
-        // IC-parity multi-select scope. GetIncludedBaseList() returns the explicit
-        // Included DN set (or the legacy single BaseDN, or empty). Each Included DN
-        // is read as a Subtree. Excluded DNs prune any entry at/under them — exactly
-        // IC's SearchBases / ExcludedSearchBases model.
-        var includedBases = OptimizeBases(scope.GetIncludedBaseList());
-        var excludedBases = scope.GetExcludedBaseList();
-
-        var creds = await ReadCredsAsync()
-            ?? throw new InvalidOperationException(
-                $"No 'ldap' credential stored for tenant {_tenantId}. Save credentials before running.");
-
-        using var connection = CreateBoundConnection(host, port, creds);
-
-        // IC-parity empty-scope fallback. IC's DirectoryQueryService treats a blank
-        // SearchBase as "sync the whole domain" by resolving the directory's
-        // defaultNamingContext from RootDSE at run time (DirectoryQueryService
-        // .GetDefaultNamingContextAnonymous). Conduit auto-generated projects (and
-        // any manual project where the operator picked no container) arrive with an
-        // empty included set, so mirror IC here rather than hard-failing: bind, read
-        // RootDSE.defaultNamingContext, and read the whole domain root as a Subtree.
-        // Only when the directory advertises no naming context do we throw.
-        if (includedBases.Count == 0)
+        using var connection = await Task.Run(() => CreateBoundConnection(host, port, creds), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var filter = string.IsNullOrWhiteSpace(scope.LdapFilter) ? AdQuery.FilterForClass(objectClass) : scope.LdapFilter;
+        if (!string.IsNullOrWhiteSpace(sinceIsoUtc)) filter = $"(&{filter}(whenChanged>={ToGeneralizedTime(sinceIsoUtc)}))";
+        var query = new AdQuery
         {
-            var rootDn = ResolveDefaultNamingContext(connection);
-            if (string.IsNullOrWhiteSpace(rootDn))
-                throw new InvalidOperationException(
-                    "AD source has no included Base DN and the directory did not advertise a defaultNamingContext on RootDSE. Pick an Included container in the scope tree.");
-            _logger.LogInformation(
-                "AD source for tenant {TenantId} had an empty scope; defaulting to the domain root {RootDn} (RootDSE defaultNamingContext), matching IC's whole-domain default.",
-                _tenantId, rootDn);
-            includedBases = new List<string> { rootDn! };
-        }
-
-        // RFC 2696 paged results. PageSize bounded by scope; default 1000.
-        var pageSize = scope.PageSize > 0 ? scope.PageSize : 1000;
-        var emitted = 0;
-
-        // Attribute projection. When the orchestrator stamped the step's mapped
-        // SOURCE attributes onto scope.RequestedAttributes, request ONLY those plus
-        // the structural floor — NOT all attributes. Pulling every attribute (the
-        // old attributeList:null) costs ~4x on the wire and forces the DC to
-        // materialize expensive constructed/operational attributes per entry, and
-        // makes EntryToConnectorObject iterate a far larger attribute bag. A null
-        // hint preserves the old read-all behavior for any caller that doesn't set
-        // it. The structural set is ALWAYS unioned in so trimming can't break
-        // SourceId / cursor / class gating.
-        string[]? attributeList = null;
-        if (scope.RequestedAttributes is { Count: > 0 })
+            IncludedBases = scope.GetIncludedBaseList(), ExcludedBases = scope.GetExcludedBaseList(), Filter = filter,
+            PageSize = Math.Clamp(scope.PageSize > 0 ? scope.PageSize : 1000, 1, 1000), MaximumRows = scope.MaxObjects,
+            Attributes = scope.RequestedAttributes is { Count: > 0 }
+                ? scope.RequestedAttributes.Where(a => !string.IsNullOrWhiteSpace(a)).Concat(StructuralAttributes).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : []
+        };
+        var state = new AdReadState();
+        await foreach (var record in AdReader.ReadAsync(new LdapSession(connection), query, state, cancellationToken))
         {
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var a in scope.RequestedAttributes)
-                if (!string.IsNullOrWhiteSpace(a)) set.Add(a.Trim());
-            foreach (var s in StructuralAttributes) set.Add(s);
-            attributeList = set.ToArray();
-            _logger.LogInformation(
-                "AD source for tenant {TenantId} requesting a projected {Count}-attribute set (mapped + structural) for class {Class} instead of all attributes.",
-                _tenantId, attributeList.Length, objectClass);
+            if (record.Attributes.TryGetValue("whenChanged", out var changed) && changed is string raw && raw.Length >= 14 &&
+                DateTime.TryParseExact(raw[..14], "yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var date))
+                watermark.Observe(date);
+            yield return EntryToConnectorObject(record, objectClass);
         }
-        else
-        {
-            _logger.LogInformation(
-                "AD source for tenant {TenantId} has no attribute projection hint; reading ALL attributes for class {Class} (slower).",
-                _tenantId, objectClass);
-        }
-
-        // Walk each Included base in turn. The complete-read sentinel may ONLY be
-        // set after the FINAL base drains to its natural LDAP terminus, so a partial
-        // drain of any earlier base never green-lights tombstones.
-        for (int baseIdx = 0; baseIdx < includedBases.Count; baseIdx++)
-        {
-            var searchBase = includedBases[baseIdx];
-            var isLastBase = baseIdx == includedBases.Count - 1;
-            var pageControl = new PageResultRequestControl(pageSize);
-
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var request = new SearchRequest(
-                    searchBase,
-                    ldapFilter,
-                    SearchScope.Subtree,
-                    attributeList);   // null = all attributes; else mapped + structural projection
-                request.Controls.Add(pageControl);
-
-                SearchResponse response;
-                try
-                {
-                    response = (SearchResponse)connection.SendRequest(request);
-                }
-                catch (DirectoryOperationException ex)
-                {
-                    _logger.LogError(ex, "LDAP search failed for tenant {TenantId} (base {Base}, filter {Filter})",
-                        _tenantId, searchBase, ldapFilter);
-                    throw;
-                }
-
-                foreach (SearchResultEntry entry in response.Entries)
-                {
-                    if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value)
-                        // Deliberate early exit on the MaxObjects cap. This is a TRUNCATED
-                        // read, not a complete drain — leave completion.IsComplete FALSE so
-                        // the orchestrator does NOT tombstone against a partial population.
-                        yield break;
-
-                    // Blocked-subtree prune: drop any entry whose DN is at/under an
-                    // Excluded base, even though it sits under an Included base. This
-                    // is what makes "Explicitly Blocked" functional, not cosmetic.
-                    if (IsInExcludedScope(entry.DistinguishedName, excludedBases))
-                        continue;
-
-                    // Phase 2 cursor: track max whenChanged seen.
-                    if (entry.Attributes.Contains("whenChanged"))
-                    {
-                        var raw = entry.Attributes["whenChanged"][0]?.ToString();
-                        if (!string.IsNullOrEmpty(raw))
-                        {
-                            // AD generalizedTime: yyyyMMddHHmmss.0Z
-                            if (raw.Length >= 14 && DateTime.TryParseExact(raw.Substring(0, 14),
-                                "yyyyMMddHHmmss", null,
-                                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
-                                out var dt))
-                            {
-                                watermark.Observe(dt);
-                            }
-                        }
-                    }
-
-                    var obj = EntryToConnectorObject(entry, objectClass);
-                    emitted++;
-                    yield return obj;
-                }
-
-                // Advance the cookie. Empty cookie = last page of THIS base.
-                var responseControl = FindPageResponseControl(response.Controls);
-                if (responseControl is null || responseControl.Cookie.Length == 0)
-                {
-                    // This base drained naturally. Only the LAST base's natural
-                    // terminus proves the WHOLE read is complete — that is the ONLY
-                    // site that may set the sentinel. (A thrown DirectoryOperationException
-                    // rethrows before reaching here; a MaxObjects truncation yield-breaks
-                    // before reaching here; a cancellation throws OperationCanceledException.)
-                    if (isLastBase && completion is not null) completion.IsComplete = true;
-                    break; // move to the next Included base (or finish)
-                }
-                pageControl.Cookie = responseControl.Cookie;
-            }
-        }
+        // Never set this on early consumer disposal, cancellation, failure, missing cookies or truncated ranges.
+        if (completion != null) completion.IsComplete = state.IsComplete;
     }
-
-    /// <summary>
-    /// IC-parity redundant-child removal. When an Included base is already covered
-    /// by a shorter (ancestor) Included base, drop it so its subtree isn't read
-    /// twice. Mirrors IC's DirectoryQueryService optimization.
-    /// </summary>
-    private static List<string> OptimizeBases(List<string> bases)
-    {
-        var optimized = new List<string>();
-        foreach (var b in bases.Where(s => !string.IsNullOrWhiteSpace(s))
-                                .Select(s => s.Trim())
-                                .OrderBy(s => s.Length))
-        {
-            bool redundant = optimized.Any(parent =>
-                b.EndsWith(parent, StringComparison.OrdinalIgnoreCase) &&
-                b.Length > parent.Length);
-            if (!redundant)
-                optimized.Add(b);
-        }
-        return optimized;
-    }
-
-    /// <summary>
-    /// IC-parity whole-domain default. When a scope carries no included Base DN,
-    /// resolve the directory's domain root by reading RootDSE.defaultNamingContext
-    /// (with rootDomainNamingContext as the fallback, exactly like IC's
-    /// DirectoryQueryService.GetDefaultNamingContextAnonymous). Returns null when
-    /// neither attribute is advertised so the caller can fail loud rather than
-    /// silently enumerate nothing. The connection is already bound.
-    /// </summary>
-    private string? ResolveDefaultNamingContext(LdapConnection connection)
-    {
-        try
-        {
-            var rootReq = new SearchRequest("", "(objectClass=*)", SearchScope.Base,
-                new[] { "defaultNamingContext", "rootDomainNamingContext" });
-            var rootResp = (SearchResponse)connection.SendRequest(rootReq);
-            if (rootResp.Entries.Count == 0) return null;
-            var attrs = rootResp.Entries[0].Attributes;
-            if (attrs.Contains("defaultNamingContext"))
-            {
-                var v = attrs["defaultNamingContext"][0]?.ToString();
-                if (!string.IsNullOrWhiteSpace(v)) return v;
-            }
-            if (attrs.Contains("rootDomainNamingContext"))
-            {
-                var v = attrs["rootDomainNamingContext"][0]?.ToString();
-                if (!string.IsNullOrWhiteSpace(v)) return v;
-            }
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "AD RootDSE defaultNamingContext probe failed for tenant {TenantId}", _tenantId);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// IC-parity blocked-subtree test: true when <paramref name="dn"/> is at or
-    /// under any Excluded base (case-insensitive DN-suffix match). Mirrors IC's
-    /// DirectorySchemaService.IsInExcludedScope.
-    /// </summary>
-    private static bool IsInExcludedScope(string? dn, List<string> excludedBases)
-    {
-        if (string.IsNullOrEmpty(dn) || excludedBases.Count == 0)
-            return false;
-        foreach (var excluded in excludedBases)
-        {
-            if (!string.IsNullOrWhiteSpace(excluded) &&
-                dn.EndsWith(excluded.Trim(), StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
     {
         try
@@ -597,7 +387,8 @@ public sealed class ActiveDirectorySource : IConnectorSource
     {
         var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
         {
-            AuthType = AuthType.Negotiate
+            AuthType = AuthType.Negotiate,
+            Timeout = TimeSpan.FromSeconds(30)
         };
         connection.SessionOptions.ProtocolVersion = 3;
         // Single-domain read: never chase referrals. ReferralChasingOptions.All
@@ -619,20 +410,14 @@ public sealed class ActiveDirectorySource : IConnectorSource
             netCred = new NetworkCredential(creds.Username, creds.Password);
         }
         connection.Credential = netCred;
-        connection.Bind();
-        return connection;
+        try { connection.Bind(); return connection; }
+        catch { connection.Dispose(); throw; }
     }
 
     private async Task<AdCredentials?> ReadCredsAsync()
     {
         var name = Conduit.Sync.Security.CredentialNameContext.Resolve("ldap", Conduit.Sync.Security.CredentialSide.Source);
         var raw = await _protector.RetrieveAsync(_tenantId, name);
-        if (string.IsNullOrEmpty(raw))
-        {
-            var sinkName = Conduit.Sync.Security.CredentialNameContext.Resolve("ldap", Conduit.Sync.Security.CredentialSide.Sink);
-            if (!string.Equals(sinkName, name, StringComparison.OrdinalIgnoreCase))
-                raw = await _protector.RetrieveAsync(_tenantId, sinkName);
-        }
         if (string.IsNullOrEmpty(raw)) return null;
         try
         {
@@ -658,49 +443,10 @@ public sealed class ActiveDirectorySource : IConnectorSource
         return (parts[0], 389);
     }
 
-    private static string DefaultFilterForClass(string objectClass) => objectClass.ToLowerInvariant() switch
+    private static ConnectorObject EntryToConnectorObject(AdRecord entry, string objectClass)
     {
-        "user"     => "(&(objectClass=user)(objectCategory=person))",
-        "group"    => "(objectCategory=group)",
-        "computer" => "(objectCategory=computer)",
-        "contact"  => "(objectClass=contact)",
-        // Every discovered AD schema class gets its own workflow. Falling back to
-        // objectClass=* reads the entire directory once per uncommon class and then
-        // relabels every entry as that class (for example, 16k objects presented as
-        // organizationalUnit). Preserve the exact requested class instead.
-        _          => $"(objectClass={EscapeLdapFilterValue(objectClass)})"
-    };
-
-    private static string EscapeLdapFilterValue(string value) => value
-        .Replace("\\", "\\5c", StringComparison.Ordinal)
-        .Replace("*", "\\2a", StringComparison.Ordinal)
-        .Replace("(", "\\28", StringComparison.Ordinal)
-        .Replace(")", "\\29", StringComparison.Ordinal)
-        .Replace("\0", "\\00", StringComparison.Ordinal);
-
-    private static ConnectorObject EntryToConnectorObject(SearchResultEntry entry, string objectClass)
-    {
-        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["distinguishedName"] = entry.DistinguishedName
-        };
-
-        foreach (string name in entry.Attributes.AttributeNames!)
-        {
-            var attr = entry.Attributes[name];
-            if (attr.Count == 0) { attrs[name] = null; continue; }
-            if (attr.Count == 1)
-            {
-                attrs[name] = ConvertAttributeValue(attr[0]);
-            }
-            else
-            {
-                var list = new List<object?>(attr.Count);
-                for (int i = 0; i < attr.Count; i++) list.Add(ConvertAttributeValue(attr[i]));
-                attrs[name] = list;
-            }
-        }
-
+        // Preserve Conduit's value shape and derived fields after the common raw LDAP read.
+        var attrs = entry.Attributes.ToDictionary(p => p.Key, p => p.Value is object?[] values ? (object?)values.ToList() : p.Value, StringComparer.OrdinalIgnoreCase);
         // Source ID priority: objectGUID > distinguishedName.
         var sourceId = attrs.TryGetValue("objectGUID", out var g) && g is byte[] bytes && bytes.Length == 16
             ? new Guid(bytes).ToString()

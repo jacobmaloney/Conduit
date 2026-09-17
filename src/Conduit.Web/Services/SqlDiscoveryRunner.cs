@@ -54,7 +54,8 @@ public sealed class SqlDiscoveryRunner
                 : $"No enabled SQL Discovery project named '{projectName}' exists.");
         }
 
-        var claimed = await projectRepo.SetRunningAsync(project.Id, Guid.Empty);
+        var ownerRunId = Guid.NewGuid();
+        var claimed = await projectRepo.SetRunningAsync(project.Id, ownerRunId, requireEnabled: true);
         if (!claimed)
             return (false, $"Project '{project.Name}' already has a run in progress.");
 
@@ -62,7 +63,7 @@ public sealed class SqlDiscoveryRunner
         {
             // CancellationToken.None: a host shutdown mid-run is handled by the
             // orchestrator's own cancellation registry; the outcome is best-effort then.
-            var runId = await orchestrator.ExecuteAsync(project.Id, "Agent:RunSqlDiscovery", CancellationToken.None, preClaimed: true);
+            var runId = await orchestrator.ExecuteAsync(project.Id, "Agent:RunSqlDiscovery", CancellationToken.None, claimedRunId: ownerRunId);
             var run = await scope.ServiceProvider.GetRequiredService<SyncRunRepository>().GetByIdAsync(runId);
             var status = run?.Status ?? "Unknown";
             var ok = status is "Succeeded" or "PartialSuccess";
@@ -72,7 +73,7 @@ public sealed class SqlDiscoveryRunner
         }
         catch (Exception ex)
         {
-            try { await projectRepo.ClearRunningAsync(project.Id); }
+            try { await projectRepo.ClearRunningAsync(project.Id, ownerRunId); }
             catch { /* orchestrator releases on its own failure paths; this is defense in depth */ }
             _logger.LogWarning(ex, "SQL Discovery run threw for project {Project}", project.Name);
             return (false, $"Project '{project.Name}' run threw: {ex.Message}");

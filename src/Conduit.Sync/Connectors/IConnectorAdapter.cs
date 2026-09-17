@@ -254,6 +254,20 @@ public interface IConnectorSink
     Task<PersonMatchResult> MatchPersonAsync(ConnectorObject obj, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This sink does not implement MatchPersonAsync.");
 
+    /// <summary>Results must have the same order and count as the input. Sinks may batch their lookup.</summary>
+    async Task<IReadOnlyList<PersonMatchResult>> MatchPeopleAsync(IReadOnlyList<ConnectorObject> objects, CancellationToken ct)
+    {
+        var results = new List<PersonMatchResult>(objects.Count);
+        foreach (var obj in objects)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { results.Add(await MatchPersonAsync(obj, ct)); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { results.Add(PersonMatchResult.Fail(ex.Message)); }
+        }
+        return results;
+    }
+
     /// <summary>
     /// Create a new Person record from the given object's attributes. Used after
     /// a <see cref="MatchPersonAsync"/> miss. The PersonCreate step typically
@@ -636,16 +650,19 @@ public sealed class PersonMatchResult
 {
     /// <summary>Null when no person matched.</summary>
     public string? MatchedIdentityId { get; init; }
-    /// <summary>Confidence 0–1. 1.0 = exact UPN/employeeId; lower for fuzzy.</summary>
+    /// <summary>Rule weight normalized to 0–1; not a probability.</summary>
     public double Confidence { get; init; }
     /// <summary>Short human label of what the match keyed on (e.g. "upn", "email", "employeeId").</summary>
     public string MatchedBy { get; init; } = string.Empty;
     /// <summary>Error message when the match probe itself failed (network etc.).</summary>
     public string? ErrorMessage { get; init; }
-    public static PersonMatchResult Miss() => new();
+    public string Outcome { get; init; } = "Unknown";
+    /// <summary>Only an explicitly confirmed miss permits the subsequent Create step.</summary>
+    public bool CanCreate { get; init; }
+    public static PersonMatchResult Miss() => new() { Outcome = "Unmatched", CanCreate = true };
     public static PersonMatchResult Hit(string id, double confidence, string matchedBy) =>
-        new() { MatchedIdentityId = id, Confidence = confidence, MatchedBy = matchedBy };
-    public static PersonMatchResult Fail(string msg) => new() { ErrorMessage = msg };
+        new() { MatchedIdentityId = id, Confidence = confidence, MatchedBy = matchedBy, Outcome = "Link" };
+    public static PersonMatchResult Fail(string msg) => new() { ErrorMessage = msg, Outcome = "Failed" };
 }
 
 /// <summary>

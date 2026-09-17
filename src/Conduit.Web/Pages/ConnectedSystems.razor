@@ -37,6 +37,7 @@
         </div>
         <div class="cx-page-head-spacer"></div>
         <div class="cx-page-actions">
+            <a class="icb-list-action" href="source-catalog">All hosts and source data</a>
             <button class="cx-btn" @onclick="SeedDemo" disabled="@seeding">
                 @if (seeding)
                 {
@@ -150,6 +151,10 @@
                                     <span>Test</span>
                                 </button>
                             }
+                            <div>
+                                <button type="button" class="icb-list-action" disabled="@(SourceBrowseService.UnavailableReason(s.SystemType, s.IsActive) != null)" aria-describedby="@($"browse-reason-{s.TenantId}")" @onclick="() => sourceBrowse = new(s.TenantId)">Browse data</button>
+                                @if (SourceBrowseService.UnavailableReason(s.SystemType, s.IsActive) is { } browseReason) { <p id="@($"browse-reason-{s.TenantId}")" class="icb-table-note">@browseReason</p> }
+                            </div>
                             <button class="cx-btn cx-btn--md" @onclick="() => EditSystem(s.TenantId)" title="Edit connection"><i class="fas fa-edit"></i> Edit</button>
                             <button class="cx-btn cx-btn--md" @onclick="GoToSyncHistory" title="View sync history">History</button>
                             @if (HasCredentialFields(s.SystemType))
@@ -1549,7 +1554,13 @@
     <div class="modal-backdrop fade show"></div>
 }
 
+@if (sourceBrowse != null)
+{
+    <Conduit.Web.Shared.Design.SourceDataBrowser Selection="@sourceBrowse" OnClose="() => sourceBrowse = null" />
+}
+
 @code {
+    private Conduit.SourceBrowsing.SourceBrowseSelection? sourceBrowse;
     // No-arg nav helper so the History button's onclick carries no string
     // literal inside the Razor attribute (avoids the nested-quote SG gotcha).
     private void GoToSyncHistory() => Navigation.NavigateTo("/sync-history");

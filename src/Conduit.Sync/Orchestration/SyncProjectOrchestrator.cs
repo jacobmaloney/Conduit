@@ -86,14 +86,10 @@ public sealed class SyncProjectOrchestrator
     /// updates counters per step, marks the run Succeeded or Failed at the end.
     /// Returns the SyncRun.Id so callers (UI, Quartz) can deep-link to history.
     ///
-    /// <paramref name="preClaimed"/>: pass true ONLY when the caller already won
-    /// the IsRunning CAS (controller StartRun, UI Run-Now, scheduler) — we then
-    /// own the release but never re-claim. When false (default) WE perform the
-    /// CAS here; losing it means another run is in flight, so the just-created
-    /// SyncRun is stamped "Skipped" and we return WITHOUT executing and WITHOUT
-    /// touching the flag (it belongs to the other run).
+    /// A caller that already won admission passes its exact persisted claimedRunId.
+    /// Otherwise this method claims a new owner. A refused claim never executes connectors.
     /// </summary>
-    public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken, bool preClaimed = false)
+    public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken, Guid? claimedRunId = null)
     {
         // Worf HIGH-1: the IsRunning flag must be released on EVERY exit path,
         // including the early throws that happen before a SyncRun row exists
@@ -101,28 +97,28 @@ public sealed class SyncProjectOrchestrator
         // invocation actually owns the flag (won the CAS or was pre-claimed).
         // A lost CAS means another run owns it; we must never clear theirs.
         SyncRun? run = null;
-        bool ownsFlag = preClaimed;
+        var runId = claimedRunId ?? Guid.NewGuid();
+        SyncRunOwnership.RequireOwner(runId);
+        bool ownsFlag = claimedRunId.HasValue;
 
         try
         {
             var project = await _projectRepo.GetByIdAsync(projectId)
                 ?? throw new InvalidOperationException($"SyncProject {projectId} not found.");
 
+            if (claimedRunId.HasValue)
+                SyncRunOwnership.RequireCurrentOwner(project, runId);
+
             run = await _runRepo.CreateAsync(new SyncRun
             {
+                Id = runId,
                 SyncProjectId = project.Id,
                 Status = "Running",
                 TriggeredBy = triggeredBy,
                 StartedAt = DateTime.UtcNow
             });
 
-            if (preClaimed)
-            {
-                // The caller's CAS used a placeholder run id (the run row didn't
-                // exist yet). Stamp the real run id so LastRunId deep-links work.
-                await _projectRepo.StampLastRunIdAsync(project.Id, run.Id);
-            }
-            else
+            if (!claimedRunId.HasValue)
             {
                 // Single-run ownership CAS. Losing means a run is already in
                 // flight for this project (scheduler overlap, double-click, …):
@@ -144,14 +140,14 @@ public sealed class SyncProjectOrchestrator
             // uses. The linked token combines the caller's token (host shutdown /
             // scheduler stop) with the registry's per-project cancel signal. We
             // unregister in a finally so a fast re-run gets a clean slot.
-            var runToken = _cancellation.Register(project.Id, cancellationToken);
+            var runToken = _cancellation.Register(project.Id, run.Id, cancellationToken);
             try
             {
                 return await RunCoreAsync(project, run, runToken);
             }
             finally
             {
-                _cancellation.Unregister(project.Id);
+                _cancellation.Unregister(project.Id, run.Id);
             }
         }
         catch (Exception ex)
@@ -167,12 +163,10 @@ public sealed class SyncProjectOrchestrator
             }
             if (ownsFlag)
             {
-                await _projectRepo.FinishRunAsync(projectId, "Failed");
+                await _projectRepo.FinishRunAsync(projectId, runId, "Failed");
             }
-            // When we do NOT own the flag (lost/never-attempted CAS) we must not
-            // touch it — it belongs to another in-flight run. Stale flags from a
-            // crashed process are recovered by the startup sweep and the UI's
-            // Force-release action, not by this path.
+            // Cleanup is fenced by runId. Startup never releases an unproven owner;
+            // recovery requires this exact owner to have durably finished.
             throw;
         }
     }
@@ -185,24 +179,12 @@ public sealed class SyncProjectOrchestrator
     private async Task<Guid> RunCoreAsync(SyncProject project, SyncRun run, CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
-        var totals = new RunCounters();
+        var totals = new SyncRunProgress();
+        var checkpoints = new SyncCheckpointBuffer();
         string status = "Succeeded";
         string? errorMessage = null;
         SyncCursor? newCursor = null;
         bool wasIncremental = false;
-
-        // ── Step-outcome rollup state (false-success fix) ──────────────────────
-        // IC's SyncProjectOrchestrator derives the run outcome from persisted
-        // SyncStepRuns. Conduit has no per-step table — step results live in
-        // memory — so we roll up from the in-loop StepResult outcomes instead of
-        // blindly stamping "Succeeded". A run whose steps/records failed must be
-        // reported Failed/PartialSuccess with the real reason surfaced, NOT a
-        // green success with 0 records.
-        int failedSteps = 0;       // steps whose StepResult classified as Failed
-        int succeededSteps = 0;    // steps that did real work with no failures
-        string? firstStepError = null; // first surfaced step-level error message
-        bool anyMappingRan = false;    // at least one Mapping/legacy pass executed
-        bool ranAnyStep = false;       // at least one workflow step executed at all
 
         try
         {
@@ -277,28 +259,16 @@ public sealed class SyncProjectOrchestrator
             if (workflows.Count == 0)
             {
                 await Log(run.Id, "Warning", "Project has no Workflows defined; falling back to legacy single-pass Mapping using project-level mappings + scope.");
-                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant);
+                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints);
                 var legacyResult = await ExecuteLegacyMappingAsync(ctx, cancellationToken);
-                totals.Add(legacyResult.Delta);
+                totals.Add(legacyResult.Delta, true, legacyResult.WasIncremental,
+                    $"Mapping pass reported {legacyResult.Delta.Failed} failure(s). See run logs for the reason.");
                 newCursor = legacyResult.NewCursor;
                 wasIncremental = legacyResult.WasIncremental;
-
-                // Roll up the single legacy Mapping pass into the step tally.
-                anyMappingRan = true;
-                ranAnyStep = true;
-                if (legacyResult.Delta.Failed > 0)
-                {
-                    failedSteps++;
-                    firstStepError ??= $"Mapping pass reported {legacyResult.Delta.Failed} failed record(s). See run logs for the per-record reason.";
-                }
-                else
-                {
-                    succeededSteps++;
-                }
             }
             else
             {
-                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant);
+                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints);
 
                 foreach (var wf in workflows)
                 {
@@ -348,6 +318,10 @@ public sealed class SyncProjectOrchestrator
                         }
 
                         StepResult stepResult;
+                        // A failed Match step must leave a failed/missing-result gate, never
+                        // the null that denotes an explicitly configured standalone Create.
+                        if (step.StepType == WorkflowStepTypes.PersonMatch) lastMatches = new(StringComparer.Ordinal);
+                        if (step.StepType == WorkflowStepTypes.Mapping) { lastMatches = null; lastBatch = null; }
                         try
                         {
                             stepResult = step.StepType switch
@@ -376,36 +350,17 @@ public sealed class SyncProjectOrchestrator
                         catch (Exception ex)
                         {
                             await Log(run.Id, "Error", $"  Step '{step.Name}' threw: {ex.Message}");
-                            stepResult = new StepResult { Delta = new RunDelta(0, 0, 0, 0, 0, 1) };
+                            stepResult = new StepResult
+                            {
+                                Delta = SyncStepDelta.Exception,
+                                ErrorMessage = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message
+                            };
                         }
 
-                        totals.Add(stepResult.Delta);
+                        totals.Add(stepResult.Delta, step.StepType == WorkflowStepTypes.Mapping, stepResult.WasIncremental,
+                            stepResult.ErrorMessage ?? $"Step '{step.Name}' [{step.StepType}] reported {stepResult.Delta.Failed} failure(s). See run logs for the reason.");
 
-                        // Step-outcome rollup (false-success fix). A step that
-                        // reported any failed records is a failed step; otherwise
-                        // it counts as a real success. Pure-skip steps (capability
-                        // missing / no upstream batch) are neither — they don't
-                        // make the run green on their own, and they don't fail it.
-                        ranAnyStep = true;
-                        if (step.StepType == WorkflowStepTypes.Mapping)
-                            anyMappingRan = true;
-
-                        if (stepResult.Delta.Failed > 0)
-                        {
-                            failedSteps++;
-                            firstStepError ??= $"Step '{step.Name}' [{step.StepType}] reported {stepResult.Delta.Failed} failure(s). See run logs for the reason.";
-                        }
-                        else if (stepResult.Delta.Created > 0 || stepResult.Delta.Updated > 0 || stepResult.Delta.Read > 0)
-                        {
-                            succeededSteps++;
-                        }
-
-                        // V25: per-class Mapping steps now persist their OWN cursor
-                        // (per WorkflowStepId, inside ExecuteMappingStepAsync) and
-                        // return NewCursor = null, so nothing is hoisted to the single
-                        // run-level value anymore — that hoist is what clobbered N
-                        // per-class cursors into one. Track wasIncremental for logging,
-                        // but never let a step's cursor become the run-level cursor.
+                        // Candidates remain per-step, but commit only after all dependent work succeeds.
                         if (stepResult.WasIncremental)
                             wasIncremental = true;
 
@@ -426,50 +381,18 @@ public sealed class SyncProjectOrchestrator
             await Log(run.Id, "Info",
                 $"Run finished. Read={totals.Read} Created={totals.Created} Updated={totals.Updated} Skipped={totals.Skipped} Failed={totals.Failed}.");
 
-            // ── Roll up the true run status from step outcomes ─────────────────
-            // No top-level exception escaped, but individual steps/records may have
-            // failed. Derive Failed / PartialSuccess / Succeeded from the tally so
-            // a run that moved zero records (or whose mapping never returned) is not
-            // reported as a green success.
-            if (failedSteps > 0 && succeededSteps > 0)
-            {
-                status = "PartialSuccess";
-                errorMessage = firstStepError;
-            }
-            else if (failedSteps > 0)
-            {
-                status = "Failed";
-                errorMessage = firstStepError;
-            }
-            else if (anyMappingRan && totals.Read == 0 && !wasIncremental)
-            {
-                // "Query never returned" sentinel normalization. A FULL Mapping pass
-                // that enumerated the source but read ZERO objects is almost always
-                // a misconfiguration (bad BaseDN/filter, bind that silently returned
-                // nothing) rather than a legitimately empty directory. Surface it as
-                // a failure with a real reason instead of a silent green / 0-records
-                // success — the long-standing false-success symptom.
-                //
-                // INCREMENTAL passes are exempt: a delta read that found 0 changes
-                // since the cursor is a legitimate, common SUCCESS, not a bad bind.
-                status = "Failed";
-                errorMessage = "Source enumeration returned 0 objects. Check the connection credential, BaseDN, and LDAP filter — a truthful 0-record run is treated as a failure to avoid a silent green success.";
-                await Log(run.Id, "Error", errorMessage);
-            }
-            else if (!ranAnyStep)
-            {
-                // Nothing executed at all (no workflows/steps, no legacy pass).
-                status = "Failed";
-                errorMessage = "No workflow steps executed — the project has no enabled Mapping step. Nothing was synced.";
-                await Log(run.Id, "Error", errorMessage);
-            }
-            else
-            {
-                status = "Succeeded";
-            }
+            var completion = totals.Complete();
+            status = completion.Status;
+            errorMessage = completion.ErrorMessage;
+            if (errorMessage is not null) await Log(run.Id, "Error", errorMessage);
+
+            // Losing these candidates on a crash replays from the prior durable cursor.
+            await checkpoints.CommitAsync(status == "Succeeded",
+                (stepId, cursor) => _workflowRepo.SetStepCursorAsync(stepId, project.Id, run.Id, cursor.Token), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             await Log(run.Id, status == "Succeeded" ? "Info" : "Warning",
-                $"Run status rolled up to '{status}' (succeededSteps={succeededSteps}, failedSteps={failedSteps}, read={totals.Read}).");
+                $"Run status rolled up to '{status}' (succeededSteps={totals.SucceededSteps}, failedSteps={totals.FailedSteps}, read={totals.Read}).");
         }
         catch (OperationCanceledException)
         {
@@ -499,22 +422,22 @@ public sealed class SyncProjectOrchestrator
                 persistedFailed = 1;
 
             await _runRepo.UpdateCountersAsync(run.Id, totals.Read, totals.Created, totals.Updated, totals.Skipped, persistedFailed);
-            // Persist the RUN-level cursor on success. V25: per-class Mapping steps now
-            // own their cursors (saved per-step in ExecuteMappingStepAsync), so newCursor
+            // Persist the RUN-level cursor on success. Workflow candidates were committed
+            // after all dependent steps above, so newCursor
             // is only non-null on the LEGACY single-pass path (no Workflows) — there it
             // still records the run's cursor on SyncRuns.[Cursor] for that path's resume
             // and for run history. Only persist on success so a failed run doesn't let
             // the next run silently skip data it never wrote downstream.
             if (status == "Succeeded" && newCursor is not null)
             {
-                await _runRepo.SetCursorAsync(run.Id, newCursor.Token, wasIncremental);
+                await _runRepo.SetCursorAsync(run.Id, project.Id, newCursor.Token, wasIncremental);
             }
             else if (status == "Succeeded")
             {
-                await _runRepo.SetCursorAsync(run.Id, null, wasIncremental);
+                await _runRepo.SetCursorAsync(run.Id, project.Id, null, wasIncremental);
             }
             await _runRepo.FinishAsync(run.Id, status, errorMessage, sw.ElapsedMilliseconds);
-            await _projectRepo.FinishRunAsync(project.Id, status);
+            await _projectRepo.FinishRunAsync(project.Id, run.Id, status);
         }
 
         return run.Id;
@@ -530,36 +453,21 @@ public sealed class SyncProjectOrchestrator
         IConnectorSource Source,
         IConnectorSink Sink,
         Core.Models.Tenant SourceTenant,
-        Core.Models.Tenant SinkTenant);
-
-    private sealed class RunCounters
-    {
-        public int Read, Created, Updated, Skipped, Failed, Other;
-        public void Add(RunDelta d)
-        {
-            Read += d.Read;
-            Created += d.Created;
-            Updated += d.Updated;
-            Skipped += d.Skipped;
-            Failed += d.Failed;
-            Other += d.Other;
-        }
-    }
-
-    private readonly record struct RunDelta(int Read, int Created, int Updated, int Skipped, int Failed, int Other);
+        Core.Models.Tenant SinkTenant,
+        SyncCheckpointBuffer Checkpoints);
 
     /// <summary>What a single step returns. Most steps populate only Delta.</summary>
     private sealed class StepResult
     {
-        public RunDelta Delta { get; init; }
-        public SyncCursor? NewCursor { get; init; }
+        public SyncStepDelta Delta { get; init; }
+        public string? ErrorMessage { get; init; }
         public bool WasIncremental { get; init; }
         /// <summary>Source objects this step produced; consumed by the next step.</summary>
         public List<ConnectorObject>? EmittedBatch { get; init; }
         /// <summary>Match results keyed by ConnectorObject.SourceId. Set by PersonMatch.</summary>
         public Dictionary<string, PersonMatchResult>? PersonMatches { get; init; }
 
-        public static StepResult Skipped(string _) => new() { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+        public static StepResult Skipped(string _) => new() { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
     }
 
     // ─── Step executors ──────────────────────────────────────────────────────
@@ -571,7 +479,7 @@ public sealed class SyncProjectOrchestrator
     /// </summary>
     private async Task<StepResult> ExecuteMappingStepAsync(RunContext ctx, WorkflowStep step, bool needEmitted, CancellationToken ct)
     {
-        var mappings = await _workflowRepo.GetMappingsByStepAsync(step.Id);
+        var stepMappings = await _workflowRepo.GetMappingsByStepAsync(step.Id);
         // Per-step scope first, then project scope, then default.
         var scope = await _workflowRepo.GetScopeByStepAsync(step.Id)
                  ?? await _projectRepo.GetProjectScopeAsync(ctx.Project.Id)
@@ -584,86 +492,28 @@ public sealed class SyncProjectOrchestrator
             ? step.ObjectClass!
             : ctx.Project.ObjectClass;
 
-        // Resilience: a step persisted with ZERO mappings would silently read nothing
-        // useful (the sink writes only the structural baseline) and the run shows
-        // "Mappings=0". This happens when a project was created against a build whose
-        // AttributeTemplateCatalog had no template for the source/class yet (the
-        // mappings are frozen at creation, never re-derived) — e.g. an ARS-source
-        // project created before the ActiveRoles templates shipped. Rather than fail
-        // a red run, resolve mappings LIVE from the now-complete catalog using the
-        // run's source/sink SystemType + this step's class. These are NOT persisted
-        // (the operator can still edit/persist via the Workflows tab); they just keep
-        // the run honest. If the catalog also has nothing, we fall through with the
-        // empty set and the existing "Mappings=0" log line makes the gap visible.
-        if (mappings.Count == 0)
-        {
-            var resolved = Templates.AttributeMapResolver.Resolve(
-                ctx.SourceTenant.SystemType, ctx.SinkTenant.SystemType, objectClass, out var droppedAttrs);
-            if (droppedAttrs.Count > 0)
-            {
-                await Log(ctx.RunId, "Warning",
-                    $"    Step '{step.Name}': {droppedAttrs.Count} {ctx.SourceTenant.SystemType} {objectClass} attribute(s) " +
-                    $"have no counterpart in the {ctx.SinkTenant.SystemType} sink template and were dropped — " +
-                    string.Join(", ", droppedAttrs.Select(d => d.SourceAttribute + " (canonical " + d.Canonical + ")")) +
-                    ". They are neither read nor written.");
-            }
-            if (resolved.Count > 0)
-            {
-                mappings = resolved
-                    .Select(r => new AttributeMapping
-                    {
-                        Id = Guid.NewGuid(),
-                        SyncProjectId = ctx.Project.Id,
-                        WorkflowStepId = step.Id,
-                        SourceAttribute = r.SourceAttribute,
-                        SinkAttribute = r.SinkAttribute,
-                        IsRequired = r.IsRequired
-                    })
-                    .ToList();
-                await Log(ctx.RunId, "Warning",
-                    $"    Step '{step.Name}' had no saved mappings; auto-resolved {mappings.Count} from the " +
-                    $"attribute-template catalog ({ctx.SourceTenant.SystemType} {objectClass} -> {ctx.SinkTenant.SystemType}). " +
-                    "Open the step in the Workflows tab and Save to persist them.");
-            }
-        }
+        var projectMappings = stepMappings.Count == 0
+            ? await _projectRepo.GetMappingsAsync(ctx.Project.Id)
+            : new List<AttributeMapping>();
+        var effective = EffectiveMappingResolver.Resolve(stepMappings, projectMappings,
+            ctx.SourceTenant.SystemType, ctx.SinkTenant.SystemType, objectClass);
+        var mappings = effective.Mappings;
+        if (effective.Origin != EffectiveMappingOrigin.Step)
+            await Log(ctx.RunId, "Info", $"    Step '{step.Name}' uses {mappings.Count} {effective.Origin.ToString().ToLowerInvariant()} mapping(s).");
+        if (effective.DroppedAttributes is { Count: > 0 } dropped)
+            await Log(ctx.RunId, "Warning", $"    Step '{step.Name}': template source attributes with no sink counterpart were dropped: " +
+                string.Join(", ", dropped.Select(d => d.SourceAttribute + " (canonical " + d.Canonical + ")")) + ". They are neither read nor written.");
 
         var pump = await PumpAsync(ctx, mappings, scope, objectClass, step, needEmitted, ct);
 
-        // V25 per-STEP cursor save. Persist the advanced cursor back to THIS step —
-        // and ONLY this step — so each per-class read advances its own high-water mark
-        // independently. (No cross-step leakage: the save is keyed to step.Id.)
-        //
-        // Fix 2 (incremental actually engages): persist the resolved cursor whenever
-        // the pump produced one from a trustworthy pass — not only when the pass was
-        // already incremental. That SEEDS the cursor on the first successful FULL run
-        // so run 2+ resumes incrementally; before this, the cursor was only saved on
-        // a WasIncremental pass, which could never happen without a stored cursor —
-        // the chicken-and-egg that kept incremental permanently disengaged.
-        //
-        // Trust gates (all required):
-        //   - a NewCursor was resolved (source supports cursors at all);
-        //   - ZERO step-level failed records (a failed write means the data at this
-        //     high-water mark was NOT durably applied — advancing would skip it);
-        //   - the read is trustworthy: a COMPLETE read (proven by the source), or an
-        //     already-incremental pass (today's behavior, kept so sources that don't
-        //     implement WasCompleteRead don't regress their existing incremental).
-        var advanceCursor = pump.NewCursor is not null
-            && pump.Delta.Failed == 0
-            && (pump.ReadWasComplete || pump.WasIncremental);
-        if (advanceCursor)
-        {
-            await _workflowRepo.SetStepCursorAsync(step.Id, pump.NewCursor!.Token);
-            await Log(ctx.RunId, "Info", pump.WasIncremental
-                ? $"    Incremental: advanced step '{step.Name}' cursor."
-                : $"    Incremental: seeded step '{step.Name}' cursor from this complete full read — next run resumes incrementally.");
-        }
+        if (ctx.Checkpoints.Offer(step.Id, pump.NewCursor, pump.ReadWasComplete, pump.Delta.Failed, pump.PendingEffects))
+            await Log(ctx.RunId, "Info", $"    Step '{step.Name}' cursor is pending successful completion of all workflow effects.");
+        else if (pump.NewCursor is not null)
+            await Log(ctx.RunId, "Warning", $"    Step '{step.Name}' cursor retained: readComplete={pump.ReadWasComplete}, failed={pump.Delta.Failed}, pendingEffects={pump.PendingEffects}.");
 
         return new StepResult
         {
             Delta = pump.Delta,
-            // V25: the cursor is now persisted per-step above. Do NOT bubble it up to
-            // the run-level newCursor (that path clobbered N steps into one value).
-            NewCursor = null,
             WasIncremental = pump.WasIncremental,
             EmittedBatch = needEmitted ? pump.EmittedBatch : null
         };
@@ -683,10 +533,12 @@ public sealed class SyncProjectOrchestrator
         // and the cursor falls back to the project-level last-run cursor (step = null).
         // No later steps exist to consume EmittedBatch → needEmitted: false.
         var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, null, needEmitted: false, ct);
-        return new LegacyResult(pump.Delta, pump.NewCursor, pump.WasIncremental);
+        return new LegacyResult(pump.Delta,
+            SyncCheckpointBuffer.CanAdvance(pump.NewCursor, pump.ReadWasComplete, pump.Delta.Failed, pump.PendingEffects) ? pump.NewCursor : null,
+            pump.WasIncremental);
     }
 
-    private readonly record struct LegacyResult(RunDelta Delta, SyncCursor? NewCursor, bool WasIncremental);
+    private readonly record struct LegacyResult(SyncStepDelta Delta, SyncCursor? NewCursor, bool WasIncremental);
 
     private async Task<StepResult> ExecutePersonMatchStepAsync(
         RunContext ctx, WorkflowStep step, List<ConnectorObject>? lastBatch, CancellationToken ct)
@@ -694,38 +546,45 @@ public sealed class SyncProjectOrchestrator
         if (!ctx.SinkAdapter.Capabilities.SupportsPersonMatch)
         {
             await Log(ctx.RunId, "Warning", $"    Sink {ctx.SinkTenant.SystemType} does not implement PersonMatch — step skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
         if (lastBatch is null || lastBatch.Count == 0)
         {
             await Log(ctx.RunId, "Warning", "    PersonMatch step has no upstream batch to match against — needs a Mapping step before it. Skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
 
         var matches = new Dictionary<string, PersonMatchResult>(lastBatch.Count, StringComparer.Ordinal);
         int hits = 0, misses = 0, failures = 0;
-        foreach (var obj in lastBatch)
+        if (lastBatch.Any(o => string.IsNullOrWhiteSpace(o.SourceId)) || lastBatch.Select(o => o.SourceId).Distinct(StringComparer.Ordinal).Count() != lastBatch.Count)
+            throw new InvalidOperationException("Matching requires unique, nonempty account source IDs. Creation was blocked.");
+        var results = await ctx.Sink.MatchPeopleAsync(lastBatch, ct);
+        if (results.Count != lastBatch.Count) throw new InvalidOperationException("The sink returned an incomplete matching batch. Creation was blocked.");
+        for (var index = 0; index < lastBatch.Count; index++)
         {
             ct.ThrowIfCancellationRequested();
-            try
-            {
-                var r = await ctx.Sink.MatchPersonAsync(obj, ct);
-                matches[obj.SourceId] = r;
-                if (r.ErrorMessage is not null) failures++;
-                else if (r.MatchedIdentityId is not null) hits++;
-                else misses++;
-            }
-            catch (Exception ex)
+            var obj = lastBatch[index];
+            var r = results[index];
+            matches[obj.SourceId] = r;
+            if (r.ErrorMessage is not null)
             {
                 failures++;
-                matches[obj.SourceId] = PersonMatchResult.Fail(ex.Message);
+                await Log(ctx.RunId, "Error", $"    PersonMatch unresolved for SourceId={obj.SourceId}: {r.ErrorMessage}");
+            }
+            else if (r.MatchedIdentityId is not null) hits++;
+            else if (r.CanCreate && r.Outcome == "Unmatched") misses++;
+            else
+            {
+                failures++;
+                matches[obj.SourceId] = PersonMatchResult.Fail($"Unresolved matching outcome '{r.Outcome}'. Creation was blocked.");
+                await Log(ctx.RunId, "Error", $"    PersonMatch unresolved for SourceId={obj.SourceId}: {matches[obj.SourceId].ErrorMessage}");
             }
         }
 
         await Log(ctx.RunId, "Info", $"    PersonMatch: hits={hits} misses={misses} failures={failures}.");
         return new StepResult
         {
-            Delta = new RunDelta(0, 0, 0, hits + misses, failures, 0),
+            Delta = new SyncStepDelta(0, 0, 0, hits + misses, failures, 0),
             EmittedBatch = lastBatch,
             PersonMatches = matches
         };
@@ -740,12 +599,12 @@ public sealed class SyncProjectOrchestrator
         if (!ctx.SinkAdapter.Capabilities.SupportsPersonCreate)
         {
             await Log(ctx.RunId, "Warning", $"    Sink {ctx.SinkTenant.SystemType} does not implement PersonCreate — step skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
         if (lastBatch is null || lastBatch.Count == 0)
         {
             await Log(ctx.RunId, "Warning", "    PersonCreate step has no upstream batch to act on. Skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
 
         int created = 0, failed = 0, skipped = 0;
@@ -753,30 +612,16 @@ public sealed class SyncProjectOrchestrator
         {
             ct.ThrowIfCancellationRequested();
 
-            // If we have prior PersonMatch results, only create on miss.
-            if (lastMatches is not null && lastMatches.TryGetValue(obj.SourceId, out var match))
-            {
-                if (match.MatchedIdentityId is not null) { skipped++; continue; }
-                if (match.ErrorMessage is not null)      { skipped++; continue; }
-            }
-
-            try
-            {
-                var r = await ctx.Sink.CreatePersonAsync(obj, ct);
-                if (r.CreatedIdentityId is not null) created++;
-                else { failed++; await Log(ctx.RunId, "Error", $"    PersonCreate failed for SourceId={obj.SourceId}: {r.ErrorMessage}"); }
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                await Log(ctx.RunId, "Error", $"    PersonCreate threw for SourceId={obj.SourceId}: {ex.Message}");
-            }
+            var outcome = await PersonCreationDispatch.ExecuteAsync(ctx.Sink, obj, lastMatches, ct);
+            if (outcome.Created) created++;
+            else if (outcome.Skipped) skipped++;
+            else { failed++; await Log(ctx.RunId, "Error", $"    PersonCreate blocked/failed for SourceId={obj.SourceId}: {outcome.Error}"); }
         }
 
         await Log(ctx.RunId, "Info", $"    PersonCreate: created={created} skipped={skipped} failed={failed}.");
         return new StepResult
         {
-            Delta = new RunDelta(0, created, 0, skipped, failed, 0),
+            Delta = new SyncStepDelta(0, created, 0, skipped, failed, 0),
             EmittedBatch = lastBatch
         };
     }
@@ -788,12 +633,12 @@ public sealed class SyncProjectOrchestrator
         if (!ctx.SinkAdapter.Capabilities.SupportsAssignManager)
         {
             await Log(ctx.RunId, "Warning", $"    Sink {ctx.SinkTenant.SystemType} does not implement AssignManager — step skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
         if (lastBatch is null || lastBatch.Count == 0)
         {
             await Log(ctx.RunId, "Warning", "    AssignManager step has no upstream batch. Skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
 
         int updated = 0, skipped = 0, failed = 0;
@@ -835,7 +680,7 @@ public sealed class SyncProjectOrchestrator
         await Log(ctx.RunId, "Info", $"    AssignManager: updated={updated} skipped={skipped} failed={failed}.");
         return new StepResult
         {
-            Delta = new RunDelta(0, 0, updated, skipped, failed, 0),
+            Delta = new SyncStepDelta(0, 0, updated, skipped, failed, 0),
             EmittedBatch = lastBatch
         };
     }
@@ -847,12 +692,12 @@ public sealed class SyncProjectOrchestrator
         if (!ctx.SinkAdapter.Capabilities.SupportsAssignGroupOwner)
         {
             await Log(ctx.RunId, "Warning", $"    Sink {ctx.SinkTenant.SystemType} does not implement AssignGroupOwner — step skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
         if (lastBatch is null || lastBatch.Count == 0)
         {
             await Log(ctx.RunId, "Warning", "    AssignGroupOwner step has no upstream batch. Skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
 
         int updated = 0, skipped = 0, failed = 0;
@@ -892,7 +737,7 @@ public sealed class SyncProjectOrchestrator
         await Log(ctx.RunId, "Info", $"    AssignGroupOwner: updated={updated} skipped={skipped} failed={failed}.");
         return new StepResult
         {
-            Delta = new RunDelta(0, 0, updated, skipped, failed, 0),
+            Delta = new SyncStepDelta(0, 0, updated, skipped, failed, 0),
             EmittedBatch = lastBatch
         };
     }
@@ -977,14 +822,14 @@ public sealed class SyncProjectOrchestrator
             await Log(ctx.RunId, "Warning",
                 $"    Lookup step '{step.Name}': sink {ctx.SinkTenant.SystemType} does not implement " +
                 $"{(isGroupClass ? "AssignGroupOwner" : "AssignManager")} relationship resolution — step skipped (no-op).");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
 
         if (lastBatch is null || lastBatch.Count == 0)
         {
             await Log(ctx.RunId, "Warning",
                 $"    Lookup step '{step.Name}' has no upstream batch to resolve against — it needs a Mapping step before it. Skipped.");
-            return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+            return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
         }
 
         var refKeys = isGroupClass
@@ -1036,7 +881,7 @@ public sealed class SyncProjectOrchestrator
             // resolved. No per-object IC calls were made → skipped/failed = 0.
             return new StepResult
             {
-                Delta = new RunDelta(0, 0, delegatedRefs, 0, 0, 0),
+                Delta = new SyncStepDelta(0, 0, delegatedRefs, 0, 0, 0),
                 EmittedBatch = lastBatch
             };
         }
@@ -1112,7 +957,7 @@ public sealed class SyncProjectOrchestrator
         // is passed through so a later step in the same workflow can still consume it.
         return new StepResult
         {
-            Delta = new RunDelta(0, 0, resolved, skipped, failed, 0),
+            Delta = new SyncStepDelta(0, 0, resolved, skipped, failed, 0),
             EmittedBatch = lastBatch
         };
     }
@@ -1121,7 +966,7 @@ public sealed class SyncProjectOrchestrator
     {
         // Reserved for future plugin extensibility. Log + no-op.
         await Log(ctx.RunId, "Info", $"    Custom step '{step.Name}' is a no-op placeholder.");
-        return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+        return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
     }
 
     /// <summary>
@@ -1150,16 +995,17 @@ public sealed class SyncProjectOrchestrator
                 $"    Step '{step.Name}': sink {ctx.SinkTenant.SystemType} does not support {capabilityLabel} — " +
                 $"step skipped (capability not available; not an error, not a license block).");
         }
-        return new StepResult { Delta = new RunDelta(0, 0, 0, 1, 0, 0) };
+        return new StepResult { Delta = new SyncStepDelta(0, 0, 0, 1, 0, 0) };
     }
 
     // ─── Mapping-step pump (the Phase-2 source→mapping→sink loop) ────────────
 
     private readonly record struct PumpResult(
-        RunDelta Delta,
+        SyncStepDelta Delta,
         SyncCursor? NewCursor,
         bool WasIncremental,
         bool ReadWasComplete,
+        int PendingEffects,
         List<ConnectorObject> EmittedBatch);
 
     private async Task<PumpResult> PumpAsync(
@@ -1408,8 +1254,9 @@ public sealed class SyncProjectOrchestrator
              || string.Equals(objectClass, "site", StringComparison.OrdinalIgnoreCase)
              || string.Equals(objectClass, "directoryrole", StringComparison.OrdinalIgnoreCase))
             && sink is IGroupMembershipEmittingSink;
-        int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, ttlRefreshed = 0;
+        int read = 0, created = 0, updated = 0, skipped = 0, failed = 0, pendingEffects = 0, ttlRefreshed = 0;
 
+        var mappingPlan = new ConnectorMappingPlan(mappings);
         var progress = Stopwatch.StartNew();
 
         await foreach (var sourceObj in enumeration.Objects.WithCancellation(ct))
@@ -1432,7 +1279,7 @@ public sealed class SyncProjectOrchestrator
             if (!sourceObj.Attributes.ContainsKey("_source"))
                 sourceObj.Attributes["_source"] = sourceAdapter.SystemType;
 
-            var sinkObj = ApplyMappings(sourceObj, mappings);
+            var sinkObj = mappingPlan.Apply(sourceObj);
 
             if (!sinkObj.Attributes.ContainsKey("_source"))
                 sinkObj.Attributes["_source"] = sourceAdapter.SystemType;
@@ -1440,7 +1287,7 @@ public sealed class SyncProjectOrchestrator
             // Capture group membership BEFORE skip-unchanged: members can change
             // without the group's mapped attributes changing, so unchanged groups must
             // still emit their current member set. Read from the RAW sourceObj bag, not
-            // sinkObj: ApplyMappings only keeps mapped attributes, and the member
+            // sinkObj: ConnectorMappingPlan only keeps mapped attributes, and the member
             // attribute is intentionally NOT in most templates — the cloud sources
             // (Entra/GWS/AWS) emit "members" (member GUIDs/ids) unconditionally; AD
             // emits "member" (DNs) only when the group step maps it. Key the edge on
@@ -1461,14 +1308,14 @@ public sealed class SyncProjectOrchestrator
             // domain nodes instead of a literal "Conduit" node. Mirrors how
             // "_source" carries the SystemType (→ IC's OriginalSource); this
             // internal "_" key is lifted out by the sink, never written as a
-            // real ObjectAttribute. ApplyMappings returns a fresh object that
+            // real ObjectAttribute. ConnectorMappingPlan returns a fresh object that
             // doesn't carry "_"-prefixed keys, so stamp it on sinkObj here.
             if (!string.IsNullOrWhiteSpace(ctx.SourceTenant.Name) && !sinkObj.Attributes.ContainsKey("_sourceConnection"))
                 sinkObj.Attributes["_sourceConnection"] = ctx.SourceTenant.Name;
 
             // Stamp this step's tag names so the IC sink can apply them as ObjectTags.
             // Mirrors "_sourceConnection": an internal "_"-key the sink lifts out and
-            // never writes as a real ObjectAttribute. ApplyMappings returns a fresh
+            // never writes as a real ObjectAttribute. ConnectorMappingPlan returns a fresh
             // object without "_"-keys, so stamp on sinkObj here.
             if (stepTagsCsv is not null && !sinkObj.Attributes.ContainsKey("_tags"))
                 sinkObj.Attributes["_tags"] = stepTagsCsv;
@@ -1514,7 +1361,7 @@ public sealed class SyncProjectOrchestrator
             if (buffer.Count >= batchSize)
             {
                 var delta = await FlushAsync(sink, buffer, bufferHashes, writtenHashes, run, project.Id, sinkTenant.Id, sinkAdapter.SystemType, ct);
-                created += delta.Created; updated += delta.Updated; skipped += delta.Skipped; failed += delta.Failed;
+                created += delta.Created; updated += delta.Updated; skipped += delta.Skipped; failed += delta.Failed; pendingEffects += delta.Pending;
                 buffer.Clear();
                 bufferHashes.Clear();
             }
@@ -1530,7 +1377,7 @@ public sealed class SyncProjectOrchestrator
         if (buffer.Count > 0)
         {
             var delta = await FlushAsync(sink, buffer, bufferHashes, writtenHashes, run, project.Id, sinkTenant.Id, sinkAdapter.SystemType, ct);
-            created += delta.Created; updated += delta.Updated; skipped += delta.Skipped; failed += delta.Failed;
+            created += delta.Created; updated += delta.Updated; skipped += delta.Skipped; failed += delta.Failed; pendingEffects += delta.Pending;
             buffer.Clear();
             bufferHashes.Clear();
         }
@@ -1649,10 +1496,12 @@ public sealed class SyncProjectOrchestrator
                         var emit = await tombstoneSink.EmitTombstonesAsync(icUpsertSource, disappeared, ct);
                         if (!emit.Succeeded)
                         {
+                            failed++;
                             await Log(run, "Error", $"    Tombstone emission FAILED: {emit.ErrorMessage}. No prune; will retry next complete run.");
                         }
                         else if (emit.Aborted)
                         {
+                            failed++;
                             await Log(run, "Error",
                                 $"    Tombstone emission ABORTED by sink safety cap: {emit.AbortReason} (requested={emit.Requested}, matched={emit.Matched}). Records NOT deleted; NOT pruned.");
                         }
@@ -1682,6 +1531,7 @@ public sealed class SyncProjectOrchestrator
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
+                        failed++;
                         await Log(run, "Error", $"    Tombstone emission threw: {ex.Message}. Upsert results stand; no deletes pruned.");
                     }
                 }
@@ -1723,10 +1573,12 @@ public sealed class SyncProjectOrchestrator
                     var emit = await tombstoneSink.EmitTombstonesAsync(icUpsertSource, sourceTombstoneIds, ct);
                     if (!emit.Succeeded)
                     {
+                        failed++;
                         await Log(run, "Error", $"    Source-tombstone emission FAILED: {emit.ErrorMessage}. Will retry next run.");
                     }
                     else if (emit.Aborted)
                     {
+                        failed++;
                         await Log(run, "Error",
                             $"    Source-tombstone emission ABORTED by sink safety cap: {emit.AbortReason} (requested={emit.Requested}, matched={emit.Matched}).");
                     }
@@ -1752,6 +1604,7 @@ public sealed class SyncProjectOrchestrator
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    failed++;
                     await Log(run, "Error", $"    Source-tombstone emission threw: {ex.Message}. Upsert results stand.");
                 }
             }
@@ -1780,9 +1633,9 @@ public sealed class SyncProjectOrchestrator
             // endpoint already falls back to resolving member ids against Objects.DN
             // (connection-scoped) for any id that didn't match a SourceUniqueId. That
             // DN fallback only works when the member's directory Object actually carries
-            // a DN — which it now does: ApplyMappings carries distinguishedName forward
+            // a DN — which it now does: ConnectorMappingPlan carries distinguishedName forward
             // as "DN" for every AD object regardless of the project's mapped set (see the
-            // structural DN carry-through in ApplyMappings). So AD memberships resolve
+            // structural DN carry-through in ConnectorMappingPlan). So AD memberships resolve
             // the same way cloud (GUID-keyed) memberships do. Cloud sources still emit
             // GUID-keyed member ids and resolve on the SourceUniqueId fast-path.
             if (string.Equals(sourceAdapter.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase))
@@ -1800,6 +1653,7 @@ public sealed class SyncProjectOrchestrator
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
+                failed++;
                 await Log(run, "Error", $"    Group-membership emission threw: {ex.Message}. Upsert results stand.");
             }
         }
@@ -1840,11 +1694,18 @@ public sealed class SyncProjectOrchestrator
             await Log(run, "Warning", $"    Could not resolve cursor: {ex.Message}");
         }
 
+        if (newCursor is not null && !readWasComplete)
+        {
+            failed++;
+            await Log(run, "Error", "    Source read was incomplete; its prior checkpoint and dependent workflow checkpoints are retained for replay.");
+        }
+
         return new PumpResult(
-            new RunDelta(read, created, updated, skipped, failed, 0),
+            new SyncStepDelta(read, created, updated, skipped, failed, 0),
             newCursor,
             wasIncremental,
             readWasComplete,
+            pendingEffects,
             emitted);
     }
 
@@ -1894,7 +1755,7 @@ public sealed class SyncProjectOrchestrator
     /// when the sink advertises SupportsBulk (single batch network call), else
     /// the default loops over UpsertAsync per record (identical to Phase 1).
     /// </summary>
-    private readonly record struct FlushDelta(int Created, int Updated, int Skipped, int Failed);
+    private readonly record struct FlushDelta(int Created, int Updated, int Skipped, int Failed, int Pending = 0);
 
     private async Task<FlushDelta> FlushAsync(
         IConnectorSink sink,
@@ -1912,6 +1773,7 @@ public sealed class SyncProjectOrchestrator
         {
             results = await sink.UpsertBatchAsync(buffer, ct);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             await Log(runId, "Error", $"    Sink bulk upsert threw for {buffer.Count} records: {ex.Message}");
@@ -1919,12 +1781,13 @@ public sealed class SyncProjectOrchestrator
         }
 
         int c = 0, u = 0, s = 0, f = 0;
-        int asyncSubmitted = 0;
+        int asyncSubmitted = 0, pending = 0;
         for (int i = 0; i < results.Count; i++)
         {
             var r = results[i];
             if (r.AsyncJob is not null)
             {
+                pending++;
                 var srcObj = i < buffer.Count ? buffer[i] : null;
                 try
                 {
@@ -1945,6 +1808,7 @@ public sealed class SyncProjectOrchestrator
                 }
                 catch (Exception ex)
                 {
+                    f++;
                     await Log(runId, "Warning", $"    Could not persist async job submission ({r.AsyncJob.JobType} / {r.AsyncJob.JobId}): {ex.Message}");
                 }
             }
@@ -1976,7 +1840,7 @@ public sealed class SyncProjectOrchestrator
         }
         if (asyncSubmitted > 0)
             await Log(runId, "Info", $"    Submitted {asyncSubmitted} async job(s); poller will advance them out-of-band.");
-        return new FlushDelta(c, u, s, f);
+        return new FlushDelta(c, u, s, f, pending);
     }
 
     /// <summary>
@@ -2058,63 +1922,6 @@ public sealed class SyncProjectOrchestrator
             // Malformed config is not fatal — treat as "no tags".
         }
         return result;
-    }
-
-    private static ConnectorObject ApplyMappings(ConnectorObject src, IReadOnlyList<AttributeMapping> mappings)
-    {
-        if (mappings.Count == 0) return src;
-
-        var dst = new ConnectorObject
-        {
-            SourceId = src.SourceId,
-            ObjectClass = src.ObjectClass
-        };
-
-        foreach (var m in mappings)
-        {
-            object? value = null;
-            var hasValue = src.Attributes.TryGetValue(m.SourceAttribute, out value);
-
-            if (!string.IsNullOrWhiteSpace(m.TransformExpr))
-            {
-                value = AttributeTransformer.Apply(m.TransformExpr!, value);
-                hasValue = value is not null || AttributeTransformer.ProducesValueWhenSourceMissing(m.TransformExpr!);
-            }
-
-            if (hasValue)
-            {
-                dst.Attributes[m.SinkAttribute] = value;
-            }
-            else if (m.IsRequired)
-            {
-                dst.Attributes[m.SinkAttribute] = null;
-            }
-        }
-
-        foreach (var fallback in new[] { "userName", "UserName", "sAMAccountName" })
-        {
-            if (!dst.Attributes.ContainsKey(fallback) && src.Attributes.TryGetValue(fallback, out var v))
-                dst.Attributes[fallback] = v;
-        }
-
-        // Structural DN carry-through. AD group membership + manager resolution on the
-        // IC sink key off Objects.DN (members are LDAP DNs; the manager attribute is a
-        // DN). ApplyMappings otherwise drops any attribute a step didn't explicitly map,
-        // so a project that maps display fields but not distinguishedName would land the
-        // object on IC with a NULL DN and member/manager DNs would never resolve. Always
-        // carry the source DN forward under IC's column name "DN" (the IC /bulk allow-list
-        // accepts it; non-IC sinks simply ignore an attribute they don't map). The raw
-        // source bag uses "distinguishedName" (AD source) — honor either spelling, and
-        // never clobber an explicit mapping that already produced a DN.
-        if (!dst.Attributes.ContainsKey("DN"))
-        {
-            if (src.Attributes.TryGetValue("distinguishedName", out var dnVal) && dnVal is not null)
-                dst.Attributes["DN"] = dnVal;
-            else if (src.Attributes.TryGetValue("DN", out var dnVal2) && dnVal2 is not null)
-                dst.Attributes["DN"] = dnVal2;
-        }
-
-        return dst;
     }
 
     private Task Log(Guid runId, string level, string message) =>

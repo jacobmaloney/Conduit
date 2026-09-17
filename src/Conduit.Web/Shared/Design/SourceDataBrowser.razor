@@ -1,0 +1,49 @@
+@using global::Conduit.SourceBrowsing
+@using IdentityCenter.Brand.Models
+@using IdentityCenter.Brand.Components.Modals
+@inject Conduit.Web.Services.SourceBrowseService Browser
+@inject Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider Authentication
+
+<BrandSourceBrowser @key="Selection" Describe="DescribeAsync" Read="ReadAsync" Save="SaveAsync" OnClose="OnClose" />
+
+@code {
+    [Parameter, EditorRequired] public SourceBrowseSelection Selection { get; set; } = default!;
+    [Parameter] public EventCallback OnClose { get; set; }
+    private async Task<BrandMappingSaved> SaveAsync(BrandMappingSave draft, CancellationToken ct)
+    {
+        try
+        {
+            var saved = await Browser.SaveMappingsAsync((await Authentication.GetAuthenticationStateAsync()).User,
+                new(Selection with { StepId = draft.StepId }, draft.Rules.Select(m => new SourceMappingRule(m.Source, m.Target, m.Transformation, m.DefaultValue, m.Required, m.Id, m.TargetType)).ToArray(), draft.Revision), ct);
+            return new(saved.Message, Map(saved.Context));
+        }
+        catch (SourceBrowseException ex) { throw PresentationError(ex); }
+    }
+    private async Task<BrandSourceContext> DescribeAsync(Guid? stepId, CancellationToken ct)
+    {
+        try { return Map(await Browser.DescribeAsync((await Authentication.GetAuthenticationStateAsync()).User, Selection with { StepId = stepId }, ct)); }
+        catch (SourceBrowseException ex) { throw PresentationError(ex); }
+    }
+    private async Task<BrandSourcePage> ReadAsync(BrandSourceQuery query, CancellationToken ct)
+    {
+        try
+        {
+            var page = await Browser.ReadAsync((await Authentication.GetAuthenticationStateAsync()).User, new(Selection with { StepId = query.StepId },
+                new(query.Limit, query.ObjectClass, query.BaseDn, query.Filter, query.Mappings?.Select(m => new SourceMappingRule(m.Source, m.Target, m.Transformation, m.DefaultValue, m.Required, m.Id, m.TargetType)).ToArray())), ct);
+            return new(Map(page.Context), page.Rows.Select(r => new BrandSourceRow(r.Number, r.Label,
+                r.Fields.Select(f => new BrandSourceField(f.Name, f.Value)).ToArray(), r.MappedFields?.Select(m => new BrandMappedField(m.Source, m.Target, m.Input, m.Output, m.Outcome)).ToArray())).ToArray(), page.HasMore, page.ReadAtUtc, page.Note);
+        }
+        catch (SourceBrowseException ex) { throw PresentationError(ex); }
+    }
+    private static BrandSourceBrowserException PresentationError(SourceBrowseException ex) => new(ex.Message,
+        ex.Code is not ("UnsupportedReader" or "InactiveConnection" or "UnsupportedScope" or "AdministratorRequired" or "SourceAccessDenied"));
+    private static BrandSourceContext Map(SourceBrowseContext c) => new(c.ConnectionName, c.ExecutionLocation, c.ProjectName,
+        c.StepId, c.ObjectClass, c.ObjectClasses, c.CanEditScope, c.CanBrowse, c.Reason,
+        c.Steps.Select(s => new BrandSourceStep(s.Id, s.Name)).ToArray(), c.Scope.Select(f => new BrandSourceField(f.Name, f.Value)).ToArray(),
+        c.Mapping == null ? null : new(c.Mapping.Profile, c.Mapping.Help, c.Mapping.Expression, c.Mapping.Defaults, c.Mapping.Required, c.Mapping.Transformations,
+            c.Mapping.SavedRules.Select(m => new BrandMappingRule(m.Source, m.Target, m.Transformation, m.DefaultValue, m.Required, m.Id, m.TargetType)).ToArray(), c.Mapping.Notice,
+            c.Mapping.Edit == null ? null : new(c.Mapping.Edit.Revision, c.Mapping.Edit.Schema.Name,
+                c.Mapping.Edit.Schema.Targets.Select(t => new BrandMappingTarget(t.Name, t.Kind, t.DataType, t.Required, t.MaxLength)).ToArray(),
+                c.Mapping.Edit.Schema.Note, c.Mapping.Edit.CanSave, c.Mapping.Edit.Reason, c.Mapping.Edit.Schema.AdditionalKind)));
+}
+

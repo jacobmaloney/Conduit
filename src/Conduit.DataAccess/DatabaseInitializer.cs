@@ -44,62 +44,32 @@ namespace Conduit.DataAccess
                 await RunMigrationsAsync();
             }
 
-            await SweepInterruptedRunsAsync();
+            await ObserveRunningOwnershipAsync();
         }
 
-        /// <summary>
-        /// Stuck-run recovery (startup sweep). A process killed/restarted mid-run
-        /// leaves SyncRuns rows stuck in 'Running' and SyncProjects.IsRunning=1
-        /// forever — the single-run CAS then refuses every future run. On startup
-        /// (single-node assumption, documented in ProcessingCenter) no run can
-        /// actually be executing, so anything still marked Running is provably
-        /// dead: stamp it Interrupted and release the project flags.
-        ///
-        /// Runs after migrations on every InitializeAsync path (inline retry,
-        /// background self-heal, setup completion). Table-existence guards make it
-        /// a no-op on a fresh database or when AutoMigrate is off.
-        /// </summary>
-        private async Task SweepInterruptedRunsAsync()
+        /// <summary>Startup cannot prove another process is dead. Observe running ownership without releasing it.</summary>
+        private async Task ObserveRunningOwnershipAsync()
         {
             const string sql = @"
+DECLARE @Running int = 0;
 IF OBJECT_ID('dbo.SyncRuns','U') IS NOT NULL
-BEGIN
-    UPDATE SyncRuns
-       SET Status = 'Interrupted',
-           ErrorMessage = 'Process restarted mid-run.',
-           CompletedAt = COALESCE(CompletedAt, SYSUTCDATETIME())
-     WHERE Status = 'Running';
-END;
-
+    SELECT @Running = @Running + COUNT(*) FROM SyncRuns WHERE Status = 'Running';
 IF OBJECT_ID('dbo.SyncProjects','U') IS NOT NULL
-BEGIN
-    UPDATE SyncProjects
-       SET IsRunning = 0,
-           LastRunStatus = 'Interrupted'
-     WHERE IsRunning = 1;
-END;";
+    SELECT @Running = @Running + COUNT(*) FROM SyncProjects WHERE IsRunning = 1;
+SELECT @Running;";
             try
             {
                 using var connection = new SqlConnection(_config.ConnectionString);
                 await connection.OpenAsync();
-                var swept = await connection.ExecuteAsync(sql);
-                if (swept > 0)
-                {
+                var running = await connection.ExecuteScalarAsync<int>(sql);
+                if (running > 0)
                     _logger.LogWarning(
-                        "Startup sweep: released {Count} sync run(s)/project flag(s) left 'Running' by a previous process. They are marked Interrupted.",
-                        swept);
-                }
+                        "RunOwnershipUnverified: startup observed {Count} running run/project row(s), left unchanged. Another process may own them; only verified terminal owners can be recovered without leases.", running);
             }
-            catch (SqlException)
-            {
-                // Connectivity-class failures are the retry wrapper's problem —
-                // rethrow so DatabaseStartup classifies them; anything else here
-                // must never block boot over a housekeeping UPDATE.
-                throw;
-            }
+            catch (SqlException) { throw; }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Startup sweep for interrupted sync runs failed (non-fatal).");
+                _logger.LogWarning(ex, "Startup observation of running sync ownership failed (non-fatal).");
             }
         }
 

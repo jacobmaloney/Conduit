@@ -58,6 +58,7 @@
         </div>
         <div class="cx-page-head-spacer"></div>
         <div class="cx-page-actions">
+            <a class="icb-list-action" href="source-catalog">All hosts and source data</a>
             <button class="cx-btn cx-btn--primary" @onclick="ShowNewProjectChooser">
                 <i class="fas fa-plus"></i> New Sync Project
             </button>
@@ -135,6 +136,10 @@
                         </div>
                     </div>
                     <div class="cx-actions">
+                        <div>
+                            <button type="button" class="icb-list-action" disabled="@(BrowseUnavailableReason(project.SourceTenantId) != null)" aria-describedby="@($"browse-reason-{project.Id}")" @onclick="() => sourceBrowse = new(project.SourceTenantId, project.Id)">Browse source</button>
+                            @if (BrowseUnavailableReason(project.SourceTenantId) is { } browseReason) { <p id="@($"browse-reason-{project.Id}")" class="icb-table-note">@browseReason</p> }
+                        </div>
                         @if (project.IsRunning)
                         {
                             <button class="cx-btn cx-btn--md" @onclick="() => SelectThenStop(project)"><i class="fas fa-stop"></i> Stop</button>
@@ -744,7 +749,7 @@
                             {
                                 <i class="fas fa-unlock me-1"></i>
                             }
-                            Force release
+                            Recover completed run
                         </button>
                     }
                     <button type="button" class="btn btn-danger" @onclick="StopSyncConfirmed" disabled="@stopInProgress">
@@ -2832,7 +2837,13 @@
    what puts the container tree on top when Browse opens it from one of them. *@
 <CcDirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" OnScopesSelected="OnScopesPicked" />
 
+@if (sourceBrowse != null)
+{
+    <Conduit.Web.Shared.Design.SourceDataBrowser Selection="@sourceBrowse" OnClose="() => sourceBrowse = null" />
+}
+
 @code {
+    private Conduit.SourceBrowsing.SourceBrowseSelection? sourceBrowse;
     // Literal @hourly / @every:Nm shown to the user — the Razor parser would otherwise
     // try to treat @ as a transition, so we hold them in fields with the bare characters.
     private const string cronPlaceholder = "@hourly  or  @every:15m  (blank = manual only)";
@@ -4974,8 +4985,7 @@
     private bool showStopConfirmModal;
     private bool stopInProgress;
     private string stopError = string.Empty;
-    // Fix 4: offered only after RequestCancel found nothing in-process while the
-    // DB row still says Running (orphaned flag) — renders the Force release button.
+    // Offers only terminal-owner recovery when local cancellation cannot act.
     private bool stopForceReleaseOffered;
 
     // Copy-Template modal state
@@ -5465,6 +5475,10 @@
 
     private string TenantName(Guid id) =>
         tenantById.TryGetValue(id, out var t) ? t.Name : "(unknown)";
+
+    private string? BrowseUnavailableReason(Guid id) => tenantById.TryGetValue(id, out var source)
+        ? Conduit.Web.Services.SourceBrowseService.UnavailableReason(source.SystemType, source.IsActive)
+        : "Source connection is unavailable. Refresh the projects list.";
 
     private string TenantType(Guid id) =>
         tenantById.TryGetValue(id, out var t) ? t.SystemType : "?";
@@ -6377,13 +6391,9 @@
         showRunConfirmModal = false;
         runNowInProgress = false;
 
-        // Fix 3: pre-claim the single-run flag (atomic IsRunning 0→1 CAS) BEFORE
-        // firing the background run. Guid.Empty is the placeholder run id — the
-        // orchestrator stamps the real one once the run row exists. Losing the
-        // CAS means a run started between the modal opening and Confirm (another
-        // operator, the scheduler, the API): show the already-running message and
-        // do NOT fire a second run.
-        var claimed = await ProjectRepo.SetRunningAsync(projectId, Guid.Empty);
+        // Claim a unique run owner before dispatch; a concurrent winner is refused.
+        var ownerRunId = Guid.NewGuid();
+        var claimed = await ProjectRepo.SetRunningAsync(projectId, ownerRunId);
         if (!claimed)
         {
             toastError = $"'{projectName}' already has a run in progress — view its live progress in Sync History.";
@@ -6404,7 +6414,7 @@
                 var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
                 // preClaimed: this page won the CAS above; the orchestrator owns
                 // the release from here on every exit path.
-                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None, preClaimed: true);
+                await orchestrator.ExecuteAsync(projectId, "Manual", CancellationToken.None, claimedRunId: ownerRunId);
             }
             catch (Exception ex)
             {
@@ -6420,7 +6430,7 @@
                 {
                     using var cleanupScope = ScopeFactory.CreateScope();
                     await cleanupScope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
-                        .ClearRunningAsync(projectId);
+                        .ClearRunningAsync(projectId, ownerRunId);
                 }
                 catch (Exception clearEx)
                 {
@@ -6450,7 +6460,8 @@
         var projectName = selectedProject.Name;
         var selectedClass = string.IsNullOrWhiteSpace(fullSyncObjectClass) ? null : fullSyncObjectClass;
 
-        var claimed = await ProjectRepo.SetRunningAsync(projectId, Guid.Empty);
+        var ownerRunId = Guid.NewGuid();
+        var claimed = await ProjectRepo.SetRunningAsync(projectId, ownerRunId);
         if (!claimed)
         {
             fullSyncInProgress = false;
@@ -6465,11 +6476,11 @@
             // Cursor + hash reset is one transaction and happens only after this page
             // owns the project's single-run claim. If reset fails, release the claim
             // and do not start a partially-requested full sync.
-            await ProjectRepo.ResetForFullSyncAsync(projectId, selectedProject.SinkTenantId, selectedClass);
+            await ProjectRepo.ResetForFullSyncAsync(projectId, selectedProject.SinkTenantId, selectedClass, ownerRunId);
         }
         catch (Exception ex)
         {
-            await ProjectRepo.ClearRunningAsync(projectId);
+            await ProjectRepo.ClearRunningAsync(projectId, ownerRunId);
             fullSyncInProgress = false;
             showFullSyncConfirmModal = false;
             toastError = $"Could not prepare full sync: {ex.Message}";
@@ -6489,7 +6500,7 @@
                 using var scope = ScopeFactory.CreateScope();
                 var orchestrator = scope.ServiceProvider.GetRequiredService<SyncProjectOrchestrator>();
                 var trigger = selectedClass is null ? "ManualFull" : $"ManualFull:{selectedClass}";
-                await orchestrator.ExecuteAsync(projectId, trigger, CancellationToken.None, preClaimed: true);
+                await orchestrator.ExecuteAsync(projectId, trigger, CancellationToken.None, claimedRunId: ownerRunId);
             }
             catch (Exception ex)
             {
@@ -6498,7 +6509,7 @@
                 {
                     using var cleanupScope = ScopeFactory.CreateScope();
                     await cleanupScope.ServiceProvider.GetRequiredService<SyncProjectRepository>()
-                        .ClearRunningAsync(projectId);
+                        .ClearRunningAsync(projectId, ownerRunId);
                 }
                 catch (Exception clearEx)
                 {
@@ -6535,13 +6546,12 @@
         stopError = string.Empty;
         try
         {
-            // Trip the SAME cancellation token the orchestrator threads through
-            // every step / sink loop. The orchestrator's existing
-            // OperationCanceledException handler marks the run "Cancelled" and
-            // releases IsRunning — no parallel stop path. A false return means the
-            // run is not executing in this process (e.g. a scheduler tick on
-            // another node, single-node assumption aside, or it already finished).
-            var signalled = CancellationRegistry.RequestCancel(selectedProject.Id);
+            // Bind cancellation to the persisted owner, never just the project slot.
+            var fresh = await ProjectRepo.GetByIdAsync(selectedProject.Id);
+            var signalled = fresh is { IsRunning: true, LastRunId: { } ownerRunId }
+                && selectedProject.LastRunId == ownerRunId
+                && ownerRunId != Guid.Empty
+                && CancellationRegistry.RequestCancel(fresh.Id, ownerRunId);
             if (signalled)
             {
                 var name = selectedProject.Name;
@@ -6550,14 +6560,10 @@
             }
             else
             {
-                // Fix 4: nothing to cancel in-process, but the DB row may STILL
-                // say Running (e.g. a previous process died mid-run before the
-                // startup sweep, or the flag got orphaned). Re-check the
-                // authoritative row; if it is still flagged, offer Force release.
-                var fresh = await ProjectRepo.GetByIdAsync(selectedProject.Id);
+                // No local registration is not evidence of a dead remote owner.
                 if (fresh is not null && fresh.IsRunning)
                 {
-                    stopError = "No in-flight run was found for this project in this process, but the project is still marked Running. If you are sure no run is executing, use Force release to clear the flag.";
+                    stopError = "RunOwnershipUnverified: this process cannot cancel the persisted owner. Recover completed run only clears the flag when that exact run is already terminal; running or missing owners remain unchanged.";
                     stopForceReleaseOffered = true;
                 }
                 else
@@ -6577,13 +6583,7 @@
         }
     }
 
-    /// <summary>
-    /// Fix 4: operator-confirmed recovery for a project whose IsRunning flag is
-    /// orphaned (no run executing in this process, row still flagged). Stamps any
-    /// dangling 'Running' run(s) Interrupted and releases the project flag via
-    /// FinishRunAsync (which also sets LastRunStatus). Never touches a healthy
-    /// run: the button is only offered after RequestCancel found nothing to cancel.
-    /// </summary>
+    /// <summary>Recover only the exact owner after its persisted run has finished.</summary>
     private async Task ForceReleaseConfirmed()
     {
         if (selectedProject is null) return;
@@ -6594,23 +6594,17 @@
             var projectId = selectedProject.Id;
             var name = selectedProject.Name;
 
-            // Stamp dangling run rows first so history agrees with the project row.
-            var recent = await RunRepo.GetByProjectAsync(projectId, take: 25);
-            foreach (var dangling in recent.Where(r => r.Status == "Running"))
-            {
-                await RunRepo.FinishAsync(dangling.Id, "Interrupted", "Force-released by operator.", 0);
-            }
-
-            await ProjectRepo.FinishRunAsync(projectId, "Interrupted");
+            var expectedOwner = selectedProject.LastRunId ?? Guid.Empty;
+            await ProjectRepo.RecoverCompletedRunAsync(projectId, expectedOwner);
 
             showStopConfirmModal = false;
             stopForceReleaseOffered = false;
-            toastSuccess = $"'{name}' force-released. Dangling run(s) marked Interrupted; Run Now is available again.";
+            toastSuccess = $"'{name}' recovered from its completed run. Run history was preserved; Run Now is available again.";
             await Reload();
         }
         catch (Exception ex)
         {
-            stopError = $"Force release failed: {ex.Message}";
+            stopError = $"Recovery refused: {ex.Message}";
         }
         finally
         {

@@ -123,13 +123,22 @@ public class WorkflowRepository : BaseRepository
     /// A NULL cursor (reset / connector dropped incremental) means full enumeration
     /// next run — SAFE.
     /// </summary>
-    public Task SetStepCursorAsync(Guid stepId, string? cursor) =>
-        ExecuteAsync(@"
-            UPDATE WorkflowSteps
+    public async Task SetStepCursorAsync(Guid stepId, Guid projectId, Guid ownerRunId, string? cursor)
+    {
+        SyncRunOwnership.RequireOwner(ownerRunId);
+        var rows = await ExecuteAsync(@"
+            UPDATE s
                SET IncrementalCursor = @Cursor,
-                   CursorUpdatedAt   = SYSUTCDATETIME()
-             WHERE Id = @Id;",
-            new { Id = stepId, Cursor = cursor });
+                   CursorUpdatedAt = SYSUTCDATETIME()
+              FROM WorkflowSteps s
+              JOIN Workflows w ON w.Id = s.WorkflowId
+              JOIN SyncProjects p WITH (UPDLOCK,HOLDLOCK) ON p.Id = w.SyncProjectId
+             WHERE s.Id = @StepId AND p.Id = @ProjectId
+               AND p.IsRunning = 1 AND p.LastRunId = @OwnerRunId;",
+            new { StepId = stepId, ProjectId = projectId, OwnerRunId = ownerRunId, Cursor = cursor });
+        if (rows != 1)
+            throw new SyncRunOwnershipException("RunOwnershipLost", "The step checkpoint was not advanced because this run no longer owns its project.");
+    }
 
     /// <summary>
     /// Bulk reorder for a workflow's steps. Caller supplies the desired order;
@@ -184,12 +193,42 @@ public class WorkflowRepository : BaseRepository
         return rows.ToList();
     }
 
-    public async Task ReplaceMappingsForStepAsync(Guid syncProjectId, Guid workflowStepId, IEnumerable<AttributeMapping> mappings)
+    public async Task ReplaceMappingsForStepAsync(Guid syncProjectId, Guid workflowStepId, IEnumerable<AttributeMapping> mappings,
+        MappingSaveCondition? condition = null, System.Threading.CancellationToken ct = default)
     {
         using var conn = CreateConnection();
         using var tx = conn.BeginTransaction();
         try
         {
+            ct.ThrowIfCancellationRequested();
+            if (condition != null)
+            {
+                var savedStep = await conn.QuerySingleOrDefaultAsync<WorkflowStep>(new CommandDefinition(
+                    "SELECT * FROM WorkflowSteps WITH (UPDLOCK,HOLDLOCK) WHERE Id=@Id", new { Id = workflowStepId }, tx, cancellationToken: ct));
+                var project = await conn.QuerySingleOrDefaultAsync<SyncProject>(new CommandDefinition(@"
+                    SELECT p.* FROM SyncProjects p WITH (UPDLOCK,HOLDLOCK)
+                    JOIN Workflows w WITH (UPDLOCK,HOLDLOCK) ON w.SyncProjectId=p.Id
+                    WHERE p.Id=@Id AND w.Id=@WorkflowId AND w.Enabled=1",
+                    new { Id = syncProjectId, WorkflowId = savedStep?.WorkflowId }, tx, cancellationToken: ct));
+                var current = await conn.QueryAsync<AttributeMapping>(new CommandDefinition(
+                    "SELECT * FROM AttributeMappings WITH (UPDLOCK,HOLDLOCK) WHERE WorkflowStepId=@Id",
+                    new { Id = workflowStepId }, tx, cancellationToken: ct));
+                // An empty step inherits the project rows. Lock and version those rows
+                // too, so a reviewed inherited map cannot become a stale step override.
+                var inherited = current.Any() ? Array.Empty<AttributeMapping>() :
+                    (await conn.QueryAsync<AttributeMapping>(new CommandDefinition(
+                        "SELECT * FROM AttributeMappings WITH (UPDLOCK,HOLDLOCK) WHERE SyncProjectId=@Id AND WorkflowStepId IS NULL",
+                        new { Id = syncProjectId }, tx, cancellationToken: ct))).ToArray();
+                var scope = await conn.QuerySingleOrDefaultAsync<SyncProjectScope>(new CommandDefinition(
+                    "SELECT * FROM SyncProjectScopes WITH (UPDLOCK,HOLDLOCK) WHERE WorkflowStepId=@Id",
+                    new { Id = workflowStepId }, tx, cancellationToken: ct))
+                    ?? await conn.QuerySingleOrDefaultAsync<SyncProjectScope>(new CommandDefinition(
+                        "SELECT * FROM SyncProjectScopes WITH (UPDLOCK,HOLDLOCK) WHERE SyncProjectId=@Id AND WorkflowStepId IS NULL",
+                        new { Id = syncProjectId }, tx, cancellationToken: ct));
+                if (savedStep == null || project == null || !savedStep.Enabled || savedStep.StepType != WorkflowStepTypes.Mapping ||
+                    MappingSaveCondition.Version(project, savedStep, current, scope, inherited) != condition.Revision)
+                    throw new InvalidOperationException("MappingsChanged: The project or mappings changed. Reload before saving.");
+            }
             await conn.ExecuteAsync(
                 "DELETE FROM AttributeMappings WHERE WorkflowStepId = @Id",
                 new { Id = workflowStepId }, tx);
@@ -197,6 +236,7 @@ public class WorkflowRepository : BaseRepository
             var order = 0;
             foreach (var m in mappings)
             {
+                ct.ThrowIfCancellationRequested();
                 if (m.Id == Guid.Empty) m.Id = Guid.NewGuid();
                 m.SyncProjectId = syncProjectId;
                 m.WorkflowStepId = workflowStepId;

@@ -270,8 +270,8 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     ///
     /// IC caps a single request at ~1000 member ids total (summed across the
     /// Memberships entries in one call). We chunk a group's members across multiple
-    /// entries / calls so no single POST exceeds the cap. Best-effort: on a failed
-    /// POST we log and continue with the next chunk rather than throwing.
+    /// entries / calls so no single POST exceeds the cap. Continues remaining chunks
+    /// after a failed POST, then reports any incomplete effect to the checkpoint owner.
     /// </summary>
     public async Task<int> EmitGroupMembershipsAsync(
         string source,
@@ -304,7 +304,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         catch (Exception ex)
         {
             _logger.LogError(ex, "IC group-membership emission setup failed (tenant={TenantId})", _tenantId);
-            return 0;
+            throw new InvalidOperationException("IC group-membership emission setup failed.", ex);
         }
 
         var sanitizedSource = SanitizeSource(source);
@@ -312,7 +312,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         // member ids total; chunk so each call's summed member count stays under it.
         const int maxMemberIdsPerCall = 1000;
 
-        int pushedGroups = 0, edgesPersistedTotal = 0, membersUnresolvedTotal = 0, groupsUnresolvedTotal = 0;
+        int pushedGroups = 0, edgesPersistedTotal = 0, membersUnresolvedTotal = 0, groupsUnresolvedTotal = 0, failedChunks = 0;
         var pending = new List<object>();
         var pendingMemberCount = 0;
 
@@ -337,16 +337,30 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                     _logger.LogError(
                         "IC group-membership POST failed (tenant={TenantId}, entries={Entries}): HTTP {Status} {Detail}",
                         _tenantId, pending.Count, (int)resp.StatusCode, detail);
+                    failedChunks++;
                 }
                 else
                 {
                     using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
                     var root = doc.RootElement;
-                    int edgesPersisted = root.TryGetProperty("edgesPersisted", out var eEl) && eEl.ValueKind == JsonValueKind.Number ? eEl.GetInt32() : pendingMemberCount;
-                    int membersResolved = root.TryGetProperty("membersResolved", out var mrEl) && mrEl.ValueKind == JsonValueKind.Number ? mrEl.GetInt32() : pendingMemberCount;
-                    int membersUnresolved = root.TryGetProperty("membersUnresolved", out var muEl) && muEl.ValueKind == JsonValueKind.Number ? muEl.GetInt32() : 0;
-                    int groupsResolved = root.TryGetProperty("groupsResolved", out var grEl) && grEl.ValueKind == JsonValueKind.Number ? grEl.GetInt32() : pending.Count;
-                    int groupsUnresolved = root.TryGetProperty("groupsUnresolved", out var guEl) && guEl.ValueKind == JsonValueKind.Number ? guEl.GetInt32() : 0;
+                    int RequiredCount(string name)
+                    {
+                        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(name, out var value)
+                            || value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var count) || count < 0)
+                            throw new InvalidOperationException($"IC membership acknowledgement requires a nonnegative integer '{name}'.");
+                        return count;
+                    }
+                    int edgesPersisted = RequiredCount("edgesPersisted");
+                    int membersResolved = RequiredCount("membersResolved");
+                    int membersUnresolved = RequiredCount("membersUnresolved");
+                    int groupsResolved = RequiredCount("groupsResolved");
+                    int groupsUnresolved = RequiredCount("groupsUnresolved");
+                    if (edgesPersisted > membersResolved
+                        || (membersResolved > 0 && edgesPersisted == 0)
+                        || (long)membersResolved + membersUnresolved > pendingMemberCount
+                        || (long)groupsResolved + groupsUnresolved != pending.Count
+                        || (groupsUnresolved == 0 && (long)membersResolved + membersUnresolved != pendingMemberCount))
+                        throw new InvalidOperationException("IC membership acknowledgement does not confirm the submitted population.");
                     edgesPersistedTotal += edgesPersisted;
                     membersUnresolvedTotal += membersUnresolved;
                     groupsUnresolvedTotal += groupsUnresolved;
@@ -359,6 +373,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             catch (Exception ex)
             {
                 _logger.LogError(ex, "IC group-membership chunk threw (tenant={TenantId}, entries={Entries})", _tenantId, pending.Count);
+                failedChunks++;
             }
             pending.Clear();
             pendingMemberCount = 0;
@@ -397,6 +412,10 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         _logger.LogInformation(
             "IC group-membership emission complete (tenant={TenantId}, groups={Groups}, edgesPersisted={EdgesPersisted}, membersUnresolved={MembersUnresolved}, groupsUnresolved={GroupsUnresolved}).",
             _tenantId, pushedGroups, edgesPersistedTotal, membersUnresolvedTotal, groupsUnresolvedTotal);
+
+        if (failedChunks > 0 || membersUnresolvedTotal > 0 || groupsUnresolvedTotal > 0)
+            throw new InvalidOperationException(
+                $"IC group-membership emission incomplete: failedChunks={failedChunks}, membersUnresolved={membersUnresolvedTotal}, groupsUnresolved={groupsUnresolvedTotal}, edgesPersisted={edgesPersistedTotal}. The prior checkpoint must be retained for replay.");
 
         return edgesPersistedTotal;
     }
@@ -1240,49 +1259,97 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     // X-API-Key + BaseUrl credential the bulk/query paths already use.
 
     public async Task<PersonMatchResult> MatchPersonAsync(ConnectorObject obj, CancellationToken cancellationToken)
+        => (await MatchPeopleAsync([obj], cancellationToken))[0];
+
+    public async Task<IReadOnlyList<PersonMatchResult>> MatchPeopleAsync(IReadOnlyList<ConnectorObject> objects, CancellationToken ct)
     {
-        try
+        var results = new List<PersonMatchResult>(objects.Count);
+        foreach (var batch in objects.Chunk(250))
         {
-            var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId);
-            if (creds is null) return PersonMatchResult.Fail("No 'identitycenter' credential.");
-            var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
-
-            var body = new
+            ct.ThrowIfCancellationRequested();
+            try
             {
-                source = LookupAttr(obj, "_source"),
-                sourceUniqueId = obj.SourceId,
-                candidateKeys = new
+                var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId)
+                    ?? throw new InvalidOperationException("No 'identitycenter' credential.");
+                var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+                var items = batch.Select(obj => new {
+                    source = LookupAttr(obj, "_source"),
+                    sourceConnection = string.IsNullOrWhiteSpace(LookupAttr(obj, "_sourceConnection")) ? null :
+                        IdentityCenterSourceName.Sanitize(LookupAttr(obj, "_sourceConnection")),
+                    sourceUniqueId = obj.SourceId,
+                    candidateKeys = new {
+                        upn = LookupAttr(obj, "userPrincipalName") ?? LookupAttr(obj, "upn"),
+                        email = LookupAttr(obj, "mail") ?? LookupAttr(obj, "email") ?? LookupAttr(obj, "PrimaryEmail"),
+                        employeeId = LookupAttr(obj, "employeeID") ?? LookupAttr(obj, "employeeId"),
+                        username = LookupAttr(obj, "sAMAccountName") ?? LookupAttr(obj, "userName") ?? LookupAttr(obj, "Username"),
+                        firstName = LookupAttr(obj, "givenName") ?? LookupAttr(obj, "FirstName"),
+                        lastName = LookupAttr(obj, "sn") ?? LookupAttr(obj, "LastName"),
+                        department = LookupAttr(obj, "department") ?? LookupAttr(obj, "Department")
+                    }
+                }).ToArray();
+                using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/identities/match/batch", new { items }, ct);
+                if (!resp.IsSuccessStatusCode)
                 {
-                    upn = LookupAttr(obj, "userPrincipalName") ?? LookupAttr(obj, "upn"),
-                    email = LookupAttr(obj, "mail") ?? LookupAttr(obj, "email") ?? LookupAttr(obj, "PrimaryEmail"),
-                    employeeId = LookupAttr(obj, "employeeID") ?? LookupAttr(obj, "employeeId"),
-                    username = LookupAttr(obj, "sAMAccountName") ?? LookupAttr(obj, "userName") ?? LookupAttr(obj, "Username"),
-                    firstName = LookupAttr(obj, "givenName") ?? LookupAttr(obj, "FirstName"),
-                    lastName = LookupAttr(obj, "sn") ?? LookupAttr(obj, "LastName")
+                    var detail = $"Identity matching returned HTTP {(int)resp.StatusCode}. No creation is allowed. Check IC availability and update IC before Conduit.";
+                    // Only the named protocol message is displayed; never echo an arbitrary response body.
+                    try
+                    {
+                        using var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+                        if (error.RootElement.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                            detail = message.GetString() ?? detail;
+                    }
+                    catch (JsonException) { }
+                    results.AddRange(batch.Select(_ => PersonMatchResult.Fail(detail)));
+                    continue;
                 }
-            };
-
-            using var resp = await PostJsonWithRetryAsync(client, $"{creds.BaseUrl}/api/identities/match", body, cancellationToken);
-            if (!resp.IsSuccessStatusCode)
-                return PersonMatchResult.Fail($"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}");
-
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
-            var matched = doc.RootElement.TryGetProperty("matched", out var mEl) && mEl.GetBoolean();
-            if (!matched) return PersonMatchResult.Miss();
-
-            var idStr = doc.RootElement.TryGetProperty("identityId", out var iEl) ? iEl.GetString() : null;
-            var by = doc.RootElement.TryGetProperty("matchedBy", out var bEl) ? bEl.GetString() : null;
-            double conf = doc.RootElement.TryGetProperty("confidence", out var cEl) && cEl.ValueKind == JsonValueKind.Number
-                ? cEl.GetDouble() : 0.0;
-            return PersonMatchResult.Hit(idStr ?? string.Empty, conf, by ?? string.Empty);
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+                if (!doc.RootElement.TryGetProperty("results", out var rows) || rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() != batch.Length)
+                    throw new InvalidOperationException("IC returned an incomplete matching batch. No creation is allowed from this batch.");
+                // Parse the entire batch before adding any row so a malformed payload cannot
+                // leave a partly trusted set of matches behind.
+                var parsed = rows.EnumerateArray().Select((row, index) => {
+                    if (row.GetProperty("index").GetInt32() != index)
+                        throw new InvalidOperationException("IC returned mismatched correlation row indexes.");
+                    return ReadMatchResult(row);
+                }).ToArray();
+                results.AddRange(parsed);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "IC matching batch failed (tenant={TenantId})", _tenantId);
+                results.AddRange(batch.Select(_ => PersonMatchResult.Fail("The matching batch failed or returned an invalid response. No creation is allowed; check the Conduit log.")));
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "IC sink MatchPerson failed (tenant={TenantId}, sourceId={Id})", _tenantId, obj.SourceId);
-            return PersonMatchResult.Fail(ex.Message);
-        }
+        return results;
     }
 
+    private static PersonMatchResult ReadMatchResult(JsonElement row)
+    {
+        var outcome = row.GetProperty("outcome").GetString();
+        var matched = row.GetProperty("matched").GetBoolean();
+        var canCreate = row.GetProperty("canCreate").GetBoolean();
+        var reason = row.GetProperty("reason").GetString();
+        if (matched)
+        {
+            var id = row.GetProperty("identityId").GetString();
+            var confidence = row.GetProperty("confidence").GetDouble();
+            if (outcome is not ("Link" or "Retain") || canCreate || !Guid.TryParse(id, out var guid) || guid == Guid.Empty ||
+                !double.IsFinite(confidence) || confidence < 0 || confidence > 1)
+                throw new InvalidOperationException("IC returned an inconsistent successful match.");
+            return new PersonMatchResult { MatchedIdentityId = id, Confidence = confidence,
+                MatchedBy = row.TryGetProperty("matchedBy", out var rule) ? rule.GetString() ?? "" : "",
+                Outcome = outcome };
+        }
+        if (outcome == "Unmatched" && canCreate)
+        {
+            if (row.GetProperty("identityId").ValueKind != JsonValueKind.Null)
+                throw new InvalidOperationException("IC returned a person ID with a creation candidate.");
+            return PersonMatchResult.Miss();
+        }
+        return new PersonMatchResult { Outcome = outcome ?? "Unknown",
+            ErrorMessage = $"{outcome ?? "Unknown"}: {reason ?? "No resolved matching outcome was returned."}" };
+    }
     public async Task<PersonCreateResult> CreatePersonAsync(ConnectorObject obj, CancellationToken cancellationToken)
     {
         try
@@ -1317,6 +1384,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             if (string.IsNullOrEmpty(idStr)) return PersonCreateResult.Fail("Response missing identityId");
             return PersonCreateResult.Ok(idStr!);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogError(ex, "IC sink CreatePerson failed (tenant={TenantId}, sourceId={Id})", _tenantId, obj.SourceId);

@@ -9,11 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CsvHelper" Version="33.0.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Conduit.Readers.Csv\Conduit.Readers.Csv.csproj" />
     <ProjectReference Include="..\Conduit.Core\Conduit.Core.csproj" />
     <ProjectReference Include="..\Conduit.Sync\Conduit.Sync.csproj" />
   </ItemGroup>

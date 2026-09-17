@@ -74,13 +74,20 @@ public class SyncRunRepository : BaseRepository
             new { Ids = candidateTenantIds.ToArray() });
 
     /// <summary>Persist the post-enumeration cursor + incremental flag.</summary>
-    public Task SetCursorAsync(Guid runId, string? cursor, bool isIncremental) =>
-        ExecuteAsync(@"
-            UPDATE SyncRuns
-               SET [Cursor] = @Cursor,
-                   IsIncremental = @IsIncremental
-             WHERE Id = @RunId;",
-            new { RunId = runId, Cursor = cursor, IsIncremental = isIncremental });
+    public async Task SetCursorAsync(Guid runId, Guid projectId, string? cursor, bool isIncremental)
+    {
+        SyncRunOwnership.RequireOwner(runId);
+        var rows = await ExecuteAsync(@"
+            UPDATE r
+               SET [Cursor] = @Cursor, IsIncremental = @IsIncremental
+              FROM SyncRuns r
+              JOIN SyncProjects p WITH (UPDLOCK,HOLDLOCK) ON p.Id = r.SyncProjectId
+             WHERE r.Id = @RunId AND p.Id = @ProjectId
+               AND p.IsRunning = 1 AND p.LastRunId = @RunId;",
+            new { RunId = runId, ProjectId = projectId, Cursor = cursor, IsIncremental = isIncremental });
+        if (rows != 1)
+            throw new SyncRunOwnershipException("RunOwnershipLost", "The run checkpoint was not advanced because this run no longer owns its project.");
+    }
 
     public Task<SyncRun?> GetByIdAsync(Guid id) =>
         QuerySingleOrDefaultAsync<SyncRun>(

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -10,8 +9,7 @@ using System.Threading.Tasks;
 using Conduit.Core.SyncModels;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Security;
-using CsvHelper;
-using CsvHelper.Configuration;
+using Conduit.Readers.Csv;
 using Microsoft.Extensions.Logging;
 
 namespace Conduit.Connectors.Csv;
@@ -112,52 +110,31 @@ public sealed class CsvSource : IConnectorSource
         SyncProjectScope scope,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var creds = await CsvCredentialReader.ReadAsync(_protector, _tenantId)
-            ?? throw new InvalidOperationException($"No 'csv' credential for tenant {_tenantId}.");
+        cancellationToken.ThrowIfCancellationRequested();
+        var creds = await CsvCredentialReader.ReadAsync(_protector, _tenantId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (creds is null) throw new InvalidOperationException($"No 'csv' credential for tenant {_tenantId}.");
         if (!File.Exists(creds.FilePath))
             throw new FileNotFoundException($"CSV file not found at {creds.FilePath}.", creds.FilePath);
 
-        var config = new CsvConfiguration(CultureInfo.InvariantCulture)
-        {
-            Delimiter = string.IsNullOrEmpty(creds.Delimiter) ? "," : creds.Delimiter,
-            HasHeaderRecord = creds.HasHeader,
-            MissingFieldFound = null,
-            BadDataFound = null,
-            HeaderValidated = null
-        };
-        var encoding = ResolveEncoding(creds.Encoding);
-        using var reader = new StreamReader(creds.FilePath, encoding);
-        using var csv = new CsvReader(reader, config);
-        if (creds.HasHeader)
-        {
-            await csv.ReadAsync();
-            csv.ReadHeader();
-        }
+        using var reader = new StreamReader(creds.FilePath, ResolveEncoding(creds.Encoding));
+        using var csv = CreateReader(reader, creds, cancellationToken);
         var idCol = creds.IdColumn;
         var emitted = 0;
         var rowIndex = 0;
-        while (await csv.ReadAsync())
+        // MaxObjects bounds the selected population; do not parse an extra record
+        // beyond that scope. IC preview separately needs a lookahead for truncation.
+        while ((!scope.MaxObjects.HasValue || emitted < scope.MaxObjects.Value) &&
+               await csv.ReadAsync() is { } row)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break;
             rowIndex++;
             var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["objectClass"] = objectClass.ToLowerInvariant()
             };
-            if (csv.HeaderRecord is not null)
-            {
-                foreach (var h in csv.HeaderRecord)
-                {
-                    var val = csv.GetField(h);
-                    if (!string.IsNullOrEmpty(val)) attrs[h] = val;
-                }
-            }
-            else
-            {
-                for (int i = 0; csv.TryGetField<string>(i, out var v); i++)
-                    if (!string.IsNullOrEmpty(v)) attrs[$"col{i}"] = v;
-            }
+            foreach (var field in row)
+                if (!string.IsNullOrEmpty(field.Value)) attrs[field.Key] = field.Value;
             string sourceId = null!;
             if (!string.IsNullOrEmpty(idCol) && attrs.TryGetValue(idCol, out var idVal))
                 sourceId = idVal?.ToString() ?? string.Empty;
@@ -180,19 +157,35 @@ public sealed class CsvSource : IConnectorSource
 
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             var creds = await CsvCredentialReader.ReadAsync(_protector, _tenantId);
+            cancellationToken.ThrowIfCancellationRequested();
             if (creds is null) return new ConnectorTestResult { IsSuccessful = false, Message = "No 'csv' credential stored." };
             if (!File.Exists(creds.FilePath))
                 return new ConnectorTestResult { IsSuccessful = false, Message = $"File not found: {creds.FilePath}" };
-            return new ConnectorTestResult { IsSuccessful = true, Message = $"File readable: {creds.FilePath}" };
+            using var input = new StreamReader(creds.FilePath, ResolveEncoding(creds.Encoding));
+            using var csv = CreateReader(input, creds, cancellationToken);
+            if (await csv.ReadAsync() == null)
+                return new ConnectorTestResult { IsSuccessful = false, Message = "CSV has no data rows. Add a data row before testing." };
+            return new ConnectorTestResult { IsSuccessful = true, Message = $"CSV sample readable: {csv.FieldNames.Count} columns and first data row checked. Remaining rows are checked during sync." };
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            return new ConnectorTestResult { IsSuccessful = false, Message = ex.Message };
+            _logger.LogWarning("CSV sample read failed ({ErrorType})", ex.GetType().Name);
+            return new ConnectorTestResult { IsSuccessful = false, Message = ex is CsvReadException csv ? csv.Message : "CSV could not be read. Check file access and encoding." };
         }
     }
+
+    private static CsvRecordReader CreateReader(TextReader input, CsvCredentials creds, CancellationToken ct) =>
+        new(input, new CsvReadOptions
+        {
+            Delimiter = string.IsNullOrEmpty(creds.Delimiter) ? "," : creds.Delimiter,
+            HasHeaderRow = creds.HasHeader,
+            TrimFields = false
+        }, ct);
 
     private static Encoding ResolveEncoding(string name) =>
         name.ToUpperInvariant() switch

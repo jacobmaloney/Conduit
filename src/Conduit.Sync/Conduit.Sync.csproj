@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Conduit.SourceBrowsing\Conduit.SourceBrowsing.csproj" />
+  </ItemGroup>
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -14,6 +17,7 @@
     <PackageReference Include="System.DirectoryServices.Protocols" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Conduit.Mapping\Conduit.Mapping.csproj" />
     <ProjectReference Include="..\Conduit.Core\Conduit.Core.csproj" />
     <ProjectReference Include="..\Conduit.DataAccess\Conduit.DataAccess.csproj" />
     <ProjectReference Include="..\Conduit.Scheduling\Conduit.Scheduling.csproj" />

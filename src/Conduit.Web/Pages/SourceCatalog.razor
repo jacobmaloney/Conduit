@@ -1,0 +1,81 @@
+@page "/source-catalog"
+@attribute [Authorize(Roles = "Admin")]
+@using Conduit.SourceBrowsing
+@using SourceCatalogData = Conduit.SourceBrowsing.SourceCatalog
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
+@inject Conduit.Web.Services.SourceCatalogService Catalog
+@inject Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider Authentication
+@implements IDisposable
+
+<div class="cc-site container-fluid">
+    <BrandPageHeader Title="Connections and sync projects" Icon="fas fa-network-wired" Subtitle="Browse local sources here. IC-owned sources open in IC, where their sync runs.">
+        <PrimaryAction><a class="icb-list-action" href="connected-systems">Connected systems</a></PrimaryAction>
+    </BrandPageHeader>
+    <BrandSourceCatalog Items="@rows" Messages="@messages" Loading="@loading" OnRefresh="Load" OnOpen="Open" />
+</div>
+@if (selection != null)
+{
+    <Conduit.Web.Shared.Design.SourceDataBrowser Selection="@selection" OnClose="() => selection = null" />
+}
+
+@code {
+    private readonly CancellationTokenSource lifetime = new();
+    private IReadOnlyList<BrandSourceCatalogRow> rows = [];
+    private IReadOnlyList<string> messages = [];
+    private readonly Dictionary<string, SourceCatalogItem> choices = [];
+    private SourceBrowseSelection? selection;
+    private bool loading;
+    protected override Task OnInitializedAsync() => Load();
+    private async Task Load()
+    {
+        loading = true; rows = []; messages = []; choices.Clear(); selection = null;
+        try
+        {
+            var user = (await Authentication.GetAuthenticationStateAsync()).User;
+            var local = await Catalog.LocalAsync(user, lifetime.Token);
+            var loaded = local.Items.Select(item =>
+            {
+                var key = $"local/{item.Kind}/{item.Id}"; choices[key] = item;
+                return new BrandSourceCatalogRow(key, item.Kind, item.Name, item.ConnectionType, item.SourceName, local.ExecutionLocation,
+                    item.Enabled, item.CanBrowse, item.Kind == "Project" ? "Browse source" : "Browse data", item.Reason);
+            }).ToList();
+            var notices = new List<string> { $"{local.ExecutionLocation}: {local.Items.Count(i => i.Kind == "Connection")} connections and {local.Items.Count(i => i.Kind == "Project")} projects available." };
+            // Metadata requests are independent, bounded and never resolve a remote file path on this host.
+            using var throttle = new SemaphoreSlim(3);
+            var remotes = await Task.WhenAll(local.Items.Where(i => i.Kind == "Connection" && i.Enabled && i.ConnectionType is "IdentityCenter" or "CertificationCenterSaaS").Select(async connection =>
+            {
+                await throttle.WaitAsync(lifetime.Token);
+                try { return (connection, catalog: await Catalog.IdentityCenterAsync(user, connection.Id, lifetime.Token), error: (string?)null); }
+                catch (SourceBrowseException ex) { return (connection, catalog: (SourceCatalogData?)null, error: ex.Message); }
+                catch (OperationCanceledException) { throw; }
+                catch { return (connection, catalog: (SourceCatalogData?)null, error: "Catalog unavailable. Check the saved IC connection and retry."); }
+                finally { throttle.Release(); }
+            }));
+            if (lifetime.IsCancellationRequested) return;
+            foreach (var (connection, catalog, error) in remotes)
+            {
+                if (catalog == null) { notices.Add($"{connection.Name}: {error}"); continue; }
+                var location = $"IC · {connection.Name}";
+                notices.Add($"{location}: {catalog.Items.Count(i => i.Kind == "Connection")} connections and {catalog.Items.Count(i => i.Kind == "Project")} projects available.");
+                foreach (var item in catalog.Items)
+                {
+                    var href = SourceCatalogLinks.PortalBrowseUrl(catalog.PortalUrl, item);
+                    loaded.Add(new($"ic/{connection.Id}/{item.Kind}/{item.Id}", item.Kind, item.Name, item.ConnectionType, item.SourceName, location,
+                        item.Enabled, item.CanBrowse && href != null, "Open browser in IC", !item.CanBrowse ? item.Reason : href == null ? "Configure PortalUrl in IC General settings to open this source" : null, href));
+                }
+            }
+            rows = loaded; messages = notices;
+        }
+        catch (OperationCanceledException) { }
+        catch (SourceBrowseException ex) { messages = [ex.Message]; }
+        catch { messages = ["Local catalog unavailable. Check access and database availability, then refresh."]; }
+        finally { loading = false; }
+    }
+    private void Open(string key)
+    {
+        if (choices.TryGetValue(key, out var item) && item.CanBrowse)
+            selection = new(item.SourceConnectionId ?? item.Id, item.Kind == "Project" ? item.Id : null);
+    }
+    public void Dispose() { lifetime.Cancel(); lifetime.Dispose(); }
+}

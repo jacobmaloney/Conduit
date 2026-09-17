@@ -478,6 +478,17 @@ builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Co
 // via the ARG KQL endpoint over raw HTTP; surfaces Azure Hybrid Benefit markers).
 builder.Services.AddScoped<Conduit.Sync.Connectors.IConnectorAdapter, Conduit.Connectors.AzureResourceGraph.AzureResourceGraphAdapter>();
 builder.Services.AddScoped<Conduit.Sync.Connectors.ConnectorRegistry>();
+builder.Services.AddScoped<Conduit.Web.Services.ISourceBrowseStore, Conduit.Web.Services.SourceBrowseStore>();
+builder.Services.AddScoped<Conduit.Web.Services.SourceBrowseService>();
+builder.Services.AddScoped<Conduit.Web.Services.ISourceMappingTargetService, Conduit.Web.Services.SourceMappingTargetService>();
+builder.Services.AddScoped<Conduit.Web.Services.ISourceCatalogStore, Conduit.Web.Services.SourceCatalogStore>();
+builder.Services.AddScoped<Conduit.Web.Services.SourceCatalogService>();
+builder.Services.AddScoped<Conduit.Connectors.IdentityCenter.IIdentityCenterSourceCatalogClient, Conduit.Connectors.IdentityCenter.IdentityCenterSourceCatalogClient>();
+builder.Services.AddHttpClient(Conduit.Connectors.IdentityCenter.IdentityCenterSourceCatalogClient.HttpClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton(_ => new Conduit.Web.Services.SourceBrowseHost(
+    Conduit.Connectors.IdentityCenter.ConduitInstanceIdentity.InstanceId,
+    Conduit.Connectors.IdentityCenter.ConduitInstanceIdentity.Name));
 // Phase 1 inbound proxy: resolves the active connection and forwards inbound
 // SCIM/REST creates to a sink-capable connection's sink (else falls back local).
 builder.Services.AddScoped<Conduit.Web.Services.InboundProxyService>();
