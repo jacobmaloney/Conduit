@@ -4,196 +4,202 @@
 @using Conduit.Web.Services
 @using Conduit.Core.Models
 @using Conduit.DataAccess.Repositories
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Components.Modals
+@using IdentityCenter.Brand.Models
 @inject ApiTokenService ApiTokenService
 @inject TenantRepository TenantRepo
 @inject NavigationManager Navigation
 
 <PageTitle>API Tokens - Conduit</PageTitle>
 
-<div class="container-fluid">
-    <PageHeader Title="API Tokens" Subtitle="Manage bearer tokens used by external apps to call the SCIM and Generic REST endpoints.">
-        <Actions>
-            <button class="btn btn-primary" @onclick="ShowCreateTokenModal">
-                <i class="oi oi-plus"></i> Create Token
+<div class="container-fluid identities-container">
+    <Template1 Icon="oi oi-key" IconAccent="slate"
+               Title="API Tokens"
+               Subtitle="Manage bearer tokens used by external apps to call the SCIM and Generic REST endpoints.">
+        <PrimaryAction>
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="ShowCreateTokenModal">
+                <i class="oi oi-plus" aria-hidden="true"></i> Create Token
             </button>
-        </Actions>
-    </PageHeader>
+        </PrimaryAction>
+    </Template1>
 
-    <div class="alert alert-warning">
-        <i class="oi oi-warning"></i> <strong>Security Notice:</strong> Treat API tokens like passwords. Never share them or commit them to source control.
+    <div class="icb-notice icb-notice-warning mb-3">
+        <i class="oi oi-warning" aria-hidden="true"></i>
+        <div class="icb-notice-body"><strong>Security Notice:</strong> Treat API tokens like passwords. Never share them or commit them to source control.</div>
     </div>
 
     @if (!string.IsNullOrEmpty(actionMessage))
     {
-        <div class="alert @(actionOk ? "alert-success" : "alert-danger") alert-dismissible d-flex align-items-center">
-            <i class="oi @(actionOk ? "oi-check" : "oi-warning") me-2"></i>
-            <div>@actionMessage</div>
-            <button type="button" class="btn-close ms-auto" @onclick="() => actionMessage = null"></button>
+        <div class="icb-notice @(actionOk ? "icb-notice-success" : "icb-notice-danger") mb-3" role="status">
+            <i class="oi @(actionOk ? "oi-check" : "oi-warning")" aria-hidden="true"></i>
+            <div class="icb-notice-body">@actionMessage</div>
+            <button type="button" class="icb-notice-dismiss" aria-label="Dismiss" @onclick="() => actionMessage = null">&times;</button>
         </div>
     }
 
     @if (schemaError)
     {
-        <div class="alert alert-danger">
-            <h4 class="alert-heading">Database Schema Error</h4>
-            <p>The API Tokens table is missing or has an incorrect schema. This usually happens when using a database created before this feature was added.</p>
-            <hr>
-            <p class="mb-0">
-                <strong>To fix this:</strong> restart the application — pending migrations are applied automatically at startup.
-                If that doesn't resolve it, re-run <a href="/setup">Setup</a> against a fresh database.
-            </p>
+        <div class="icb-notice icb-notice-danger mb-3" role="alert">
+            <i class="oi oi-warning" aria-hidden="true"></i>
+            <div class="icb-notice-body">
+                <span class="icb-notice-title">Database Schema Error</span>
+                <p>The API Tokens table is missing or has an incorrect schema. This usually happens when using a database created before this feature was added.</p>
+                <p class="mb-0">
+                    <strong>To fix this:</strong> restart the application — pending migrations are applied automatically at startup.
+                    If that doesn't resolve it, re-run <a href="/setup">Setup</a> against a fresh database.
+                </p>
+            </div>
         </div>
     }
 
     @if (loading)
     {
-        <div class="text-center py-5">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
+        <div class="text-center py-5" role="status">
+            <i class="fas fa-spinner fa-spin fa-2x" aria-hidden="true"></i>
+            <span class="visually-hidden">Loading...</span>
         </div>
     }
     else if (!tokens.Any())
     {
-        <div class="alert alert-info">
-            <h4 class="alert-heading">No API Tokens</h4>
+        <div class="empty-state">
+            <h3>No API Tokens</h3>
             <p>You haven't created any API tokens yet.</p>
-            <hr>
-            <p class="mb-0">
-                <button class="btn btn-primary btn-sm" @onclick="ShowCreateTokenModal">
-                    <i class="oi oi-plus"></i> Create Your First Token
-                </button>
-            </p>
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="ShowCreateTokenModal">
+                <i class="oi oi-plus" aria-hidden="true"></i> Create Your First Token
+            </button>
         </div>
     }
     else
     {
-        <div class="card">
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Connected System</th>
-                                <th>Scope</th>
-                                <th>Created</th>
-                                <th>Last Used</th>
-                                <th>Expires</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var token in tokens)
-                            {
-                                <tr>
-                                    <td>
-                                        <strong>@token.Name</strong>
-                                        @if (!string.IsNullOrWhiteSpace(token.Description))
-                                        {
-                                            <div><small class="text-muted">@token.Description</small></div>
-                                        }
-                                    </td>
-                                    <td>
-                                        @{
-                                            var name = TenantNameFor(token.TenantId);
-                                        }
-                                        @if (token.TenantId == null)
-                                        {
-                                            <span class="badge bg-dark">Admin — all systems</span>
-                                        }
-                                        else
-                                        {
-                                            <span>@name</span>
-                                        }
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-info text-dark">@(string.IsNullOrEmpty(token.Scope) ? "Tenant" : token.Scope)</span>
-                                    </td>
-                                    <td>
-                                        <small>@token.CreatedAt.ToString("MMM dd, yyyy")</small>
-                                    </td>
-                                    <td>
-                                        @if (token.LastUsedAt.HasValue)
-                                        {
-                                            <small>@token.LastUsedAt.Value.ToString("MMM dd, yyyy")</small>
-                                        }
-                                        else
-                                        {
-                                            <small class="text-muted">Never</small>
-                                        }
-                                    </td>
-                                    <td>
-                                        @if (token.ExpiresAt.HasValue)
-                                        {
-                                            <small>@token.ExpiresAt.Value.ToString("MMM dd, yyyy")</small>
-                                        }
-                                        else
-                                        {
-                                            <small class="text-muted">Never</small>
-                                        }
-                                    </td>
-                                    <td>
-                                        @if (!token.IsActive)
-                                        {
-                                            <span class="badge bg-secondary">Inactive</span>
-                                        }
-                                        else if (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTime.UtcNow)
-                                        {
-                                            <span class="badge bg-danger">Expired</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="badge bg-success">Active</span>
-                                        }
-                                    </td>
-                                    <td>
-                                        @if (token.IsActive && (!token.ExpiresAt.HasValue || token.ExpiresAt.Value > DateTime.UtcNow))
-                                        {
-                                            <button class="btn btn-sm btn-outline-warning" @onclick="() => ToggleToken(token)">
-                                                <i class="oi oi-ban"></i> Deactivate
-                                            </button>
-                                        }
-                                        else
-                                        {
-                                            <button class="btn btn-sm btn-outline-success" @onclick="() => ToggleToken(token)">
-                                                <i class="oi oi-check"></i> Activate
-                                            </button>
-                                        }
-                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteToken(token)">
-                                            <i class="oi oi-trash"></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+        <BrandListTable TItem="Conduit.Web.Services.ApiToken" Title="API tokens" Items="@tokens" TotalCount="@tokens.Count"
+                        PageSize="@Math.Max(1, tokens.Count)" State="BrandListState.Ready"
+                        EmptyMessage="No API tokens.">
+            <HeaderTemplate>
+                <th scope="col">Name</th><th scope="col">Connected System</th><th scope="col">Scope</th><th scope="col">Created</th>
+                <th scope="col">Last Used</th><th scope="col">Expires</th><th scope="col">Status</th><th scope="col">Actions</th>
+            </HeaderTemplate>
+            <RowTemplate Context="token">
+                <td class="nm-cell">
+                    <strong>@token.Name</strong>
+                    @if (!string.IsNullOrWhiteSpace(token.Description))
+                    {
+                        <div><small class="text-muted">@token.Description</small></div>
+                    }
+                </td>
+                <td>
+                    @if (token.TenantId == null)
+                    {
+                        <BrandBadge Text="Admin — all systems" Tone="BrandBadgeTone.Neutral" Soft="true" />
+                    }
+                    else
+                    {
+                        <span>@TenantNameFor(token.TenantId)</span>
+                    }
+                </td>
+                <td><BrandBadge Text="@(string.IsNullOrEmpty(token.Scope) ? "Tenant" : token.Scope)" Tone="BrandBadgeTone.Info" Soft="true" /></td>
+                <td><small>@token.CreatedAt.ToString("MMM dd, yyyy")</small></td>
+                <td>
+                    @if (token.LastUsedAt.HasValue)
+                    {
+                        <small>@token.LastUsedAt.Value.ToString("MMM dd, yyyy")</small>
+                    }
+                    else
+                    {
+                        <small class="text-muted">Never</small>
+                    }
+                </td>
+                <td>
+                    @if (token.ExpiresAt.HasValue)
+                    {
+                        <small>@token.ExpiresAt.Value.ToString("MMM dd, yyyy")</small>
+                    }
+                    else
+                    {
+                        <small class="text-muted">Never</small>
+                    }
+                </td>
+                <td>
+                    @if (!token.IsActive)
+                    {
+                        <BrandBadge Text="Inactive" Tone="BrandBadgeTone.Neutral" Soft="true" />
+                    }
+                    else if (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTime.UtcNow)
+                    {
+                        <BrandBadge Text="Expired" Tone="BrandBadgeTone.Danger" Soft="true" />
+                    }
+                    else
+                    {
+                        <BrandBadge Text="Active" Tone="BrandBadgeTone.Success" Soft="true" />
+                    }
+                </td>
+                <td>
+                    <div class="icb-table-actions">
+                        @if (token.IsActive && (!token.ExpiresAt.HasValue || token.ExpiresAt.Value > DateTime.UtcNow))
+                        {
+                            <button type="button" class="ic-btn icb-btn-caution ic-btn-sm" @onclick="() => ToggleToken(token)">
+                                <i class="oi oi-ban" aria-hidden="true"></i> Deactivate
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" class="ic-btn icb-btn-caution ic-btn-sm" @onclick="() => ToggleToken(token)">
+                                <i class="oi oi-check" aria-hidden="true"></i> Activate
+                            </button>
+                        }
+                        <button type="button" class="ic-btn ic-btn-danger ic-btn-sm" @onclick="() => DeleteToken(token)" aria-label="@($"Delete {token.Name}")" title="Delete">
+                            <i class="oi oi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </td>
+            </RowTemplate>
+        </BrandListTable>
     }
+
+    <BrandConfirmationModal @ref="confirmModal" ConfirmLabel="Delete" />
 </div>
 
-<!-- Create Token Modal -->
-<div class="modal @(showCreateModal ? "show d-block" : "")" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Create API Token</h5>
-                <button type="button" class="btn-close" @onclick="CloseCreateModal"></button>
+@if (showCreateModal)
+{
+    <BrandEditorDialog Label="Create API Token">
+        <HeaderContent>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                <div>
+                    <h1 class="icb-editor-title mb-1">
+                        <i class="oi oi-key me-2" aria-hidden="true"></i>
+                        <span>Create API Token</span>
+                    </h1>
+                    <p class="icb-editor-subtitle mb-0">The raw value is shown once, right after it is minted.</p>
+                </div>
+                <div class="d-flex align-items-center flex-wrap gap-2">
+                    @if (string.IsNullOrEmpty(generatedToken))
+                    {
+                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseCreateModal">Cancel</button>
+                        <button type="button" class="ic-btn ic-btn-primary" @onclick="CreateToken" disabled="@string.IsNullOrWhiteSpace(newToken.Name)">
+                            Create Token
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" class="ic-btn ic-btn-primary" @onclick="CloseCreateModal" disabled="@(!confirmCopied)" title="@(confirmCopied ? "" : "Tick the checkbox below first.")">
+                            Done
+                        </button>
+                    }
+                </div>
             </div>
-            <div class="modal-body">
-                <form>
-                    <div class="mb-3">
-                        <label class="form-label">Token Name *</label>
-                        <input type="text" class="form-control" @bind="newToken.Name" placeholder="e.g., Production API" />
-                        <small class="form-text text-muted">A descriptive name to identify this token</small>
+        </HeaderContent>
+        <ChildContent>
+            <form>
+                <div class="icb-settings-grid">
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="tokenName">Token Name *</label>
+                        <input id="tokenName" type="text" class="icb-form-input" @bind="newToken.Name" placeholder="e.g., Production API" />
+                        <span class="icb-form-help">A descriptive name to identify this token</span>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label">Connected System *</label>
-                        <select class="form-select" @bind="newTokenSystemSelection">
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="tokenSystem">Connected System *</label>
+                        <select id="tokenSystem" class="icb-form-select" @bind="newTokenSystemSelection">
                             <option value="__admin__">Admin — all systems</option>
                             <option value="__arsproxy__">ARS Proxy (for /ars/v1/ inbound)</option>
                             @foreach (var sys in tenants)
@@ -201,18 +207,18 @@
                                 <option value="@sys.Id">@sys.Name @(sys.Domain != null ? $"({sys.Domain})" : "")</option>
                             }
                         </select>
-                        <small class="form-text text-muted">Scopes the token's read/write reach. Admin = full access. ARS Proxy = inbound /ars/v1/ only.</small>
+                        <span class="icb-form-help">Scopes the token's read/write reach. Admin = full access. ARS Proxy = inbound /ars/v1/ only.</span>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label">Description</label>
-                        <textarea class="form-control" rows="3" @bind="newToken.Description"
+                    <div class="icb-form-field icb-settings-grid-full">
+                        <label class="icb-form-label" for="tokenDescription">Description</label>
+                        <textarea id="tokenDescription" class="icb-form-textarea" rows="3" @bind="newToken.Description"
                                   placeholder="What will this token be used for?"></textarea>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label">Expiration</label>
-                        <select class="form-select" @bind="expirationOption">
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="tokenExpiration">Expiration</label>
+                        <select id="tokenExpiration" class="icb-form-select" @bind="expirationOption">
                             <option value="never">Never expires</option>
                             <option value="30">30 days</option>
                             <option value="60">60 days</option>
@@ -221,49 +227,51 @@
                             <option value="365">1 year</option>
                         </select>
                     </div>
+                </div>
 
-                    @if (!string.IsNullOrEmpty(createError))
-                    {
-                        <div class="alert alert-danger py-2">
-                            <i class="oi oi-warning"></i> @createError
-                        </div>
-                    }
+                @if (!string.IsNullOrEmpty(createError))
+                {
+                    <div class="icb-notice icb-notice-danger mt-3" role="alert">
+                        <i class="oi oi-warning" aria-hidden="true"></i>
+                        <div class="icb-notice-body">@createError</div>
+                    </div>
+                }
 
-                    @if (!string.IsNullOrEmpty(generatedToken))
-                    {
-                        <div class="alert alert-success">
-                            <h6 class="alert-heading"><i class="oi oi-check"></i> Token created — copy it now.</h6>
+                @if (!string.IsNullOrEmpty(generatedToken))
+                {
+                    <div class="icb-notice icb-notice-success mt-3" role="status">
+                        <i class="oi oi-check" aria-hidden="true"></i>
+                        <div class="icb-notice-body">
+                            <span class="icb-notice-title">Token created — copy it now.</span>
                             <p class="mb-2">The raw value is shown <strong>once</strong>. After this dialog closes only the hash is kept; lose the value and you have to mint a new token.</p>
 
-                            <div class="mb-2">
-                                <small class="text-muted d-block mb-1">Authorization header (this is the full string your client sends):</small>
-                                <div class="input-group">
-                                    <input type="text" id="newTokenHeader" class="form-control font-monospace" value="Bearer @generatedToken" readonly @onclick="SelectAllOnFocus" />
-                                    <button class="btn @(tokenCopied ? "btn-success" : "btn-outline-secondary")" type="button" @onclick="CopyToken">
-                                        <i class="oi oi-clipboard"></i> @(tokenCopied ? "Copied" : "Copy")
+                            <div class="icb-form-field mb-2">
+                                <span class="icb-form-help">Authorization header (this is the full string your client sends):</span>
+                                <div class="icb-form-input-group">
+                                    <input type="text" id="newTokenHeader" class="icb-form-input icb-form-input-mono" value="Bearer @generatedToken" readonly @onclick="SelectAllOnFocus" />
+                                    <button class="ic-btn @(tokenCopied ? "ic-btn-primary" : "ic-btn-ghost")" type="button" @onclick="CopyToken">
+                                        <i class="oi oi-clipboard" aria-hidden="true"></i> @(tokenCopied ? "Copied" : "Copy")
                                     </button>
                                 </div>
                             </div>
 
-                            <div class="mb-2">
-                                <small class="text-muted d-block mb-1">Raw value only (if you only need the part after <code>Bearer </code>):</small>
-                                <div class="input-group">
-                                    <input type="text" class="form-control font-monospace" value="@generatedToken" readonly @onclick="SelectAllOnFocus" />
-                                </div>
+                            <div class="icb-form-field mb-2">
+                                <span class="icb-form-help">Raw value only (if you only need the part after <code>Bearer </code>):</span>
+                                <input type="text" class="icb-form-input icb-form-input-mono" value="@generatedToken" readonly @onclick="SelectAllOnFocus" />
                             </div>
 
-                            <hr />
+                            <hr class="icb-form-divider" />
 
                             <div class="d-flex align-items-center gap-2 mb-2">
-                                <button class="btn btn-sm btn-outline-primary" type="button" @onclick="TestNewToken" disabled="@testInFlight">
+                                <button class="ic-btn ic-btn-ghost ic-btn-sm" type="button" @onclick="TestNewToken" disabled="@testInFlight">
                                     @if (testInFlight)
                                     {
-                                        <span class="spinner-border spinner-border-sm me-1"></span>
+                                        <i class="fas fa-spinner fa-spin me-1" aria-hidden="true"></i>
                                         <span>Testing…</span>
                                     }
                                     else
                                     {
-                                        <i class="oi oi-pulse"></i>
+                                        <i class="oi oi-pulse" aria-hidden="true"></i>
                                         <span>Test this token now</span>
                                     }
                                 </button>
@@ -271,43 +279,23 @@
                             </div>
                             @if (!string.IsNullOrEmpty(testResult))
                             {
-                                <div class="@(testOk ? "alert alert-success" : "alert alert-danger") py-2 mb-2 small">
-                                    @testResult
+                                <div class="icb-notice @(testOk ? "icb-notice-success" : "icb-notice-danger") mb-2" role="status">
+                                    <div class="icb-notice-body">@testResult</div>
                                 </div>
                             }
 
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="confirmCopied" @bind="confirmCopied" />
-                                <label class="form-check-label" for="confirmCopied">
+                            <div class="icb-form-check">
+                                <input type="checkbox" id="confirmCopied" @bind="confirmCopied" />
+                                <label class="icb-form-check-label" for="confirmCopied">
                                     I've copied the token somewhere safe.
                                 </label>
                             </div>
                         </div>
-                    }
-                </form>
-            </div>
-            <div class="modal-footer">
-                @if (string.IsNullOrEmpty(generatedToken))
-                {
-                    <button type="button" class="btn btn-secondary" @onclick="CloseCreateModal">Cancel</button>
-                    <button type="button" class="btn btn-primary" @onclick="CreateToken" disabled="@string.IsNullOrWhiteSpace(newToken.Name)">
-                        Create Token
-                    </button>
+                    </div>
                 }
-                else
-                {
-                    <button type="button" class="btn btn-primary" @onclick="CloseCreateModal" disabled="@(!confirmCopied)" title="@(confirmCopied ? "" : "Tick the checkbox above first.")">
-                        Done
-                    </button>
-                }
-            </div>
-        </div>
-    </div>
-</div>
-
-@if (showCreateModal)
-{
-    <div class="modal-backdrop fade show"></div>
+            </form>
+        </ChildContent>
+    </BrandEditorDialog>
 }
 
 @code {
@@ -321,6 +309,7 @@
     private string expirationOption = "never";
     // "__admin__" | "__arsproxy__" | a tenant Guid string
     private string newTokenSystemSelection = "__admin__";
+    private BrandConfirmationModal? confirmModal;
 
     // Page-level feedback for list actions (toggle / delete) and an in-modal error
     // for create — previously all three swallowed failures to Console only, so the
@@ -368,13 +357,13 @@
         catch (Exception ex)
         {
             Console.WriteLine($"Error loading tokens: {ex.Message}");
-            
+
             // Check if it's a schema error
             if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("Invalid object name"))
             {
                 schemaError = true;
             }
-            
+
             tokens = new List<Conduit.Web.Services.ApiToken>();
         }
         finally
@@ -475,7 +464,7 @@
 
     private async Task DeleteToken(Conduit.Web.Services.ApiToken token)
     {
-        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete the token '{token.Name}'?"))
+        if (confirmModal == null || !await confirmModal.ShowAsync("Delete API token", $"Are you sure you want to delete the token '{token.Name}'?"))
         {
             return;
         }

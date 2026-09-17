@@ -4,6 +4,9 @@
 @using System.Net.Http
 @using Conduit.Web.Authentication
 @using Conduit.DataAccess.Repositories
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Components.Modals
+@using IdentityCenter.Brand.Models
 @inject IdentityProviderRepository ProviderRepo
 @inject ISecretProtector SecretProtector
 @inject IHttpClientFactory HttpClientFactory
@@ -13,219 +16,197 @@
 <PageTitle>Identity Providers - Conduit</PageTitle>
 
 <div class="container-fluid identities-container">
-    <CcTemplate1 Icon="oi oi-key" IconAccent="slate"
-                 Title="Identity Providers"
-                 Subtitle="Optional single sign-on. SSO maps to an existing admin — it never creates accounts.">
+    <Template1 Icon="oi oi-key" IconAccent="slate"
+               Title="Identity Providers"
+               Subtitle="Optional single sign-on. SSO maps to an existing admin — it never creates accounts.">
         <PrimaryAction>
-            <button class="btn btn-primary" @onclick="OpenCreate">
-                <i class="oi oi-plus"></i> Add provider
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="OpenCreate">
+                <i class="oi oi-plus" aria-hidden="true"></i> Add provider
             </button>
         </PrimaryAction>
-    </CcTemplate1>
+    </Template1>
 
-    <div class="alert alert-info">
-        <i class="oi oi-info"></i>
-        Single sign-on is <strong>optional</strong>. With no enabled providers, the portal uses local
-        username/password only. A successful SSO sign-in must match an <strong>existing active admin</strong>
-        by username or email — no accounts are auto-created; manage those accounts under
-        <a href="/admin/portal-admins">Portal Admins</a>. Changes take effect after an app restart.
+    <div class="icb-notice icb-notice-info mb-3">
+        <i class="oi oi-info" aria-hidden="true"></i>
+        <div class="icb-notice-body">
+            Single sign-on is <strong>optional</strong>. With no enabled providers, the portal uses local
+            username/password only. A successful SSO sign-in must match an <strong>existing active admin</strong>
+            by username or email — no accounts are auto-created; manage those accounts under
+            <a href="/admin/portal-admins">Portal Admins</a>. Changes take effect after an app restart.
+        </div>
     </div>
 
     @if (!string.IsNullOrEmpty(actionMessage))
     {
-        <div class="alert @(actionOk ? "alert-success" : "alert-danger") alert-dismissible d-flex align-items-center">
-            <i class="oi @(actionOk ? "oi-check" : "oi-warning") me-2"></i>
-            <div>@actionMessage</div>
-            <button type="button" class="btn-close ms-auto" @onclick="() => actionMessage = null"></button>
+        <div class="icb-notice @(actionOk ? "icb-notice-success" : "icb-notice-danger") mb-3" role="status">
+            <i class="oi @(actionOk ? "oi-check" : "oi-warning")" aria-hidden="true"></i>
+            <div class="icb-notice-body">@actionMessage</div>
+            <button type="button" class="icb-notice-dismiss" aria-label="Dismiss" @onclick="() => actionMessage = null">&times;</button>
         </div>
     }
 
-    @if (loading)
-    {
-        <div class="text-center py-5">
-            <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
-        </div>
-    }
-    else if (!providers.Any())
-    {
-        <div class="alert alert-secondary">
-            <h5 class="alert-heading">No identity providers</h5>
-            <p class="mb-0">Add an OIDC or Azure AD provider to enable single sign-on for your existing admins.</p>
-        </div>
-    }
-    else
-    {
-        <div class="card">
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover align-middle">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Type</th>
-                                <th>Authority</th>
-                                <th>Status</th>
-                                <th class="text-end">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var p in providers)
-                            {
-                                <tr>
-                                    <td><strong>@p.Name</strong></td>
-                                    <td><span class="badge bg-secondary">@p.Type</span></td>
-                                    <td><small class="text-muted">@AuthorityFor(p)</small></td>
-                                    <td>
-                                        @if (p.IsEnabled)
-                                        {
-                                            <span class="badge bg-success">Enabled</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="badge bg-secondary">Disabled</span>
-                                        }
-                                    </td>
-                                    <td class="text-end">
-                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenEdit(p)">
-                                            <i class="oi oi-pencil"></i> Edit
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-warning" @onclick="() => ToggleEnabled(p)">
-                                            @(p.IsEnabled ? "Disable" : "Enable")
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteProvider(p)">
-                                            <i class="oi oi-trash"></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
+    <BrandListTable TItem="IdentityProvider" Title="Identity providers" Items="@providers" TotalCount="@providers.Count"
+                    PageSize="@Math.Max(1, providers.Count)" State="@(loading ? BrandListState.Loading : BrandListState.Ready)"
+                    EmptyMessage="No identity providers. Add an OIDC or Azure AD provider to enable single sign-on for your existing admins.">
+        <HeaderTemplate>
+            <th scope="col">Name</th><th scope="col">Type</th><th scope="col">Authority</th><th scope="col">Status</th><th scope="col">Actions</th>
+        </HeaderTemplate>
+        <RowTemplate Context="p">
+            <td class="nm-cell">@p.Name</td>
+            <td><BrandBadge Text="@p.Type" Soft="true" /></td>
+            <td class="mono">@AuthorityFor(p)</td>
+            <td>
+                @if (p.IsEnabled)
+                {
+                    <BrandBadge Text="Enabled" Tone="BrandBadgeTone.Success" Soft="true" />
+                }
+                else
+                {
+                    <BrandBadge Text="Disabled" Tone="BrandBadgeTone.Neutral" Soft="true" />
+                }
+            </td>
+            <td>
+                <div class="icb-table-actions">
+                    <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm" @onclick="() => OpenEdit(p)">
+                        <i class="oi oi-pencil" aria-hidden="true"></i> Edit
+                    </button>
+                    <button type="button" class="ic-btn icb-btn-caution ic-btn-sm" @onclick="() => ToggleEnabled(p)">
+                        @(p.IsEnabled ? "Disable" : "Enable")
+                    </button>
+                    <button type="button" class="ic-btn ic-btn-danger ic-btn-sm" @onclick="() => DeleteProvider(p)" aria-label="@($"Delete {p.Name}")" title="Delete">
+                        <i class="oi oi-trash" aria-hidden="true"></i>
+                    </button>
                 </div>
-            </div>
-        </div>
-    }
+            </td>
+        </RowTemplate>
+    </BrandListTable>
+
+    <BrandConfirmationModal @ref="confirmModal" ConfirmLabel="Delete" />
 </div>
 
-<div class="modal @(showModal ? "show d-block" : "")" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">@(editingId == null ? "Add identity provider" : "Edit identity provider")</h5>
-                <button type="button" class="btn-close" @onclick="CloseModal"></button>
+@if (showModal)
+{
+    <BrandEditorDialog Label="@(editingId == null ? "Add identity provider" : "Edit identity provider")">
+        <HeaderContent>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                <div>
+                    <h1 class="icb-editor-title mb-1">
+                        <i class="oi oi-key me-2" aria-hidden="true"></i>
+                        <span>@(editingId == null ? "Add identity provider" : "Edit identity provider")</span>
+                    </h1>
+                    <p class="icb-editor-subtitle mb-0">Test GETs the provider's /.well-known/openid-configuration.</p>
+                </div>
+                <div class="d-flex align-items-center flex-wrap gap-2">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="TestConnection" disabled="@(saving || testInFlight)">
+                        @if (testInFlight)
+                        {
+                            <i class="fas fa-spinner fa-spin me-1" aria-hidden="true"></i>
+                        }
+                        else
+                        {
+                            <i class="oi oi-pulse me-1" aria-hidden="true"></i>
+                        }
+                        Test Connection
+                    </button>
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseModal">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="Save" disabled="@saving">Save</button>
+                </div>
             </div>
-            <div class="modal-body">
-                @if (!string.IsNullOrEmpty(formError))
-                {
-                    <div class="alert alert-danger py-2">@formError</div>
-                }
-                <form>
-                    <div class="mb-3">
-                        <label class="form-label">Name * <small class="text-muted">(also the sign-in button label and scheme name)</small></label>
-                        <input type="text" class="form-control" @bind="form.Name" placeholder="e.g., Contoso Azure AD" />
+        </HeaderContent>
+        <ChildContent>
+            @if (!string.IsNullOrEmpty(formError))
+            {
+                <div class="icb-notice icb-notice-danger mb-3" role="alert"><div class="icb-notice-body">@formError</div></div>
+            }
+            @if (!string.IsNullOrEmpty(testResult))
+            {
+                <div class="icb-notice @(testOk ? "icb-notice-success" : "icb-notice-danger") mb-3" role="status">
+                    <div class="icb-notice-body">@testResult</div>
+                    <button type="button" class="icb-notice-dismiss" aria-label="Dismiss" @onclick="@(() => testResult = string.Empty)">&times;</button>
+                </div>
+            }
+            <form>
+                <div class="icb-settings-grid">
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpName">Name *</label>
+                        <input id="idpName" type="text" class="icb-form-input" @bind="form.Name" placeholder="e.g., Contoso Azure AD" />
+                        <span class="icb-form-help">Also the sign-in button label and scheme name.</span>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Type *</label>
-                        <select class="form-select" @bind="form.Type">
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpType">Type *</label>
+                        <select id="idpType" class="icb-form-select" @bind="form.Type">
                             <option value="OIDC">Generic OIDC</option>
                             <option value="AzureAD">Azure AD</option>
                         </select>
                     </div>
+                </div>
 
-                    <div class="card mb-3">
-                        <div class="card-body">
-                            <h6 class="card-title">@(form.Type == "AzureAD" ? "Azure AD" : "Generic OIDC") Settings</h6>
+                <hr class="icb-form-divider" />
+                <h3 class="section-title">@(form.Type == "AzureAD" ? "Azure AD" : "Generic OIDC") Settings</h3>
 
-                            @if (form.Type == "AzureAD")
-                            {
-                                <div class="mb-3">
-                                    <label class="form-label">Azure Tenant ID *</label>
-                                    <input type="text" class="form-control" @bind="form.TenantId" placeholder="specific tenant GUID (required)" />
-                                    <small class="form-text text-muted">Authority becomes https://login.microsoftonline.com/{tenant}/v2.0. Multi-tenant authorities (common, organizations, consumers) are not allowed — they would accept tokens from any Azure tenant.</small>
-                                </div>
-                            }
-                            else
-                            {
-                                <div class="mb-3">
-                                    <label class="form-label">Authority (issuer URL) *</label>
-                                    <input type="text" class="form-control" @bind="form.Authority" placeholder="https://idp.example.com/" />
-                                </div>
-                            }
-                            <div class="mb-3">
-                                <label class="form-label">Client ID *</label>
-                                <input type="text" class="form-control" @bind="form.ClientId" />
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Client Secret @(editingId != null ? "(leave blank to keep current)" : "*")</label>
-                                <div class="input-group">
-                                    <input type="@(showSecret ? "text" : "password")" class="form-control" @bind="form.ClientSecret" autocomplete="new-password"
-                                           placeholder="@(editingId != null ? "•••••••• (unchanged)" : "")" />
-                                    <button class="btn btn-outline-secondary" type="button" @onclick="ToggleSecret">
-                                        <i class="oi @(showSecret ? "oi-lock-locked" : "oi-eye")"></i>
-                                    </button>
-                                </div>
-                                <small class="form-text text-muted">Encrypted at rest. Never displayed after saving.</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Username/email claim <small class="text-muted">(optional)</small></label>
-                                <input type="text" class="form-control" @bind="form.UsernameClaim"
-                                       placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
-                                <small class="form-text text-muted">Which claim is matched against an existing admin's username.</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Redirect / callback path</label>
-                                <input type="text" class="form-control" @bind="form.CallbackPath" placeholder="/signin-oidc" />
-                                <small class="form-text text-muted">The path your IdP redirects back to after login. Register this EXACT path as the redirect URI in your IdP app registration (e.g. https://&lt;host&gt;/signin-oidc). If you run more than one enabled provider, give each a unique path.</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Extra scopes <small class="text-muted">(space-separated, optional)</small></label>
-                                <input type="text" class="form-control" @bind="form.ScopesRaw" placeholder="openid profile email are always requested" />
-                            </div>
-                            <div class="form-check mb-3">
-                                <input class="form-check-input" type="checkbox" id="idpEnabled" @bind="form.IsEnabled" />
-                                <label class="form-check-label" for="idpEnabled">Enabled</label>
-                            </div>
-                            <div class="form-check mb-0">
-                                <input class="form-check-input" type="checkbox" id="idpAutoProvision" @bind="form.AutoProvision" />
-                                <label class="form-check-label" for="idpAutoProvision">Auto-create an admin on first SSO sign-in</label>
-                                <small class="form-text text-muted d-block">When on, anyone who successfully signs in through this provider (and isn't already an admin) gets a new active admin account. Use only with a trusted, tenant-pinned provider — every Conduit admin has full access.</small>
-                            </div>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <div class="d-flex flex-column w-100">
-                    @if (!string.IsNullOrEmpty(testResult))
+                <div class="icb-settings-grid">
+                    @if (form.Type == "AzureAD")
                     {
-                        <div class="@(testOk ? "alert alert-success" : "alert alert-danger") alert-dismissible fade show py-2 mb-3 small" role="alert">
-                            @testResult
-                            <button type="button" class="btn-close" @onclick="@(() => testResult = string.Empty)"></button>
+                        <div class="icb-form-field icb-settings-grid-full">
+                            <label class="icb-form-label" for="idpTenant">Azure Tenant ID *</label>
+                            <input id="idpTenant" type="text" class="icb-form-input" @bind="form.TenantId" placeholder="specific tenant GUID (required)" />
+                            <span class="icb-form-help">Authority becomes https://login.microsoftonline.com/{tenant}/v2.0. Multi-tenant authorities (common, organizations, consumers) are not allowed — they would accept tokens from any Azure tenant.</span>
                         </div>
                     }
-                    <div class="d-flex justify-content-end align-items-center gap-2">
-                        <small class="text-muted me-auto">Test GETs the provider's /.well-known/openid-configuration.</small>
-                        <button type="button" class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
-                        <button type="button" class="btn btn-info" @onclick="TestConnection" disabled="@(saving || testInFlight)">
-                            @if (testInFlight)
-                            {
-                                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                            }
-                            else
-                            {
-                                <i class="oi oi-pulse me-2"></i>
-                            }
-                            Test Connection
-                        </button>
-                        <button type="button" class="btn btn-primary" @onclick="Save" disabled="@saving">Save</button>
+                    else
+                    {
+                        <div class="icb-form-field icb-settings-grid-full">
+                            <label class="icb-form-label" for="idpAuthority">Authority (issuer URL) *</label>
+                            <input id="idpAuthority" type="text" class="icb-form-input" @bind="form.Authority" placeholder="https://idp.example.com/" />
+                        </div>
+                    }
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpClientId">Client ID *</label>
+                        <input id="idpClientId" type="text" class="icb-form-input" @bind="form.ClientId" />
+                    </div>
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpSecret">Client Secret @(editingId != null ? "(leave blank to keep current)" : "*")</label>
+                        <div class="icb-form-input-group">
+                            <input id="idpSecret" type="@(showSecret ? "text" : "password")" class="icb-form-input" @bind="form.ClientSecret" autocomplete="new-password"
+                                   placeholder="@(editingId != null ? "•••••••• (unchanged)" : "")" />
+                            <button class="ic-btn ic-btn-ghost" type="button" @onclick="ToggleSecret" aria-label="@(showSecret ? "Hide secret" : "Show secret")">
+                                <i class="oi @(showSecret ? "oi-lock-locked" : "oi-eye")" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <span class="icb-form-help">Encrypted at rest. Never displayed after saving.</span>
+                    </div>
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpClaim">Username/email claim (optional)</label>
+                        <input id="idpClaim" type="text" class="icb-form-input" @bind="form.UsernameClaim"
+                               placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
+                        <span class="icb-form-help">Which claim is matched against an existing admin's username.</span>
+                    </div>
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpCallback">Redirect / callback path</label>
+                        <input id="idpCallback" type="text" class="icb-form-input" @bind="form.CallbackPath" placeholder="/signin-oidc" />
+                        <span class="icb-form-help">The path your IdP redirects back to after login. Register this EXACT path as the redirect URI in your IdP app registration (e.g. https://&lt;host&gt;/signin-oidc). If you run more than one enabled provider, give each a unique path.</span>
+                    </div>
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="idpScopes">Extra scopes (space-separated, optional)</label>
+                        <input id="idpScopes" type="text" class="icb-form-input" @bind="form.ScopesRaw" placeholder="openid profile email are always requested" />
+                    </div>
+                    <div class="icb-form-field icb-settings-grid-full">
+                        <div class="icb-form-check mb-2">
+                            <input class="icb-form-switch" type="checkbox" role="switch" id="idpEnabled" @bind="form.IsEnabled" />
+                            <label class="icb-form-check-label" for="idpEnabled">Enabled</label>
+                        </div>
+                        <div class="icb-form-check">
+                            <input type="checkbox" id="idpAutoProvision" @bind="form.AutoProvision" />
+                            <label class="icb-form-check-label" for="idpAutoProvision">
+                                Auto-create an admin on first SSO sign-in
+                                <span class="icb-form-help">When on, anyone who successfully signs in through this provider (and isn't already an admin) gets a new active admin account. Use only with a trusted, tenant-pinned provider — every Conduit admin has full access.</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
-</div>
-@if (showModal)
-{
-    <div class="modal-backdrop fade show"></div>
+            </form>
+        </ChildContent>
+    </BrandEditorDialog>
 }
 
 @code {
@@ -247,6 +228,7 @@
     private bool testOk;
     private string testResult = "";
     private bool showSecret;
+    private BrandConfirmationModal? confirmModal;
 
     private void ToggleSecret() => showSecret = !showSecret;
 
@@ -436,7 +418,7 @@
 
     private async Task DeleteProvider(IdentityProvider p)
     {
-        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Delete identity provider '{p.Name}'?")) return;
+        if (confirmModal == null || !await confirmModal.ShowAsync("Delete identity provider", $"Delete identity provider '{p.Name}'?")) return;
         actionMessage = null;
         try
         {

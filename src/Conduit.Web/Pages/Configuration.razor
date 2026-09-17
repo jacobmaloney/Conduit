@@ -6,6 +6,8 @@
 @using Conduit.Web.Authentication
 @using Conduit.Web.Services
 @using Conduit.Connectors.IdentityCenter
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject IConfiguration Config
 @inject NavigationManager Navigation
 @inject OpenAccessState OpenAccess
@@ -14,7 +16,7 @@
 
 @*
     Configuration — the settings HOME. Same tabbed-hub pattern as
-    Pages/Sync/SynchronizationCenter.razor: CcTemplate1 header + CcFilterTabs, with
+    Pages/Sync/SynchronizationCenter.razor: Template1 header + BrandFilterTabs, with
     the active tab reflected in ?tab=... Each non-General tab RENDERS AN EXISTING
     SETTINGS PAGE AS A CHILD COMPONENT, so those pages keep their own @page routes
     (deep-links still work) and we touch none of their @code blocks. The General
@@ -23,17 +25,18 @@
 
 <PageTitle>Configuration - Conduit</PageTitle>
 
-<div class="container-fluid identities-container config-hub-container cfg-section">
-    <CcTemplate1 Title="Configuration"
-                 Subtitle="Portal security, identity providers, database, provisioning, and logs — everything that governs this server."
-                 Icon="fas fa-gear"
-                 IconAccent="slate" />
+<div class="container-fluid identities-container">
+    <Template1 Title="Configuration"
+               Subtitle="Portal security, identity providers, database, provisioning, and logs — everything that governs this server."
+               Icon="fas fa-gear"
+               IconAccent="slate" />
 
-    <CcFilterTabs Tabs="@_tabs"
-                  ActiveTab="@activeTab"
-                  OnTabChanged="HandleTabChanged" />
+    <BrandFilterTabs Tabs="@_tabs"
+                     ActiveTab="@activeTab"
+                     Label="Configuration section"
+                     OnTabChanged="HandleTabChanged" />
 
-    <div class="config-hub-body">
+    <div>
         @if (activeTab == "identity-providers")
         {
             <IdentityProviders />
@@ -60,23 +63,24 @@
             <div class="row">
                 <div class="col-lg-8">
                     <!-- Portal Security: open-access toggle -->
-                    <div class="card mb-4 @(OpenAccess.IsEnabled ? "border-warning" : "")">
-                        <div class="card-header @(OpenAccess.IsEnabled ? "bg-warning bg-opacity-25" : "")">
-                            <h5 class="mb-0"><i class="oi oi-lock-locked"></i> Portal Authentication</h5>
+                    <div class="ic-card mb-3 @(OpenAccess.IsEnabled ? "icb-card-warning" : "")">
+                        <div class="ic-card-hdr">
+                            <i class="oi oi-lock-locked" aria-hidden="true"></i>
+                            <span class="ic-card-hdr-title">Portal Authentication</span>
                         </div>
-                        <div class="card-body">
+                        <div class="ic-card-body">
                             <p class="mb-3 text-muted">
                                 Controls whether the portal/web UI requires sign-in. The SCIM, generic REST,
                                 SQL emulator, and ARS proxy surfaces are <strong>unaffected</strong> — they
                                 always require a <code>scim_</code> bearer token regardless of this setting.
                             </p>
 
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="openAccessToggle"
+                            <div class="icb-form-check mb-2">
+                                <input class="icb-form-switch" type="checkbox" role="switch" id="openAccessToggle"
                                        checked="@OpenAccess.IsEnabled"
                                        @onchange="OnToggleOpenAccess"
                                        disabled="@toggling" />
-                                <label class="form-check-label" for="openAccessToggle">
+                                <label class="icb-form-check-label" for="openAccessToggle">
                                     <strong>Open access</strong>
                                     — skip portal login (for demos / local testing only)
                                 </label>
@@ -84,11 +88,13 @@
 
                             @if (OpenAccess.IsEnabled)
                             {
-                                <div class="alert alert-warning small mb-0">
-                                    <i class="oi oi-warning"></i>
-                                    <strong>Portal authentication is OFF.</strong>
-                                    Anyone reaching this server's portal pages is signed in as admin automatically.
-                                    Toggle off before exposing the portal to anything but localhost.
+                                <div class="icb-notice icb-notice-warning mb-0">
+                                    <i class="oi oi-warning" aria-hidden="true"></i>
+                                    <div class="icb-notice-body">
+                                        <strong>Portal authentication is OFF.</strong>
+                                        Anyone reaching this server's portal pages is signed in as admin automatically.
+                                        Toggle off before exposing the portal to anything but localhost.
+                                    </div>
                                 </div>
                             }
                             else
@@ -100,17 +106,18 @@
 
                             @if (!string.IsNullOrEmpty(toggleError))
                             {
-                                <div class="alert alert-danger small mt-2 mb-0">@toggleError</div>
+                                <div class="icb-notice icb-notice-danger mt-2 mb-0"><div class="icb-notice-body">@toggleError</div></div>
                             }
                         </div>
                     </div>
 
                     <!-- IC Agent enrollment status -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0"><i class="oi oi-rss"></i> IC Agent</h5>
+                    <div class="ic-card mb-3">
+                        <div class="ic-card-hdr">
+                            <i class="oi oi-rss" aria-hidden="true"></i>
+                            <span class="ic-card-hdr-title">IC Agent</span>
                         </div>
-                        <div class="card-body">
+                        <div class="ic-card-body">
                             <p class="mb-3 text-muted">
                                 Enrollment against IdentityCenter's agent command channel. Identity (name,
                                 location, agent id) is assigned server-side when an admin registers this
@@ -121,26 +128,26 @@
                                 API key is used (legacy mode).
                             </p>
 
-                            <dl class="row mb-3">
-                                <dt class="col-sm-4">Instance ID:</dt>
-                                <dd class="col-sm-8">
-                                    <code id="conduitInstanceId">@instanceId</code>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
-                                            @onclick="CopyInstanceId">
-                                        <i class="oi oi-clipboard"></i> @copyInstanceLabel
-                                    </button>
+                            <div class="ic-field-grid p-0 mb-3">
+                                <div class="ic-field">
+                                    <span class="ic-field-label">Instance ID</span>
+                                    <span class="ic-field-value mono" id="conduitInstanceId">@instanceId</span>
+                                    <div>
+                                        <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm" @onclick="CopyInstanceId">
+                                            <i class="oi oi-clipboard" aria-hidden="true"></i> @copyInstanceLabel
+                                        </button>
+                                    </div>
                                     <div class="small text-muted mt-1">
                                         Use this when enrolling this agent in IdentityCenter — paste it into the
                                         <strong>Conduit instance ID</strong> field on IC's Agents page so the minted
                                         key is bound to the same id this agent stamps on synced objects.
                                     </div>
-                                </dd>
-
-                                <dt class="col-sm-4">Auto-enrollment:</dt>
-                                <dd class="col-sm-8">
-                                    <span class="small">@Enrollment.StateDescription</span>
-                                </dd>
-                            </dl>
+                                </div>
+                                <div class="ic-field">
+                                    <span class="ic-field-label">Auto-enrollment</span>
+                                    <span class="ic-field-value">@Enrollment.StateDescription</span>
+                                </div>
+                            </div>
 
                             @if (icAgentEndpoints.Count == 0)
                             {
@@ -153,247 +160,236 @@
                             {
                                 @foreach (var ep in icAgentEndpoints)
                                 {
-                                    <dl class="row mb-2">
-                                        <dt class="col-sm-4">Server:</dt>
-                                        <dd class="col-sm-8"><code>@ep.BaseUrl</code></dd>
+                                    <div class="ic-field-grid p-0 mb-2">
+                                        <div class="ic-field">
+                                            <span class="ic-field-label">Server</span>
+                                            <span class="ic-field-value mono">@ep.BaseUrl</span>
+                                        </div>
 
-                                        <dt class="col-sm-4">API key configured:</dt>
-                                        <dd class="col-sm-8">
-                                            @if (ep.KeyConfigured)
-                                            {
-                                                <span class="badge bg-success">Yes</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="badge bg-secondary">No</span>
-                                            }
-                                        </dd>
-
-                                        <dt class="col-sm-4">Key source:</dt>
-                                        <dd class="col-sm-8">
-                                            @if (ep.KeySource == "AgentApiKey")
-                                            {
-                                                <span class="badge bg-success">Agent API key (per-agent)</span>
-                                            }
-                                            else if (ep.KeySource == "ApiKey")
-                                            {
-                                                <span class="badge bg-warning text-dark">API key (shared, legacy mode)</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="badge bg-secondary">Unknown</span>
-                                            }
-                                        </dd>
-
-                                        <dt class="col-sm-4">Channel mode:</dt>
-                                        <dd class="col-sm-8">
-                                            @if (ep.Mode == "Claim")
-                                            {
-                                                <span class="badge bg-success">Per-agent (claim)</span>
-                                            }
-                                            else if (ep.Mode == "Legacy")
-                                            {
-                                                <span class="badge bg-warning text-dark">Legacy shared key</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="badge bg-secondary">Unknown</span>
-                                            }
-                                        </dd>
-
-                                        <dt class="col-sm-4">Last heartbeat:</dt>
-                                        <dd class="col-sm-8">
-                                            @if (ep.LastHeartbeatUtc.HasValue)
-                                            {
-                                                @if (ep.LastHeartbeatOk)
+                                        <div class="ic-field">
+                                            <span class="ic-field-label">API key configured</span>
+                                            <span class="ic-field-value">
+                                                @if (ep.KeyConfigured)
                                                 {
-                                                    <span class="badge bg-success">OK</span>
+                                                    <BrandBadge Text="Yes" Tone="BrandBadgeTone.Success" Compact="true" />
                                                 }
                                                 else
                                                 {
-                                                    <span class="badge bg-danger">Failed</span>
+                                                    <BrandBadge Text="No" Tone="BrandBadgeTone.Neutral" Compact="true" />
                                                 }
-                                                <span class="text-muted small ms-1">@ep.LastHeartbeatUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span>
-                                                @if (!ep.LastHeartbeatOk && !string.IsNullOrEmpty(ep.LastHeartbeatError))
+                                            </span>
+                                        </div>
+
+                                        <div class="ic-field">
+                                            <span class="ic-field-label">Key source</span>
+                                            <span class="ic-field-value">
+                                                @if (ep.KeySource == "AgentApiKey")
                                                 {
-                                                    <span class="text-muted small ms-1">(@ep.LastHeartbeatError)</span>
+                                                    <BrandBadge Text="Agent API key (per-agent)" Tone="BrandBadgeTone.Success" Compact="true" />
                                                 }
-                                            }
-                                            else
-                                            {
-                                                <span class="text-muted">none yet</span>
-                                            }
-                                        </dd>
+                                                else if (ep.KeySource == "ApiKey")
+                                                {
+                                                    <BrandBadge Text="API key (shared, legacy mode)" Tone="BrandBadgeTone.Warning" Compact="true" />
+                                                }
+                                                else
+                                                {
+                                                    <BrandBadge Text="Unknown" Tone="BrandBadgeTone.Neutral" Compact="true" />
+                                                }
+                                            </span>
+                                        </div>
+
+                                        <div class="ic-field">
+                                            <span class="ic-field-label">Channel mode</span>
+                                            <span class="ic-field-value">
+                                                @if (ep.Mode == "Claim")
+                                                {
+                                                    <BrandBadge Text="Per-agent (claim)" Tone="BrandBadgeTone.Success" Compact="true" />
+                                                }
+                                                else if (ep.Mode == "Legacy")
+                                                {
+                                                    <BrandBadge Text="Legacy shared key" Tone="BrandBadgeTone.Warning" Compact="true" />
+                                                }
+                                                else
+                                                {
+                                                    <BrandBadge Text="Unknown" Tone="BrandBadgeTone.Neutral" Compact="true" />
+                                                }
+                                            </span>
+                                        </div>
+
+                                        <div class="ic-field">
+                                            <span class="ic-field-label">Last heartbeat</span>
+                                            <span class="ic-field-value">
+                                                @if (ep.LastHeartbeatUtc.HasValue)
+                                                {
+                                                    @if (ep.LastHeartbeatOk)
+                                                    {
+                                                        <BrandBadge Text="OK" Tone="BrandBadgeTone.Success" Compact="true" />
+                                                    }
+                                                    else
+                                                    {
+                                                        <BrandBadge Text="Failed" Tone="BrandBadgeTone.Danger" Compact="true" />
+                                                    }
+                                                    <span class="text-muted small ms-1">@ep.LastHeartbeatUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span>
+                                                    @if (!ep.LastHeartbeatOk && !string.IsNullOrEmpty(ep.LastHeartbeatError))
+                                                    {
+                                                        <span class="text-muted small ms-1">(@ep.LastHeartbeatError)</span>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">none yet</span>
+                                                }
+                                            </span>
+                                        </div>
 
                                         @if (ep.AgentId.HasValue)
                                         {
-                                            <dt class="col-sm-4">Enrolled as:</dt>
-                                            <dd class="col-sm-8">
-                                                <strong>@ep.AgentName</strong>
-                                                @if (!string.IsNullOrEmpty(ep.AgentLocation))
-                                                {
-                                                    <span class="text-muted"> — @ep.AgentLocation</span>
-                                                }
-                                                <div class="small text-muted"><code>@ep.AgentId</code></div>
-                                            </dd>
+                                            <div class="ic-field">
+                                                <span class="ic-field-label">Enrolled as</span>
+                                                <span class="ic-field-value">
+                                                    <strong>@ep.AgentName</strong>
+                                                    @if (!string.IsNullOrEmpty(ep.AgentLocation))
+                                                    {
+                                                        <span class="text-muted"> — @ep.AgentLocation</span>
+                                                    }
+                                                </span>
+                                                <span class="ic-field-value mono">@ep.AgentId</span>
+                                            </div>
                                         }
-                                    </dl>
+                                    </div>
                                 }
                             }
                         </div>
                     </div>
 
                     <!-- Database Configuration -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0"><i class="oi oi-hard-drive"></i> Database Configuration</h5>
+                    <div class="ic-card mb-3">
+                        <div class="ic-card-hdr">
+                            <i class="oi oi-hard-drive" aria-hidden="true"></i>
+                            <span class="ic-card-hdr-title">Database Configuration</span>
                         </div>
-                        <div class="card-body">
-                            <dl class="row">
-                                <dt class="col-sm-4">Connection String:</dt>
-                                <dd class="col-sm-8">
-                                    <code class="text-muted">@MaskConnectionString(Config.GetConnectionString("DefaultConnection") ?? "Not configured")</code>
-                                </dd>
+                        <div class="ic-card-body">
+                            <div class="ic-field-grid p-0">
+                                <div class="ic-field icb-settings-grid-full">
+                                    <span class="ic-field-label">Connection String</span>
+                                    <code class="icb-code-block">@MaskConnectionString(Config.GetConnectionString("DefaultConnection") ?? "Not configured")</code>
+                                </div>
 
-                                <dt class="col-sm-4">Database Provider:</dt>
-                                <dd class="col-sm-8">SQL Server</dd>
+                                <div class="ic-field">
+                                    <span class="ic-field-label">Database Provider</span>
+                                    <span class="ic-field-value">SQL Server</span>
+                                </div>
 
-                                <dt class="col-sm-4">Connection Status:</dt>
-                                <dd class="col-sm-8">
-                                    @if (databaseConnected)
-                                    {
-                                        <span class="badge bg-success">Connected</span>
-                                    }
-                                    else
-                                    {
-                                        <span class="badge bg-danger">Disconnected</span>
-                                    }
-                                </dd>
-                            </dl>
+                                <div class="ic-field">
+                                    <span class="ic-field-label">Connection Status</span>
+                                    <span class="ic-field-value">
+                                        @if (databaseConnected)
+                                        {
+                                            <BrandBadge Text="Connected" Tone="BrandBadgeTone.Success" Compact="true" />
+                                        }
+                                        else
+                                        {
+                                            <BrandBadge Text="Disconnected" Tone="BrandBadgeTone.Danger" Compact="true" />
+                                        }
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- JWT Configuration -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0"><i class="oi oi-lock-locked"></i> JWT Authentication Configuration</h5>
+                    <div class="ic-card mb-3">
+                        <div class="ic-card-hdr">
+                            <i class="oi oi-lock-locked" aria-hidden="true"></i>
+                            <span class="ic-card-hdr-title">JWT Authentication Configuration</span>
                         </div>
-                        <div class="card-body">
-                            <dl class="row">
-                                <dt class="col-sm-4">Issuer:</dt>
-                                <dd class="col-sm-8">@(Config["Jwt:Issuer"] ?? "Not configured")</dd>
-
-                                <dt class="col-sm-4">Audience:</dt>
-                                <dd class="col-sm-8">@(Config["Jwt:Audience"] ?? "Not configured")</dd>
-
-                                <dt class="col-sm-4">Token Expiration:</dt>
-                                <dd class="col-sm-8">@(Config["Jwt:ExpirationMinutes"] ?? "60") minutes</dd>
-
-                                <dt class="col-sm-4">Validate Issuer:</dt>
-                                <dd class="col-sm-8">@(Config["Jwt:ValidateIssuer"] ?? "true")</dd>
-
-                                <dt class="col-sm-4">Validate Audience:</dt>
-                                <dd class="col-sm-8">@(Config["Jwt:ValidateAudience"] ?? "true")</dd>
-                            </dl>
+                        <div class="ic-card-body">
+                            <div class="ic-field-grid p-0">
+                                <div class="ic-field"><span class="ic-field-label">Issuer</span><span class="ic-field-value">@(Config["Jwt:Issuer"] ?? "Not configured")</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Audience</span><span class="ic-field-value">@(Config["Jwt:Audience"] ?? "Not configured")</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Token Expiration</span><span class="ic-field-value">@(Config["Jwt:ExpirationMinutes"] ?? "60") minutes</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Validate Issuer</span><span class="ic-field-value">@(Config["Jwt:ValidateIssuer"] ?? "true")</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Validate Audience</span><span class="ic-field-value">@(Config["Jwt:ValidateAudience"] ?? "true")</span></div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- SCIM Configuration -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0"><i class="oi oi-share-boxed"></i> SCIM Configuration</h5>
+                    <div class="ic-card mb-3">
+                        <div class="ic-card-hdr">
+                            <i class="oi oi-share-boxed" aria-hidden="true"></i>
+                            <span class="ic-card-hdr-title">SCIM Configuration</span>
                         </div>
-                        <div class="card-body">
-                            <dl class="row">
-                                <dt class="col-sm-4">SCIM Version:</dt>
-                                <dd class="col-sm-8">2.0</dd>
-
-                                <dt class="col-sm-4">Base URL:</dt>
-                                <dd class="col-sm-8">@Navigation.BaseUri</dd>
-
-                                <dt class="col-sm-4">Users Endpoint:</dt>
-                                <dd class="col-sm-8"><code>/scim/v2/Users</code></dd>
-
-                                <dt class="col-sm-4">Groups Endpoint:</dt>
-                                <dd class="col-sm-8"><code>/scim/v2/Groups</code></dd>
-
-                                <dt class="col-sm-4">Service Provider Config:</dt>
-                                <dd class="col-sm-8"><code>/scim/v2/ServiceProviderConfig</code></dd>
-
-                                <dt class="col-sm-4">Resource Types:</dt>
-                                <dd class="col-sm-8"><code>/scim/v2/ResourceTypes</code></dd>
-
-                                <dt class="col-sm-4">Schemas:</dt>
-                                <dd class="col-sm-8"><code>/scim/v2/Schemas</code></dd>
-                            </dl>
+                        <div class="ic-card-body">
+                            <div class="ic-field-grid p-0">
+                                <div class="ic-field"><span class="ic-field-label">SCIM Version</span><span class="ic-field-value">2.0</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Base URL</span><span class="ic-field-value mono">@Navigation.BaseUri</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Users Endpoint</span><span class="ic-field-value mono">/scim/v2/Users</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Groups Endpoint</span><span class="ic-field-value mono">/scim/v2/Groups</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Service Provider Config</span><span class="ic-field-value mono">/scim/v2/ServiceProviderConfig</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Resource Types</span><span class="ic-field-value mono">/scim/v2/ResourceTypes</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Schemas</span><span class="ic-field-value mono">/scim/v2/Schemas</span></div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Server Configuration -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0"><i class="oi oi-cog"></i> Server Configuration</h5>
+                    <div class="ic-card mb-3">
+                        <div class="ic-card-hdr">
+                            <i class="oi oi-cog" aria-hidden="true"></i>
+                            <span class="ic-card-hdr-title">Server Configuration</span>
                         </div>
-                        <div class="card-body">
-                            <dl class="row">
-                                <dt class="col-sm-4">Environment:</dt>
-                                <dd class="col-sm-8">@Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")</dd>
-
-                                <dt class="col-sm-4">Application Name:</dt>
-                                <dd class="col-sm-8">Conduit</dd>
-
-                                <dt class="col-sm-4">Version:</dt>
-                                <dd class="col-sm-8">1.0.0</dd>
-
-                                <dt class="col-sm-4">CORS Policy:</dt>
-                                <dd class="col-sm-8">Enabled (Allow All Origins)</dd>
-
-                                <dt class="col-sm-4">HTTPS Redirection:</dt>
-                                <dd class="col-sm-8">Enabled</dd>
-                            </dl>
+                        <div class="ic-card-body">
+                            <div class="ic-field-grid p-0">
+                                <div class="ic-field"><span class="ic-field-label">Environment</span><span class="ic-field-value">@Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Application Name</span><span class="ic-field-value">Conduit</span></div>
+                                <div class="ic-field"><span class="ic-field-label">Version</span><span class="ic-field-value">1.0.0</span></div>
+                                <div class="ic-field"><span class="ic-field-label">CORS Policy</span><span class="ic-field-value">Enabled (Allow All Origins)</span></div>
+                                <div class="ic-field"><span class="ic-field-label">HTTPS Redirection</span><span class="ic-field-value">Enabled</span></div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <div class="col-lg-4">
                     <!-- Quick Actions -->
-                    <div class="card mb-4">
-                        <div class="card-header">
-                            <h5 class="mb-0">Quick Actions</h5>
+                    <div class="ic-card mb-3">
+                        <div class="ic-card-hdr">
+                            <span class="ic-card-hdr-title">Quick Actions</span>
                         </div>
-                        <div class="card-body">
-                            <div class="d-grid gap-2">
-                                <button class="btn btn-outline-primary" @onclick="TestDatabaseConnection" disabled="@testingConnection">
+                        <div class="ic-card-body">
+                            <div class="icb-form-actions icb-form-actions-stack">
+                                <button type="button" class="ic-btn ic-btn-ghost" @onclick="TestDatabaseConnection" disabled="@testingConnection">
                                     @if (testingConnection)
                                     {
-                                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                        <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>
                                         <span>Testing...</span>
                                     }
                                     else
                                     {
-                                        <i class="oi oi-pulse me-2"></i>
+                                        <i class="oi oi-pulse me-2" aria-hidden="true"></i>
                                         <span>Test Database Connection</span>
                                     }
                                 </button>
-                                <button class="btn btn-outline-secondary" @onclick="ExportConfiguration">
-                                    <i class="oi oi-data-transfer-download"></i> Export Configuration
+                                <button type="button" class="ic-btn ic-btn-ghost" @onclick="ExportConfiguration">
+                                    <i class="oi oi-data-transfer-download" aria-hidden="true"></i> Export Configuration
                                 </button>
-                                <a href="/configuration?tab=database" class="btn btn-outline-primary">
-                                    <i class="oi oi-hard-drive"></i> Change SQL Server
+                                <a href="/configuration?tab=database" class="ic-btn ic-btn-ghost">
+                                    <i class="oi oi-hard-drive" aria-hidden="true"></i> Change SQL Server
                                 </a>
-                                <a href="/setup" class="btn btn-outline-warning">
-                                    <i class="oi oi-wrench"></i> Re-run Setup
+                                <a href="/setup" class="ic-btn icb-btn-caution">
+                                    <i class="oi oi-wrench" aria-hidden="true"></i> Re-run Setup
                                 </a>
                             </div>
                         </div>
                     </div>
 
                     <!-- Configuration Tips -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h5 class="mb-0">Configuration Tips</h5>
+                    <div class="ic-card">
+                        <div class="ic-card-hdr">
+                            <span class="ic-card-hdr-title">Configuration Tips</span>
                         </div>
-                        <div class="card-body">
+                        <div class="ic-card-body">
                             <h6>Security Best Practices:</h6>
                             <ul class="small">
                                 <li>Always use HTTPS in production</li>
@@ -416,11 +412,12 @@
             </div>
 
             <!-- Configuration Files -->
-            <div class="card mt-4">
-                <div class="card-header">
-                    <h5 class="mb-0"><i class="oi oi-file"></i> Configuration Files</h5>
+            <div class="ic-card mt-3">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-file" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">Configuration Files</span>
                 </div>
-                <div class="card-body">
+                <div class="ic-card-body">
                     <p>Configuration is loaded from the following sources (in order of precedence):</p>
                     <ol>
                         <li>Environment Variables</li>
@@ -430,8 +427,9 @@
                         <li>Command Line Arguments</li>
                     </ol>
 
-                    <div class="alert alert-info mt-3">
-                        <i class="oi oi-info"></i> <strong>Note:</strong> To modify configuration, update the appropriate appsettings.json file or set environment variables. Some changes may require restarting the application.
+                    <div class="icb-notice icb-notice-info mt-3">
+                        <i class="oi oi-info" aria-hidden="true"></i>
+                        <div class="icb-notice-body"><strong>Note:</strong> To modify configuration, update the appropriate appsettings.json file or set environment variables. Some changes may require restarting the application.</div>
                     </div>
                 </div>
             </div>
@@ -442,7 +440,7 @@
 @code {
     private string activeTab = "general";
 
-    private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
+    private static readonly IReadOnlyList<BrandFilterTabs.Tab> _tabs = new List<BrandFilterTabs.Tab>
     {
         new("general", "General", null, "fas fa-sliders"),
         new("identity-providers", "Identity Providers", null, "fas fa-id-card"),

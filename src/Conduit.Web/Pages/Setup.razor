@@ -9,21 +9,21 @@
 @inject ILogger<Setup> Logger
 @layout SetupLayout
 
-<div class="wizard-shell">
-    <aside class="wizard-aside">
-        <div class="wizard-brand">
+<div class="icb-wizard">
+    <aside class="icb-wizard-aside">
+        <div class="icb-wizard-brand">
             <ConduitMark Size="72" Color="var(--accent)" HubFill="var(--bg-2)" />
             <span><b>Conduit</b></span>
         </div>
-        <div class="wizard-steps">
+        <div class="icb-wizard-steps">
             @foreach (var (label, num) in StepList())
             {
-                var state = num == currentStep ? "cur" : (num < currentStep ? "done" : "");
-                <div class="wizard-step @state">
-                    <span class="wizard-step-num">
+                var state = num == currentStep ? "is-current" : (num < currentStep ? "is-done" : "");
+                <div class="icb-wizard-step @state">
+                    <span class="icb-wizard-step-num">
                         @if (num < currentStep)
                         {
-                            <i class="oi oi-check step-check"></i>
+                            <i class="oi oi-check" aria-hidden="true"></i>
                         }
                         else
                         {
@@ -34,28 +34,27 @@
                 </div>
             }
         </div>
-        <div class="wizard-aside-foot">
-            <div class="wizard-aside-foot-label">First-run setup</div>
-            <p class="wizard-aside-foot-note">Point Conduit at a database, create your admin sign-in, and you're ready to connect your first system. You can change everything later in Configuration.</p>
+        <div class="icb-wizard-aside-foot">
+            <div>First-run setup</div>
+            <p class="icb-wizard-aside-foot-note">Point Conduit at a database, create your admin sign-in, and you're ready to connect your first system. You can change everything later in Configuration.</p>
         </div>
     </aside>
 
-    <main class="wizard-main">
-        <div class="wizard-pane">
+    <main class="icb-wizard-main">
+        <div class="icb-wizard-pane">
             @if (isProcessing)
             {
-                <div class="text-center py-5">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Setting up...</span>
-                    </div>
+                <div class="text-center py-5" role="status">
+                    <i class="fas fa-spinner fa-spin fa-2x" aria-hidden="true"></i>
+                    <span class="visually-hidden">Setting up...</span>
                     <p class="mt-3 text-muted">Setting up Conduit, please wait...</p>
                 </div>
             }
             else if (setupComplete)
             {
-                <div class="wizard-eyebrow">All set</div>
-                <h1 class="wizard-h1">Setup <span class="hl">complete</span>.</h1>
-                <p class="wizard-lede">Conduit has been successfully configured. Redirecting to the login page…</p>
+                <div class="icb-wizard-eyebrow">All set</div>
+                <h1 class="icb-wizard-title">Setup <span class="icb-wizard-title-accent">complete</span>.</h1>
+                <p class="icb-wizard-lede">Conduit has been successfully configured. Redirecting to the login page…</p>
             }
             else if (prefill.RecoveryRequired)
             {
@@ -89,20 +88,20 @@
                         it redirects. Deleting that assignment does NOT make this branch fall
                         back to the redirect; it silently renders the whole form instead.
                 -->
-                <div class="wizard-eyebrow">Recovery required</div>
-                <h1 class="wizard-h1">This install needs its <span class="hl">administrator</span> back.</h1>
-                <p class="wizard-lede">
+                <div class="icb-wizard-eyebrow">Recovery required</div>
+                <h1 class="icb-wizard-title">This install needs its <span class="icb-wizard-title-accent">administrator</span> back.</h1>
+                <p class="icb-wizard-lede">
                     Conduit already has a database and a schema — this is not a first run, so the
                     setup wizard will not open. What it does not have is an active portal
                     administrator, and restoring one requires access to the Conduit host itself.
                 </p>
-                <a class="btn btn-primary" href="/admin-recovery">Continue to recovery</a>
+                <a class="ic-btn ic-btn-primary" href="/admin-recovery">Continue to recovery</a>
             }
             else
             {
-                <div class="wizard-eyebrow">First-run setup · @StepList()[currentStep - 1].label</div>
-                <h1 class="wizard-h1">@WizardHeading()</h1>
-                <p class="wizard-lede">@WizardLede()</p>
+                <div class="icb-wizard-eyebrow">First-run setup · @StepList()[currentStep - 1].label</div>
+                <h1 class="icb-wizard-title">@WizardHeading()</h1>
+                <p class="icb-wizard-lede">@WizardLede()</p>
 
                 <EditForm Model="@config" OnValidSubmit="@HandleValidSubmit">
                     <DataAnnotationsValidator />
@@ -110,12 +109,12 @@
                             @if (currentStep == 1)
                             {
                                 <!-- Step 1: Database Configuration -->
-                                <h4>Database Configuration</h4>
+                                <h4 class="section-title">Database Configuration</h4>
                                 <p class="text-muted">Configure the database connection for Conduit.</p>
 
-                                <div class="mb-3">
-                                    <label class="form-label">Database Type</label>
-                                    <select class="form-select" @bind="databaseType">
+                                <div class="icb-form-field mb-3">
+                                    <label class="icb-form-label" for="setupDbType">Database Type</label>
+                                    <select id="setupDbType" class="icb-form-select" @bind="databaseType">
                                         <option value="localdb">SQL Server LocalDB (Development)</option>
                                         <option value="sqlexpress">SQL Server Express</option>
                                         <option value="sqlserver">SQL Server</option>
@@ -125,34 +124,34 @@
 
                                 @if (databaseType == "localdb")
                                 {
-                                    <div class="mb-3">
-                                        <label class="form-label">Database Name</label>
-                                        <input type="text" class="form-control" @bind="databaseName" placeholder="Conduit" />
-                                        <small class="form-text text-muted">
+                                    <div class="icb-form-field mb-3">
+                                        <label class="icb-form-label" for="setupDbNameLocal">Database Name</label>
+                                        <input id="setupDbNameLocal" type="text" class="icb-form-input" @bind="databaseName" placeholder="Conduit" />
+                                        <span class="icb-form-help">
                                             Defaults to <code>Conduit</code>. Use suffixes like <code>ConduitUSA1</code> to run multiple instances side-by-side.
-                                        </small>
+                                        </span>
                                     </div>
                                 }
 
                                 @if (databaseType == "sqlexpress" || databaseType == "sqlserver")
                                 {
-                                    <div class="mb-3">
-                                        <label class="form-label">Server Name</label>
-                                        <input type="text" class="form-control" @bind="serverName"
+                                    <div class="icb-form-field mb-3">
+                                        <label class="icb-form-label" for="setupServer">Server Name</label>
+                                        <input id="setupServer" type="text" class="icb-form-input" @bind="serverName"
                                                placeholder="@(databaseType == "sqlexpress" ? ".\\SQLEXPRESS" : "localhost")" />
                                     </div>
 
-                                    <div class="mb-3">
-                                        <label class="form-label">Database Name</label>
-                                        <input type="text" class="form-control" @bind="databaseName" placeholder="Conduit" />
-                                        <small class="form-text text-muted">
+                                    <div class="icb-form-field mb-3">
+                                        <label class="icb-form-label" for="setupDbName">Database Name</label>
+                                        <input id="setupDbName" type="text" class="icb-form-input" @bind="databaseName" placeholder="Conduit" />
+                                        <span class="icb-form-help">
                                             Defaults to <code>Conduit</code>. Use suffixes like <code>ConduitUSA1</code>, <code>ConduitUSA2</code> to run multiple instances side-by-side on one server.
-                                        </small>
+                                        </span>
                                     </div>
 
-                                    <div class="mb-3">
-                                        <label class="form-label">Authentication</label>
-                                        <select class="form-select" @bind="authType">
+                                    <div class="icb-form-field mb-3">
+                                        <label class="icb-form-label" for="setupAuthType">Authentication</label>
+                                        <select id="setupAuthType" class="icb-form-select" @bind="authType">
                                             <option value="windows">Windows Authentication</option>
                                             <option value="sql">SQL Server Authentication</option>
                                         </select>
@@ -160,104 +159,102 @@
 
                                     @if (authType == "sql")
                                     {
-                                        <div class="mb-3">
-                                            <label class="form-label">Username</label>
-                                            <input type="text" class="form-control" @bind="dbUsername" />
+                                        <div class="icb-form-field mb-3">
+                                            <label class="icb-form-label" for="setupDbUser">Username</label>
+                                            <input id="setupDbUser" type="text" class="icb-form-input" @bind="dbUsername" />
                                             @if (prefill.HasConnection && !prefill.IntegratedSecurity)
                                             {
-                                                <small class="form-text text-muted">
+                                                <span class="icb-form-help">
                                                     Re-enter the SQL login. Stored credentials are never shown on this page.
-                                                </small>
+                                                </span>
                                             }
                                         </div>
 
-                                        <div class="mb-3">
-                                            <label class="form-label">Password</label>
-                                            <input type="password" class="form-control" @bind="dbPassword" />
+                                        <div class="icb-form-field mb-3">
+                                            <label class="icb-form-label" for="setupDbPassword">Password</label>
+                                            <input id="setupDbPassword" type="password" class="icb-form-input" @bind="dbPassword" />
                                         </div>
                                     }
 
-                                    <div class="form-check mb-2">
-                                        <input type="checkbox" class="form-check-input" id="trustServerCertificate" @bind="trustServerCertificate" />
-                                        <label class="form-check-label" for="trustServerCertificate">
+                                    <div class="icb-form-check mb-2">
+                                        <input type="checkbox" id="trustServerCertificate" @bind="trustServerCertificate" />
+                                        <label class="icb-form-check-label" for="trustServerCertificate">
                                             Trust server certificate (use for self-signed SSL certificates)
+                                            <span class="icb-form-help">Enable this if you're getting SSL certificate trust errors. Not recommended for production.</span>
                                         </label>
-                                        <small class="form-text text-muted d-block">
-                                            Enable this if you're getting SSL certificate trust errors. Not recommended for production.
-                                        </small>
                                     </div>
 
-                                    <div class="form-check mb-3">
-                                        <input type="checkbox" class="form-check-input" id="encryptConnection" @bind="encryptConnection" />
-                                        <label class="form-check-label" for="encryptConnection">
+                                    <div class="icb-form-check mb-3">
+                                        <input type="checkbox" id="encryptConnection" @bind="encryptConnection" />
+                                        <label class="icb-form-check-label" for="encryptConnection">
                                             Encrypt connection
+                                            <span class="icb-form-help">Uncheck this to disable encryption. May help with SSPI context errors.</span>
                                         </label>
-                                        <small class="form-text text-muted d-block">
-                                            Uncheck this to disable encryption. May help with SSPI context errors.
-                                        </small>
                                     </div>
                                 }
                                 else if (databaseType == "custom")
                                 {
-                                    <div class="mb-3">
-                                        <label class="form-label">Connection String</label>
-                                        <textarea class="form-control" rows="3" @bind="config.ConnectionString"
+                                    <div class="icb-form-field mb-3">
+                                        <label class="icb-form-label" for="setupConnectionString">Connection String</label>
+                                        <textarea id="setupConnectionString" class="icb-form-textarea" rows="3" @bind="config.ConnectionString"
                                                   placeholder="Server=localhost;Database=Conduit;..."></textarea>
                                     </div>
                                 }
 
                                 <div class="mb-3">
-                                    <button type="button" class="btn btn-sm btn-secondary" @onclick="TestConnection" disabled="@testingConnection">
+                                    <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm" @onclick="TestConnection" disabled="@testingConnection">
                                         @if (testingConnection)
                                         {
-                                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                            <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>
                                         }
                                         Test Connection
                                     </button>
                                     @if (connectionTest != null)
                                     {
-                                        var alertClass = GetTestAlertClass();
-                                        <div class="mt-2 alert @alertClass py-2">
-                                            @GetTestMessage()
-                                            @if (!connectionTest.ServerReachable && !string.IsNullOrEmpty(connectionTest.ErrorMessage) &&
-                                                 (connectionTest.ErrorMessage.Contains("SSPI") || connectionTest.ErrorMessage.Contains("principal name")))
-                                            {
-                                                <hr class="my-2" />
-                                                <small>
-                                                    <strong>SSPI Error Help:</strong>
-                                                    <ul class="mb-0 ps-3">
-                                                        <li>Try switching to SQL Server Authentication instead of Windows Authentication</li>
-                                                        <li>Uncheck "Encrypt connection" above</li>
-                                                        <li>Verify the server name is correct (use computer name instead of IP)</li>
-                                                        <li>Check if SQL Server Browser service is running</li>
-                                                    </ul>
-                                                </small>
-                                            }
-                                            @if (connectionTest.ServerReachable && !connectionTest.DatabaseExists && !string.IsNullOrWhiteSpace(connectionTest.DatabaseName))
-                                            {
-                                                <hr class="my-2" />
-                                                <div class="d-flex align-items-center gap-2 flex-wrap">
-                                                    <button type="button" class="btn btn-sm btn-warning" @onclick="CreateDatabaseNow" disabled="@creatingDatabase">
-                                                        @if (creatingDatabase)
-                                                        {
-                                                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
-                                                        }
-                                                        Create Database Now
-                                                    </button>
-                                                    <div class="form-check ms-2 mb-0">
-                                                        <input type="checkbox" class="form-check-input" id="autoCreateDb" @bind="autoCreateDatabase" />
-                                                        <label class="form-check-label" for="autoCreateDb">
-                                                            Create on setup completion
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                                @if (!string.IsNullOrEmpty(createDatabaseMessage))
+                                        var noticeClass = GetTestAlertClass();
+                                        <div class="icb-notice @noticeClass mt-2" role="status">
+                                            <div class="icb-notice-body">
+                                                @GetTestMessage()
+                                                @if (!connectionTest.ServerReachable && !string.IsNullOrEmpty(connectionTest.ErrorMessage) &&
+                                                     (connectionTest.ErrorMessage.Contains("SSPI") || connectionTest.ErrorMessage.Contains("principal name")))
                                                 {
-                                                    <div class="small mt-2 @(createDatabaseSuccess ? "text-success" : "text-danger")">
-                                                        @createDatabaseMessage
-                                                    </div>
+                                                    <hr class="icb-form-divider" />
+                                                    <small>
+                                                        <strong>SSPI Error Help:</strong>
+                                                        <ul class="mb-0 ps-3">
+                                                            <li>Try switching to SQL Server Authentication instead of Windows Authentication</li>
+                                                            <li>Uncheck "Encrypt connection" above</li>
+                                                            <li>Verify the server name is correct (use computer name instead of IP)</li>
+                                                            <li>Check if SQL Server Browser service is running</li>
+                                                        </ul>
+                                                    </small>
                                                 }
-                                            }
+                                                @if (connectionTest.ServerReachable && !connectionTest.DatabaseExists && !string.IsNullOrWhiteSpace(connectionTest.DatabaseName))
+                                                {
+                                                    <hr class="icb-form-divider" />
+                                                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                                                        <button type="button" class="ic-btn icb-btn-caution ic-btn-sm" @onclick="CreateDatabaseNow" disabled="@creatingDatabase">
+                                                            @if (creatingDatabase)
+                                                            {
+                                                                <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>
+                                                            }
+                                                            Create Database Now
+                                                        </button>
+                                                        <div class="icb-form-check ms-2 mb-0">
+                                                            <input type="checkbox" id="autoCreateDb" @bind="autoCreateDatabase" />
+                                                            <label class="icb-form-check-label" for="autoCreateDb">
+                                                                Create on setup completion
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                    @if (!string.IsNullOrEmpty(createDatabaseMessage))
+                                                    {
+                                                        <div class="mt-2 @(createDatabaseSuccess ? "icb-form-help" : "icb-form-error")">
+                                                            @createDatabaseMessage
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
                                         </div>
                                     }
                                 </div>
@@ -265,73 +262,73 @@
                             else if (currentStep == 2)
                             {
                                 <!-- Step 2: Admin User -->
-                                <h4>Administrator Account</h4>
+                                <h4 class="section-title">Administrator Account</h4>
                                 <p class="text-muted">Create the administrator account for Conduit.</p>
 
-                                <div class="mb-3">
-                                    <label class="form-label">Admin Username</label>
-                                    <InputText class="form-control" @bind-Value="config.AdminUsername" />
-                                    <ValidationMessage For="@(() => config.AdminUsername)" />
+                                <div class="icb-form-field mb-3">
+                                    <label class="icb-form-label" for="setupAdminUser">Admin Username</label>
+                                    <InputText id="setupAdminUser" class="icb-form-input" @bind-Value="config.AdminUsername" />
+                                    <div class="icb-form-error"><ValidationMessage For="@(() => config.AdminUsername)" /></div>
                                 </div>
 
-                                <div class="mb-3">
-                                    <label class="form-label">Admin Password</label>
-                                    <InputText type="password" class="form-control" @bind-Value="config.AdminPassword" />
-                                    <ValidationMessage For="@(() => config.AdminPassword)" />
-                                    <small class="form-text text-muted">Minimum 8 characters</small>
+                                <div class="icb-form-field mb-3">
+                                    <label class="icb-form-label" for="setupAdminPassword">Admin Password</label>
+                                    <InputText id="setupAdminPassword" type="password" class="icb-form-input" @bind-Value="config.AdminPassword" />
+                                    <div class="icb-form-error"><ValidationMessage For="@(() => config.AdminPassword)" /></div>
+                                    <span class="icb-form-help">Minimum 8 characters</span>
                                 </div>
 
-                                <div class="mb-3">
-                                    <label class="form-label">Confirm Password</label>
-                                    <input type="password" class="form-control" @bind="confirmPassword" />
+                                <div class="icb-form-field mb-3">
+                                    <label class="icb-form-label" for="setupConfirmPassword">Confirm Password</label>
+                                    <input id="setupConfirmPassword" type="password" class="icb-form-input" @bind="confirmPassword" />
                                     @if (!string.IsNullOrEmpty(confirmPassword) && confirmPassword != config.AdminPassword)
                                     {
-                                        <div class="text-danger small mt-1">Passwords do not match</div>
+                                        <span class="icb-form-error">Passwords do not match</span>
                                     }
                                 </div>
                             }
                             else if (currentStep == 3)
                             {
                                 <!-- Step 3: Security Settings -->
-                                <h4>Security Configuration</h4>
+                                <h4 class="section-title">Security Configuration</h4>
                                 <p class="text-muted">Configure security settings for Conduit.</p>
 
-                                <div class="mb-3">
-                                    <label class="form-label">JWT Secret Key</label>
-                                    <div class="input-group">
+                                <div class="icb-form-field mb-3">
+                                    <label class="icb-form-label" for="setupJwtKey">JWT Secret Key</label>
+                                    <div class="icb-form-input-group">
                                         @if (reusedExistingJwtKey)
                                         {
-                                            <input type="text" class="form-control" value="Existing signing key retained" readonly />
+                                            <input id="setupJwtKey" type="text" class="icb-form-input icb-form-input-mono" value="Existing signing key retained" readonly />
                                         }
                                         else
                                         {
-                                            <input type="text" class="form-control" @bind="config.JwtSecretKey" readonly />
+                                            <input id="setupJwtKey" type="text" class="icb-form-input icb-form-input-mono" @bind="config.JwtSecretKey" readonly />
                                         }
-                                        <button type="button" class="btn btn-outline-secondary" @onclick="GenerateSecretKey">
+                                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="GenerateSecretKey">
                                             Generate New
                                         </button>
                                     </div>
                                     @if (reusedExistingJwtKey)
                                     {
-                                        <small class="form-text text-muted">
+                                        <span class="icb-form-help">
                                             This install already has a signing key, so it is being kept — every API token
                                             already issued stays valid. Generating a new one invalidates all of them.
-                                        </small>
+                                        </span>
                                     }
                                     else
                                     {
-                                        <small class="form-text text-muted">This key is used to sign JWT tokens. Keep it secure!</small>
+                                        <span class="icb-form-help">This key is used to sign JWT tokens. Keep it secure!</span>
                                     }
                                 </div>
 
-                                <div class="mb-3">
-                                    <label class="form-label">Server Port</label>
-                                    <InputNumber class="form-control" @bind-Value="config.ServerPort" />
+                                <div class="icb-form-field mb-3">
+                                    <label class="icb-form-label" for="setupPort">Server Port</label>
+                                    <InputNumber id="setupPort" class="icb-form-input" @bind-Value="config.ServerPort" />
                                 </div>
 
-                                <div class="form-check mb-3">
-                                    <InputCheckbox class="form-check-input" @bind-Value="config.UseHttps" />
-                                    <label class="form-check-label">
+                                <div class="icb-form-check mb-3">
+                                    <InputCheckbox id="setupUseHttps" @bind-Value="config.UseHttps" />
+                                    <label class="icb-form-check-label" for="setupUseHttps">
                                         Enable HTTPS (recommended for production)
                                     </label>
                                 </div>
@@ -339,71 +336,84 @@
                             else if (currentStep == 4)
                             {
                                 <!-- Step 4: Review -->
-                                <h4>Review Configuration</h4>
+                                <h4 class="section-title">Review Configuration</h4>
                                 <p class="text-muted">Please review your settings before completing setup.</p>
 
-                                <dl class="row">
-                                    <dt class="col-sm-4">Server</dt>
-                                    <dd class="col-sm-8">
-                                        @if (databaseType == "localdb")
-                                        {
-                                            <text>SQL Server LocalDB</text>
-                                        }
-                                        else if (databaseType == "custom")
-                                        {
-                                            <text>Custom</text>
-                                        }
-                                        else
-                                        {
-                                            <text>@serverName</text>
-                                        }
-                                    </dd>
+                                <div class="ic-field-grid p-0 mb-3">
+                                    <div class="ic-field">
+                                        <span class="ic-field-label">Server</span>
+                                        <span class="ic-field-value">
+                                            @if (databaseType == "localdb")
+                                            {
+                                                <text>SQL Server LocalDB</text>
+                                            }
+                                            else if (databaseType == "custom")
+                                            {
+                                                <text>Custom</text>
+                                            }
+                                            else
+                                            {
+                                                <text>@serverName</text>
+                                            }
+                                        </span>
+                                    </div>
 
                                     @if (databaseType != "custom")
                                     {
-                                        <dt class="col-sm-4">Database Name</dt>
-                                        <dd class="col-sm-8">@(string.IsNullOrWhiteSpace(databaseName) ? "Conduit" : databaseName)</dd>
+                                        <div class="ic-field">
+                                            <span class="ic-field-label">Database Name</span>
+                                            <span class="ic-field-value">@(string.IsNullOrWhiteSpace(databaseName) ? "Conduit" : databaseName)</span>
+                                        </div>
                                     }
 
-                                    <dt class="col-sm-4">Admin Username</dt>
-                                    <dd class="col-sm-8">@config.AdminUsername</dd>
+                                    <div class="ic-field">
+                                        <span class="ic-field-label">Admin Username</span>
+                                        <span class="ic-field-value">@config.AdminUsername</span>
+                                    </div>
 
-                                    <dt class="col-sm-4">Server URL</dt>
-                                    <dd class="col-sm-8">@(config.UseHttps ? "https" : "http")://localhost:@config.ServerPort</dd>
+                                    <div class="ic-field">
+                                        <span class="ic-field-label">Server URL</span>
+                                        <span class="ic-field-value mono">@(config.UseHttps ? "https" : "http")://localhost:@config.ServerPort</span>
+                                    </div>
 
-                                    <dt class="col-sm-4">JWT Security</dt>
-                                    <dd class="col-sm-8">✓ Configured</dd>
-                                </dl>
+                                    <div class="ic-field">
+                                        <span class="ic-field-label">JWT Security</span>
+                                        <span class="ic-field-value">✓ Configured</span>
+                                    </div>
+                                </div>
 
                                 @if (errors.Any())
                                 {
-                                    <div class="alert alert-danger">
-                                        <h6>Please fix the following errors:</h6>
-                                        <ul class="mb-0">
-                                            @foreach (var error in errors)
-                                            {
-                                                <li>@error</li>
-                                            }
-                                        </ul>
+                                    <div class="icb-notice icb-notice-danger" role="alert">
+                                        <i class="oi oi-warning" aria-hidden="true"></i>
+                                        <div class="icb-notice-body">
+                                            <span class="icb-notice-title">Please fix the following errors:</span>
+                                            <ul class="mb-0">
+                                                @foreach (var error in errors)
+                                                {
+                                                    <li>@error</li>
+                                                }
+                                            </ul>
+                                        </div>
                                     </div>
                                 }
                             }
 
-                    <div class="wizard-foot">
-                        <button type="button" class="btn btn-outline-secondary" @onclick="PreviousStep"
+                    <div class="icb-wizard-foot">
+                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="PreviousStep"
                                 disabled="@(currentStep == 1)">
                             ← Previous
                         </button>
 
                         @if (currentStep < 4)
                         {
-                            <button type="button" class="btn btn-primary" @onclick="NextStep">
+                            <button type="button" class="ic-btn ic-btn-primary" @onclick="NextStep">
                                 Next →
                             </button>
                         }
                         else
                         {
-                            <button type="submit" class="btn btn-primary" disabled="@isProcessing">
+                            <button type="submit" class="ic-btn ic-btn-primary" disabled="@isProcessing">
                                 Complete Setup
                             </button>
                         }
@@ -714,10 +724,10 @@
 
     private string GetTestAlertClass()
     {
-        if (connectionTest == null) return "alert-secondary";
-        if (!connectionTest.ServerReachable) return "alert-danger";
-        if (!connectionTest.DatabaseExists) return "alert-warning";
-        return "alert-success";
+        if (connectionTest == null) return "icb-notice-neutral";
+        if (!connectionTest.ServerReachable) return "icb-notice-danger";
+        if (!connectionTest.DatabaseExists) return "icb-notice-warning";
+        return "icb-notice-success";
     }
 
     private string GetTestMessage()

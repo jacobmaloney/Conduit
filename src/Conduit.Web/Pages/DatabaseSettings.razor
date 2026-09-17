@@ -10,18 +10,21 @@
 
 <PageTitle>Database Settings - Conduit</PageTitle>
 
-<div class="container-fluid">
-    <h1>Database Settings</h1>
-    <p class="lead">Point Conduit at a different SQL Server, or stand up a brand-new database.</p>
+<div class="container-fluid identities-container">
+    <Template1 Title="Database Settings"
+               Subtitle="Point Conduit at a different SQL Server, or stand up a brand-new database."
+               Icon="fas fa-database"
+               IconAccent="slate" />
 
     <div class="row">
         <div class="col-lg-8">
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5 class="mb-0"><i class="oi oi-hard-drive"></i> Current Connection</h5>
+            <div class="ic-card mb-3">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-hard-drive" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">Current Connection</span>
                 </div>
-                <div class="card-body">
-                    <code class="text-muted">@MaskConnectionString(currentConnectionString)</code>
+                <div class="ic-card-body">
+                    <code class="icb-code-block">@MaskConnectionString(currentConnectionString)</code>
                 </div>
             </div>
 
@@ -30,45 +33,48 @@
             }
             @if (prepared is not null && prepared.Success)
             {
-                <div class="alert alert-success" role="alert">
-                    <h5 class="alert-heading">Database '@prepared.DatabaseName' is ready.</h5>
-                    <p class="mb-2">
-                        Schema built and the sign-in is set up. Conduit is <strong>still running on
-                        '@CurrentDatabaseName()'</strong> until you restart it.
-                    </p>
-                    @if (string.IsNullOrEmpty(prepared.AdminUserName))
-                    {
-                        <p class="mb-0">
-                            After you restart, sign in with an administrator account that already
-                            existed in '@prepared.DatabaseName' — this action created none and changed
-                            no passwords there.
+                <div class="icb-notice icb-notice-success mb-3" role="alert">
+                    <i class="oi oi-check" aria-hidden="true"></i>
+                    <div class="icb-notice-body">
+                        <span class="icb-notice-title">Database '@prepared.DatabaseName' is ready.</span>
+                        <p class="mb-2">
+                            Schema built and the sign-in is set up. Conduit is <strong>still running on
+                            '@CurrentDatabaseName()'</strong> until you restart it.
                         </p>
-                    }
-                    else
-                    {
-                        <p class="mb-0">
-                            After you restart, sign in as <code>@prepared.AdminUserName</code>
-                            @if (prepared.AdminPasswordCarriedOver)
-                            {
-                                <text>with your current password.</text>
-                            }
-                            else
-                            {
-                                <text>with the password you just set.</text>
-                            }
-                        </p>
-                    }
+                        @if (string.IsNullOrEmpty(prepared.AdminUserName))
+                        {
+                            <p class="mb-0">
+                                After you restart, sign in with an administrator account that already
+                                existed in '@prepared.DatabaseName' — this action created none and changed
+                                no passwords there.
+                            </p>
+                        }
+                        else
+                        {
+                            <p class="mb-0">
+                                After you restart, sign in as <code>@prepared.AdminUserName</code>
+                                @if (prepared.AdminPasswordCarriedOver)
+                                {
+                                    <text>with your current password.</text>
+                                }
+                                else
+                                {
+                                    <text>with the password you just set.</text>
+                                }
+                            </p>
+                        }
+                    </div>
                 </div>
             }
 
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5 class="mb-0">Choose SQL Server</h5>
+            <div class="ic-card mb-3">
+                <div class="ic-card-hdr">
+                    <span class="ic-card-hdr-title">Choose SQL Server</span>
                 </div>
-                <div class="card-body">
-                    <div class="mb-3">
-                        <label class="form-label">Database Type</label>
-                        <select class="form-select" @bind="databaseType">
+                <div class="ic-card-body">
+                    <div class="icb-form-field mb-3">
+                        <label class="icb-form-label" for="dbType">Database Type</label>
+                        <select id="dbType" class="icb-form-select" @bind="databaseType">
                             <option value="localdb">SQL Server LocalDB (Development)</option>
                             <option value="sqlexpress">SQL Server Express</option>
                             <option value="sqlserver">SQL Server</option>
@@ -78,118 +84,122 @@
 
                     @if (databaseType == "sqlexpress" || databaseType == "sqlserver")
                     {
-                        <div class="mb-3">
-                            <label class="form-label">Server Name</label>
-                            <input type="text" class="form-control" @bind="serverName"
-                                   placeholder="@(databaseType == "sqlexpress" ? ".\\SQLEXPRESS" : "localhost")" />
-                        </div>
-
-                        <div class="mb-3">
-                            <label class="form-label">Database Name</label>
-                            <input type="text" class="form-control" @bind="databaseName" />
-                            <small class="form-text text-muted">Type a name that does not exist yet to create a new database.</small>
-                        </div>
-
-                        <div class="mb-3">
-                            <label class="form-label">Authentication</label>
-                            <select class="form-select" @bind="authType">
-                                <option value="windows">Windows Authentication</option>
-                                <option value="sql">SQL Server Authentication</option>
-                            </select>
-                        </div>
-
-                        @if (authType == "sql")
-                        {
-                            <div class="mb-3">
-                                <label class="form-label">Username</label>
-                                <input type="text" class="form-control" @bind="dbUsername" />
+                        <div class="icb-settings-grid mb-3">
+                            <div class="icb-form-field">
+                                <label class="icb-form-label" for="dbServer">Server Name</label>
+                                <input id="dbServer" type="text" class="icb-form-input" @bind="serverName"
+                                       placeholder="@(databaseType == "sqlexpress" ? ".\\SQLEXPRESS" : "localhost")" />
                             </div>
-                            <div class="mb-3">
-                                <label class="form-label">Password</label>
-                                <input type="password" class="form-control" @bind="dbPassword" />
-                            </div>
-                        }
 
-                        <div class="form-check mb-2">
-                            <input type="checkbox" class="form-check-input" id="trustCert" @bind="trustServerCertificate" />
-                            <label class="form-check-label" for="trustCert">Trust server certificate</label>
+                            <div class="icb-form-field">
+                                <label class="icb-form-label" for="dbName">Database Name</label>
+                                <input id="dbName" type="text" class="icb-form-input" @bind="databaseName" />
+                                <span class="icb-form-help">Type a name that does not exist yet to create a new database.</span>
+                            </div>
+
+                            <div class="icb-form-field">
+                                <label class="icb-form-label" for="dbAuth">Authentication</label>
+                                <select id="dbAuth" class="icb-form-select" @bind="authType">
+                                    <option value="windows">Windows Authentication</option>
+                                    <option value="sql">SQL Server Authentication</option>
+                                </select>
+                            </div>
+
+                            @if (authType == "sql")
+                            {
+                                <div class="icb-form-field">
+                                    <label class="icb-form-label" for="dbUser">Username</label>
+                                    <input id="dbUser" type="text" class="icb-form-input" @bind="dbUsername" />
+                                </div>
+                                <div class="icb-form-field">
+                                    <label class="icb-form-label" for="dbPass">Password</label>
+                                    <input id="dbPass" type="password" class="icb-form-input" @bind="dbPassword" />
+                                </div>
+                            }
                         </div>
-                        <div class="form-check mb-3">
-                            <input type="checkbox" class="form-check-input" id="encryptConn" @bind="encryptConnection" />
-                            <label class="form-check-label" for="encryptConn">Encrypt connection</label>
+
+                        <div class="icb-form-check mb-2">
+                            <input type="checkbox" id="trustCert" @bind="trustServerCertificate" />
+                            <label class="icb-form-check-label" for="trustCert">Trust server certificate</label>
+                        </div>
+                        <div class="icb-form-check mb-3">
+                            <input type="checkbox" id="encryptConn" @bind="encryptConnection" />
+                            <label class="icb-form-check-label" for="encryptConn">Encrypt connection</label>
                         </div>
                     }
                     else if (databaseType == "localdb")
                     {
-                        <div class="mb-3">
-                            <label class="form-label">Database Name</label>
-                            <input type="text" class="form-control" @bind="databaseName" />
+                        <div class="icb-form-field mb-3">
+                            <label class="icb-form-label" for="dbNameLocal">Database Name</label>
+                            <input id="dbNameLocal" type="text" class="icb-form-input" @bind="databaseName" />
                         </div>
                     }
                     else if (databaseType == "custom")
                     {
-                        <div class="mb-3">
-                            <label class="form-label">Connection String</label>
-                            <textarea class="form-control" rows="3" @bind="customConnectionString"
+                        <div class="icb-form-field mb-3">
+                            <label class="icb-form-label" for="dbCustom">Connection String</label>
+                            <textarea id="dbCustom" class="icb-form-textarea" rows="3" @bind="customConnectionString"
                                       placeholder="Server=localhost;Database=Conduit;..."></textarea>
                         </div>
                     }
 
-                    <hr />
+                    <hr class="icb-form-divider" />
 
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Who signs in after restart?</label>
+                        <span class="icb-form-label d-block mb-2">Who signs in after restart?</span>
 
-                        <div class="form-check">
-                            <input type="radio" class="form-check-input" id="signinCopy" name="signinChoice"
+                        <div class="icb-form-check">
+                            <input type="radio" id="signinCopy" name="signinChoice"
                                    checked="@copyCurrentAdmin" @onchange="SelectCopyAdmin" />
-                            <label class="form-check-label" for="signinCopy">
+                            <label class="icb-form-check-label" for="signinCopy">
                                 Me — <strong>@(string.IsNullOrEmpty(currentAdminUserName) ? "(unknown)" : currentAdminUserName)</strong>, same password
                             </label>
                         </div>
 
-                        <div class="form-check">
-                            <input type="radio" class="form-check-input" id="signinNew" name="signinChoice"
+                        <div class="icb-form-check">
+                            <input type="radio" id="signinNew" name="signinChoice"
                                    checked="@(!copyCurrentAdmin)" @onchange="SelectNewAdmin" />
-                            <label class="form-check-label" for="signinNew">A different admin</label>
+                            <label class="icb-form-check-label" for="signinNew">A different admin</label>
                         </div>
 
                         @if (!copyCurrentAdmin)
                         {
-                            <div class="row g-2 mt-2 ms-1">
-                                <div class="col-sm-6">
-                                    <input type="text" class="form-control" placeholder="Username" @bind="newAdminUserName" />
+                            <div class="icb-settings-grid mt-2">
+                                <div class="icb-form-field">
+                                    <label class="icb-form-label" for="newAdminUser">Username</label>
+                                    <input id="newAdminUser" type="text" class="icb-form-input" placeholder="Username" @bind="newAdminUserName" />
                                 </div>
-                                <div class="col-sm-6">
-                                    <input type="password" class="form-control" placeholder="Password (min 8 characters)" @bind="newAdminPassword" />
+                                <div class="icb-form-field">
+                                    <label class="icb-form-label" for="newAdminPass">Password</label>
+                                    <input id="newAdminPass" type="password" class="icb-form-input" placeholder="Password (min 8 characters)" @bind="newAdminPassword" />
                                 </div>
                             </div>
                         }
 
-                        <small class="form-text text-muted d-block mt-2">
+                        <div class="icb-form-help d-block mt-2">
                             No agents, connections, or sync history come across &mdash; the new database starts empty.
-                        </small>
-                        <small class="form-text text-muted d-block mt-1">
+                        </div>
+                        <div class="icb-form-help d-block mt-1">
                             <strong>"Me" duplicates your credential.</strong> Your username, password hash and
                             salt are copied into the new database as a second, independent account. It is a
                             copy that outlives the original: changing or revoking your password in
                             '@CurrentDatabaseName()' later has <em>no effect</em> on the copy, and the copy
                             keeps working. To retire the credential you must change it in both databases.
-                        </small>
+                        </div>
                     </div>
 
-                    <div class="d-flex gap-2 flex-wrap">
-                        <button type="button" class="btn btn-secondary" @onclick="TestConnection" disabled="@(testingConnection || preparing)">
+                    <div class="icb-form-actions">
+                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="TestConnection" disabled="@(testingConnection || preparing)">
                             @if (testingConnection)
                             {
-                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>
                             }
                             Test Connection
                         </button>
-                        <button type="button" class="btn btn-primary" @onclick="PrepareDatabase" disabled="@(!CanPrepare())">
+                        <button type="button" class="ic-btn ic-btn-primary" @onclick="PrepareDatabase" disabled="@(!CanPrepare())">
                             @if (preparing)
                             {
-                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>
                             }
                             Create and prepare database
                         </button>
@@ -197,16 +207,16 @@
 
                     @if (prepared != null)
                     {
-                        <ul class="list-group mt-3">
+                        <ul class="icb-step-list">
                             @foreach (var step in prepared.Steps)
                             {
-                                <li class="list-group-item d-flex align-items-start gap-2">
-                                    <span class="@StepIconClass(step.State)">@StepIcon(step.State)</span>
+                                <li class="icb-step @(step.State == PrepareStepState.Failed ? "icb-step-failed" : "")">
+                                    <span class="@StepIconClass(step.State)" aria-hidden="true">@StepIcon(step.State)</span>
                                     <div>
-                                        <div class="@(step.State == PrepareStepState.Failed ? "text-danger fw-bold" : "")">@step.Title</div>
+                                        <div class="icb-step-title">@step.Title</div>
                                         @if (!string.IsNullOrEmpty(step.Message))
                                         {
-                                            <div class="small @(step.State == PrepareStepState.Failed ? "text-danger" : "text-muted")">@step.Message</div>
+                                            <div class="icb-step-message">@step.Message</div>
                                         }
                                     </div>
                                 </li>
@@ -216,14 +226,17 @@
                         var failedStep = prepared.Success ? null : prepared.FailedStep;
                         @if (failedStep != null && !preparing)
                         {
-                            <div class="alert alert-danger mt-3">
-                                <strong>Stopped at &quot;@failedStep.Title&quot;.</strong>
-                                <div class="small mt-1">@failedStep.Message</div>
-                                <hr class="my-2" />
-                                <small>
-                                    The connection was <strong>not</strong> saved. Conduit is still running on
-                                    '@CurrentDatabaseName()' and a restart will change nothing. Fix the problem above and run it again.
-                                </small>
+                            <div class="icb-notice icb-notice-danger mt-3">
+                                <i class="oi oi-warning" aria-hidden="true"></i>
+                                <div class="icb-notice-body">
+                                    <span class="icb-notice-title">Stopped at &quot;@failedStep.Title&quot;.</span>
+                                    <div class="small">@failedStep.Message</div>
+                                    <hr class="icb-form-divider my-2" />
+                                    <small>
+                                        The connection was <strong>not</strong> saved. Conduit is still running on
+                                        '@CurrentDatabaseName()' and a restart will change nothing. Fix the problem above and run it again.
+                                    </small>
+                                </div>
                             </div>
                         }
                     }
@@ -231,8 +244,8 @@
                     @if (connectionTest != null)
                     {
                         var alertClass = GetTestAlertClass();
-                        <div class="mt-3 alert @alertClass py-2">
-                            @GetTestMessage()
+                        <div class="icb-notice @alertClass mt-3" role="status">
+                            <div class="icb-notice-body">@GetTestMessage()</div>
                         </div>
                     }
                 </div>
@@ -240,11 +253,11 @@
         </div>
 
         <div class="col-lg-4">
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0">Notes</h5>
+            <div class="ic-card">
+                <div class="ic-card-hdr">
+                    <span class="ic-card-hdr-title">Notes</span>
                 </div>
-                <div class="card-body small">
+                <div class="ic-card-body small">
                     <ul class="mb-0 ps-3">
                         <li>
                             <strong>Create and prepare database</strong> does everything in one go: creates the
@@ -425,19 +438,19 @@
 
     private static string StepIconClass(PrepareStepState state) => state switch
     {
-        PrepareStepState.Succeeded => "text-success fw-bold",
-        PrepareStepState.Skipped => "text-muted fw-bold",
-        PrepareStepState.Failed => "text-danger fw-bold",
-        PrepareStepState.Running => "text-primary fw-bold",
-        _ => "text-muted"
+        PrepareStepState.Succeeded => "icb-step-icon icb-step-icon-success",
+        PrepareStepState.Skipped => "icb-step-icon icb-step-icon-muted",
+        PrepareStepState.Failed => "icb-step-icon icb-step-icon-danger",
+        PrepareStepState.Running => "icb-step-icon icb-step-icon-running",
+        _ => "icb-step-icon"
     };
 
     private string GetTestAlertClass()
     {
-        if (connectionTest == null) return "alert-secondary";
-        if (!connectionTest.ServerReachable) return "alert-danger";
-        if (!connectionTest.DatabaseExists) return "alert-warning";
-        return "alert-success";
+        if (connectionTest == null) return "icb-notice-neutral";
+        if (!connectionTest.ServerReachable) return "icb-notice-danger";
+        if (!connectionTest.DatabaseExists) return "icb-notice-warning";
+        return "icb-notice-success";
     }
 
     private string GetTestMessage()

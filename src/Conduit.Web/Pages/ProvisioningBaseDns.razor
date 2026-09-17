@@ -3,6 +3,8 @@
 @using Conduit.DataAccess.Repositories
 @using Conduit.Web.Services
 @using Microsoft.AspNetCore.Components.Authorization
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject ICreationBaseDnAllowListRepository Repo
 @inject ICreationBaseDnPolicy Policy
 @inject Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository CredMapRepo
@@ -13,57 +15,71 @@
 
 <PageTitle>AD Creation Base DNs - Conduit</PageTitle>
 
-<div class="container-fluid">
-    <h1>AD Creation Base DNs</h1>
-    <p class="lead">The containment allow-list for AD account creation — customer-owned, on this agent.</p>
+<div class="container-fluid identities-container">
+    <Template1 Icon="fas fa-shield-alt" IconAccent="slate"
+               Title="AD Creation Base DNs"
+               Subtitle="The containment allow-list for AD account creation — customer-owned, on this agent." />
 
-    <div class="alert alert-warning">
-        <strong>This is the creation containment control.</strong> An AD account create is only permitted when its
-        target OU is <em>contained within</em> one of the base DNs configured here for its connection.
-        A connection with <strong>no</strong> permitted base DN <strong>denies every create</strong> (deny-all by default).
-        Grant only the OUs where creation is intended — and delegate the bind account "Create User objects" only there.
-        These values live on this agent and are never set from IdentityCenter.
+    <div class="icb-notice icb-notice-warning mb-3">
+        <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+        <div class="icb-notice-body">
+            <strong>This is the creation containment control.</strong> An AD account create is only permitted when its
+            target OU is <em>contained within</em> one of the base DNs configured here for its connection.
+            A connection with <strong>no</strong> permitted base DN <strong>denies every create</strong> (deny-all by default).
+            Grant only the OUs where creation is intended — and delegate the bind account "Create User objects" only there.
+            These values live on this agent and are never set from IdentityCenter.
+        </div>
     </div>
 
     @if (!string.IsNullOrEmpty(message))
     {
-        <div class="alert @(messageIsError ? "alert-danger" : "alert-success") alert-dismissible">
-            @message
-            <button type="button" class="btn-close" @onclick="ClearMessage"></button>
+        <div class="icb-notice @(messageIsError ? "icb-notice-danger" : "icb-notice-success") mb-3" role="status">
+            <i class="@(messageIsError ? "fas fa-circle-exclamation" : "fas fa-circle-check")" aria-hidden="true"></i>
+            <div class="icb-notice-body">@message</div>
+            <button type="button" class="icb-notice-dismiss" aria-label="Dismiss" @onclick="ClearMessage">&times;</button>
         </div>
     }
 
-    <div class="card mb-4">
-        <div class="card-header"><h5 class="mb-0">Add a permitted base DN</h5></div>
-        <div class="card-body">
+    <div class="ic-card mb-4">
+        <div class="ic-card-hdr">
+            <i class="fas fa-plus" aria-hidden="true"></i>
+            <span class="ic-card-hdr-title">Add a permitted base DN</span>
+        </div>
+        <div class="ic-card-body">
             <div class="row g-2 align-items-start">
                 <div class="col-md-4">
-                    <label class="form-label">Connection name</label>
-                    <select class="form-select" @bind="newConnectionName">
-                        <option value="">-- select a connection --</option>
-                        @foreach (var name in connectionOptions)
-                        {
-                            <option value="@name">@name</option>
-                        }
-                    </select>
-                    <div class="form-text">
-                        @if (connectionOptions.Count == 0)
-                        {
-                            <text>No connections are registered on this agent yet — save an IdentityCenter-targeted sync project so its route appears here.</text>
-                        }
-                        else
-                        {
-                            <text>The IdentityCenter connection to provision into (its DirectoryConnections.Name).</text>
-                        }
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="pbd-conn">Connection name</label>
+                        <select id="pbd-conn" class="icb-form-select" @bind="newConnectionName">
+                            <option value="">-- select a connection --</option>
+                            @foreach (var name in connectionOptions)
+                            {
+                                <option value="@name">@name</option>
+                            }
+                        </select>
+                        <span class="icb-form-help">
+                            @if (connectionOptions.Count == 0)
+                            {
+                                <text>No connections are registered on this agent yet — save an IdentityCenter-targeted sync project so its route appears here.</text>
+                            }
+                            else
+                            {
+                                <text>The IdentityCenter connection to provision into (its DirectoryConnections.Name).</text>
+                            }
+                        </span>
                     </div>
                 </div>
                 <div class="col-md-6">
-                    <label class="form-label">Permitted base DN</label>
-                    <input class="form-control" @bind="newBaseDn" @bind:event="oninput" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="pbd-dn">Permitted base DN</label>
+                        <input id="pbd-dn" class="icb-form-input icb-form-input-mono" @bind="newBaseDn" @bind:event="oninput" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
+                    </div>
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label d-none d-md-block">&nbsp;</label>
-                    <button class="btn btn-primary w-100" @onclick="AddAsync" disabled="@saving">Add</button>
+                    <div class="icb-form-field">
+                        <span class="icb-form-label d-none d-md-block">&nbsp;</span>
+                        <button type="button" class="ic-btn ic-btn-primary w-100 justify-content-center" @onclick="AddAsync" disabled="@saving">Add</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -75,71 +91,81 @@
     }
     else if (connections.Count == 0)
     {
-        <div class="alert alert-secondary">No provisioning routes are configured on this agent.</div>
+        <div class="icb-notice icb-notice-neutral">
+            <div class="icb-notice-body">No provisioning routes are configured on this agent.</div>
+        </div>
     }
     else
     {
         @if (!anyEffective)
         {
-            <div class="alert alert-warning">Routes exist, but no permitted creation base DN is in effect. Every AD create is currently denied.</div>
+            <div class="icb-notice icb-notice-warning mb-3">
+                <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+                <div class="icb-notice-body">Routes exist, but no permitted creation base DN is in effect. Every AD create is currently denied.</div>
+            </div>
         }
         @foreach (var conn in connections)
         {
-            <div class="card mb-3">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><strong>@conn.Name</strong></span>
-                    @if (conn.EnforcedSource == BaseDnSource.Database)
-                    {
-                        <span class="badge bg-success">@conn.DbEntries.Count enforced (database)</span>
-                    }
-                    else if (conn.EnforcedSource == BaseDnSource.Config)
-                    {
-                        <span class="badge bg-info text-dark">@conn.ConfigDns.Count enforced (host config)</span>
-                    }
-                    else
-                    {
-                        <span class="badge bg-danger">denied — no permitted base DN</span>
-                    }
+            <div class="ic-card mb-3">
+                <div class="ic-card-hdr">
+                    <i class="fas fa-plug" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">@conn.Name</span>
+                    <span class="ms-auto">
+                        @if (conn.EnforcedSource == BaseDnSource.Database)
+                        {
+                            <BrandBadge Text="@($"{conn.DbEntries.Count} enforced (database)")" Tone="BrandBadgeTone.Success" Compact="true" />
+                        }
+                        else if (conn.EnforcedSource == BaseDnSource.Config)
+                        {
+                            <BrandBadge Text="@($"{conn.ConfigDns.Count} enforced (host config)")" Tone="BrandBadgeTone.Info" Compact="true" />
+                        }
+                        else
+                        {
+                            <BrandBadge Text="denied — no permitted base DN" Tone="BrandBadgeTone.Danger" Compact="true" />
+                        }
+                    </span>
                 </div>
-                <div class="card-body p-0">
-                    <table class="table table-sm mb-0">
-                        <thead>
-                            <tr><th>Base DN</th><th>Source</th><th>Added</th><th>By</th><th class="text-end">Action</th></tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var entry in conn.DbEntries)
-                            {
-                                <tr>
-                                    <td><code>@entry.BaseDn</code></td>
-                                    <td><span class="badge bg-success">database (enforced)</span></td>
-                                    <td>@entry.CreatedAt.ToString("u")</td>
-                                    <td>@(entry.CreatedBy ?? "—")</td>
-                                    <td class="text-end">
-                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(entry.Id)" disabled="@saving">Remove</button>
-                                    </td>
-                                </tr>
-                            }
-                            @foreach (var dn in conn.ConfigDns)
-                            {
-                                <tr class="table-light">
-                                    <td><code>@dn</code></td>
-                                    <td>
-                                        @if (conn.EnforcedSource == BaseDnSource.Config)
-                                        {
-                                            <span class="badge bg-info text-dark" title="Edit in the agent's appsettings">host config (enforced) — read-only</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="badge bg-secondary" title="Database entries take precedence; this is not currently enforced">host config — OVERRIDDEN by database, not enforced</span>
-                                        }
-                                    </td>
-                                    <td colspan="2"><em class="text-muted">from agent host config — edit in appsettings</em></td>
-                                    <td class="text-end"><span class="text-muted">—</span></td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
+                <section class="icb-table-panel" aria-label="@($"Permitted base DNs for {conn.Name}")">
+                    <div class="icb-table-scroll" tabindex="0" role="region" aria-label="@($"Permitted base DNs for {conn.Name}")">
+                        <table class="icb-data-table">
+                            <thead>
+                                <tr><th scope="col">Base DN</th><th scope="col">Source</th><th scope="col">Added</th><th scope="col">By</th><th scope="col" class="text-end">Action</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var entry in conn.DbEntries)
+                                {
+                                    <tr>
+                                        <td class="mono">@entry.BaseDn</td>
+                                        <td><BrandBadge Text="database (enforced)" Tone="BrandBadgeTone.Success" Compact="true" /></td>
+                                        <td>@entry.CreatedAt.ToString("u")</td>
+                                        <td>@(entry.CreatedBy ?? "—")</td>
+                                        <td class="text-end">
+                                            <button type="button" class="ic-btn ic-btn-danger ic-btn-sm" @onclick="() => DeleteAsync(entry.Id)" disabled="@saving">Remove</button>
+                                        </td>
+                                    </tr>
+                                }
+                                @foreach (var dn in conn.ConfigDns)
+                                {
+                                    <tr>
+                                        <td class="mono">@dn</td>
+                                        <td>
+                                            @if (conn.EnforcedSource == BaseDnSource.Config)
+                                            {
+                                                <span title="Edit in the agent's appsettings"><BrandBadge Text="host config (enforced) — read-only" Tone="BrandBadgeTone.Info" Compact="true" /></span>
+                                            }
+                                            else
+                                            {
+                                                <span title="Database entries take precedence; this is not currently enforced"><BrandBadge Text="host config — OVERRIDDEN by database, not enforced" Tone="BrandBadgeTone.Neutral" Compact="true" /></span>
+                                            }
+                                        </td>
+                                        <td colspan="2"><em class="text-muted">from agent host config — edit in appsettings</em></td>
+                                        <td class="text-end"><span class="text-muted">—</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         }
     }

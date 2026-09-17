@@ -1,6 +1,8 @@
 @page "/logs"
 @attribute [Authorize]
 @using Conduit.Web.Services
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject ApplicationLogService ApplicationLogService
 @inject IJSRuntime JSRuntime
 
@@ -12,22 +14,28 @@
                Icon="fas fa-bug"
                IconAccent="amber">
         <PrimaryAction>
-            <button class="btn btn-outline-secondary me-2" @onclick="RefreshLogs">
-                <i class="oi oi-loop-circular"></i> Refresh
-            </button>
-            <button class="btn btn-outline-danger" @onclick="ClearLogs">
-                <i class="oi oi-trash"></i> Clear
-            </button>
+            <div class="d-flex gap-2">
+                <button type="button" class="icb-list-action" @onclick="RefreshLogs">
+                    <i class="oi oi-loop-circular"></i> Refresh
+                </button>
+                <button type="button" class="icb-list-action" @onclick="ClearLogs">
+                    <i class="oi oi-trash"></i> Clear
+                </button>
+            </div>
         </PrimaryAction>
     </Template1>
 
-    <!-- Filters -->
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="row">
+    <BrandListTable TItem="ApplicationLogService.LogEntry" Items="@logs" Title="Application logs"
+                    TotalCount="@logs.Count" ShowPaging="false"
+                    State="@(loading ? BrandListState.Loading : BrandListState.Ready)"
+                    EmptyMessage="No Logs Found. No logs match your current filters or no logs have been generated yet."
+                    RowClass="@(log => GetRowClass(log.Level))">
+        <Toolbar>
+            <div class="row g-3">
                 <div class="col-md-3">
-                    <label class="form-label">Log Level</label>
-                    <select class="form-select" @bind="selectedLevel" @bind:after="RefreshLogs">
+                    <div class="icb-form-field">
+                    <label class="icb-form-label" for="lg-level">Log Level</label>
+                    <select id="lg-level" class="icb-form-select" @bind="selectedLevel" @bind:after="RefreshLogs">
                         <option value="">All Levels</option>
                         <option value="Debug">Debug</option>
                         <option value="Info">Info</option>
@@ -35,110 +43,78 @@
                         <option value="Error">Error</option>
                         <option value="Critical">Critical</option>
                     </select>
+                    </div>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">Category</label>
-                    <input type="text" class="form-control" @bind="categoryFilter" @bind:after="RefreshLogs" placeholder="e.g., GroupGeneration" />
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="lg-category">Category</label>
+                        <input id="lg-category" type="text" class="icb-form-input" @bind="categoryFilter" @bind:after="RefreshLogs" placeholder="e.g., GroupGeneration" />
+                    </div>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">Max Results</label>
-                    <select class="form-select" @bind="maxResults" @bind:after="RefreshLogs">
+                    <div class="icb-form-field">
+                    <label class="icb-form-label" for="lg-max">Max Results</label>
+                    <select id="lg-max" class="icb-form-select" @bind="maxResults" @bind:after="RefreshLogs">
                         <option value="50">50</option>
                         <option value="100">100</option>
                         <option value="200">200</option>
                         <option value="500">500</option>
                     </select>
+                    </div>
                 </div>
                 <div class="col-md-3 d-flex align-items-end">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" @bind="autoRefresh" @bind:after="ToggleAutoRefresh" id="autoRefreshCheck" />
-                        <label class="form-check-label" for="autoRefreshCheck">
+                    <div class="icb-form-check">
+                        <input type="checkbox" @bind="autoRefresh" @bind:after="ToggleAutoRefresh" id="autoRefreshCheck" />
+                        <label class="icb-form-check-label" for="autoRefreshCheck">
                             Auto-refresh (5s)
                         </label>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <!-- Logs Table -->
-    @if (loading)
-    {
-        <div class="text-center py-5">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-        </div>
-    }
-    else if (!logs.Any())
-    {
-        <div class="alert alert-info">
-            <h4 class="alert-heading">No Logs Found</h4>
-            <p>No logs match your current filters or no logs have been generated yet.</p>
-        </div>
-    }
-    else
-    {
-        <div class="card">
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover table-sm">
-                        <thead>
-                            <tr>
-                                <th class="col-w-160">Timestamp</th>
-                                <th class="col-w-80">Level</th>
-                                <th class="col-w-150">Category</th>
-                                <th>Message</th>
-                                <th>Details</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var log in logs)
-                            {
-                                <tr class="@GetRowClass(log.Level)">
-                                    <td>
-                                        <small>@log.Timestamp.ToString("HH:mm:ss.fff")</small>
-                                    </td>
-                                    <td>
-                                        <span class="badge @GetLevelBadgeClass(log.Level)">
-                                            @log.Level
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <small>@log.Category</small>
-                                    </td>
-                                    <td>
-                                        <small>@log.Message</small>
-                                    </td>
-                                    <td>
-                                        @if (!string.IsNullOrEmpty(log.Details))
-                                        {
-                                            <small class="text-muted">@log.Details</small>
-                                        }
-                                        @if (log.Exception != null)
-                                        {
-                                            <div class="mt-1">
-                                                <small class="text-danger">
-                                                    <strong>Exception:</strong> @log.Exception.Message
-                                                </small>
-                                                @if (!string.IsNullOrEmpty(log.Exception.StackTrace))
-                                                {
-                                                    <details class="mt-1">
-                                                        <summary><small class="text-muted">Stack Trace</small></summary>
-                                                        <pre class="small text-muted mt-1">@log.Exception.StackTrace</pre>
-                                                    </details>
-                                                }
-                                            </div>
-                                        }
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    }
+        </Toolbar>
+        <HeaderTemplate>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Level</th>
+            <th scope="col">Category</th>
+            <th scope="col">Message</th>
+            <th scope="col">Details</th>
+        </HeaderTemplate>
+        <RowTemplate Context="log">
+            <td>
+                <small>@log.Timestamp.ToString("HH:mm:ss.fff")</small>
+            </td>
+            <td>
+                <BrandBadge Text="@log.Level.ToString()" Tone="@GetLevelBadgeClass(log.Level)" Soft="true" />
+            </td>
+            <td>
+                <small>@log.Category</small>
+            </td>
+            <td>
+                <small>@log.Message</small>
+            </td>
+            <td>
+                @if (!string.IsNullOrEmpty(log.Details))
+                {
+                    <small class="text-muted">@log.Details</small>
+                }
+                @if (log.Exception != null)
+                {
+                    <div class="mt-1">
+                        <small class="text-danger">
+                            <strong>Exception:</strong> @log.Exception.Message
+                        </small>
+                        @if (!string.IsNullOrEmpty(log.Exception.StackTrace))
+                        {
+                            <details class="mt-1">
+                                <summary><small class="text-muted">Stack Trace</small></summary>
+                                <pre class="small text-muted mt-1">@log.Exception.StackTrace</pre>
+                            </details>
+                        }
+                    </div>
+                }
+            </td>
+        </RowTemplate>
+    </BrandListTable>
 </div>
 
 @code {
@@ -158,7 +134,7 @@
     private Task RefreshLogs()
     {
         loading = true;
-        
+
         try
         {
             ApplicationLogService.LogLevel? minLevel = null;
@@ -195,7 +171,7 @@
     {
         if (autoRefresh)
         {
-            refreshTimer = new Timer(async _ => await InvokeAsync(async () => await RefreshLogs()), 
+            refreshTimer = new Timer(async _ => await InvokeAsync(async () => await RefreshLogs()),
                                    null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
         }
         else
@@ -205,16 +181,16 @@
         }
     }
 
-    private string GetLevelBadgeClass(ApplicationLogService.LogLevel level)
+    private BrandBadgeTone GetLevelBadgeClass(ApplicationLogService.LogLevel level)
     {
         return level switch
         {
-            ApplicationLogService.LogLevel.Debug => "bg-secondary",
-            ApplicationLogService.LogLevel.Info => "bg-primary",
-            ApplicationLogService.LogLevel.Warning => "bg-warning",
-            ApplicationLogService.LogLevel.Error => "bg-danger",
-            ApplicationLogService.LogLevel.Critical => "bg-dark",
-            _ => "bg-light"
+            ApplicationLogService.LogLevel.Debug => BrandBadgeTone.Neutral,
+            ApplicationLogService.LogLevel.Info => BrandBadgeTone.Info,
+            ApplicationLogService.LogLevel.Warning => BrandBadgeTone.Warning,
+            ApplicationLogService.LogLevel.Error => BrandBadgeTone.Danger,
+            ApplicationLogService.LogLevel.Critical => BrandBadgeTone.Danger,
+            _ => BrandBadgeTone.Neutral
         };
     }
 
@@ -222,9 +198,9 @@
     {
         return level switch
         {
-            ApplicationLogService.LogLevel.Error => "table-danger",
-            ApplicationLogService.LogLevel.Critical => "table-danger",
-            ApplicationLogService.LogLevel.Warning => "table-warning",
+            ApplicationLogService.LogLevel.Error => "icb-row-danger",
+            ApplicationLogService.LogLevel.Critical => "icb-row-danger",
+            ApplicationLogService.LogLevel.Warning => "icb-row-warning",
             _ => ""
         };
     }

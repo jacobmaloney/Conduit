@@ -1,6 +1,8 @@
 @page "/"
 @attribute [Authorize]
 @using Conduit.Core.SyncModels
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject Conduit.DataAccess.Repositories.UserRepository UserRepository
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
 @inject Conduit.DataAccess.Repositories.SyncProjectRepository ProjectRepo
@@ -10,121 +12,79 @@
 
 <PageTitle>Conduit — move identities across connected systems.</PageTitle>
 
-<div class="cx-page">
-    <div class="cx-page-head">
-        <div>
-            <div class="cx-page-title">Dashboard</div>
-            <div class="cx-page-sub">Everything that moves identities, at a glance.</div>
-        </div>
-        <div class="cx-page-head-spacer"></div>
-        <div class="cx-page-actions">
-            <a href="/getting-started" class="cx-btn"><i class="fas fa-list-check"></i> Getting Started</a>
-            <a href="/sync-projects" class="cx-btn cx-btn--primary"><i class="fas fa-play"></i> Run All Syncs</a>
-        </div>
-    </div>
+<div class="container-fluid">
+    <Template1 Title="Dashboard"
+               Subtitle="Everything that moves identities, at a glance."
+               Icon="fas fa-gauge-high"
+               IconAccent="cyan">
+        <PrimaryAction>
+            <div class="d-flex gap-2">
+                <a href="/getting-started" class="icb-list-action"><i class="fas fa-list-check"></i> Getting Started</a>
+                <a href="/sync-projects" class="icb-list-action icb-list-action-primary"><i class="fas fa-play"></i> Run All Syncs</a>
+            </div>
+        </PrimaryAction>
+    </Template1>
 
     @if (_showGettingStarted)
     {
-        <div class="alert alert-info d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3" role="alert">
-            <div>
-                <i class="fas fa-list-check me-2"></i>
+        <div class="icb-notice icb-notice-info align-items-center flex-wrap mb-3" role="alert">
+            <i class="fas fa-list-check" aria-hidden="true"></i>
+            <div class="icb-notice-body">
                 <strong>New to Conduit?</strong> Finish setting up — connect a system, point it at IdentityCenter, and run your first sync.
             </div>
             <div class="d-flex gap-2 align-items-center">
-                <a href="/getting-started" class="btn btn-sm btn-primary">Getting Started</a>
-                <button type="button" class="btn-close" aria-label="Dismiss" @onclick="DismissGettingStarted"></button>
+                <a href="/getting-started" class="icb-list-action icb-list-action-primary">Getting Started</a>
+                <button type="button" class="icb-list-action" aria-label="Dismiss" @onclick="DismissGettingStarted"><i class="fas fa-xmark" aria-hidden="true"></i></button>
             </div>
         </div>
     }
 
-    <div class="cx-statband">
-        <div class="cx-stat">
-            <div class="cx-stat-label">Total Users</div>
-            <div class="cx-stat-val">@userCount.ToString("N0")</div>
-            <div class="cx-stat-sub">across systems</div>
-        </div>
-        <div class="cx-stat">
-            <div class="cx-stat-label">Connections</div>
-            <div class="cx-stat-val">@connectionCount.ToString("N0")</div>
-            <div class="cx-stat-sub">@activeConnectionCount active</div>
-        </div>
-        <div class="cx-stat">
-            <div class="cx-stat-label">Sync Projects</div>
-            <div class="cx-stat-val">@projectCount.ToString("N0")</div>
-            <div class="cx-stat-sub">@EnabledProjectsSub</div>
-        </div>
-        <div class="cx-stat">
-            <div class="cx-stat-label">Runs Today</div>
-            <div class="cx-stat-val @(runsTodayCount > 0 ? "ok" : "")">@runsTodayCount.ToString("N0")</div>
-            <div class="cx-stat-sub">@failedTodayCount failed</div>
-        </div>
-        <div class="cx-stat">
-            <div class="cx-stat-label">Last Run</div>
-            <div class="cx-stat-val @LastRunValueClass">@LastRunShort</div>
-            <div class="cx-stat-sub">@LastRunSub</div>
-        </div>
-    </div>
+    <BrandStatRow Stats="@DashboardStats" />
 
-    <div class="cx-dash-grid">
-        <div class="cx-card">
-            <div class="cx-card-head">
-                <span class="cx-card-title">Sync projects</span>
-                <a href="/sync-projects" class="cx-card-link">Open Sync Center →</a>
-            </div>
-            @if (projectList.Count == 0)
-            {
-                <div class="text-muted small">No sync projects yet. <a href="/sync-projects">Create one →</a></div>
-            }
-            else
-            {
-                <div class="cx-rows">
-                    @foreach (var p in projectList.Take(6))
-                    {
-                        <div class="cx-row">
-                            <span class="cx-dot @StatusDotClass(p.LastRunStatus)"></span>
-                            <div class="cx-row-main">
-                                <div class="cx-row-name">@p.Name</div>
-                                <div class="cx-row-meta">@TenantName(p.SourceTenantId) → @TenantName(p.SinkTenantId) · @p.ObjectClass</div>
-                            </div>
-                            <span class="cx-pill cx-pill--runs">@p.SuccessfulRuns/@p.TotalRuns runs</span>
-                            <span class="cx-row-time">@(p.LastRunAt is { } lr ? RelativeTime(lr) : "never")</span>
-                            <a href="/sync-projects" class="cx-btn cx-btn--run cx-btn--xs"><i class="fas fa-play"></i> Run</a>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
-
-        <div class="cx-col-stack">
-            <div class="cx-card">
-                <div class="cx-card-title" style="margin-bottom:10px;">Next scheduled run</div>
-                <div class="cx-bigtime">@NextRunLabel</div>
-                <div class="cx-card-sub">@scheduledCount schedules · @failingCount failing</div>
-                <div class="d-flex gap-2 mt-3">
-                    <a href="/schedules" class="cx-btn cx-btn--md">Schedules</a>
-                    <a href="/sync-history" class="cx-btn cx-btn--md">Run history</a>
+    <div class="row">
+        <div class="col-lg-7 mb-3">
+            <div class="icb-card-toolbar mb-2">
+                <div class="icb-action-bar">
+                    <a href="/sync-projects" class="icb-list-action">Open Sync Center →</a>
                 </div>
             </div>
-            <div class="cx-card">
-                <div class="cx-card-title" style="margin-bottom:10px;">Recent activity</div>
-                @if (recentRuns.Count == 0)
-                {
-                    <div class="text-muted small">No runs recorded yet.</div>
-                }
-                else
-                {
-                    <div class="cx-activity">
-                        @foreach (var r in recentRuns.Take(6))
-                        {
-                            <div>
-                                <span class="@StatusGlyphClass(r.Status)">@StatusGlyph(r.Status)</span>
-                                @ProjectName(r.SyncProjectId) — @r.ObjectsRead read, @r.ObjectsCreated created, @r.ObjectsUpdated updated
-                                <span class="text-muted">· @RelativeTime(r.CompletedAt ?? r.StartedAt)</span>
-                            </div>
-                        }
-                    </div>
-                }
+            <BrandListPanel TItem="SyncProject" Width="BrandListWidth.Fill" Title="Sync projects"
+                            Items="@TopProjects" TotalCount="@projectList.Count" ShowSearch="false" ShowPaging="false">
+                <EmptyTemplate>
+                    <p>No sync projects yet. <a href="/sync-projects">Create one →</a></p>
+                </EmptyTemplate>
+                <RowTemplate Context="p">
+                    <BrandSummaryRow Title="@p.Name" Subtitle="@ProjectSubtitle(p)" Meta="@LastRunMeta(p)">
+                        <Badges>
+                            <BrandBadge Text="@StatusText(p.LastRunStatus)" Tone="@StatusTone(p.LastRunStatus)" Dot="true" Soft="true" Compact="true" />
+                            <BrandBadge Text="@RunsSummary(p)" Tone="BrandBadgeTone.Success" Soft="true" />
+                        </Badges>
+                    </BrandSummaryRow>
+                </RowTemplate>
+                <RowActions Context="p">
+                    <a href="/sync-projects" class="icb-list-action icb-list-action-primary"><i class="fas fa-play"></i> Run</a>
+                </RowActions>
+            </BrandListPanel>
+        </div>
+
+        <div class="col-lg-5 mb-3">
+            <div class="icb-card-toolbar mb-2">
+                <div class="icb-action-bar">
+                    <a href="/schedules" class="icb-list-action"><i class="fas fa-clock"></i> Schedules</a>
+                    <a href="/sync-history" class="icb-list-action"><i class="fas fa-history"></i> Run history</a>
+                </div>
             </div>
+            <BrandListPanel TItem="SyncRun" Width="BrandListWidth.Fill" Title="Recent activity"
+                            Items="@RecentActivity" TotalCount="@recentRuns.Count" ShowSearch="false" ShowPaging="false"
+                            EmptyMessage="No runs recorded yet.">
+                <RowTemplate Context="r">
+                    <BrandSummaryRow Title="@ProjectName(r.SyncProjectId)" Subtitle="@RunSubtitle(r)" Meta="@RelativeTime(r.CompletedAt ?? r.StartedAt)">
+                        <Badges>
+                            <BrandBadge Text="@StatusText(r.Status)" Tone="@StatusTone(r.Status)" Dot="true" Soft="true" Compact="true" />
+                        </Badges>
+                    </BrandSummaryRow>
+                </RowTemplate>
+            </BrandListPanel>
         </div>
     </div>
 </div>
@@ -160,10 +120,23 @@
     private string LastRunSub => lastRunWhen is null ? "no runs yet" : $"ago · {(lastRunStatus ?? "unknown").ToLowerInvariant()}";
     private string LastRunValueClass => lastRunStatus switch
     {
-        "Completed" or "Succeeded" => "ok",
-        "Failed" or "Error" => "muted",
-        _ => ""
+        "Completed" or "Succeeded" => "text-success",
+        "Failed" or "Error" => "text-muted",
+        _ => "text-primary"
     };
+
+    private IReadOnlyList<BrandStatRow.StatItem> DashboardStats => new[]
+    {
+        new BrandStatRow.StatItem("Total Users", userCount.ToString("N0"), Sub: "across systems"),
+        new BrandStatRow.StatItem("Connections", connectionCount.ToString("N0"), Sub: $"{activeConnectionCount} active"),
+        new BrandStatRow.StatItem("Sync Projects", projectCount.ToString("N0"), Sub: EnabledProjectsSub),
+        new BrandStatRow.StatItem("Runs Today", runsTodayCount.ToString("N0"), runsTodayCount > 0 ? "text-success" : "text-primary", Sub: $"{failedTodayCount} failed"),
+        new BrandStatRow.StatItem("Last Run", LastRunShort, LastRunValueClass, Sub: LastRunSub),
+        new BrandStatRow.StatItem("Next scheduled run", NextRunLabel, Sub: $"{scheduledCount} schedules · {failingCount} failing", Prominent: true)
+    };
+
+    private IReadOnlyList<SyncProject> TopProjects => projectList.Take(6).ToList();
+    private IReadOnlyList<SyncRun> RecentActivity => recentRuns.Take(6).ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -222,27 +195,25 @@
     private string TenantName(Guid id) => tenantNames.TryGetValue(id, out var n) ? n : "—";
     private string ProjectName(Guid id) => projectNames.TryGetValue(id, out var n) ? n : "Sync project";
 
-    private static string StatusDotClass(string? status) => status switch
+    private string ProjectSubtitle(SyncProject p) => $"{TenantName(p.SourceTenantId)} → {TenantName(p.SinkTenantId)} · {p.ObjectClass}";
+    private static string RunsSummary(SyncProject p) => $"{p.SuccessfulRuns}/{p.TotalRuns} runs";
+    private static string LastRunMeta(SyncProject p) => p.LastRunAt is { } lr ? RelativeTime(lr) : "never";
+    private static string RunSubtitle(SyncRun r) => $"{r.ObjectsRead} read, {r.ObjectsCreated} created, {r.ObjectsUpdated} updated";
+
+    private static BrandBadgeTone StatusTone(string? status) => status switch
     {
-        "Completed" or "Succeeded" => "",
-        "Failed" or "Error" => "cx-dot--fail",
-        "Running" => "cx-dot--run",
-        _ => "cx-dot--idle"
+        "Completed" or "Succeeded" => BrandBadgeTone.Success,
+        "Failed" or "Error" => BrandBadgeTone.Danger,
+        "Running" => BrandBadgeTone.Info,
+        _ => BrandBadgeTone.Neutral
     };
 
-    private static string StatusGlyph(string? status) => status switch
+    private static string StatusText(string? status) => status switch
     {
-        "Completed" or "Succeeded" => "✓",
-        "Failed" or "Error" => "✗",
-        "Running" => "●",
-        _ => "＋"
-    };
-
-    private static string StatusGlyphClass(string? status) => status switch
-    {
-        "Failed" or "Error" => "add",
-        "Running" => "add",
-        _ => "ok"
+        "Completed" or "Succeeded" => "OK",
+        "Failed" or "Error" => "Failed",
+        "Running" => "Running",
+        _ => "Idle"
     };
 
     private static string RelativeTime(DateTime utc)

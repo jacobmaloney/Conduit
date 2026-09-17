@@ -228,51 +228,20 @@
 .cx-btn:hover { border-color: #94a3b8; color: #475569; }
 .cx-btn:disabled { opacity: .55; cursor: default; }
 
-.cx-btn--primary,
-.cx-btn--run {
+.cx-btn--primary {
     border: none;
     background: #0e7490;
     color: #fff;
     padding: 8px 17px;
 }
-.cx-btn--primary:hover,
-.cx-btn--run:hover { background: #155e75; color: #fff; border: none; }
+.cx-btn--primary:hover { background: #155e75; color: #fff; border: none; }
 
 /* size modifiers */
 .cx-btn--md { font-size: 12px; padding: 7px 13px; border-radius: 9px; }
-.cx-btn--xs { font-size: 11.5px; padding: 6px 12px; border-radius: 8px; }
-.cx-btn--run.cx-btn--md { padding: 7px 14px; }
 
 /* teal-text secondary (Test action) */
 .cx-btn--teal { color: #0e7490; }
 .cx-btn--teal:hover { color: #0e7490; }
-
-/* ============================================================================
-   STAT BAND (dashboard)
-   ========================================================================== */
-.cx-statband {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 12px;
-    margin-bottom: 16px;
-}
-.cx-stat {
-    background: #fff;
-    border: 1px solid #e2eaee;
-    border-radius: 12px;
-    padding: 12px 15px;
-}
-.cx-stat-label {
-    font-size: 10.5px;
-    font-weight: 800;
-    letter-spacing: .06em;
-    color: #94a3b8;
-    text-transform: uppercase;
-}
-.cx-stat-val { font-size: 22px; font-weight: 800; color: #0e7490; margin-top: 2px; }
-.cx-stat-val.ok { color: #15803d; }
-.cx-stat-val.muted { color: #64748b; }
-.cx-stat-sub { font-size: 11px; font-weight: 700; color: #64748b; }
 
 /* ============================================================================
    CARDS
@@ -283,60 +252,10 @@
     border-radius: 14px;
     padding: 16px 18px;
 }
-.cx-card-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-.cx-card-title { font-weight: 800; font-size: 14.5px; margin: 0; }
-.cx-card-link { font-size: 12px; font-weight: 800; color: #0e7490; }
-.cx-bigtime { font-size: 20px; font-weight: 800; color: #0e7490; }
-.cx-card-sub { font-size: 12px; color: #64748b; font-weight: 600; margin-top: 2px; }
-
-/* dashboard two-column grid */
-.cx-dash-grid {
-    display: grid;
-    grid-template-columns: 1.6fr 1fr;
-    gap: 14px;
-    align-items: start;
-}
-.cx-col-stack { display: grid; gap: 14px; }
 
 /* ---- Rows (list stacks) -------------------------------------------------- */
 .cx-rows { display: grid; gap: 6px; }
 .cx-rows--sp { gap: 8px; }
-
-/* compact dashboard sync-project row */
-.cx-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    border: 1px solid #eef2f4;
-    border-radius: 10px;
-    padding: 9px 12px;
-}
-.cx-row-main { min-width: 0; flex: 1; }
-.cx-row-name {
-    font-weight: 800;
-    font-size: 13px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.cx-row-meta { font-size: 11.5px; color: #64748b; font-weight: 600; }
-.cx-row-time { font-size: 11.5px; color: #94a3b8; font-weight: 700; flex: none; }
-
-/* dot */
-.cx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #16a34a; }
-.cx-dot--fail { background: #dc2626; }
-.cx-dot--run { background: #0e7490; }
-.cx-dot--idle { background: #94a3b8; }
-
-/* activity list */
-.cx-activity { display: grid; gap: 8px; font-size: 12.5px; font-weight: 600; color: #475569; }
-.cx-activity .ok { color: #15803d; font-weight: 800; }
-.cx-activity .add { color: #0e7490; font-weight: 800; }
 
 /* ---- Full-width list card (sync projects / connections) ------------------ */
 .cx-listcard {
@@ -393,7 +312,6 @@
 .cx-pill--muted { background: #eef4f6; color: #64748b; }
 .cx-pill--warn { background: #fef3c7; color: #b45309; }
 .cx-pill--fail { background: #fee2e2; color: #b91c1c; }
-.cx-pill--runs { background: #dcfce7; color: #15803d; font-size: 10.5px; flex: none; }
 .cx-pill--lg { font-size: 11.5px; padding: 4px 12px; }
 .cx-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .cx-arrow { color: #94a3b8; font-weight: 800; }

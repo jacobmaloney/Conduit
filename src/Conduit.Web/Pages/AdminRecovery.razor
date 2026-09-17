@@ -25,286 +25,123 @@
     sign in.
 *@
 
-<div class="offline-shell">
-    <div class="offline-card">
-        <div class="offline-mark">
+<div class="icb-offline-shell">
+    <div class="icb-offline-card">
+        <div class="icb-offline-mark">
             <ConduitMark Size="64" Color="var(--accent)" HubFill="var(--bg-2)" />
         </div>
 
         @if (_created)
         {
-            <div class="offline-badge recovery-ok">
-                <span class="offline-dot"></span>
+            <div class="icb-offline-badge is-ok">
+                <span class="icb-offline-dot"></span>
                 Recovered
             </div>
 
-            <h1 class="offline-title">Administrator restored</h1>
-            <p class="offline-lead">
+            <h1 class="icb-offline-title">Administrator restored</h1>
+            <p class="icb-offline-lead">
                 The account is active and the recovery token has been used up. A new token is
                 only ever issued if this install loses all of its administrators again.
             </p>
-            <a class="offline-reconnect" href="/login">Go to sign-in</a>
+            <a class="ic-btn ic-btn-primary" href="/login">Go to sign-in</a>
         }
         else
         {
-            <div class="offline-badge">
-                <span class="offline-dot"></span>
+            <div class="icb-offline-badge">
+                <span class="icb-offline-dot"></span>
                 Administrator recovery
             </div>
 
-            <h1 class="offline-title">No administrator can sign in</h1>
+            <h1 class="icb-offline-title">No administrator can sign in</h1>
 
-            <p class="offline-lead">
+            <p class="icb-offline-lead">
                 This Conduit install has a database, but it has no active portal
                 administrator &mdash; so there is no account left to authenticate with.
             </p>
 
-            <p class="offline-sub">
+            <p class="icb-offline-sub">
                 Restoring one is not something that can be done over the network. It requires
                 access to the Conduit host itself, the same access that protects the
                 credentials this server stores.
             </p>
 
-            <div class="recovery-steps">
-                <div class="recovery-step">
-                    <span class="recovery-num">1</span>
+            <ol class="icb-step-list">
+                <li class="icb-step">
+                    <span class="icb-step-icon" aria-hidden="true">1</span>
                     <span>Sign in to the machine running Conduit, as an administrator.</span>
-                </div>
-                <div class="recovery-step">
-                    <span class="recovery-num">2</span>
+                </li>
+                <li class="icb-step">
+                    <span class="icb-step-icon" aria-hidden="true">2</span>
                     <span>Open <code>@_tokenPath</code> and copy the <code>Token</code> value.</span>
-                </div>
-                <div class="recovery-step">
-                    <span class="recovery-num">3</span>
+                </li>
+                <li class="icb-step">
+                    <span class="icb-step-icon" aria-hidden="true">3</span>
                     <span>Paste it below and choose the account to create.</span>
-                </div>
-            </div>
+                </li>
+            </ol>
 
             @if (!_tokenOutstanding)
             {
-                <div class="recovery-warn">
-                    That file is not present right now. Restart Conduit &mdash; the token is
-                    re-issued whenever this state is detected. If it still does not appear,
-                    check the application log for a token-write failure.
+                <div class="icb-notice icb-notice-warning mb-3">
+                    <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+                    <div class="icb-notice-body">
+                        That file is not present right now. Restart Conduit &mdash; the token is
+                        re-issued whenever this state is detected. If it still does not appear,
+                        check the application log for a token-write failure.
+                    </div>
                 </div>
             }
 
-            <div class="recovery-form">
-                <label class="recovery-label" for="rt">Recovery token</label>
-                <input id="rt" type="password" class="recovery-input" autocomplete="off"
+            <div class="icb-form-field">
+                <label class="icb-form-label" for="rt">Recovery token</label>
+                <input id="rt" type="password" class="icb-form-input" autocomplete="off"
                        @bind="_token" @bind:event="oninput" placeholder="Paste the token" />
+            </div>
 
-                <label class="recovery-label" for="ru">New administrator username</label>
-                <input id="ru" type="text" class="recovery-input" autocomplete="off"
+            <div class="icb-form-field mt-2">
+                <label class="icb-form-label" for="ru">New administrator username</label>
+                <input id="ru" type="text" class="icb-form-input" autocomplete="off"
                        @bind="_userName" @bind:event="oninput" placeholder="Choose a name" />
+            </div>
 
-                <label class="recovery-label" for="rp">Password</label>
-                <input id="rp" type="password" class="recovery-input" autocomplete="new-password"
+            <div class="icb-form-field mt-2">
+                <label class="icb-form-label" for="rp">Password</label>
+                <input id="rp" type="password" class="icb-form-input" autocomplete="new-password"
                        @bind="_password" @bind:event="oninput" placeholder="At least 8 characters" />
+            </div>
 
-                <label class="recovery-label" for="rc">Confirm password</label>
-                <input id="rc" type="password" class="recovery-input" autocomplete="new-password"
+            <div class="icb-form-field mt-2">
+                <label class="icb-form-label" for="rc">Confirm password</label>
+                <input id="rc" type="password" class="icb-form-input" autocomplete="new-password"
                        @bind="_confirm" @bind:event="oninput" placeholder="Repeat it" />
-
                 @if (_password.Length > 0 && _confirm.Length > 0 && _password != _confirm)
                 {
-                    <div class="recovery-warn">The passwords do not match.</div>
+                    <span class="icb-form-error">The passwords do not match.</span>
                 }
+            </div>
 
-                @if (!string.IsNullOrEmpty(_error))
-                {
-                    <div class="recovery-error">@_error</div>
-                }
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="icb-notice icb-notice-danger mt-3" role="alert">
+                    <i class="fas fa-circle-exclamation" aria-hidden="true"></i>
+                    <div class="icb-notice-body">@_error</div>
+                </div>
+            }
 
-                <button type="button" class="offline-reconnect recovery-submit"
+            <div class="icb-form-actions icb-form-actions-stack mt-3">
+                <button type="button" class="ic-btn ic-btn-primary"
                         disabled="@(!CanSubmit())" @onclick="SubmitAsync">
                     @(_working ? "Creating…" : "Create administrator")
                 </button>
             </div>
 
-            <p class="offline-sub recovery-foot">
+            <p class="icb-offline-sub mt-3 mb-0">
                 Existing accounts are never reused or reactivated here, even deactivated ones.
                 Recovery only ever creates a new account.
             </p>
         }
     </div>
 </div>
-
-<style>
-    .offline-shell {
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 32px;
-        background: var(--bg, #0A1322);
-    }
-
-    .offline-card {
-        width: 100%;
-        max-width: 520px;
-        background: var(--bg-2, #0E1A2D);
-        border: 1px solid rgba(157, 176, 204, 0.14);
-        border-radius: 16px;
-        padding: 40px 36px;
-        text-align: center;
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-    }
-
-    .offline-mark { margin-bottom: 20px; }
-
-    .offline-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 5px 12px;
-        border-radius: 999px;
-        background: rgba(245, 158, 11, 0.12);
-        border: 1px solid rgba(245, 158, 11, 0.35);
-        color: var(--warn, #F59E0B);
-        font-size: 12.5px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        text-transform: uppercase;
-        margin-bottom: 22px;
-    }
-
-    .offline-badge.recovery-ok {
-        background: rgba(34, 197, 94, 0.12);
-        border-color: rgba(34, 197, 94, 0.35);
-        color: #22C55E;
-    }
-
-    .offline-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: currentColor;
-    }
-
-    .offline-title {
-        color: var(--text, #E4EDFB);
-        font-size: 22px;
-        font-weight: 700;
-        margin: 0 0 14px;
-    }
-
-    .offline-lead {
-        color: var(--text-2, #9DB0CC);
-        font-size: 15px;
-        line-height: 1.6;
-        margin: 0 0 12px;
-    }
-
-    .offline-sub {
-        color: var(--text-3, #6B809E);
-        font-size: 13.5px;
-        line-height: 1.6;
-        margin: 0 0 22px;
-    }
-
-    .recovery-steps {
-        text-align: left;
-        margin: 0 0 22px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
-    .recovery-step {
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        color: var(--text-2, #9DB0CC);
-        font-size: 13.5px;
-        line-height: 1.5;
-    }
-
-    .recovery-step code {
-        color: var(--accent, #22D3EE);
-        word-break: break-all;
-    }
-
-    .recovery-num {
-        flex: 0 0 22px;
-        height: 22px;
-        border-radius: 50%;
-        background: rgba(34, 211, 238, 0.12);
-        border: 1px solid rgba(34, 211, 238, 0.35);
-        color: var(--accent, #22D3EE);
-        font-size: 12px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .recovery-form {
-        text-align: left;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .recovery-label {
-        color: var(--text-3, #6B809E);
-        font-size: 12px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-top: 8px;
-    }
-
-    .recovery-input {
-        width: 100%;
-        padding: 9px 12px;
-        border-radius: 8px;
-        border: 1px solid rgba(157, 176, 204, 0.22);
-        background: var(--bg, #0A1322);
-        color: var(--text, #E4EDFB);
-        font-size: 14px;
-    }
-
-    .recovery-input:focus {
-        outline: none;
-        border-color: var(--accent, #22D3EE);
-    }
-
-    .recovery-warn {
-        color: var(--warn, #F59E0B);
-        font-size: 12.5px;
-        line-height: 1.5;
-        margin-top: 8px;
-    }
-
-    .recovery-error {
-        color: #F87171;
-        font-size: 12.5px;
-        line-height: 1.5;
-        margin-top: 10px;
-    }
-
-    .offline-reconnect {
-        display: inline-block;
-        padding: 10px 20px;
-        border-radius: 10px;
-        background: var(--accent, #22D3EE);
-        color: #06121F;
-        font-size: 14px;
-        font-weight: 700;
-        text-decoration: none;
-        border: none;
-        cursor: pointer;
-        transition: filter 0.15s ease;
-    }
-
-    .offline-reconnect:hover:not(:disabled) { filter: brightness(1.08); }
-    .offline-reconnect:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    .recovery-submit { margin-top: 18px; width: 100%; }
-
-    .recovery-foot { margin: 20px 0 0; font-size: 12.5px; }
-</style>
 
 @code {
     private string _token = "";

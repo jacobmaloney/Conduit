@@ -2,151 +2,159 @@
 @attribute [Authorize]
 @using Microsoft.AspNetCore.Hosting
 @using Conduit.Web.Services
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject IWebHostEnvironment Environment
 @inject NavigationManager Navigation
 @inject IConfiguration Configuration
 
 <PageTitle>Quick Connect - Conduit</PageTitle>
 
-<div class="container-fluid">
-    <h1>REST / SCIM Access</h1>
-    <p class="lead">
-        Conduit's synced directory is also reachable over a standard SCIM 2.0 REST
-        API — for scripts, downstream tools, or an external IdP that provisions
-        against Conduit. This page is the connection reference: base URL, endpoints,
-        auth, and copy-paste examples.
-    </p>
+<div class="container-fluid identities-container">
+    <Template1 Icon="oi oi-flash" IconAccent="slate"
+               Title="REST / SCIM Access"
+               Subtitle="Conduit's synced directory is also reachable over a standard SCIM 2.0 REST API — for scripts, downstream tools, or an external IdP that provisions against Conduit. This page is the connection reference: base URL, endpoints, auth, and copy-paste examples." />
+
     <p class="text-muted">
         Endpoints below use the unscoped SCIM 2.0 base path. Authenticate with an API token (see API Tokens).
     </p>
 
     <div class="row">
         <div class="col-lg-8">
-            <!-- Connection Details -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h3 class="mb-0"><i class="oi oi-link-intact"></i> Connection Details</h3>
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-link-intact" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">Connection Details</span>
                 </div>
-                <div class="card-body">
-                    <dl class="row">
-                        <dt class="col-sm-3">Base URL:</dt>
-                        <dd class="col-sm-9">
-                            <code class="user-select-all">@baseUrl</code>
-                            <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="() => CopyToClipboard(baseUrl)">
-                                <i class="oi oi-clipboard"></i> Copy
-                            </button>
-                        </dd>
-
-                        <dt class="col-sm-3">SCIM Version:</dt>
-                        <dd class="col-sm-9"><span class="badge bg-primary">SCIM 2.0</span></dd>
-
-                        <dt class="col-sm-3">Authentication:</dt>
-                        <dd class="col-sm-9">Bearer Token (JWT)</dd>
-
-                        <dt class="col-sm-3">Content-Type:</dt>
-                        <dd class="col-sm-9"><code>application/scim+json</code></dd>
-                    </dl>
-                </div>
-            </div>
-
-            <!-- SCIM Endpoints -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h3 class="mb-0"><i class="oi oi-list"></i> SCIM Endpoints</h3>
-                </div>
-                <div class="card-body">
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Resource</th>
-                                <th>Endpoint</th>
-                                <th>Operations</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td><strong>Users</strong></td>
-                                <td><code>@ScimPath()/Users</code></td>
-                                <td>
-                                    <span class="badge bg-success">GET</span>
-                                    <span class="badge bg-primary">POST</span>
-                                    <span class="badge bg-warning">PUT</span>
-                                    <span class="badge bg-info">PATCH</span>
-                                    <span class="badge bg-danger">DELETE</span>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td><strong>Groups</strong></td>
-                                <td><code>@ScimPath()/Groups</code></td>
-                                <td>
-                                    <span class="badge bg-success">GET</span>
-                                    <span class="badge bg-primary">POST</span>
-                                    <span class="badge bg-warning">PUT</span>
-                                    <span class="badge bg-info">PATCH</span>
-                                    <span class="badge bg-danger">DELETE</span>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td><strong>Schemas</strong></td>
-                                <td><code>@ScimPath()/Schemas</code></td>
-                                <td><span class="badge bg-success">GET</span></td>
-                            </tr>
-                            <tr>
-                                <td><strong>Resource Types</strong></td>
-                                <td><code>@ScimPath()/ResourceTypes</code></td>
-                                <td><span class="badge bg-success">GET</span></td>
-                            </tr>
-                            <tr>
-                                <td><strong>Service Provider Config</strong></td>
-                                <td><code>@ScimPath()/ServiceProviderConfig</code></td>
-                                <td><span class="badge bg-success">GET</span></td>
-                            </tr>
-                            <tr>
-                                <td><strong>Bulk Operations</strong></td>
-                                <td><code>@ScimPath()/Bulk</code></td>
-                                <td><span class="badge bg-primary">POST</span></td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div class="ic-card-body">
+                    <div class="ic-field-grid p-0">
+                        <div class="ic-field">
+                            <span class="ic-field-label">Base URL</span>
+                            <span class="ic-field-value mono">
+                                <span class="user-select-all">@baseUrl</span>
+                                <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm ms-2" @onclick="() => CopyToClipboard(baseUrl)">
+                                    <i class="oi oi-clipboard" aria-hidden="true"></i> Copy
+                                </button>
+                            </span>
+                        </div>
+                        <div class="ic-field">
+                            <span class="ic-field-label">SCIM Version</span>
+                            <span class="ic-field-value"><BrandBadge Text="SCIM 2.0" Tone="BrandBadgeTone.Info" Compact="true" /></span>
+                        </div>
+                        <div class="ic-field">
+                            <span class="ic-field-label">Authentication</span>
+                            <span class="ic-field-value">Bearer Token (JWT)</span>
+                        </div>
+                        <div class="ic-field">
+                            <span class="ic-field-label">Content-Type</span>
+                            <span class="ic-field-value mono">application/scim+json</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Authentication -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h3 class="mb-0"><i class="oi oi-key"></i> Authentication</h3>
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-list" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">SCIM Endpoints</span>
                 </div>
-                <div class="card-body">
+                <div class="ic-card-body">
+                    <section class="icb-table-panel" aria-label="SCIM endpoints">
+                        <div class="icb-table-scroll" tabindex="0" role="region" aria-label="SCIM endpoints table">
+                            <table class="icb-data-table" aria-label="SCIM endpoints">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Resource</th>
+                                        <th scope="col">Endpoint</th>
+                                        <th scope="col">Operations</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td class="nm-cell">Users</td>
+                                        <td class="mono">@ScimPath()/Users</td>
+                                        <td>
+                                            <BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" />
+                                            <BrandBadge Text="POST" Tone="BrandBadgeTone.Info" Compact="true" />
+                                            <BrandBadge Text="PUT" Tone="BrandBadgeTone.Neutral" Compact="true" />
+                                            <BrandBadge Text="PATCH" Tone="BrandBadgeTone.Warning" Compact="true" />
+                                            <BrandBadge Text="DELETE" Tone="BrandBadgeTone.Danger" Compact="true" />
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td class="nm-cell">Groups</td>
+                                        <td class="mono">@ScimPath()/Groups</td>
+                                        <td>
+                                            <BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" />
+                                            <BrandBadge Text="POST" Tone="BrandBadgeTone.Info" Compact="true" />
+                                            <BrandBadge Text="PUT" Tone="BrandBadgeTone.Neutral" Compact="true" />
+                                            <BrandBadge Text="PATCH" Tone="BrandBadgeTone.Warning" Compact="true" />
+                                            <BrandBadge Text="DELETE" Tone="BrandBadgeTone.Danger" Compact="true" />
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td class="nm-cell">Schemas</td>
+                                        <td class="mono">@ScimPath()/Schemas</td>
+                                        <td><BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" /></td>
+                                    </tr>
+                                    <tr>
+                                        <td class="nm-cell">Resource Types</td>
+                                        <td class="mono">@ScimPath()/ResourceTypes</td>
+                                        <td><BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" /></td>
+                                    </tr>
+                                    <tr>
+                                        <td class="nm-cell">Service Provider Config</td>
+                                        <td class="mono">@ScimPath()/ServiceProviderConfig</td>
+                                        <td><BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" /></td>
+                                    </tr>
+                                    <tr>
+                                        <td class="nm-cell">Bulk Operations</td>
+                                        <td class="mono">@ScimPath()/Bulk</td>
+                                        <td><BrandBadge Text="POST" Tone="BrandBadgeTone.Info" Compact="true" /></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-key" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">Authentication</span>
+                </div>
+                <div class="ic-card-body">
                     <p>All SCIM requests must include an Authorization header with a valid Bearer token:</p>
-                    <pre class="bg-light p-3"><code>Authorization: Bearer &lt;your-api-token&gt;</code></pre>
-                    
-                    <div class="alert alert-info">
-                        <i class="oi oi-info"></i> <strong>Get an API Token:</strong> 
-                        Go to <a href="/tokens" class="alert-link">API Tokens</a> to create a new token for authentication.
+                    <pre class="icb-code-block mb-3"><code>Authorization: Bearer &lt;your-api-token&gt;</code></pre>
+
+                    <div class="icb-notice icb-notice-info">
+                        <i class="oi oi-info" aria-hidden="true"></i>
+                        <div class="icb-notice-body">
+                            <strong>Get an API Token:</strong>
+                            Go to <a href="/tokens">API Tokens</a> to create a new token for authentication.
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Example Requests -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h3 class="mb-0"><i class="oi oi-code"></i> Example Requests</h3>
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-code" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">Example Requests</span>
                 </div>
-                <div class="card-body">
-                    <div class="drawer-tabs flush">
-                        <button class="@(exampleTab == "curl" ? "cur" : "")" @onclick='() => exampleTab = "curl"'>cURL</button>
-                        <button class="@(exampleTab == "postman" ? "cur" : "")" @onclick='() => exampleTab = "postman"'>Postman</button>
-                        <button class="@(exampleTab == "powershell" ? "cur" : "")" @onclick='() => exampleTab = "powershell"'>PowerShell</button>
-                    </div>
+                <div class="ic-card-body">
+                    <BrandFilterTabs Tabs="@_exampleTabs" ActiveTab="@exampleTab" Label="Example request format"
+                                     OnTabChanged="@(key => exampleTab = key)" />
                     <div class="mt-3">
-                        <div class="tab-pane" hidden="@(exampleTab != "curl")">
+                        <div hidden="@(exampleTab != "curl")">
                             <h5>Get All Users</h5>
-                            <pre class="bg-light p-3"><code>curl -X GET "@baseUrl@ScimPath()/Users" \
+                            <pre class="icb-code-block mb-3"><code>curl -X GET "@baseUrl@ScimPath()/Users" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Accept: application/scim+json"</code></pre>
 
                             <h5>Create User</h5>
-                            <pre class="bg-light p-3"><code>curl -X POST "@baseUrl@ScimPath()/Users" \
+                            <pre class="icb-code-block mb-3"><code>curl -X POST "@baseUrl@ScimPath()/Users" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/scim+json" \
   -d '{
@@ -165,12 +173,12 @@
   }'</code></pre>
 
                             <h5>Search Users with Filter</h5>
-                            <pre class="bg-light p-3"><code>curl -X GET "@baseUrl@ScimPath()/Users?filter=userName%20eq%20%22john.doe@example.com%22" \
+                            <pre class="icb-code-block"><code>curl -X GET "@baseUrl@ScimPath()/Users?filter=userName%20eq%20%22john.doe@example.com%22" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Accept: application/scim+json"</code></pre>
                         </div>
-                        
-                        <div class="tab-pane" hidden="@(exampleTab != "postman")">
+
+                        <div hidden="@(exampleTab != "postman")">
                             <h5>Postman Configuration</h5>
                             <ol>
                                 <li>Create a new request in Postman</li>
@@ -184,17 +192,17 @@
                                 <li>For POST/PUT/PATCH, add: <code>Content-Type: application/scim+json</code></li>
                             </ol>
                         </div>
-                        
-                        <div class="tab-pane" hidden="@(exampleTab != "powershell")">
+
+                        <div hidden="@(exampleTab != "powershell")">
                             <h5>Get All Users</h5>
-                            <pre class="bg-light p-3"><code>$headers = @@{
+                            <pre class="icb-code-block mb-3"><code>$headers = @@{
     "Authorization" = "Bearer YOUR_TOKEN"
     "Accept" = "application/scim+json"
 }
 Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Get</code></pre>
 
                             <h5>Create User</h5>
-                            <pre class="bg-light p-3"><code>$headers = @@{
+                            <pre class="icb-code-block"><code>$headers = @@{
     "Authorization" = "Bearer YOUR_TOKEN"
     "Content-Type" = "application/scim+json"
 }
@@ -221,20 +229,20 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
                 </div>
             </div>
 
-            <!-- Test Connection -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h3 class="mb-0"><i class="oi oi-pulse"></i> Test Connection</h3>
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <i class="oi oi-pulse" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">Test Connection</span>
                 </div>
-                <div class="card-body">
+                <div class="ic-card-body">
                     <p>Test your SCIM connection by checking the Service Provider Configuration:</p>
-                    
-                    <div class="input-group mb-3">
-                        <input type="text" class="form-control" @bind="testToken" placeholder="Enter your API token" />
-                        <button class="btn btn-primary" @onclick="TestConnection" disabled="@testing">
+
+                    <div class="icb-form-input-group mb-3">
+                        <input type="text" class="icb-form-input" @bind="testToken" placeholder="Enter your API token" aria-label="API token" />
+                        <button type="button" class="ic-btn ic-btn-primary" @onclick="TestConnection" disabled="@testing">
                             @if (testing)
                             {
-                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>
                             }
                             Test Connection
                         </button>
@@ -244,21 +252,27 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
                     {
                         @if (testSuccess)
                         {
-                            <div class="alert alert-success mt-3">
-                                <h6 class="alert-heading">✓ Connection Successful!</h6>
-                                <p>Your API token is valid and the SCIM server is responding correctly.</p>
-                                <hr>
-                                <details>
-                                    <summary class="cursor-pointer">View Service Provider Configuration</summary>
-                                    <pre class="mt-2 mb-0 bg-light p-2 rounded"><code>@testResult</code></pre>
-                                </details>
+                            <div class="icb-notice icb-notice-success mt-3" role="status">
+                                <i class="oi oi-check" aria-hidden="true"></i>
+                                <div class="icb-notice-body">
+                                    <span class="icb-notice-title">Connection Successful!</span>
+                                    <p>Your API token is valid and the SCIM server is responding correctly.</p>
+                                    <hr class="icb-form-divider" />
+                                    <details>
+                                        <summary>View Service Provider Configuration</summary>
+                                        <pre class="icb-code-block mt-2"><code>@testResult</code></pre>
+                                    </details>
+                                </div>
                             </div>
                         }
                         else
                         {
-                            <div class="alert alert-danger mt-3">
-                                <h6 class="alert-heading">✗ Connection Failed</h6>
-                                <pre class="mb-0">@testResult</pre>
+                            <div class="icb-notice icb-notice-danger mt-3" role="alert">
+                                <i class="oi oi-warning" aria-hidden="true"></i>
+                                <div class="icb-notice-body">
+                                    <span class="icb-notice-title">Connection Failed</span>
+                                    <pre class="icb-code-block">@testResult</pre>
+                                </div>
                             </div>
                         }
                     }
@@ -266,57 +280,53 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
             </div>
         </div>
 
-        <!-- Right Sidebar -->
         <div class="col-lg-4">
-            <!-- Quick Links -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5 class="mb-0">Quick Links</h5>
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <span class="ic-card-hdr-title">Quick Links</span>
                 </div>
-                <div class="card-body">
-                    <div class="d-grid gap-2">
-                        <a href="/tokens" class="btn btn-outline-primary">
-                            <i class="oi oi-key"></i> Manage API Tokens
+                <div class="ic-card-body">
+                    <div class="icb-form-actions icb-form-actions-stack">
+                        <a href="/tokens" class="ic-btn ic-btn-ghost">
+                            <i class="oi oi-key" aria-hidden="true"></i> Manage API Tokens
                         </a>
-                        <a href="/api-explorer" class="btn btn-outline-primary">
-                            <i class="oi oi-code"></i> API Explorer
+                        <a href="/api-explorer" class="ic-btn ic-btn-ghost">
+                            <i class="oi oi-code" aria-hidden="true"></i> API Explorer
                         </a>
                     </div>
                 </div>
             </div>
 
-            <!-- SCIM Resources -->
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5 class="mb-0">SCIM Resources</h5>
+            <div class="ic-card mb-4">
+                <div class="ic-card-hdr">
+                    <span class="ic-card-hdr-title">SCIM Resources</span>
                 </div>
-                <div class="card-body">
-                    <ul class="list-unstyled">
+                <div class="ic-card-body">
+                    <ul class="list-unstyled mb-0">
                         <li class="mb-2">
                             <a href="https://datatracker.ietf.org/doc/html/rfc7644" target="_blank" rel="noopener">
-                                <i class="oi oi-external-link"></i> SCIM 2.0 Protocol (RFC 7644)
+                                <i class="oi oi-external-link" aria-hidden="true"></i> SCIM 2.0 Protocol (RFC 7644)
                             </a>
                         </li>
                         <li class="mb-2">
                             <a href="https://datatracker.ietf.org/doc/html/rfc7643" target="_blank" rel="noopener">
-                                <i class="oi oi-external-link"></i> SCIM 2.0 Core Schema (RFC 7643)
+                                <i class="oi oi-external-link" aria-hidden="true"></i> SCIM 2.0 Core Schema (RFC 7643)
                             </a>
                         </li>
                         <li class="mb-2">
                             <a href="https://tools.ietf.org/html/rfc7642" target="_blank" rel="noopener">
-                                <i class="oi oi-external-link"></i> SCIM 2.0 Definitions (RFC 7642)
+                                <i class="oi oi-external-link" aria-hidden="true"></i> SCIM 2.0 Definitions (RFC 7642)
                             </a>
                         </li>
                     </ul>
                 </div>
             </div>
 
-            <!-- Common Filters -->
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0">Common SCIM Filters</h5>
+            <div class="ic-card">
+                <div class="ic-card-hdr">
+                    <span class="ic-card-hdr-title">Common SCIM Filters</span>
                 </div>
-                <div class="card-body">
+                <div class="ic-card-body">
                     <p class="small text-muted">Examples of SCIM filter syntax:</p>
                     <ul class="list-unstyled small">
                         <li class="mb-2"><code>userName eq "john"</code></li>
@@ -327,8 +337,8 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
                         <li class="mb-2"><code>userName pr and active eq true</code></li>
                     </ul>
                     <p class="small text-muted mb-0">
-                        <strong>Operators:</strong> eq (equals), ne (not equals), co (contains), 
-                        sw (starts with), ew (ends with), gt (greater than), 
+                        <strong>Operators:</strong> eq (equals), ne (not equals), co (contains),
+                        sw (starts with), ew (ends with), gt (greater than),
                         lt (less than), ge (&gt;=), le (&lt;=), pr (present)
                     </p>
                 </div>
@@ -347,6 +357,13 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
     // bootstrap.bundle.js which we don't load — driving them with Blazor state
     // instead matches the rest of the app (drawer, modal, etc).
     private string exampleTab = "curl";
+
+    private static readonly IReadOnlyList<BrandFilterTabs.Tab> _exampleTabs = new List<BrandFilterTabs.Tab>
+    {
+        new("curl", "cURL"),
+        new("postman", "Postman"),
+        new("powershell", "PowerShell"),
+    };
 
     protected override void OnInitialized()
     {
@@ -375,17 +392,17 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
         {
             using var client = new HttpClient();
             client.BaseAddress = new Uri(baseUrl);
-            client.DefaultRequestHeaders.Authorization = 
+            client.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", testToken);
             client.DefaultRequestHeaders.Accept.Add(
                 new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/scim+json"));
 
             var response = await client.GetAsync("/scim/v2/ServiceProviderConfig");
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var content = await response.Content.ReadAsStringAsync();
-                
+
                 // Parse and format JSON response
                 try
                 {
@@ -400,7 +417,7 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
                 {
                     testResult = content;
                 }
-                
+
                 testSuccess = true;
             }
             else

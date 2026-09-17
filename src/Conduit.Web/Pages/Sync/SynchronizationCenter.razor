@@ -5,6 +5,7 @@
 @using Conduit.Web.Pages.Sync
 @using Microsoft.AspNetCore.WebUtilities
 @using Conduit.DataAccess.Repositories
+@using IdentityCenter.Brand.Components.Layout
 @inject NavigationManager Navigation
 @inject TenantRepository TenantRepo
 @inject SyncProjectRepository ProjectRepo
@@ -34,38 +35,20 @@
 
 <PageTitle>Synchronization Center - Conduit</PageTitle>
 
-<div class="container-fluid identities-container sync-center-container ops-section">
-    <CcTemplate1 Title="Synchronization Center"
-                 Subtitle="Connections, sync projects, and run history — the home for everything that moves identities."
-                 Icon="fas fa-sync-alt"
-                 IconAccent="cyan">
-        <Stats>
-            <div class="d-flex gap-3 flex-wrap align-items-center ms-2">
-                <div class="cc-hub-chip">
-                    <span class="cc-hub-chip-value">@connectionCount</span>
-                    <span class="cc-hub-chip-label">Connections</span>
-                </div>
-                <div class="cc-hub-chip">
-                    <span class="cc-hub-chip-value">@projectCount</span>
-                    <span class="cc-hub-chip-label">Sync Projects</span>
-                </div>
-                <div class="cc-hub-chip">
-                    <span class="cc-hub-chip-value">@runsTodayCount</span>
-                    <span class="cc-hub-chip-label">Runs today</span>
-                </div>
-                <div class="cc-hub-chip">
-                    <span class="cc-hub-chip-value @LastRunColor">@LastRunLabel</span>
-                    <span class="cc-hub-chip-label">Last run</span>
-                </div>
-            </div>
-        </Stats>
-    </CcTemplate1>
+<div class="container-fluid identities-container">
+    <Template1 Title="Synchronization Center"
+               Subtitle="Connections, sync projects, and run history — the home for everything that moves identities."
+               Icon="fas fa-sync-alt"
+               IconAccent="cyan" />
 
-    <CcFilterTabs Tabs="@_tabs"
-                  ActiveTab="@activeTab"
-                  OnTabChanged="HandleTabChanged" />
+    <BrandStatRow Stats="@HubStats" />
 
-    <div class="sync-center-body">
+    <BrandFilterTabs Tabs="@_tabs"
+                     ActiveTab="@activeTab"
+                     Label="Synchronization section"
+                     OnTabChanged="HandleTabChanged" />
+
+    <div>
         @if (activeTab == "connections")
         {
             <ConnectedSystems />
@@ -110,6 +93,14 @@
         _ => "text-primary"
     };
 
+    private IReadOnlyList<BrandStatRow.StatItem> HubStats => new[]
+    {
+        new BrandStatRow.StatItem("Connections", connectionCount),
+        new BrandStatRow.StatItem("Sync Projects", projectCount),
+        new BrandStatRow.StatItem("Runs today", runsTodayCount),
+        new BrandStatRow.StatItem("Last run", LastRunLabel, LastRunColor),
+    };
+
     private static string RelativeTime(DateTime utc)
     {
         var span = DateTime.UtcNow - utc;
@@ -119,7 +110,7 @@
         return $"{(int)span.TotalDays}d ago";
     }
 
-    private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
+    private static readonly IReadOnlyList<BrandFilterTabs.Tab> _tabs = new List<BrandFilterTabs.Tab>
     {
         new("connections", "Connections", null, "fas fa-plug"),
         new("projects", "Projects", null, "fas fa-exchange-alt"),

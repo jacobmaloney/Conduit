@@ -3,87 +3,98 @@
 @using Conduit.Core.SyncModels
 @using Conduit.Web.Services
 @using Conduit.DataAccess.Repositories
+@using IdentityCenter.Brand.Components.Layout
 @inject IcParityImportService Parity
 @inject SyncProjectRepository ProjectRepo
 @inject IConfiguration Config
 
 <PageTitle>IC ↔ Conduit Parity Proof</PageTitle>
 
-<div class="container py-4" style="max-width: 980px;">
-    <h3 class="mb-1">IC ↔ Conduit Sync-Project Parity</h3>
+<div class="container-fluid identities-container">
+    <Template1 Icon="fas fa-code-compare" IconAccent="cyan"
+               Title="IC ↔ Conduit Sync-Project Parity"
+               Subtitle="Two operations that prove and finish 1:1 parity. Both are reversible and only ever touch rows they create." />
+
     <p class="text-muted">
-        Two operations that prove and finish 1:1 parity. Both are reversible and only ever
-        touch rows they create. See <a href="/sync/projects">Sync Projects</a> to compare the
-        results against IdentityCenter side-by-side.
+        See <a href="/sync/projects">Sync Projects</a> to compare the results against IdentityCenter side-by-side.
     </p>
 
     @* ───────── TASK 1 — migrate flat (pre-7d7e034) projects to per-class workflows ───────── *@
-    <div class="card mb-4">
-        <div class="card-header fw-bold">
-            <i class="fas fa-diagram-project me-1"></i>Task 1 — Migrate legacy "1 workflow / N steps" projects
+    <div class="ic-card mb-4">
+        <div class="ic-card-hdr">
+            <i class="fas fa-diagram-project" aria-hidden="true"></i>
+            <span class="ic-card-hdr-title">Task 1 — Migrate legacy "1 workflow / N steps" projects</span>
         </div>
-        <div class="card-body">
+        <div class="ic-card-body">
             <p class="text-muted small mb-2">
                 Projects generated <strong>before</strong> the per-class generator fix render as a single
                 "Full sync" workflow holding flat per-class steps. This re-groups each into one workflow per
                 object class (IC's shape) <strong>without</strong> editing any step, scope, or mapping content —
                 it only re-parents steps. Fully reversible per project.
             </p>
-            <button class="btn btn-sm btn-outline-secondary mb-3" @onclick="ScanFlat" disabled="@busy">
-                <i class="fas fa-magnifying-glass me-1"></i>Scan for legacy-shape projects
+            <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm mb-3" @onclick="ScanFlat" disabled="@busy">
+                <i class="fas fa-magnifying-glass" aria-hidden="true"></i>Scan for legacy-shape projects
             </button>
 
             @if (flatScan is not null)
             {
                 @if (flatScan.Count == 0)
                 {
-                    <div class="alert alert-success py-2 small mb-0">No legacy "1 workflow / N steps" projects found.</div>
+                    <div class="icb-notice icb-notice-success">
+                        <i class="fas fa-circle-check" aria-hidden="true"></i>
+                        <div class="icb-notice-body">No legacy "1 workflow / N steps" projects found.</div>
+                    </div>
                 }
                 else
                 {
-                    <table class="table table-sm align-middle">
-                        <thead><tr><th>Project</th><th>Workflows</th><th>Steps</th><th></th></tr></thead>
-                        <tbody>
-                            @foreach (var row in flatScan)
-                            {
-                                var p = row;
-                                <tr>
-                                    <td>@p.Name</td>
-                                    <td>@p.Workflows</td>
-                                    <td>@p.Steps</td>
-                                    <td class="text-end">
-                                        @if (p.Flat)
-                                        {
-                                            <button class="btn btn-sm btn-primary" @onclick="() => Migrate(p.Id)" disabled="@busy">
-                                                Migrate to per-class
-                                            </button>
-                                        }
-                                        else if (p.Migrated)
-                                        {
-                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => Revert(p.Id)" disabled="@busy">
-                                                Revert
-                                            </button>
-                                        }
-                                        else
-                                        {
-                                            <span class="text-muted small">already per-class</span>
-                                        }
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
+                    <section class="icb-table-panel" aria-label="Legacy-shape projects">
+                        <div class="icb-table-scroll" tabindex="0" role="region" aria-label="Legacy-shape projects table">
+                            <table class="icb-data-table">
+                                <thead><tr><th scope="col">Project</th><th scope="col">Workflows</th><th scope="col">Steps</th><th scope="col"></th></tr></thead>
+                                <tbody>
+                                    @foreach (var row in flatScan)
+                                    {
+                                        var p = row;
+                                        <tr>
+                                            <td class="nm-cell">@p.Name</td>
+                                            <td>@p.Workflows</td>
+                                            <td>@p.Steps</td>
+                                            <td class="text-end">
+                                                @if (p.Flat)
+                                                {
+                                                    <button type="button" class="ic-btn ic-btn-primary ic-btn-sm" @onclick="() => Migrate(p.Id)" disabled="@busy">
+                                                        Migrate to per-class
+                                                    </button>
+                                                }
+                                                else if (p.Migrated)
+                                                {
+                                                    <button type="button" class="ic-btn ic-btn-danger ic-btn-sm" @onclick="() => Revert(p.Id)" disabled="@busy">
+                                                        Revert
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted small">already per-class</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 }
             }
         </div>
     </div>
 
     @* ───────── TASK 2 — import a real IC sync project's graph into Conduit ───────── *@
-    <div class="card mb-3">
-        <div class="card-header fw-bold">
-            <i class="fas fa-file-import me-1"></i>Task 2 — Import a real IdentityCenter sync project (proof)
+    <div class="ic-card mb-3">
+        <div class="ic-card-hdr">
+            <i class="fas fa-file-import" aria-hidden="true"></i>
+            <span class="ic-card-hdr-title">Task 2 — Import a real IdentityCenter sync project (proof)</span>
         </div>
-        <div class="card-body">
+        <div class="ic-card-body">
             <p class="text-muted small mb-2">
                 Reads a real IC project's full graph (read-only) and writes it into Conduit, transformed
                 column-by-column, as a NEW project named
@@ -91,66 +102,75 @@
                 cleanly and the imported project opens 1:1 in Edit Sync Project, the structures match.
             </p>
 
-            <div class="mb-2">
-                <label class="form-label fw-bold small mb-1">IdentityCenter connection string (read-only)</label>
-                <input class="form-control form-control-sm" @bind="icConnString" placeholder="Data Source=...;Initial Catalog=IdentityCenter15;..." />
-                <small class="form-text text-muted">
+            <div class="icb-form-field mb-2">
+                <label class="icb-form-label" for="pp-ic-cs">IdentityCenter connection string (read-only)</label>
+                <input id="pp-ic-cs" class="icb-form-input icb-form-input-mono" @bind="icConnString" placeholder="Data Source=...;Initial Catalog=IdentityCenter15;..." />
+                <span class="icb-form-help">
                     Defaulted from <code>ConnectionStrings:IdentityCenterSource</code> if configured. Never written to.
-                </small>
+                </span>
             </div>
 
-            <button class="btn btn-sm btn-outline-secondary mb-3" @onclick="ListIc" disabled="@(busy || string.IsNullOrWhiteSpace(icConnString))">
-                <i class="fas fa-list me-1"></i>List IC projects
+            <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm mb-3" @onclick="ListIc" disabled="@(busy || string.IsNullOrWhiteSpace(icConnString))">
+                <i class="fas fa-list" aria-hidden="true"></i>List IC projects
             </button>
 
             @if (icProjects is not null)
             {
-                <table class="table table-sm align-middle">
-                    <thead><tr><th>IC Project</th><th>WF</th><th>Steps</th><th>Maps</th><th></th></tr></thead>
-                    <tbody>
-                        @foreach (var row in icProjects)
-                        {
-                            var ic = row;
-                            <tr>
-                                <td>@ic.Name</td>
-                                <td>@ic.Workflows</td>
-                                <td>@ic.Steps</td>
-                                <td>@ic.Mappings</td>
-                                <td class="text-end">
-                                    <button class="btn btn-sm btn-success" @onclick="() => Import(ic.Name)" disabled="@busy">
-                                        Import into Conduit
-                                    </button>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+                <section class="icb-table-panel mb-3" aria-label="IdentityCenter projects">
+                    <div class="icb-table-scroll" tabindex="0" role="region" aria-label="IdentityCenter projects table">
+                        <table class="icb-data-table">
+                            <thead><tr><th scope="col">IC Project</th><th scope="col">WF</th><th scope="col">Steps</th><th scope="col">Maps</th><th scope="col"></th></tr></thead>
+                            <tbody>
+                                @foreach (var row in icProjects)
+                                {
+                                    var ic = row;
+                                    <tr>
+                                        <td class="nm-cell">@ic.Name</td>
+                                        <td>@ic.Workflows</td>
+                                        <td>@ic.Steps</td>
+                                        <td>@ic.Mappings</td>
+                                        <td class="text-end">
+                                            <button type="button" class="ic-btn ic-btn-primary ic-btn-sm" @onclick="() => Import(ic.Name)" disabled="@busy">
+                                                Import into Conduit
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             }
 
             <div class="d-flex gap-2">
-                <button class="btn btn-sm btn-outline-danger" @onclick="RemoveImports" disabled="@busy">
-                    <i class="fas fa-trash me-1"></i>Remove all imports
+                <button type="button" class="ic-btn ic-btn-danger ic-btn-sm" @onclick="RemoveImports" disabled="@busy">
+                    <i class="fas fa-trash" aria-hidden="true"></i>Remove all imports
                 </button>
             </div>
-            <div class="alert alert-info py-2 small mt-2 mb-0">
-                Removal SQL (note the ESCAPE — <code>[</code> is a LIKE wildcard):
-                <code>DELETE FROM SyncProjects WHERE Name LIKE '\[IC-IMPORT\]%' ESCAPE '\';</code>
-                (delete child rows by SyncProjectId first if your schema has no cascade — the
-                <em>Remove all imports</em> button handles this for you).
+            <div class="icb-notice icb-notice-info mt-2">
+                <i class="fas fa-circle-info" aria-hidden="true"></i>
+                <div class="icb-notice-body">
+                    Removal SQL (note the ESCAPE — <code>[</code> is a LIKE wildcard):
+                    <code>DELETE FROM SyncProjects WHERE Name LIKE '\[IC-IMPORT\]%' ESCAPE '\';</code>
+                    (delete child rows by SyncProjectId first if your schema has no cascade — the
+                    <em>Remove all imports</em> button handles this for you).
+                </div>
             </div>
         </div>
     </div>
 
     @if (!string.IsNullOrEmpty(message))
     {
-        <div class="alert @alertClass py-2 small">@((MarkupString)message)</div>
+        <div class="icb-notice @noticeClass" role="status">
+            <div class="icb-notice-body">@((MarkupString)message)</div>
+        </div>
     }
 </div>
 
 @code {
     private bool busy;
     private string? message;
-    private string alertClass = "alert-success";
+    private string noticeClass = "icb-notice-success";
 
     private string icConnString = string.Empty;
 
@@ -191,7 +211,7 @@
         try
         {
             var r = await Parity.MigrateProjectToPerClassAsync(id);
-            alertClass = r.Changed ? "alert-success" : "alert-warning";
+            noticeClass = r.Changed ? "icb-notice-success" : "icb-notice-warning";
             message = $"{r.Note} (workflows {r.WorkflowsBefore} → {r.WorkflowsAfter}, {r.StepsMoved} steps moved).";
             await ScanFlat();
         }
@@ -205,7 +225,7 @@
         try
         {
             var r = await Parity.RevertMigrationAsync(id);
-            alertClass = r.Changed ? "alert-success" : "alert-warning";
+            noticeClass = r.Changed ? "icb-notice-success" : "icb-notice-warning";
             message = r.Note;
             await ScanFlat();
         }
@@ -230,7 +250,7 @@
         try
         {
             var r = await Parity.ImportFromIdentityCenterAsync(icConnString, icProjectName);
-            alertClass = r.Created ? "alert-success" : "alert-warning";
+            noticeClass = r.Created ? "icb-notice-success" : "icb-notice-warning";
             // HTML-encode data-derived text before it goes into the MarkupString alert (Worf: prevent XSS via a crafted IC project name / note).
             var safeName = System.Net.WebUtility.HtmlEncode(r.ProjectName);
             var noteHtml = string.Join("<br/>", r.Notes.Select(n => System.Net.WebUtility.HtmlEncode(n)));
@@ -248,11 +268,11 @@
         try
         {
             message = await Parity.RemoveImportsAsync();
-            alertClass = "alert-success";
+            noticeClass = "icb-notice-success";
         }
         catch (Exception ex) { Fail($"Remove failed: {ex.Message}"); }
         finally { busy = false; }
     }
 
-    private void Fail(string m) { alertClass = "alert-danger"; message = m; }
+    private void Fail(string m) { noticeClass = "icb-notice-danger"; message = m; }
 }

@@ -1,5 +1,7 @@
 @page "/api-explorer"
 @attribute [Authorize]
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Models
 @inject NavigationManager Navigation
 @inject IHttpClientFactory HttpFactory
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
@@ -7,48 +9,57 @@
 
 <PageTitle>API Explorer - Conduit</PageTitle>
 
-<div class="container-fluid">
-    <h1>API Explorer</h1>
-    <p class="lead">Explore and test SCIM API endpoints interactively</p>
+<div class="container-fluid identities-container">
+    <Template1 Icon="fas fa-code" IconAccent="slate"
+               Title="API Explorer"
+               Subtitle="Explore and test SCIM API endpoints interactively" />
 
-    <!-- ==================== Test Connection (NEW) ==================== -->
-    <div class="card mb-3 border-primary">
-        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-            <strong>Test Connection</strong>
-            <small>Verify a bearer token against a tenant — round-trips through the same auth middleware ARS hits</small>
+    <!-- ==================== Test Connection ==================== -->
+    <div class="ic-card mb-3">
+        <div class="ic-card-hdr">
+            <i class="fas fa-plug" aria-hidden="true"></i>
+            <span class="ic-card-hdr-title">Test Connection</span>
         </div>
-        <div class="card-body">
+        <div class="ic-card-body">
+            <p class="text-muted small mb-3">Verify a bearer token against a tenant — round-trips through the same auth middleware ARS hits.</p>
             <div class="row g-3 align-items-end">
                 <div class="col-md-4">
-                    <label class="form-label">Target tenant</label>
-                    <select class="form-select" @bind="selectedSlug" @bind:after="OnTenantChanged">
-                        <option value="">-- pick a tenant --</option>
-                        @foreach (var t in tenants)
-                        {
-                            <option value="@t.Slug">@t.Name (@t.Slug)</option>
-                        }
-                    </select>
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="ax-tenant">Target tenant</label>
+                        <select id="ax-tenant" class="icb-form-select" @bind="selectedSlug" @bind:after="OnTenantChanged">
+                            <option value="">-- pick a tenant --</option>
+                            @foreach (var t in tenants)
+                            {
+                                <option value="@t.Slug">@t.Name (@t.Slug)</option>
+                            }
+                        </select>
+                    </div>
                 </div>
                 <div class="col-md-8">
-                    <label class="form-label">Base URL (copy this into ARS workflow param SCIM-&lt;App&gt;-URI)</label>
-                    <div class="input-group">
-                        <input type="text" class="form-control font-monospace" value="@BaseTenantUrl" readonly />
-                        <button class="btn btn-outline-secondary" type="button"
-                                @onclick="() => CopyToClipboard(BaseTenantUrl)"
-                                disabled="@(string.IsNullOrEmpty(selectedSlug))">Copy</button>
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="ax-base">Base URL (copy this into ARS workflow param SCIM-&lt;App&gt;-URI)</label>
+                        <div class="icb-form-input-group">
+                            <input id="ax-base" type="text" class="icb-form-input icb-form-input-mono" value="@BaseTenantUrl" readonly />
+                            <button class="ic-btn ic-btn-ghost" type="button"
+                                    @onclick="() => CopyToClipboard(BaseTenantUrl)"
+                                    disabled="@(string.IsNullOrEmpty(selectedSlug))">Copy</button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <div class="row g-3 mt-1">
                 <div class="col-md-9">
-                    <label class="form-label">API Token (full mint string, including <code>scim_</code> prefix)</label>
-                    <input type="text" class="form-control font-monospace" @bind="apiToken"
-                           placeholder="scim_xxxxxxxxxxxxxxxxxx" />
+                    <div class="icb-form-field">
+                        <label class="icb-form-label" for="ax-token">API Token (full mint string, including <code>scim_</code> prefix)</label>
+                        <input id="ax-token" type="text" class="icb-form-input icb-form-input-mono" @bind="apiToken"
+                               placeholder="scim_xxxxxxxxxxxxxxxxxx" />
+                    </div>
                 </div>
                 <div class="col-md-3 d-flex align-items-end">
-                    <button class="btn btn-primary w-100" @onclick="TestConnection"
+                    <button type="button" class="ic-btn ic-btn-primary w-100 justify-content-center" @onclick="TestConnection"
                             disabled="@(testing || string.IsNullOrEmpty(selectedSlug) || string.IsNullOrEmpty(apiToken))">
+                        @if (testing) { <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> }
                         @(testing ? "Testing..." : "Test Connection")
                     </button>
                 </div>
@@ -56,37 +67,37 @@
 
             @if (testResult != null)
             {
-                <hr />
+                <hr class="icb-form-divider" />
                 <div class="row">
                     <div class="col-md-3"><strong>Request</strong></div>
-                    <div class="col-md-9 font-monospace small">
-                        GET @testResult.Url<br />
-                        Authorization: Bearer @testResult.BearerSentMasked
+                    <div class="col-md-9">
+                        <code class="icb-code-block">GET @testResult.Url
+Authorization: Bearer @testResult.BearerSentMasked</code>
                     </div>
                 </div>
                 <div class="row mt-2">
                     <div class="col-md-3"><strong>Response</strong></div>
                     <div class="col-md-9">
-                        <span class="badge @(testResult.StatusCode >= 200 && testResult.StatusCode < 300 ? "bg-success" : testResult.StatusCode == 0 ? "bg-secondary" : "bg-danger")">
-                            @(testResult.StatusCode == 0 ? "no response" : $"{testResult.StatusCode} {testResult.StatusText}")
-                        </span>
+                        <BrandBadge Text="@(testResult.StatusCode == 0 ? "no response" : $"{testResult.StatusCode} {testResult.StatusText}")" Tone="@TestTone" Compact="true" />
                         <small class="text-muted ms-2">@(testResult.Elapsed)ms</small>
                         @if (!string.IsNullOrEmpty(testResult.Body))
                         {
-                            <pre class="code-preview small mt-2"><code>@testResult.Body</code></pre>
+                            <pre class="icb-code-block mt-2"><code>@testResult.Body</code></pre>
                         }
                     </div>
                 </div>
                 @if (!string.IsNullOrEmpty(testResult.Hint))
                 {
-                    <div class="alert alert-warning mt-2 mb-0">
-                        <strong>Diagnosis:</strong> @testResult.Hint
+                    <div class="icb-notice icb-notice-warning mt-2">
+                        <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+                        <div class="icb-notice-body"><strong>Diagnosis:</strong> @testResult.Hint</div>
                     </div>
                 }
                 @if (!string.IsNullOrEmpty(testResult.Error))
                 {
-                    <div class="alert alert-danger mt-2 mb-0">
-                        <strong>Exception:</strong> @testResult.Error
+                    <div class="icb-notice icb-notice-danger mt-2">
+                        <i class="fas fa-circle-exclamation" aria-hidden="true"></i>
+                        <div class="icb-notice-body"><strong>Exception:</strong> @testResult.Error</div>
                     </div>
                 }
             }
@@ -96,20 +107,19 @@
     <!-- ==================== Endpoint Browser ==================== -->
     <div class="row">
         <div class="col-lg-4">
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="mb-0">SCIM Endpoints</h5>
+            <div class="ic-card mb-3">
+                <div class="ic-card-hdr">
+                    <i class="fas fa-list" aria-hidden="true"></i>
+                    <span class="ic-card-hdr-title">SCIM Endpoints</span>
                 </div>
-                <div class="list-group list-group-flush">
+                <div class="icb-choice-list" role="listbox" aria-label="SCIM endpoints">
                     @foreach (var ep in endpoints)
                     {
-                        <button class="list-group-item list-group-item-action @(selectedEndpoint == ep.Key ? "active" : "")"
+                        <button type="button" role="option" aria-selected="@(selectedEndpoint == ep.Key)"
+                                class="icb-choice @(selectedEndpoint == ep.Key ? "is-active" : "")"
                                 @onclick="() => SelectEndpoint(ep.Key)">
-                            <div>
-                                <strong>@ep.PathSuffix</strong>
-                                <br />
-                                <small class="@(selectedEndpoint == ep.Key ? "text-white-50" : "text-muted")">@ep.Description</small>
-                            </div>
+                            <span class="icb-choice-title">@ep.PathSuffix</span>
+                            <span class="icb-choice-desc">@ep.Description</span>
                         </button>
                     }
                 </div>
@@ -122,62 +132,63 @@
             }
             @if (selected != null)
             {
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0">@selected.Title</h5>
+                <div class="ic-card mb-3">
+                    <div class="ic-card-hdr">
+                        <i class="fas fa-link" aria-hidden="true"></i>
+                        <span class="ic-card-hdr-title">@selected.Title</span>
                     </div>
-                    <div class="card-body">
-                        <div class="mb-3">
-                            <strong>Full URL</strong> (for this tenant)
-                            <div class="input-group mt-1">
-                                <input type="text" class="form-control font-monospace small" value="@FullUrlFor(selected.PathSuffix)" readonly />
-                                <button class="btn btn-outline-secondary btn-sm" type="button"
+                    <div class="ic-card-body">
+                        <div class="icb-form-field mb-3">
+                            <label class="icb-form-label" for="ax-full">Full URL (for this tenant)</label>
+                            <div class="icb-form-input-group">
+                                <input id="ax-full" type="text" class="icb-form-input icb-form-input-mono" value="@FullUrlFor(selected.PathSuffix)" readonly />
+                                <button class="ic-btn ic-btn-ghost" type="button"
                                         @onclick="() => CopyToClipboard(FullUrlFor(selected.PathSuffix))">Copy</button>
                             </div>
                             @if (string.IsNullOrEmpty(selectedSlug))
                             {
-                                <small class="text-muted">Pick a tenant above to scope this URL.</small>
+                                <span class="icb-form-help">Pick a tenant above to scope this URL.</span>
                             }
                         </div>
 
                         @if (selected.Key == "users")
                         {
                             <h6>Operations</h6>
-                            <ul class="list-group mb-3">
-                                <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-primary verb-fixed me-2">GET</span>
-                                    <code class="me-2">@FullUrlFor("/Users")</code>
-                                    <small class="text-muted ms-auto">List all users (supports ?filter, ?count, ?startIndex)</small>
+                            <ul class="icb-step-list mb-3">
+                                <li class="icb-step align-items-center">
+                                    <BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" />
+                                    <code>@FullUrlFor("/Users")</code>
+                                    <span class="icb-step-message ms-auto">List all users (supports ?filter, ?count, ?startIndex)</span>
                                 </li>
-                                <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-primary verb-fixed me-2">GET</span>
-                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
-                                    <small class="text-muted ms-auto">Get user by ID</small>
+                                <li class="icb-step align-items-center">
+                                    <BrandBadge Text="GET" Tone="BrandBadgeTone.Success" Compact="true" />
+                                    <code>@FullUrlFor("/Users/{id}")</code>
+                                    <span class="icb-step-message ms-auto">Get user by ID</span>
                                 </li>
-                                <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-success verb-fixed me-2">POST</span>
-                                    <code class="me-2">@FullUrlFor("/Users")</code>
-                                    <small class="text-muted ms-auto">Create user</small>
+                                <li class="icb-step align-items-center">
+                                    <BrandBadge Text="POST" Tone="BrandBadgeTone.Info" Compact="true" />
+                                    <code>@FullUrlFor("/Users")</code>
+                                    <span class="icb-step-message ms-auto">Create user</span>
                                 </li>
-                                <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-warning text-dark verb-fixed me-2">PUT</span>
-                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
-                                    <small class="text-muted ms-auto">Replace user</small>
+                                <li class="icb-step align-items-center">
+                                    <BrandBadge Text="PUT" Tone="BrandBadgeTone.Neutral" Compact="true" />
+                                    <code>@FullUrlFor("/Users/{id}")</code>
+                                    <span class="icb-step-message ms-auto">Replace user</span>
                                 </li>
-                                <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-info text-dark verb-fixed me-2">PATCH</span>
-                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
-                                    <small class="text-muted ms-auto">Partial update (enable/disable via active=false)</small>
+                                <li class="icb-step align-items-center">
+                                    <BrandBadge Text="PATCH" Tone="BrandBadgeTone.Warning" Compact="true" />
+                                    <code>@FullUrlFor("/Users/{id}")</code>
+                                    <span class="icb-step-message ms-auto">Partial update (enable/disable via active=false)</span>
                                 </li>
-                                <li class="list-group-item d-flex align-items-center">
-                                    <span class="badge bg-danger verb-fixed me-2">DELETE</span>
-                                    <code class="me-2">@FullUrlFor("/Users/{id}")</code>
-                                    <small class="text-muted ms-auto">Delete user</small>
+                                <li class="icb-step align-items-center">
+                                    <BrandBadge Text="DELETE" Tone="BrandBadgeTone.Danger" Compact="true" />
+                                    <code>@FullUrlFor("/Users/{id}")</code>
+                                    <span class="icb-step-message ms-auto">Delete user</span>
                                 </li>
                             </ul>
 
                             <h6>Example: Create User</h6>
-                            <pre class="bg-light p-3 small"><code>POST @FullUrlFor("/Users")
+                            <pre class="icb-code-block"><code>POST @FullUrlFor("/Users")
 Authorization: Bearer @(string.IsNullOrEmpty(apiToken) ? "scim_xxx..." : MaskToken(apiToken))
 Content-Type: application/scim+json
 
@@ -194,7 +205,7 @@ Content-Type: application/scim+json
                             <h6>Operations</h6>
                             <p>Same verb set as Users (GET/POST/PUT/PATCH/DELETE) on <code>@FullUrlFor("/Groups")</code>.</p>
                             <h6>Example: Create Group</h6>
-                            <pre class="bg-light p-3 small"><code>POST @FullUrlFor("/Groups")
+                            <pre class="icb-code-block"><code>POST @FullUrlFor("/Groups")
 Content-Type: application/scim+json
 
 {
@@ -227,8 +238,8 @@ Content-Type: application/scim+json
             }
             else
             {
-                <div class="alert alert-info">
-                    <h4 class="alert-heading">Select an endpoint</h4>
+                <div class="empty-state">
+                    <h3>Select an endpoint</h3>
                     <p class="mb-0">Pick one from the left panel to see its full URL and example payloads. Use the Test Connection card above to verify a token without leaving this page.</p>
                 </div>
             }
@@ -264,6 +275,14 @@ Content-Type: application/scim+json
         string.IsNullOrEmpty(selectedSlug)
             ? $"{Navigation.BaseUri.TrimEnd('/')}/scim/v2/t/{{slug}}{suffix}"
             : $"{BaseTenantUrl}{suffix}";
+
+    private BrandBadgeTone TestTone => testResult switch
+    {
+        null => BrandBadgeTone.Neutral,
+        { StatusCode: 0 } => BrandBadgeTone.Neutral,
+        { StatusCode: >= 200 and < 300 } => BrandBadgeTone.Success,
+        _ => BrandBadgeTone.Danger
+    };
 
     protected override async Task OnInitializedAsync()
     {
