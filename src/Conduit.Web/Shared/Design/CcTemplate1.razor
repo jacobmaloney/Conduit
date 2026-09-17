@@ -1,38 +1,7 @@
-@*
-    CcTemplate1 — STANDARD SECONDARY PAGE HEADER.
-    The canonical secondary header used across every Conduit page.
+@using IdentityCenter.Brand.Components.Layout
+@* CcTemplate1 — compatibility adapter for the shared BrandPageHeader (IdentityCenter.Brand). *@
 
-    Layout:
-      [Icon tile] [Title + Subtitle]   [Stat chips...]                    [Primary action]
-
-    Accent presets (IconAccent): cyan (default, Identity), teal (Governance),
-    violet (Analytics), amber (Operations), slate (Configure).
-
-    Usage:
-      <CcTemplate1 Icon="fas fa-user" Title="Identities" Subtitle="@subtitle">
-          <Stats>...</Stats>
-          <PrimaryAction>...</PrimaryAction>
-      </CcTemplate1>
-*@
-
-<div class="cc-template1 d-flex justify-content-between align-items-start mb-3">
-    <div class="d-flex align-items-center gap-3 flex-wrap">
-        <div class="cc-template1-icon-tile cc-template1-accent-@IconAccent">
-            <i class="@Icon"></i>
-        </div>
-        <div>
-            <h2 class="mb-0 cc-template1-title">@Title</h2>
-            @if (!string.IsNullOrEmpty(Subtitle))
-            {
-                <div class="cc-template1-subtitle">@Subtitle</div>
-            }
-        </div>
-        @Stats
-    </div>
-    <div>
-        @PrimaryAction
-    </div>
-</div>
+<BrandPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon" IconAccent="@IconAccent" Stats="@Stats" PrimaryAction="@PrimaryAction" />
 
 @code {
     [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
