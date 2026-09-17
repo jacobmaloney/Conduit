@@ -4266,8 +4266,11 @@ details summary::-webkit-details-marker { color: var(--accent); }
    already light and live OUTSIDE this element, so they are untouched). It is a
    themed override, NOT the token source, so the single-source model is intact:
    change --brand-primary in brand-tokens and the accent still moves everywhere.
-   Loaded from conduit.css (the last stylesheet) so it wins the cascade. */
-.ic-content {
+   Loaded from conduit.css (the last stylesheet) so it wins the cascade.
+   2026-09-16: scoped to html.light-theme so the shared theme toggle (Brand
+   BrandTopBar → localStorage 'theme') governs content like it does in
+   IdentityCenter; in dark mode the Brand tokens apply untouched. */
+html.light-theme .ic-content {
   /* Conduit vocabulary → paper */
   --bg:        #faf9f6;
   --bg-2:      #ffffff;
