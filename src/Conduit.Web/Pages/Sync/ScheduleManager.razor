@@ -33,19 +33,19 @@
 
 <PageTitle>Schedules - Conduit</PageTitle>
 
-<div class="container-fluid cx-page">
-    <div class="cx-page-head cx-page-head--tight">
-        <div>
-            <div class="cx-page-title">Schedules</div>
-            <div class="cx-page-sub">Recurring runs across all sync projects. Next run <b>@NextScheduledRunText</b> · @FailingCount failing.</div>
-        </div>
-        <div class="cx-page-head-spacer"></div>
-        <div class="cx-page-actions">
-            <button class="cx-btn cx-btn--primary" @onclick="OpenAssign" disabled="@(loading || projects.Count == 0)">
+<div class="container-fluid">
+    @* CcTemplate1 is the thin adapter over the shared BrandPageHeader, so Schedules gets the same
+       header as every other migrated page instead of a local cx-* copy that drifts. *@
+    <CcTemplate1 Title="Schedules"
+                 Subtitle="@($"Recurring runs across all sync projects. Next run {NextScheduledRunText} · {FailingCount} failing.")"
+                 Icon="fas fa-clock"
+                 IconAccent="amber">
+        <PrimaryAction>
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="OpenAssign" disabled="@(loading || projects.Count == 0)">
                 <i class="fas fa-plus"></i> Assign Schedule
             </button>
-        </div>
-    </div>
+        </PrimaryAction>
+    </CcTemplate1>
 
     <BrandListTable TItem="SyncProject" Title="Schedules" Items="@Filtered" TotalCount="@Filtered.Count"
                     PageSize="@Math.Max(1, Filtered.Count)" State="@(loading ? BrandListState.Loading : loadError != null ? BrandListState.Failed : BrandListState.Ready)"
@@ -143,8 +143,8 @@
                 <div class="modal-body">
                     <p class="text-muted small">Choose the sync project that runs on this cadence. Each execution is recorded in Sync History against that project.</p>
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Sync project</label>
-                        <select class="form-select" @bind="assignProjectId">
+                        <label class="icb-form-label" for="assignProjectSelect">Sync project</label>
+                        <select id="assignProjectSelect" class="icb-form-select" @bind="assignProjectId">
                             <option value="">Select a sync project</option>
                             @foreach (var project in projects.OrderBy(p => p.Name))
                             {
@@ -153,14 +153,14 @@
                         </select>
                     </div>
                     <CcScheduleEditor @bind-Value="assignCron" Error="@assignError" />
-                    <div class="form-check mt-3">
-                        <input class="form-check-input" type="checkbox" id="enableAssignedProject" @bind="assignEnable" />
-                        <label class="form-check-label" for="enableAssignedProject">Enable this sync project</label>
+                    <div class="icb-form-check mt-3">
+                        <input type="checkbox" id="enableAssignedProject" @bind="assignEnable" />
+                        <label class="icb-form-check-label" for="enableAssignedProject">Enable this sync project</label>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-secondary" @onclick="CloseAssign" disabled="@assignSaving">Cancel</button>
-                    <button class="btn btn-primary" @onclick="SaveAssignment" disabled="@assignSaving">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseAssign" disabled="@assignSaving">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveAssignment" disabled="@assignSaving">
                         @if (assignSaving)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>
@@ -192,7 +192,7 @@
     </div>
 }
 
-<CcConfirmationModal @ref="runConfirm" ConfirmLabel="Run Now" ConfirmButtonClass="btn-success" />
+<CcConfirmationModal @ref="runConfirm" ConfirmLabel="Run Now" ConfirmButtonClass="ic-btn icb-btn-success" />
 
 @* ───────── Edit Schedule Modal (reuses shared CcScheduleEditor) ───────── *@
 @if (editProject is not null)
@@ -210,8 +210,8 @@
                     <CcScheduleEditor @bind-Value="editCron" Error="@editError" />
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseEdit" disabled="@editSaving">Cancel</button>
-                    <button type="button" class="btn btn-primary" @onclick="SaveSchedule" disabled="@editSaving">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseEdit" disabled="@editSaving">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveSchedule" disabled="@editSaving">
                         @if (editSaving)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>

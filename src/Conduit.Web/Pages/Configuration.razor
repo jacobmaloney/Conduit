@@ -76,9 +76,16 @@
                             </p>
 
                             <div class="icb-form-check mb-2">
+                                @* @bind:get/@bind:set, never checked="@x" + @onchange. When SetAsync THROWS,
+                                   OpenAccess.IsEnabled never changes, so the bound value is identical to what it
+                                   was before the click and Blazor has nothing to diff — the switch keeps showing
+                                   the position the user dragged it to while the setting did not move. On a control
+                                   that decides whether the portal requires sign-in, that pixel is a security lie.
+                                   With a two-way bind the re-render after the setter re-reads IsEnabled, so a
+                                   failed save snaps the switch back to the truth beside its error message. *@
                                 <input class="icb-form-switch" type="checkbox" role="switch" id="openAccessToggle"
-                                       checked="@OpenAccess.IsEnabled"
-                                       @onchange="OnToggleOpenAccess"
+                                       @bind:get="OpenAccess.IsEnabled"
+                                       @bind:set="OnToggleOpenAccess"
                                        disabled="@toggling" />
                                 <label class="icb-form-check-label" for="openAccessToggle">
                                     <strong>Open access</strong>
@@ -499,10 +506,9 @@
         }
     }
 
-    private async Task OnToggleOpenAccess(ChangeEventArgs e)
+    private async Task OnToggleOpenAccess(bool enable)
     {
         if (toggling) return;
-        var enable = e.Value is bool b && b;
         toggling = true;
         toggleError = "";
         StateHasChanged();

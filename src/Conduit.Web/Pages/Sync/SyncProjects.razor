@@ -52,20 +52,21 @@
 
 <PageTitle>Sync Projects - Conduit</PageTitle>
 
-<div class="container-fluid cx-page sync-page-container">
-    <div class="cx-page-head cx-page-head--tight">
-        <div>
-            <div class="cx-page-title">Sync Projects</div>
-            <div class="cx-page-sub">Read from a Source, map, write to a Target — scheduled or on demand.</div>
-        </div>
-        <div class="cx-page-head-spacer"></div>
-        <div class="cx-page-actions">
+<div class="container-fluid sync-page-container">
+    @* The last cx-* header in the product. CcTemplate1 is the thin adapter over the shared
+       BrandPageHeader, so this page gets the same header as Sync History and every other
+       migrated page instead of a local copy that drifts. *@
+    <CcTemplate1 Title="Sync Projects"
+                 Subtitle="Read from a Source, map, write to a Target — scheduled or on demand."
+                 Icon="fas fa-project-diagram"
+                 IconAccent="teal">
+        <PrimaryAction>
             <a class="icb-list-action" href="source-catalog">All hosts and source data</a>
-            <button class="cx-btn cx-btn--primary" @onclick="ShowNewProjectChooser">
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="ShowNewProjectChooser">
                 <i class="fas fa-plus"></i> New Sync Project
             </button>
-        </div>
-    </div>
+        </PrimaryAction>
+    </CcTemplate1>
 
     @if (!string.IsNullOrEmpty(toastSuccess))
     {
@@ -211,7 +212,7 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseNewProjectChooser">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseNewProjectChooser">Cancel</button>
                 </div>
             </div>
         </div>
@@ -261,8 +262,8 @@
                         @* ── The two connections, side by side with a flow arrow ── *@
                         <div class="autogen-flow-row">
                             <div class="autogen-flow-col">
-                                <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source</label>
-                                <select class="form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
+                                <label class="icb-form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source</label>
+                                <select class="icb-form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
                                     <option value="@Guid.Empty">-- Read from --</option>
                                     @foreach (var t in AutoGenSourceTenants)
                                     {
@@ -271,7 +272,7 @@
                                 </select>
                                 @if (AutoGenSourceIsIdentityCenter)
                                 {
-                                    <select class="form-select form-select-sm mt-2" @bind="autoGenSourceTable">
+                                    <select class="icb-form-select icb-form-select-sm mt-2" @bind="autoGenSourceTable">
                                         <option value="Objects">Objects (directory accounts)</option>
                                         <option value="Identities">Identities (people)</option>
                                     </select>
@@ -279,8 +280,8 @@
                             </div>
                             <div class="autogen-flow-arrow"><i class="fas fa-arrow-right-long"></i></div>
                             <div class="autogen-flow-col">
-                                <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target</label>
-                                <select class="form-select" @bind="autoGenSinkId" @bind:after="OnAutoGenSinkChanged">
+                                <label class="icb-form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target</label>
+                                <select class="icb-form-select" @bind="autoGenSinkId" @bind:after="OnAutoGenSinkChanged">
                                     <option value="@Guid.Empty">-- Write to --</option>
                                     @foreach (var t in AutoGenSinkTenants)
                                     {
@@ -289,7 +290,7 @@
                                 </select>
                                 @if (AutoGenSinkIsIdentityCenter)
                                 {
-                                    <select class="form-select form-select-sm mt-2" @bind="autoGenSinkTable">
+                                    <select class="icb-form-select icb-form-select-sm mt-2" @bind="autoGenSinkTable">
                                         <option value="Objects">Objects (directory accounts)</option>
                                         <option value="Identities">Identities (people)</option>
                                     </select>
@@ -309,7 +310,7 @@
                         @if (AvailableModes.Count > 1)
                         {
                             <div class="mb-2 mt-3">
-                                <label class="form-label fw-bold">Scope</label>
+                                <label class="icb-form-label fw-bold">Scope</label>
                                 <div class="autogen-tpl-grid">
                                     @foreach (var m in AvailableModes)
                                     {
@@ -354,13 +355,13 @@
                         }
 
                         <div class="mb-3 mt-3">
-                            <label class="form-label fw-bold">Project Name</label>
-                            <input class="form-control" maxlength="200" @bind="autoGenProjectName" @bind:after="OnAutoGenNameEdited" />
-                            <small class="form-text text-muted">Auto-filled from source → target. Edit to override.</small>
+                            <label class="icb-form-label fw-bold">Project Name</label>
+                            <input class="icb-form-input" maxlength="200" @bind="autoGenProjectName" @bind:after="OnAutoGenNameEdited" />
+                            <small class="icb-form-help text-muted">Auto-filled from source → target. Edit to override.</small>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Schedule</label>
-                            <select class="form-select" @bind="autoGenCronSchedule">
+                            <label class="icb-form-label fw-bold">Schedule</label>
+                            <select class="icb-form-select" @bind="autoGenCronSchedule">
                                 <option value="">No schedule (manual only)</option>
                                 <option value="0 * * * *">Every hour</option>
                                 <option value="0 */6 * * *">Every 6 hours</option>
@@ -368,17 +369,17 @@
                                 <option value="0 2 * * 0">Weekly Sunday 02:00</option>
                             </select>
                         </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="autoGenEnabled" @bind="autoGenEnable" />
-                            <label class="form-check-label" for="autoGenEnabled">Enable project on create</label>
+                        <div class="icb-form-check">
+                            <input class="icb-form-checkbox" type="checkbox" id="autoGenEnabled" @bind="autoGenEnable" />
+                            <label class="icb-form-check-label" for="autoGenEnabled">Enable project on create</label>
                         </div>
                     }
                 </div>
                 <div class="modal-footer">
                     @if (autoGenStep == 1)
                     {
-                        <button type="button" class="btn btn-secondary" @onclick="CloseAutoGenerateModal">Cancel</button>
-                        <button type="button" class="btn btn-success"
+                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseAutoGenerateModal">Cancel</button>
+                        <button type="button" class="ic-btn icb-btn-success"
                                 @onclick="AutoGenNext"
                                 disabled="@(!AutoGenStep1Ready)">
                             Next<i class="fas fa-arrow-right-long ms-1"></i>
@@ -386,10 +387,10 @@
                     }
                     else
                     {
-                        <button type="button" class="btn btn-secondary" @onclick="AutoGenBack" disabled="@autoGenInProgress">
+                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="AutoGenBack" disabled="@autoGenInProgress">
                             <i class="fas fa-arrow-left-long me-1"></i>Back
                         </button>
-                        <button type="button" class="btn btn-success"
+                        <button type="button" class="ic-btn icb-btn-success"
                                 @onclick="GenerateAutoSyncProject"
                                 disabled="@(autoGenSourceId == Guid.Empty || autoGenSinkId == Guid.Empty || AutoGenIsSelfSync || autoGenInProgress)">
                             @if (autoGenInProgress)
@@ -471,7 +472,7 @@
                     {
                         @* STEP 2 — templates FILTERED to the chosen source type. *@
                         <div class="mb-2">
-                            <button type="button" class="btn btn-sm btn-link ps-0" @onclick="ClearBlueprintSourceType">
+                            <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost ps-0" @onclick="ClearBlueprintSourceType">
                                 <i class="fas fa-arrow-left me-1"></i>Pick a different source type
                             </button>
                         </div>
@@ -511,7 +512,7 @@
                         var classes = BlueprintClasses(bp);
                         var deferred = classes.Where(c => Conduit.Sync.Templates.SyncProjectBlueprintCatalog.IsDeferredClass(c)).ToList();
                         <div class="mb-2">
-                            <button type="button" class="btn btn-sm btn-link ps-0" @onclick="ClearBlueprintSelection">
+                            <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost ps-0" @onclick="ClearBlueprintSelection">
                                 <i class="fas fa-arrow-left me-1"></i>Pick a different blueprint
                             </button>
                         </div>
@@ -519,7 +520,7 @@
                         <p class="text-muted mb-2">@bp.Description</p>
 
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Will create @classes.Count step(s)</label>
+                            <label class="icb-form-label fw-bold">Will create @classes.Count step(s)</label>
                             <div class="autogen-tpl-card-classes">@AutoGenClassListLabel(classes)</div>
                         </div>
 
@@ -545,15 +546,15 @@
                         }
 
                         <div class="mb-3">
-                            <label class="form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(@bp.SourceSystemType)</span></label>
-                            <select class="form-select" @bind="blueprintSourceId">
+                            <label class="icb-form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(@bp.SourceSystemType)</span></label>
+                            <select class="icb-form-select" @bind="blueprintSourceId">
                                 <option value="@Guid.Empty">-- Pick a source --</option>
                                 @foreach (var t in BlueprintSourceTenants)
                                 {
                                     <option value="@t.Id">@t.Name (@t.SystemType)</option>
                                 }
                             </select>
-                            <small class="form-text text-muted">Only @bp.SourceSystemType connections are listed.</small>
+                            <small class="icb-form-help text-muted">Only @bp.SourceSystemType connections are listed.</small>
                         </div>
 
                         <div class="mb-3 text-center text-muted">
@@ -561,35 +562,35 @@
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(IdentityCenter)</span></label>
-                            <select class="form-select" @bind="blueprintSinkId">
+                            <label class="icb-form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(IdentityCenter)</span></label>
+                            <select class="icb-form-select" @bind="blueprintSinkId">
                                 <option value="@Guid.Empty">-- Pick an IdentityCenter target --</option>
                                 @foreach (var t in BlueprintSinkTenants)
                                 {
                                     <option value="@t.Id">@t.Name (@t.SystemType)</option>
                                 }
                             </select>
-                            <small class="form-text text-muted">Blueprints write into IdentityCenter.</small>
+                            <small class="icb-form-help text-muted">Blueprints write into IdentityCenter.</small>
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Schedule</label>
-                            <select class="form-select" @bind="blueprintCronSchedule">
+                            <label class="icb-form-label fw-bold">Schedule</label>
+                            <select class="icb-form-select" @bind="blueprintCronSchedule">
                                 <option value="">No schedule (manual only)</option>
                                 <option value="0 * * * *">Every hour</option>
                                 <option value="0 */6 * * *">Every 6 hours</option>
                                 <option value="0 2 * * *">Daily at 02:00</option>
                                 <option value="0 2 * * 0">Weekly Sunday 02:00</option>
                             </select>
-                            <small class="form-text text-muted">Defaulted from the blueprint. Change it if you like.</small>
+                            <small class="icb-form-help text-muted">Defaulted from the blueprint. Change it if you like.</small>
                         </div>
                     }
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseBlueprintModal">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseBlueprintModal">Cancel</button>
                     @if (selectedBlueprint is not null)
                     {
-                        <button type="button" class="btn btn-success"
+                        <button type="button" class="ic-btn icb-btn-success"
                                 @onclick="CreateFromBlueprint"
                                 disabled="@(blueprintSourceId == Guid.Empty || blueprintSinkId == Guid.Empty || blueprintInProgress)">
                             @if (blueprintInProgress)
@@ -634,10 +635,10 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseRunConfirmModal" disabled="@runNowInProgress">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseRunConfirmModal" disabled="@runNowInProgress">
                         <i class="fas fa-times me-1"></i>Cancel
                     </button>
-                    <button type="button" class="btn btn-primary" @onclick="RunNowConfirmed" disabled="@runNowInProgress">
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="RunNowConfirmed" disabled="@runNowInProgress">
                         @if (runNowInProgress)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>
@@ -673,8 +674,8 @@
                         then rereads and rewrites that population from the source. It does not delete the
                         connection, project, or target objects.
                     </div>
-                    <label class="form-label fw-semibold">Object class</label>
-                    <select class="form-select" @bind="fullSyncObjectClass">
+                    <label class="icb-form-label fw-semibold">Object class</label>
+                    <select class="icb-form-select" @bind="fullSyncObjectClass">
                         <option value="">All object classes</option>
                         @foreach (var objectClass in FullSyncObjectClasses)
                         {
@@ -683,8 +684,8 @@
                     </select>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseFullSyncConfirmModal" disabled="@fullSyncInProgress">Cancel</button>
-                    <button type="button" class="btn btn-primary" @onclick="FullSyncConfirmed" disabled="@fullSyncInProgress">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseFullSyncConfirmModal" disabled="@fullSyncInProgress">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="FullSyncConfirmed" disabled="@fullSyncInProgress">
                         @if (fullSyncInProgress)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>
@@ -733,12 +734,12 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseStopConfirmModal" disabled="@stopInProgress">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseStopConfirmModal" disabled="@stopInProgress">
                         <i class="fas fa-times me-1"></i>Keep Running
                     </button>
                     @if (stopForceReleaseOffered)
                     {
-                        <button type="button" class="btn btn-warning" @onclick="ForceReleaseConfirmed" disabled="@stopInProgress">
+                        <button type="button" class="ic-btn icb-btn-caution" @onclick="ForceReleaseConfirmed" disabled="@stopInProgress">
                             @if (stopInProgress)
                             {
                                 <span class="spinner-border spinner-border-sm me-1"></span>
@@ -750,7 +751,7 @@
                             Recover completed run
                         </button>
                     }
-                    <button type="button" class="btn btn-danger" @onclick="StopSyncConfirmed" disabled="@stopInProgress">
+                    <button type="button" class="ic-btn ic-btn-danger" @onclick="StopSyncConfirmed" disabled="@stopInProgress">
                         @if (stopInProgress)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>
@@ -795,16 +796,16 @@
                         review it before enabling.
                     </p>
                     <div class="mb-2">
-                        <label class="form-label fw-bold">New project name</label>
-                        <input type="text" class="form-control" @bind="copyName" @bind:event="oninput"
+                        <label class="icb-form-label fw-bold">New project name</label>
+                        <input type="text" class="icb-form-input" @bind="copyName" @bind:event="oninput"
                                placeholder="e.g., @selectedProject.Name (Copy)" autocomplete="off" />
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseCopyTemplateModal" disabled="@copyInProgress">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseCopyTemplateModal" disabled="@copyInProgress">
                         <i class="fas fa-times me-1"></i>Cancel
                     </button>
-                    <button type="button" class="btn btn-primary" @onclick="CopyTemplateConfirmed"
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="CopyTemplateConfirmed"
                             disabled="@(string.IsNullOrWhiteSpace(copyName) || copyInProgress)">
                         @if (copyInProgress)
                         {
@@ -854,9 +855,9 @@
                         <li>All run history and log lines</li>
                     </ul>
                     <div class="mb-3">
-                        <label class="form-label fw-bold">To confirm, type <code>DELETE</code> below:</label>
+                        <label class="icb-form-label fw-bold">To confirm, type <code>DELETE</code> below:</label>
                         <input type="text"
-                               class="form-control @(deleteConfirmText == "DELETE" ? "is-valid" : (deleteConfirmText.Length > 0 ? "is-invalid" : ""))"
+                               class="icb-form-input @(deleteConfirmText == "DELETE" ? "is-valid" : (deleteConfirmText.Length > 0 ? "is-invalid" : ""))"
                                @bind="deleteConfirmText"
                                @bind:event="oninput"
                                placeholder="Type DELETE to confirm"
@@ -864,10 +865,10 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseDeleteModal" disabled="@deleteInProgress">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseDeleteModal" disabled="@deleteInProgress">
                         <i class="fas fa-times me-1"></i>Cancel
                     </button>
-                    <button type="button" class="btn btn-danger"
+                    <button type="button" class="ic-btn ic-btn-danger"
                             @onclick="DeleteConfirmed"
                             disabled="@(deleteConfirmText != "DELETE" || deleteInProgress)">
                         @if (deleteInProgress)
@@ -903,8 +904,8 @@
                     <CcScheduleEditor @bind-Value="scheduleForm" Error="@scheduleError" />
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseScheduleModal" disabled="@scheduleSaving">Cancel</button>
-                    <button type="button" class="btn btn-primary" @onclick="SaveSchedule" disabled="@scheduleSaving">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseScheduleModal" disabled="@scheduleSaving">Cancel</button>
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveSchedule" disabled="@scheduleSaving">
                         @if (scheduleSaving)
                         {
                             <span class="spinner-border spinner-border-sm me-1"></span>
@@ -962,7 +963,7 @@
                                 </h1>
                                 <p class="lead mb-0">Configure directory synchronization workflows and settings</p>
                             </div>
-                            <button type="button" class="btn btn-outline-light" @onclick="CloseFormModal">
+                            <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseFormModal">
                                 <i class="fas fa-times me-1"></i>Close
                             </button>
                         </div>
@@ -1035,16 +1036,16 @@
                         <div class="row g-3">
                             <div class="@(isWizard ? "col-12" : "col-md-8")">
                                 <div class="mb-3">
-                                    <label class="form-label fw-semibold">Project Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control form-control-lg @(ShowNameError ? "is-invalid-field" : "")" @bind="form.Name" @bind:event="oninput" placeholder="e.g., AD → Emulator User Sync" />
+                                    <label class="icb-form-label fw-semibold">Project Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="icb-form-input icb-form-input-lg @(ShowNameError ? "is-invalid-field" : "")" @bind="form.Name" @bind:event="oninput" placeholder="e.g., AD → Emulator User Sync" />
                                     @if (ShowNameError)
                                     {
                                         <div class="sync-field-error">A project name is required.</div>
                                     }
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label fw-semibold">Description</label>
-                                    <textarea class="form-control" rows="2" @bind="form.Description"
+                                    <label class="icb-form-label fw-semibold">Description</label>
+                                    <textarea class="icb-form-input" rows="2" @bind="form.Description"
                                               placeholder="Optional description of what this project synchronizes"></textarea>
                                 </div>
                                 @* Phase 8: workflow template picker. Only shown on edit's Setup tab —
@@ -1061,8 +1062,8 @@
                                             <div class="sync-flow-role sync-flow-role-source">
                                                 <i class="fas fa-arrow-up-from-bracket me-1"></i>SOURCE <span class="sync-flow-role-sub">read from</span>
                                             </div>
-                                            <label class="form-label fw-semibold mb-1">Connected System <span class="text-danger">*</span></label>
-                                            <select class="form-select @(ShowSourceError || SourceCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
+                                            <label class="icb-form-label fw-semibold mb-1">Connected System <span class="text-danger">*</span></label>
+                                            <select class="icb-form-select @(ShowSourceError || SourceCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SourceTenantId" @bind:after="OnSourceTenantChanged" disabled="@editingId.HasValue">
                                                 <option value="@Guid.Empty">-- Pick a source --</option>
                                                 @foreach (var t in SourceTenants)
                                                 {
@@ -1088,17 +1089,17 @@
                                             @if (SourceIsIdentityCenter)
                                             {
                                                 <div class="mt-2">
-                                                    <label class="form-label fw-semibold mb-1">Source Table</label>
-                                                    <select class="form-select" @bind="form.SourceTable" @bind:after="OnIcTableChanged">
+                                                    <label class="icb-form-label fw-semibold mb-1">Source Table</label>
+                                                    <select class="icb-form-select" @bind="form.SourceTable" @bind:after="OnIcTableChanged">
                                                         <option value="Objects">Objects (directory accounts)</option>
                                                         <option value="Identities">Identities (people)</option>
                                                     </select>
-                                                    <small class="form-text text-muted">Which IdentityCenter table to read from.</small>
+                                                    <small class="icb-form-help text-muted">Which IdentityCenter table to read from.</small>
                                                 </div>
                                             }
                                             @if (editingId.HasValue)
                                             {
-                                                <small class="form-text text-muted">Source cannot change after creation.</small>
+                                                <small class="icb-form-help text-muted">Source cannot change after creation.</small>
                                             }
                                             else if (ShowSourceError)
                                             {
@@ -1106,7 +1107,7 @@
                                             }
                                             else
                                             {
-                                                <small class="form-text text-muted">Only connectors that can read are listed.</small>
+                                                <small class="icb-form-help text-muted">Only connectors that can read are listed.</small>
                                             }
                                         </div>
                                     </div>
@@ -1121,8 +1122,8 @@
                                             <div class="sync-flow-role sync-flow-role-target">
                                                 <i class="fas fa-arrow-down-to-bracket me-1"></i>TARGET <span class="sync-flow-role-sub">write to</span>
                                             </div>
-                                            <label class="form-label fw-semibold mb-1">Connected System <span class="text-danger">*</span></label>
-                                            <select class="form-select @(ShowSinkError || SinkCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
+                                            <label class="icb-form-label fw-semibold mb-1">Connected System <span class="text-danger">*</span></label>
+                                            <select class="icb-form-select @(ShowSinkError || SinkCapabilityInvalid || IsSelfSync ? "is-invalid-field" : "")" @bind="form.SinkTenantId" @bind:after="OnSinkTenantChanged" disabled="@editingId.HasValue">
                                                 <option value="@Guid.Empty">-- Pick a target --</option>
                                                 @foreach (var t in SinkTenants)
                                                 {
@@ -1148,17 +1149,17 @@
                                             @if (SinkIsIdentityCenter)
                                             {
                                                 <div class="mt-2">
-                                                    <label class="form-label fw-semibold mb-1">Target Table</label>
-                                                    <select class="form-select" @bind="form.SinkTable" @bind:after="OnIcTableChanged">
+                                                    <label class="icb-form-label fw-semibold mb-1">Target Table</label>
+                                                    <select class="icb-form-select" @bind="form.SinkTable" @bind:after="OnIcTableChanged">
                                                         <option value="Objects">Objects (directory accounts)</option>
                                                         <option value="Identities">Identities (people)</option>
                                                     </select>
-                                                    <small class="form-text text-muted">Which IdentityCenter table to write to.</small>
+                                                    <small class="icb-form-help text-muted">Which IdentityCenter table to write to.</small>
                                                 </div>
                                             }
                                             @if (editingId.HasValue)
                                             {
-                                                <small class="form-text text-muted">Target cannot change after creation.</small>
+                                                <small class="icb-form-help text-muted">Target cannot change after creation.</small>
                                             }
                                             else if (ShowSinkError)
                                             {
@@ -1166,7 +1167,7 @@
                                             }
                                             else
                                             {
-                                                <small class="form-text text-muted">Only connectors that can write are listed.</small>
+                                                <small class="icb-form-help text-muted">Only connectors that can write are listed.</small>
                                             }
                                         </div>
                                     </div>
@@ -1212,26 +1213,26 @@
                                 {
                                     <div class="row g-3 mt-1">
                                         <div class="col-md-6">
-                                            <label class="form-label fw-semibold">Source Credential <span class="text-muted">(optional)</span></label>
-                                            <select class="form-select" @bind="form.SourceCredentialName">
+                                            <label class="icb-form-label fw-semibold">Source Credential <span class="text-muted">(optional)</span></label>
+                                            <select class="icb-form-select" @bind="form.SourceCredentialName">
                                                 <option value="">(default)</option>
                                                 @foreach (var name in sourceCredentialNames)
                                                 {
                                                     <option value="@name">@name</option>
                                                 }
                                             </select>
-                                            <small class="form-text text-muted">Override when the source tenant holds multiple credentials.</small>
+                                            <small class="icb-form-help text-muted">Override when the source tenant holds multiple credentials.</small>
                                         </div>
                                         <div class="col-md-6">
-                                            <label class="form-label fw-semibold">Target Credential <span class="text-muted">(optional)</span></label>
-                                            <select class="form-select" @bind="form.SinkCredentialName">
+                                            <label class="icb-form-label fw-semibold">Target Credential <span class="text-muted">(optional)</span></label>
+                                            <select class="icb-form-select" @bind="form.SinkCredentialName">
                                                 <option value="">(default)</option>
                                                 @foreach (var name in sinkCredentialNames)
                                                 {
                                                     <option value="@name">@name</option>
                                                 }
                                             </select>
-                                            <small class="form-text text-muted">Override when the target connection holds multiple credentials.</small>
+                                            <small class="icb-form-help text-muted">Override when the target connection holds multiple credentials.</small>
                                         </div>
                                     </div>
                                 }
@@ -1239,8 +1240,8 @@
                                 {
                                     <div class="row g-3 mt-1">
                                         <div class="col-md-6">
-                                            <label class="form-label fw-semibold">Object Class</label>
-                                            <select class="form-select" @bind="form.ObjectClass">
+                                            <label class="icb-form-label fw-semibold">Object Class</label>
+                                            <select class="icb-form-select" @bind="form.ObjectClass">
                                                 <option value="User">User</option>
                                                 <option value="Group">Group</option>
                                                 @if (SinkIsAwsSso)
@@ -1268,9 +1269,9 @@
                                         <h6 class="sync-form-aside-title">
                                             <i class="fas fa-sliders-h me-2"></i>Status
                                         </h6>
-                                        <div class="form-check form-switch mb-3">
-                                            <input class="form-check-input sync-form-switch" type="checkbox" id="formIsEnabled" @bind="form.IsEnabled" />
-                                            <label class="form-check-label ms-2" for="formIsEnabled">
+                                        <div class="icb-form-check mb-3">
+                                            <input class="icb-form-switch sync-form-switch" type="checkbox" id="formIsEnabled" @bind="form.IsEnabled" />
+                                            <label class="icb-form-check-label ms-2" for="formIsEnabled">
                                                 <span class="badge @(form.IsEnabled ? "bg-success" : "bg-secondary")">
                                                     @(form.IsEnabled ? "Enabled" : "Disabled")
                                                 </span>
@@ -1298,7 +1299,7 @@
                         @* Tier presets — same source of truth as Auto-Generate (ISyncProjectGenerator).
                            Core / connector-specific / Full each pre-fill the checklist below. *@
                         <div class="mb-2">
-                            <label class="form-label fw-semibold">Object classes to sync</label>
+                            <label class="icb-form-label fw-semibold">Object classes to sync</label>
                         </div>
                         <div class="row g-2 mb-3">
                             @foreach (var m in WizardClassModes)
@@ -1336,8 +1337,8 @@
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <small class="text-muted">@WizardClassSummary</small>
                                 <div class="btn-group btn-group-sm">
-                                    <button type="button" class="btn btn-outline-secondary" @onclick="WizardSelectAllClasses">Select all</button>
-                                    <button type="button" class="btn btn-outline-secondary" @onclick="WizardClearClasses">Clear</button>
+                                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="WizardSelectAllClasses">Select all</button>
+                                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="WizardClearClasses">Clear</button>
                                 </div>
                             </div>
                             <div class="sync-class-grid mb-3">
@@ -1348,11 +1349,13 @@
                                     var recTpl = WizardRecommendedTemplateFor(clsRef);
                                     var inputId = string.Concat("wiz_cls_", clsRef);
                                     <div class="sync-class-grid-item">
-                                        <div class="form-check">
-                                            <input type="checkbox" class="form-check-input" id="@inputId"
-                                                   checked="@checkedNow"
-                                                   @onchange="(e) => ToggleWizardClass(clsRef, (bool)(e.Value ?? false))" />
-                                            <label class="form-check-label" for="@inputId">
+                                        <div class="icb-form-check">
+                                            @* Two-way bind also retires the (bool)(e.Value ?? false) cast, which
+                                               throws InvalidCastException the moment the value arrives as a string. *@
+                                            <input type="checkbox" class="icb-form-checkbox" id="@inputId"
+                                                   @bind:get="checkedNow"
+                                                   @bind:set="@(v => ToggleWizardClass(clsRef, v))" />
+                                            <label class="icb-form-check-label" for="@inputId">
                                                 <span class="sync-class-grid-name">@clsRef</span>
                                                 <span class="sync-class-grid-tpl">@recTpl.DisplayName</span>
                                             </label>
@@ -1377,7 +1380,7 @@
                                 Shortcut: <strong>Auto-Generate</strong> builds a project for the <strong>full
                                 tier</strong> in one click (no per-class picking) for this Source and Target.
                             </span>
-                            <button type="button" class="btn btn-sm btn-success ms-3 flex-shrink-0" @onclick="SwitchToAutoGenerateFromWizard">
+                            <button type="button" class="ic-btn ic-btn-sm icb-btn-success ms-3 flex-shrink-0" @onclick="SwitchToAutoGenerateFromWizard">
                                 <i class="fas fa-magic me-1"></i>Auto-Generate the set
                             </button>
                         </div>
@@ -1393,20 +1396,20 @@
                             </p>
                             <div class="row g-3">
                                 <div class="col-md-7">
-                                    <label class="form-label fw-semibold">Base DN <CcHelpHint Text="The directory container the read starts from (e.g. OU=Staff,DC=corp,DC=local). Leave blank to start at the domain root. Everything beneath it is in scope." /></label>
+                                    <label class="icb-form-label fw-semibold">Base DN <CcHelpHint Text="The directory container the read starts from (e.g. OU=Staff,DC=corp,DC=local). Leave blank to start at the domain root. Everything beneath it is in scope." /></label>
                                     <div class="input-group">
-                                        <input class="form-control" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
-                                        <button type="button" class="btn btn-outline-secondary" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a single container">
+                                        <input class="icb-form-input" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
+                                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a single container">
                                             <i class="bi bi-diagram-3 me-1"></i>Browse
                                         </button>
-                                        <button type="button" class="btn btn-outline-primary" @onclick="OpenScopeBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick multiple Included / Blocked containers">
+                                        <button type="button" class="ic-btn icb-btn-accent" @onclick="OpenScopeBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick multiple Included / Blocked containers">
                                             <i class="bi bi-folder-symlink me-1"></i>Select Scope Locations
                                         </button>
                                     </div>
                                     @{ var projInc = scopeForm.GetIncludedBaseList(); var projBlk = scopeForm.GetExcludedBaseList(); }
                                     @if (projInc.Count > 1 || projBlk.Count > 0)
                                     {
-                                        <small class="form-text text-muted">
+                                        <small class="icb-form-help text-muted">
                                             <i class="bi bi-check-circle-fill text-success me-1"></i>@projInc.Count included
                                             @if (projBlk.Count > 0)
                                             {
@@ -1416,20 +1419,20 @@
                                     }
                                 </div>
                                 <div class="col-md-5">
-                                    <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
-                                    <input class="form-control" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                                    <label class="icb-form-label fw-semibold">Page size <span class="text-danger">*</span></label>
+                                    <input class="icb-form-input" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
                                 </div>
                             </div>
                             <div class="row g-3 mt-1">
                                 <div class="col-md-9">
-                                    <label class="form-label fw-semibold">LDAP filter override <CcHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></label>
-                                    <input class="form-control" @bind="scopeForm.LdapFilter" placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default" />
-                                    <small class="form-text text-muted">RFC 4515 LDAP filter. Blank = the per-object-class default.</small>
+                                    <label class="icb-form-label fw-semibold">LDAP filter override <CcHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></label>
+                                    <input class="icb-form-input" @bind="scopeForm.LdapFilter" placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default" />
+                                    <small class="icb-form-help text-muted">RFC 4515 LDAP filter. Blank = the per-object-class default.</small>
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="form-label fw-semibold">Max objects</label>
-                                    <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
-                                    <small class="form-text text-muted">0 = no cap.</small>
+                                    <label class="icb-form-label fw-semibold">Max objects</label>
+                                    <input class="icb-form-input" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                                    <small class="icb-form-help text-muted">0 = no cap.</small>
                                 </div>
                             </div>
                         }
@@ -1441,20 +1444,20 @@
                             </p>
                             <div class="row g-3">
                                 <div class="col-md-12">
-                                    <label class="form-label fw-semibold">OData filter</label>
-                                    <input class="form-control" @bind="scopeForm.QueryExpression" placeholder="startswith(displayName,'Sales') — blank for all" />
-                                    <small class="form-text text-muted">Graph OData <code>$filter</code>. Blank = all objects of this class.</small>
+                                    <label class="icb-form-label fw-semibold">OData filter</label>
+                                    <input class="icb-form-input" @bind="scopeForm.QueryExpression" placeholder="startswith(displayName,'Sales') — blank for all" />
+                                    <small class="icb-form-help text-muted">Graph OData <code>$filter</code>. Blank = all objects of this class.</small>
                                 </div>
                             </div>
                             <div class="row g-3 mt-1">
                                 <div class="col-md-6">
-                                    <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
-                                    <input class="form-control" type="number" min="1" max="999" @bind="scopeForm.PageSize" />
+                                    <label class="icb-form-label fw-semibold">Page size <span class="text-danger">*</span></label>
+                                    <input class="icb-form-input" type="number" min="1" max="999" @bind="scopeForm.PageSize" />
                                 </div>
                                 <div class="col-md-6">
-                                    <label class="form-label fw-semibold">Max objects</label>
-                                    <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
-                                    <small class="form-text text-muted">0 = no cap.</small>
+                                    <label class="icb-form-label fw-semibold">Max objects</label>
+                                    <input class="icb-form-input" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                                    <small class="icb-form-help text-muted">0 = no cap.</small>
                                 </div>
                             </div>
                         }
@@ -1466,26 +1469,26 @@
                             </p>
                             <div class="row g-3">
                                 <div class="col-md-12">
-                                    <label class="form-label fw-semibold">Query expression</label>
-                                    <input class="form-control" @bind="scopeForm.QueryExpression" placeholder="Connector-specific query — blank to read all" />
-                                    <small class="form-text text-muted">Interpreted by the source connector. Blank = read all.</small>
+                                    <label class="icb-form-label fw-semibold">Query expression</label>
+                                    <input class="icb-form-input" @bind="scopeForm.QueryExpression" placeholder="Connector-specific query — blank to read all" />
+                                    <small class="icb-form-help text-muted">Interpreted by the source connector. Blank = read all.</small>
                                 </div>
                             </div>
                             <div class="row g-3 mt-1">
                                 <div class="col-md-6">
-                                    <label class="form-label fw-semibold">Page size <span class="text-danger">*</span></label>
-                                    <input class="form-control" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                                    <label class="icb-form-label fw-semibold">Page size <span class="text-danger">*</span></label>
+                                    <input class="icb-form-input" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
                                 </div>
                                 <div class="col-md-6">
-                                    <label class="form-label fw-semibold">Max objects</label>
-                                    <input class="form-control" type="number" min="0" @bind="scopeForm.MaxObjects" />
-                                    <small class="form-text text-muted">0 = no cap.</small>
+                                    <label class="icb-form-label fw-semibold">Max objects</label>
+                                    <input class="icb-form-input" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                                    <small class="icb-form-help text-muted">0 = no cap.</small>
                                 </div>
                             </div>
                         }
-                        <div class="form-check mt-3">
-                            <input class="form-check-input" type="checkbox" id="scopeIncludeDeleted" @bind="scopeForm.IncludeDeleted" />
-                            <label class="form-check-label" for="scopeIncludeDeleted">
+                        <div class="icb-form-check mt-3">
+                            <input class="icb-form-checkbox" type="checkbox" id="scopeIncludeDeleted" @bind="scopeForm.IncludeDeleted" />
+                            <label class="icb-form-check-label" for="scopeIncludeDeleted">
                                 Include deleted / soft-deleted objects where the source exposes them
                             </label>
                         </div>
@@ -1497,10 +1500,10 @@
                                 This is separate from the read scope above. It is used only when this project creates
                                 missing objects in the target Active Directory.
                             </p>
-                            <label class="form-label fw-semibold">Target container (OU DN)</label>
-                            <input class="form-control" @bind="form.TargetContainer"
+                            <label class="icb-form-label fw-semibold">Target container (OU DN)</label>
+                            <input class="icb-form-input" @bind="form.TargetContainer"
                                    placeholder="OU=Employees,OU=Users,DC=domain,DC=local" />
-                            <small class="form-text text-muted">Leave blank for update-only projects or to use the directory connector's root default.</small>
+                            <small class="icb-form-help text-muted">Leave blank for update-only projects or to use the directory connector's root default.</small>
                         }
                     }
                     else if (formTab == "mappings")
@@ -1535,31 +1538,31 @@
                                 {
                                     <div class="assignment-template-fields">
                                         <div>
-                                            <label class="form-label fw-semibold">Account id <span class="text-danger">*</span></label>
-                                            <input class="form-control" @bind="assignAccountId" placeholder="123456789012" />
+                                            <label class="icb-form-label fw-semibold">Account id <span class="text-danger">*</span></label>
+                                            <input class="icb-form-input" @bind="assignAccountId" placeholder="123456789012" />
                                         </div>
                                         <div>
-                                            <label class="form-label fw-semibold">Permission set ARN <span class="text-danger">*</span></label>
-                                            <input class="form-control" @bind="assignPermissionSetArn" placeholder="arn:aws:sso:::permissionSet/ssoins-xxxx/ps-xxxx" />
+                                            <label class="icb-form-label fw-semibold">Permission set ARN <span class="text-danger">*</span></label>
+                                            <input class="icb-form-input" @bind="assignPermissionSetArn" placeholder="arn:aws:sso:::permissionSet/ssoins-xxxx/ps-xxxx" />
                                         </div>
                                         <div>
-                                            <label class="form-label fw-semibold">Principal type</label>
-                                            <select class="form-select" @bind="assignPrincipalType">
+                                            <label class="icb-form-label fw-semibold">Principal type</label>
+                                            <select class="icb-form-select" @bind="assignPrincipalType">
                                                 <option value="USER">USER</option>
                                                 <option value="GROUP">GROUP</option>
                                             </select>
                                         </div>
                                         <div>
-                                            <label class="form-label fw-semibold">Principal id (source attribute)</label>
-                                            <input class="form-control" @bind="assignPrincipalIdSource"
+                                            <label class="icb-form-label fw-semibold">Principal id (source attribute)</label>
+                                            <input class="icb-form-input" @bind="assignPrincipalIdSource"
                                                    placeholder="e.g. id, externalId, sAMAccountName" />
-                                            <small class="form-text text-muted">
+                                            <small class="icb-form-help text-muted">
                                                 Source attribute holding the IdentityStore UserId / GroupId — required because it varies per row.
                                             </small>
                                         </div>
                                     </div>
                                     <div class="mt-3">
-                                        <button type="button" class="btn btn-outline-primary btn-sm" @onclick="ApplyAssignmentTemplate">
+                                        <button type="button" class="ic-btn icb-btn-accent ic-btn-sm" @onclick="ApplyAssignmentTemplate">
                                             <i class="fas fa-magic me-1"></i>Apply template to mappings
                                         </button>
                                         @if (!string.IsNullOrEmpty(assignTemplateMessage))
@@ -1575,10 +1578,10 @@
 
                         <div class="mapping-editor-toolbar">
                             <h6 class="form-section-title mb-0">Attribute mappings (optional — blank = passthrough)</h6>
-                            <button type="button" class="btn btn-outline-secondary btn-sm me-2" @onclick="AutoMapAttributes">
+                            <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm me-2" @onclick="AutoMapAttributes">
                                 <i class="fas fa-magic me-1"></i>Auto-map attributes
                             </button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddMappingRow">
+                            <button type="button" class="ic-btn icb-btn-accent ic-btn-sm" @onclick="AddMappingRow">
                                 <i class="fas fa-plus me-1"></i>Add rule
                             </button>
                         </div>
@@ -1606,12 +1609,12 @@
                                         var idx = i;
                                         var rule = mappingForm[idx];
                                         <tr>
-                                            <td><input class="form-control" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
-                                            <td><input class="form-control" @bind="rule.SinkAttribute" placeholder="userName" /></td>
-                                            <td><input class="form-control" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
-                                            <td class="text-center"><input type="checkbox" class="form-check-input" @bind="rule.IsRequired" /></td>
+                                            <td><input class="icb-form-input" @bind="rule.SourceAttribute" placeholder="sAMAccountName" /></td>
+                                            <td><input class="icb-form-input" @bind="rule.SinkAttribute" placeholder="userName" /></td>
+                                            <td><input class="icb-form-input" @bind="rule.TransformExpr" placeholder="trim | lower" /></td>
+                                            <td class="text-center"><input type="checkbox" class="icb-form-checkbox" @bind="rule.IsRequired" /></td>
                                             <td>
-                                                <button type="button" class="btn btn-link btn-sm text-danger" @onclick="() => RemoveMappingRow(idx)" title="Remove">
+                                                <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm text-danger" @onclick="() => RemoveMappingRow(idx)" title="Remove">
                                                     <i class="fas fa-times"></i>
                                                 </button>
                                             </td>
@@ -1650,7 +1653,7 @@
                             <h6 class="form-section-title mb-0">
                                 <i class="fas fa-layer-group me-2"></i>Workflows (@workflowsForm.Count)
                             </h6>
-                            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="AddWorkflow">
+                            <button type="button" class="ic-btn icb-btn-accent ic-btn-sm" @onclick="AddWorkflow">
                                 <i class="fas fa-plus me-1"></i>Add workflow
                             </button>
                         </div>
@@ -1672,13 +1675,13 @@
                                         <span class="fw-semibold">Build steps for all object classes</span>
                                     </div>
                                     <div class="input-group input-group-sm mt-2">
-                                        <select class="form-select" @bind="workflowsClassMode">
+                                        <select class="icb-form-select" @bind="workflowsClassMode">
                                             @foreach (var m in AvailableWorkflowModes)
                                             {
                                                 <option value="@m">@ModeLabel(m)</option>
                                             }
                                         </select>
-                                        <button type="button" class="btn btn-outline-primary"
+                                        <button type="button" class="ic-btn icb-btn-accent"
                                                 @onclick="AddStepsForAllClasses"
                                                 disabled="@(SourceSystemType.Length == 0)"
                                                 title="Add a Mapping step for every object class in this tier the active workflow doesn't already have">
@@ -1687,13 +1690,13 @@
                                     </div>
                                     <div class="d-flex justify-content-between align-items-center mt-2">
                                         <small class="text-muted">@BulkBuilderPreviewText</small>
-                                        <button type="button" class="btn btn-link btn-sm p-0"
+                                        <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm p-0"
                                                 @onclick="AutoMapAllSteps"
                                                 disabled="@(SourceSystemType.Length == 0 || MappingStepCount == 0)"
                                                 title="Re-run auto-map for every Mapping step using each step's own object class">
                                             <i class="fas fa-magic me-1"></i>Auto-map all steps
                                         </button>
-                                        <button type="button" class="btn btn-link btn-sm p-0 ms-3"
+                                        <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm p-0 ms-3"
                                                 @onclick="CollapseAll"
                                                 disabled="@(!AnythingExpanded)"
                                                 title="Collapse every expanded workflow and step panel">
@@ -1730,12 +1733,12 @@
                                     <div class="workflow-header d-flex justify-content-between align-items-center">
                                         <div class="d-flex align-items-center flex-grow-1">
                                             <div class="btn-group btn-group-sm me-3" role="group">
-                                                <button type="button" class="btn btn-outline-secondary"
+                                                <button type="button" class="ic-btn ic-btn-ghost"
                                                         @onclick="() => MoveWorkflowUpById(wfRef.Id)"
                                                         disabled="@(wfIndex == 0)" title="Move Up">
                                                     <i class="fas fa-arrow-up"></i>
                                                 </button>
-                                                <button type="button" class="btn btn-outline-secondary"
+                                                <button type="button" class="ic-btn ic-btn-ghost"
                                                         @onclick="() => MoveWorkflowDownById(wfRef.Id)"
                                                         disabled="@(wfIndex == workflowsForm.Count - 1)" title="Move Down">
                                                     <i class="fas fa-arrow-down"></i>
@@ -1746,21 +1749,21 @@
                                             <span class="badge @(wfRef.Enabled ? "bg-success" : "bg-secondary") ms-2">@(wfRef.Enabled ? "Enabled" : "Disabled")</span>
                                         </div>
                                         <div class="d-flex align-items-center gap-2">
-                                            <button type="button" class="btn btn-sm btn-outline-info"
+                                            <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost"
                                                     @onclick="() => ToggleWorkflowExpanded(wfRef.Id)"
                                                     title="@(wfExpanded ? "Collapse" : "Expand")">
                                                 <i class="fas @(wfExpanded ? "fa-chevron-up" : "fa-chevron-down") me-1"></i>
                                                 @wfSteps.Count step(s)
                                             </button>
-                                            <button type="button" class="btn btn-sm @(wfSettings ? "btn-info" : "btn-outline-primary")"
+                                            <button type="button" class="ic-btn ic-btn-sm @(wfSettings ? "btn-info" : "icb-btn-accent")"
                                                     @onclick="() => ToggleWorkflowSettings(wfRef.Id)" title="Rename Workflow">
                                                 <i class="fas fa-edit"></i>
                                             </button>
-                                            <button type="button" class="btn btn-sm btn-outline-success"
+                                            <button type="button" class="ic-btn ic-btn-sm icb-btn-success"
                                                     @onclick="() => CopyWorkflowById(wfRef.Id)" title="Copy Workflow">
                                                 <i class="fas fa-copy"></i>
                                             </button>
-                                            <button type="button" class="btn btn-sm btn-outline-danger"
+                                            <button type="button" class="ic-btn ic-btn-sm ic-btn-danger"
                                                     @onclick="() => DeleteWorkflowById(wfRef.Id)" title="Delete Workflow">
                                                 <i class="fas fa-trash"></i>
                                             </button>
@@ -1773,18 +1776,18 @@
                                         <div class="workflow-settings-strip">
                                             <div class="row g-3">
                                                 <div class="col-md-6">
-                                                    <label class="form-label fw-semibold">Name</label>
-                                                    <input class="form-control form-control-sm" @bind="wfRef.Name" @bind:after="MarkWorkflowsDirty" />
+                                                    <label class="icb-form-label fw-semibold">Name</label>
+                                                    <input class="icb-form-input icb-form-input-sm" @bind="wfRef.Name" @bind:after="MarkWorkflowsDirty" />
                                                 </div>
                                                 <div class="col-md-6 d-flex align-items-end">
-                                                    <div class="form-check form-switch">
-                                                        <input class="form-check-input" type="checkbox" id="@($"wfEnabled_{wfRef.Id}")" @bind="wfRef.Enabled" @bind:after="MarkWorkflowsDirty" />
-                                                        <label class="form-check-label" for="@($"wfEnabled_{wfRef.Id}")">Enabled</label>
+                                                    <div class="icb-form-check">
+                                                        <input class="icb-form-switch" type="checkbox" id="@($"wfEnabled_{wfRef.Id}")" @bind="wfRef.Enabled" @bind:after="MarkWorkflowsDirty" />
+                                                        <label class="icb-form-check-label" for="@($"wfEnabled_{wfRef.Id}")">Enabled</label>
                                                     </div>
                                                 </div>
                                                 <div class="col-md-12">
-                                                    <label class="form-label fw-semibold">Description</label>
-                                                    <textarea class="form-control form-control-sm" rows="2" @bind="wfRef.Description" @bind:after="MarkWorkflowsDirty"></textarea>
+                                                    <label class="icb-form-label fw-semibold">Description</label>
+                                                    <textarea class="icb-form-input icb-form-input-sm" rows="2" @bind="wfRef.Description" @bind:after="MarkWorkflowsDirty"></textarea>
                                                 </div>
                                             </div>
                                         </div>
@@ -1832,11 +1835,11 @@
                                                             <div class="flex-grow-1">
                                                                 <div class="d-flex align-items-center">
                                                                     <div class="btn-group btn-group-sm me-2">
-                                                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                                        <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm"
                                                                                 @onclick="() => MoveStepUpById(stepRef.Id)" disabled="@isFirstStep" title="Move Up">
                                                                             <i class="fas fa-arrow-up"></i>
                                                                         </button>
-                                                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                                        <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm"
                                                                                 @onclick="() => MoveStepDownById(stepRef.Id)" disabled="@isLastStep" title="Move Down">
                                                                             <i class="fas fa-arrow-down"></i>
                                                                         </button>
@@ -1844,7 +1847,7 @@
                                                                     <span class="badge bg-secondary me-2">#@(stepIndex + 1)</span>
                                                                     @if (isRenaming)
                                                                     {
-                                                                        <input class="form-control form-control-sm step-name-inline"
+                                                                        <input class="icb-form-input icb-form-input-sm step-name-inline"
                                                                                @ref="_renameInput"
                                                                                value="@_renameDraft"
                                                                                @oninput="@(e => _renameDraft = e.Value?.ToString() ?? string.Empty)"
@@ -1909,7 +1912,7 @@
                                                             <div class="step-actions">
                                                                 @if (isMappingStep)
                                                                 {
-                                                                    <button type="button" class="btn btn-sm btn-primary"
+                                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-primary"
                                                                             @onclick="() => OpenMappingModal(stepRef.Id)" title="Edit Attribute Mappings">
                                                                         <i class="fas fa-exchange-alt me-1"></i>Mappings
                                                                         @if (mapCount > 0)
@@ -1917,20 +1920,20 @@
                                                                             <span class="badge bg-light text-primary ms-1">@mapCount</span>
                                                                         }
                                                                     </button>
-                                                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                                                    <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                                                             @onclick="() => OpenStepScopeModal(stepRef.Id)" title="Configure scope and filter">
                                                                         <i class="fas fa-filter"></i>
                                                                     </button>
                                                                 }
-                                                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                                <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost"
                                                                         @onclick="() => OpenStepSettingsModal(stepRef.Id)" title="Edit settings">
                                                                     <i class="fas fa-cog"></i>
                                                                 </button>
-                                                                <button type="button" class="btn btn-sm btn-outline-success"
+                                                                <button type="button" class="ic-btn ic-btn-sm icb-btn-success"
                                                                         @onclick="() => CopyStepById(stepRef.Id)" title="Copy Step">
                                                                     <i class="fas fa-copy fa-sm"></i>
                                                                 </button>
-                                                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                                                <button type="button" class="ic-btn ic-btn-sm ic-btn-danger"
                                                                         @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">
                                                                     <i class="fas fa-trash fa-sm"></i>
                                                                 </button>
@@ -1945,7 +1948,7 @@
                                                     <i class="fas fa-info-circle me-2"></i>No steps configured for this workflow.
                                                 </div>
                                             }
-                                            <button type="button" class="btn btn-sm btn-outline-success mt-2"
+                                            <button type="button" class="ic-btn ic-btn-sm icb-btn-success mt-2"
                                                     @onclick="() => AddStepExpanded(wfRef.Id)">
                                                 <i class="fas fa-plus me-1"></i>Add Step
                                             </button>
@@ -1965,14 +1968,14 @@
                     {
                         <div class="row g-3">
                             <div class="col-md-12">
-                                <label class="form-label fw-semibold">Schedule</label>
+                                <label class="icb-form-label fw-semibold">Schedule</label>
                                 <CcScheduleEditor @bind-Value="form.CronSchedule" />
                             </div>
                             <div class="col-md-12">
-                                <div class="form-check mt-2">
-                                    <input class="form-check-input" type="checkbox" id="formSkipUnchanged" @bind="form.SkipUnchanged" />
-                                    <label class="form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records <CcHelpHint Text="When on, a record whose mapped attributes haven't changed since the last run is skipped (compared by content hash) — much faster on large directories, and the run still reports it as skipped." /></label>
-                                    <small class="form-text text-muted d-block">Only write records whose mapped attributes changed since the last run (faster; uses a per-record content hash). Recommended for large directories.</small>
+                                <div class="icb-form-check mt-2">
+                                    <input class="icb-form-checkbox" type="checkbox" id="formSkipUnchanged" @bind="form.SkipUnchanged" />
+                                    <label class="icb-form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records <CcHelpHint Text="When on, a record whose mapped attributes haven't changed since the last run is skipped (compared by content hash) — much faster on large directories, and the run still reports it as skipped." /></label>
+                                    <small class="icb-form-help text-muted d-block">Only write records whose mapped attributes changed since the last run (faster; uses a per-record content hash). Recommended for large directories.</small>
                                 </div>
                             </div>
                         </div>
@@ -2016,9 +2019,9 @@
                             <dd>@(form.SkipUnchanged ? "Yes" : "No")</dd>
                             <dt>Status</dt>
                             <dd>
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input sync-form-switch" type="checkbox" id="reviewIsEnabled" @bind="form.IsEnabled" />
-                                    <label class="form-check-label ms-2" for="reviewIsEnabled">
+                                <div class="icb-form-check">
+                                    <input class="icb-form-switch sync-form-switch" type="checkbox" id="reviewIsEnabled" @bind="form.IsEnabled" />
+                                    <label class="icb-form-check-label ms-2" for="reviewIsEnabled">
                                         <span class="badge @(form.IsEnabled ? "bg-success" : "bg-secondary")">
                                             @(form.IsEnabled ? "Enabled" : "Disabled")
                                         </span>
@@ -2032,22 +2035,22 @@
                 <div class="modal-footer">
                     @if (isWizard)
                     {
-                        <button class="btn btn-secondary me-auto" @onclick="CloseFormModal">Cancel</button>
+                        <button class="ic-btn ic-btn-ghost me-auto" @onclick="CloseFormModal">Cancel</button>
                         @if (wizardStep > 1)
                         {
-                            <button class="btn btn-outline-secondary" @onclick="PrevWizardStep" disabled="@saving">
+                            <button class="ic-btn ic-btn-ghost" @onclick="PrevWizardStep" disabled="@saving">
                                 <i class="fas fa-arrow-left me-1"></i>Back
                             </button>
                         }
                         @if (wizardStep < WizardStepCount)
                         {
-                            <button class="btn btn-primary" @onclick="NextWizardStep">
+                            <button class="ic-btn ic-btn-primary" @onclick="NextWizardStep">
                                 Next<i class="fas fa-arrow-right ms-1"></i>
                             </button>
                         }
                         else
                         {
-                            <button class="btn btn-success" @onclick="SaveForm" disabled="@saving">
+                            <button class="ic-btn icb-btn-success" @onclick="SaveForm" disabled="@saving">
                                 @if (saving)
                                 {
                                     <span class="spinner-border spinner-border-sm me-1"></span>
@@ -2062,12 +2065,12 @@
                     }
                     else
                     {
-                        <button class="btn btn-outline-secondary btn-lg" @onclick="CloseFormModal">
+                        <button class="ic-btn ic-btn-ghost ic-btn-lg" @onclick="CloseFormModal">
                             <i class="fas fa-times me-2"></i>Cancel
                         </button>
                         @* IC-parity GREEN Save: .btn-center-gradient reads the center-theme-system
                            tokens (emerald→teal), exactly as IdentityCenter's SyncProjectWizard. *@
-                        <button class="btn btn-primary btn-lg btn-center-gradient" @onclick="SaveForm" disabled="@saving">
+                        <button class="ic-btn ic-btn-primary ic-btn-lg btn-center-gradient" @onclick="SaveForm" disabled="@saving">
                             @if (saving)
                             {
                                 <span class="spinner-border spinner-border-sm me-2"></span>
@@ -2109,19 +2112,19 @@
                         }
                     </h5>
                     <div class="ms-auto me-2 d-flex gap-2">
-                        <button type="button" class="btn btn-sm btn-outline-success"
+                        <button type="button" class="ic-btn ic-btn-sm icb-btn-success"
                                 @onclick="() => AutoFillMappingModal(mmStepId)"
                                 disabled="@(form.SourceTenantId == Guid.Empty)"
                                 title="Fill from the attribute catalog for this step's object class">
                             <i class="fas fa-magic me-1"></i><span>Auto-Fill Mappings</span>
                         </button>
-                        <button type="button" class="btn btn-sm btn-outline-primary"
+                        <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                 @onclick="() => RefreshMappingModal(mmStepId)"
                                 disabled="@(form.SourceTenantId == Guid.Empty)"
                                 title="Re-resolve the attribute catalog for this step's object class">
                             <i class="fas fa-sync-alt me-1"></i><span>Refresh Attributes</span>
                         </button>
-                        <button type="button" class="btn btn-sm btn-outline-danger"
+                        <button type="button" class="ic-btn ic-btn-sm ic-btn-danger"
                                 @onclick="() => ClearMappingModal(mmStepId)"
                                 title="Remove all attribute mappings for this step">
                             <i class="fas fa-trash-alt me-1"></i><span>Clear All</span>
@@ -2158,14 +2161,14 @@
                                     </text>
                                 }
                             </small></p>
-                            <div class="form-check form-switch">
+                            <div class="icb-form-check">
                                 @* @bind:get/@bind:set, never checked="@x" + @onchange: with the latter Blazor can
                                    diff the checkbox as unchanged and leave the pixel showing the OLD state after a
                                    re-entrant or refused update. This is a recorded defect family in this codebase. *@
-                                <input class="form-check-input" type="checkbox" id="@($"mmInherit_{mmStepId}")"
+                                <input class="icb-form-switch" type="checkbox" id="@($"mmInherit_{mmStepId}")"
                                        @bind:get="mmInherit"
                                        @bind:set="@(v => SetStepMappingsInherit(mmStepId, v))" />
-                                <label class="form-check-label small" for="@($"mmInherit_{mmStepId}")">Inherit from project Mappings tab</label>
+                                <label class="icb-form-check-label small" for="@($"mmInherit_{mmStepId}")">Inherit from project Mappings tab</label>
                             </div>
                         </div>
                     </div>
@@ -2174,7 +2177,7 @@
                         <span class="small text-muted">
                             @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — set Value mode per row: Direct maps from the source (blank Transform = passthrough), Constant always writes a fixed value, Default fills the fixed value only when the source is empty.
                         </span>
-                        <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => AddStepMappingRow(mmStepId)">
+                        <button type="button" class="ic-btn icb-btn-accent ic-btn-sm" @onclick="() => AddStepMappingRow(mmStepId)">
                             <i class="fas fa-plus me-1"></i>Add Mapping
                         </button>
                     </div>
@@ -2208,7 +2211,7 @@
                                         var rowMode = MappingMode(rule);
                                         <tr>
                                             <td>
-                                                <select class="form-select form-select-sm" value="@rowMode"
+                                                <select class="icb-form-select icb-form-select-sm" value="@rowMode"
                                                         @onchange="@(e => SetMappingMode(rule, e.Value?.ToString() ?? "direct"))">
                                                     <option value="direct">Direct</option>
                                                     <option value="const">Constant</option>
@@ -2218,34 +2221,34 @@
                                             <td>
                                                 @if (rowMode == "const")
                                                 {
-                                                    <input class="form-control form-control-sm" placeholder="(ignored)" disabled />
+                                                    <input class="icb-form-input icb-form-input-sm" placeholder="(ignored)" disabled />
                                                 }
                                                 else
                                                 {
-                                                    <input class="form-control form-control-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" />
+                                                    <input class="icb-form-input icb-form-input-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" />
                                                 }
                                             </td>
                                             <td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>
-                                            <td><input class="form-control form-control-sm" @bind="rule.SinkAttribute" placeholder="userName" /></td>
+                                            <td><input class="icb-form-input icb-form-input-sm" @bind="rule.SinkAttribute" placeholder="userName" /></td>
                                             <td>
                                                 @if (rowMode == "direct")
                                                 {
-                                                    <input class="form-control form-control-sm" placeholder="trim | lower"
+                                                    <input class="icb-form-input icb-form-input-sm" placeholder="trim | lower"
                                                            @bind:get="DirectTransform(rule)" @bind:set="@(v => SetDirectTransform(rule, v))" />
                                                 }
                                                 else
                                                 {
-                                                    <input class="form-control form-control-sm" placeholder="fixed value"
+                                                    <input class="icb-form-input icb-form-input-sm" placeholder="fixed value"
                                                            @bind:get="MappingLiteral(rule)" @bind:set="@(v => SetMappingLiteral(rule, v))" />
                                                 }
                                             </td>
                                             <td class="text-center">
-                                                <div class="form-check form-switch d-inline-block">
-                                                    <input class="form-check-input" type="checkbox" @bind="rule.IsRequired" />
+                                                <div class="icb-form-check d-inline-block">
+                                                    <input class="icb-form-switch" type="checkbox" @bind="rule.IsRequired" />
                                                 </div>
                                             </td>
                                             <td class="text-end">
-                                                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveStepMappingRow(mmStepId, idx)" title="Remove">
+                                                <button type="button" class="ic-btn ic-btn-sm ic-btn-danger" @onclick="() => RemoveStepMappingRow(mmStepId, idx)" title="Remove">
                                                     <i class="fas fa-trash"></i>
                                                 </button>
                                             </td>
@@ -2262,7 +2265,7 @@
                     }
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseMappingModal">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseMappingModal">
                         <i class="fas fa-times me-1"></i>Done
                     </button>
                 </div>
@@ -2304,12 +2307,12 @@
                 <div class="modal-body">
                     <div class="row g-3">
                         <div class="col-md-7">
-                            <label class="form-label fw-semibold">Name</label>
-                            <input class="form-control form-control-sm" @bind="smStep.Name" @bind:after="MarkWorkflowsDirty" />
+                            <label class="icb-form-label fw-semibold">Name</label>
+                            <input class="icb-form-input icb-form-input-sm" @bind="smStep.Name" @bind:after="MarkWorkflowsDirty" />
                         </div>
                         <div class="col-md-5">
-                            <label class="form-label fw-semibold">Type</label>
-                            <select class="form-select form-select-sm" @bind="smStep.StepType" @bind:after="MarkWorkflowsDirty">
+                            <label class="icb-form-label fw-semibold">Type</label>
+                            <select class="icb-form-select icb-form-select-sm" @bind="smStep.StepType" @bind:after="MarkWorkflowsDirty">
                                 <option value="Mapping">Mapping (source → target)</option>
                                 <option value="PersonMatch">PersonMatch</option>
                                 <option value="PersonCreate">PersonCreate</option>
@@ -2327,20 +2330,20 @@
                         @if (smIsMapping)
                         {
                             <div class="col-md-7">
-                                <label class="form-label fw-semibold">Object Class</label>
-                                <select class="form-select form-select-sm" @bind="smStep.ObjectClass" @bind:after="MarkWorkflowsDirty">
+                                <label class="icb-form-label fw-semibold">Object Class</label>
+                                <select class="icb-form-select icb-form-select-sm" @bind="smStep.ObjectClass" @bind:after="MarkWorkflowsDirty">
                                     @foreach (var opt in StepObjectClassOptionsFor(smStep.ObjectClass))
                                     {
                                         <option value="@opt.Value">@opt.Label</option>
                                     }
                                 </select>
-                                <small class="form-text text-muted">Each step in a project can target a different class.</small>
+                                <small class="icb-form-help text-muted">Each step in a project can target a different class.</small>
                             </div>
                             <div class="col-md-5 d-flex flex-column">
                                 @* Spacer label matches the Object Class label height so the button
                                    top-aligns with the select input (not the column bottom). *@
-                                <label class="form-label fw-semibold" aria-hidden="true">&nbsp;</label>
-                                <button type="button" class="btn btn-outline-primary btn-sm w-100"
+                                <label class="icb-form-label fw-semibold" aria-hidden="true">&nbsp;</label>
+                                <button type="button" class="ic-btn icb-btn-accent ic-btn-sm w-100"
                                         @onclick="@(() => AutoMapStepForClass(smStepId))"
                                         disabled="@(form.SourceTenantId == Guid.Empty)"
                                         title="Populate this step's mappings from the template for its object class">
@@ -2354,7 +2357,7 @@
                                        becomes its implicitly-labeled control, so clicking the word "Tags"
                                        would fire a refetch. *@
                                     <div class="step-tag-head">
-                                        <label class="form-label fw-semibold mb-0">
+                                        <label class="icb-form-label fw-semibold mb-0">
                                             Tags
                                             <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." />
                                         </label>
@@ -2388,7 +2391,7 @@
                                         @if (smPickerOpen)
                                         {
                                             <div class="step-tag-popover">
-                                                <input class="form-control form-control-sm" placeholder="Filter tags…"
+                                                <input class="icb-form-input icb-form-input-sm" placeholder="Filter tags…"
                                                        value="@_tagFilter"
                                                        @oninput="@(e => _tagFilter = e.Value?.ToString() ?? string.Empty)"
                                                        @onkeydown="OnTagFilterKeyDown" />
@@ -2419,7 +2422,7 @@
                                             </div>
                                         }
                                     </div>
-                                    <small class="form-text text-muted d-block">Assign existing tags only. Conduit can't create tags in IdentityCenter.</small>
+                                    <small class="icb-form-help text-muted d-block">Assign existing tags only. Conduit can't create tags in IdentityCenter.</small>
 
                                     @* Loading must be the FIRST branch: it is the state of not having asked
                                        yet, so nothing below it — least of all "IC has no tags" — may claim
@@ -2442,7 +2445,7 @@
                                                 <strong>Can't reach IdentityCenter at <code>@IcTagHost</code> — tag list unavailable.</strong>
                                                 <div>Any tags already saved on this step are kept and will still apply when the project runs. You just can't change them until Conduit can reach IC.</div>
                                                 <div class="step-tag-state-actions">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Retry</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2455,8 +2458,8 @@
                                                 <strong>IdentityCenter rejected Conduit's API key (401). Tag list unavailable.</strong>
                                                 <div>Update the key on this project's sink connection, then Retry.</div>
                                                 <div class="step-tag-state-actions">
-                                                    <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                    <a class="ic-btn ic-btn-sm ic-btn-ghost" href="/connected-systems" target="_blank">Open connection settings</a>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Retry</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2469,7 +2472,7 @@
                                                 <strong>IdentityCenter accepted the key but refused the request (403). Tag list unavailable.</strong>
                                                 <div>Most often the IC tenant row isn't Active — a tenant must have Status = 'Active' or its API keys return 403. Check the tenant in IdentityCenter, then Retry.</div>
                                                 <div class="step-tag-state-actions">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Retry</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2482,8 +2485,8 @@
                                                 <strong>This project's IdentityCenter sink has no stored credential. Tag list unavailable.</strong>
                                                 <div>Save a base URL + API key on the sink connection, then Retry.</div>
                                                 <div class="step-tag-state-actions">
-                                                    <a class="btn btn-sm btn-outline-secondary" href="/connected-systems" target="_blank">Open connection settings</a>
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                    <a class="ic-btn ic-btn-sm ic-btn-ghost" href="/connected-systems" target="_blank">Open connection settings</a>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Retry</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2496,7 +2499,7 @@
                                                 <strong>This IdentityCenter has no tag endpoint (404). Tag list unavailable.</strong>
                                                 <div>Tags already saved on this step are kept and still apply when the project runs.</div>
                                                 <div class="step-tag-state-actions">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Retry</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2509,7 +2512,7 @@
                                                 <strong>Couldn't read the tag list from IdentityCenter. Tag list unavailable.</strong>
                                                 <div>@_icTagDetail</div>
                                                 <div class="step-tag-state-actions">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Retry</button>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Retry</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2522,7 +2525,7 @@
                                                 <strong>IdentityCenter has no tags defined yet.</strong>
                                                 <div>Create the tags you want to assign in IdentityCenter (Objects → Tags), then Refresh. Conduit can only assign tags that already exist.</div>
                                                 <div class="step-tag-state-actions">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="LoadIcTagsAsync">Refresh</button>
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost" @onclick="LoadIcTagsAsync">Refresh</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -2542,7 +2545,7 @@
                                             <div class="step-tag-state-body">
                                                 <strong>@smStaleTags.Count @staleNoun on this step @staleVerb in IdentityCenter and will be ignored at run time.</strong>
                                                 <div class="step-tag-state-actions">
-                                                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                    <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost"
                                                             @onclick="@(() => RemoveStaleTags(smStep))">@staleBtn</button>
                                                     <span class="step-tag-stale-hint">· @staleHint</span>
                                                 </div>
@@ -2553,16 +2556,16 @@
                             }
                         }
                         <div class="col-md-12">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="@($"stepEnabled_{smStepId}")" @bind="smStep.Enabled" @bind:after="MarkWorkflowsDirty" />
-                                <label class="form-check-label" for="@($"stepEnabled_{smStepId}")">Enabled</label>
+                            <div class="icb-form-check">
+                                <input class="icb-form-switch" type="checkbox" id="@($"stepEnabled_{smStepId}")" @bind="smStep.Enabled" @bind:after="MarkWorkflowsDirty" />
+                                <label class="icb-form-check-label" for="@($"stepEnabled_{smStepId}")">Enabled</label>
                             </div>
                         </div>
                     </div>
                     <p class="text-muted small mt-2 mb-0">@StepTypeHint(smStep.StepType)</p>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CloseStepSettingsModal">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseStepSettingsModal">
                         <i class="fas fa-times me-1"></i>Done
                     </button>
                 </div>
@@ -2604,15 +2607,31 @@
                         <i class="fas fa-sitemap fa-lg me-3 mt-1"></i>
                         <div class="flex-grow-1">
                             <strong>@(scopeDraftInherit ? "Inheriting the project Scope" : "This step owns its Scope")</strong>
+                            @* State-aware, like the heading above it. The old sentence was written for the
+                               inheriting case and rendered in both, so a step that already owned its scope was
+                               still being told how to acquire one. *@
                             <p class="mb-2 mt-1"><small>
-                                When inheriting, this step reads whatever the project Scope tab reads. Turn the toggle off to
-                                bound this step to its own containers and filter.
+                                @if (scopeDraftInherit)
+                                {
+                                    <text>
+                                        This step reads whatever the project <strong>Scope</strong> tab reads. Turn the
+                                        toggle off to bound it to its own containers and filter.
+                                    </text>
+                                }
+                                else
+                                {
+                                    <text>
+                                        This step is bounded by its own containers and filter, so the project
+                                        <strong>Scope</strong> tab does not apply here. Turn the toggle back on to follow
+                                        the project scope again; the containers below are kept either way.
+                                    </text>
+                                }
                             </small></p>
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="@($"scopeInherit_{scStepId}")"
-                                       checked="@scopeDraftInherit"
-                                       @onchange="OnScopeDraftInheritChanged" />
-                                <label class="form-check-label small" for="@($"scopeInherit_{scStepId}")">Inherit from project Scope tab</label>
+                            <div class="icb-form-check">
+                                <input class="icb-form-switch" type="checkbox" id="@($"scopeInherit_{scStepId}")"
+                                       @bind:get="scopeDraftInherit"
+                                       @bind:set="SetScopeDraftInherit" />
+                                <label class="icb-form-check-label small" for="@($"scopeInherit_{scStepId}")">Inherit from project Scope tab</label>
                             </div>
                         </div>
                     </div>
@@ -2638,11 +2657,11 @@
 
                     <div class="step-scope-section @(scopeDraftInherit ? "step-scope-inert" : "")">
                         <div class="step-scope-section-head">
-                            <label class="form-label fw-semibold mb-0">
+                            <label class="icb-form-label fw-semibold mb-0">
                                 Included paths
                                 <CcHelpHint Text="Each included container becomes a subtree LDAP base for this step's read. With Inherit off and no included path, this step reads the ENTIRE directory from the source's root (RootDSE defaultNamingContext) — the project Scope tab is not consulted." />
                             </label>
-                            <button type="button" class="btn btn-sm btn-outline-primary"
+                            <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                     @onclick="OpenScopeDraftBrowser"
                                     disabled="@(scopeDraftInherit || form.SourceTenantId == Guid.Empty)"
                                     title="Pick Included / Blocked containers from the live directory">
@@ -2697,12 +2716,12 @@
                             </ul>
                         }
                         <div class="input-group input-group-sm">
-                            <input class="form-control" placeholder="type a DN…"
+                            <input class="icb-form-input" placeholder="type a DN…"
                                    disabled="@scopeDraftInherit"
                                    value="@scopeDraftIncludedInput"
                                    @oninput="@(e => scopeDraftIncludedInput = e.Value?.ToString() ?? string.Empty)"
                                    @onkeydown="OnScopeDraftIncludedKeyDown" />
-                            <button type="button" class="btn btn-outline-secondary"
+                            <button type="button" class="ic-btn ic-btn-ghost"
                                     disabled="@scopeDraftInherit" @onclick="AddScopeDraftIncluded">
                                 <i class="fas fa-plus me-1"></i>Add
                             </button>
@@ -2715,11 +2734,11 @@
 
                     <div class="step-scope-section @(scopeDraftInherit ? "step-scope-inert" : "")">
                         <div class="step-scope-section-head">
-                            <label class="form-label fw-semibold mb-0">
+                            <label class="icb-form-label fw-semibold mb-0">
                                 Blocked paths
                                 <CcHelpHint Text="Any object at or under a blocked container is dropped from the read even when it sits under an included path." />
                             </label>
-                            <button type="button" class="btn btn-sm btn-outline-primary"
+                            <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                     @onclick="OpenScopeDraftBrowser"
                                     disabled="@(scopeDraftInherit || form.SourceTenantId == Guid.Empty)"
                                     title="Pick Included / Blocked containers from the live directory">
@@ -2747,12 +2766,12 @@
                             </ul>
                         }
                         <div class="input-group input-group-sm">
-                            <input class="form-control" placeholder="type a DN…"
+                            <input class="icb-form-input" placeholder="type a DN…"
                                    disabled="@scopeDraftInherit"
                                    value="@scopeDraftBlockedInput"
                                    @oninput="@(e => scopeDraftBlockedInput = e.Value?.ToString() ?? string.Empty)"
                                    @onkeydown="OnScopeDraftBlockedKeyDown" />
-                            <button type="button" class="btn btn-outline-secondary"
+                            <button type="button" class="ic-btn ic-btn-ghost"
                                     disabled="@scopeDraftInherit" @onclick="AddScopeDraftBlocked">
                                 <i class="fas fa-plus me-1"></i>Add
                             </button>
@@ -2765,27 +2784,27 @@
 
                     <div class="row g-3 @(scopeDraftInherit ? "step-scope-inert" : "")">
                         <div class="col-md-12">
-                            <label class="form-label fw-semibold">LDAP filter</label>
-                            <input class="form-control form-control-sm" disabled="@scopeDraftInherit"
+                            <label class="icb-form-label fw-semibold">LDAP filter</label>
+                            <input class="icb-form-input icb-form-input-sm" disabled="@scopeDraftInherit"
                                    @bind="scopeDraftLdapFilter" placeholder="(&amp;(objectClass=user)…) — blank for the object-class default" />
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label fw-semibold">Page size</label>
-                            <input class="form-control form-control-sm" type="number" min="1" max="10000"
+                            <label class="icb-form-label fw-semibold">Page size</label>
+                            <input class="icb-form-input icb-form-input-sm" type="number" min="1" max="10000"
                                    disabled="@scopeDraftInherit" @bind="scopeDraftPageSize" />
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label fw-semibold">Max objects</label>
-                            <input class="form-control form-control-sm" type="number" min="0"
+                            <label class="icb-form-label fw-semibold">Max objects</label>
+                            <input class="icb-form-input icb-form-input-sm" type="number" min="0"
                                    disabled="@scopeDraftInherit" @bind="scopeDraftMaxObjects" />
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CancelStepScopeModal">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CancelStepScopeModal">
                         <i class="fas fa-times me-1"></i>Cancel
                     </button>
-                    <button type="button" class="btn btn-primary" @onclick="ApplyStepScopeModal">
+                    <button type="button" class="ic-btn ic-btn-primary" @onclick="ApplyStepScopeModal">
                         <i class="fas fa-check me-1"></i>Apply
                     </button>
                 </div>
@@ -2840,10 +2859,10 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" @onclick="CancelScopeDiscard">
+                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CancelScopeDiscard">
                         <i class="fas fa-times me-1"></i>Cancel
                     </button>
-                    <button type="button" class="btn btn-danger" @onclick="ConfirmScopeDiscardAndSave">
+                    <button type="button" class="ic-btn ic-btn-danger" @onclick="ConfirmScopeDiscardAndSave">
                         <i class="fas fa-trash me-1"></i>Discard scopes and save
                     </button>
                 </div>
@@ -3835,9 +3854,12 @@
         MarkWorkflowsDirty();
     }
 
-    private void OnScopeDraftInheritChanged(ChangeEventArgs e)
+    /// <summary>Sole writer for the scope draft inherit flag. Takes the value directly because the
+    /// checkbox binds two-way; parsing a ChangeEventArgs back into a bool was an extra place for the
+    /// switch and the draft to disagree.</summary>
+    private void SetScopeDraftInherit(bool inherit)
     {
-        scopeDraftInherit = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
+        scopeDraftInherit = inherit;
         scopeDraftIncludedError = null;
         scopeDraftBlockedError = null;
     }
