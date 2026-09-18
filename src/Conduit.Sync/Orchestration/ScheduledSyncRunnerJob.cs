@@ -56,22 +56,42 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
 
     public async Task ExecuteAsync(CancellationToken cancellationToken)
     {
-        var due = await _projectRepo.GetEnabledScheduledAsync();
+        var due = await _projectRepo.GetEnabledScheduledWithConnectionStateAsync();
         var now = DateTime.UtcNow;
 
-        foreach (var project in due)
+        foreach (var candidate in due)
         {
+            var project = candidate.Project;
             if (cancellationToken.IsCancellationRequested) return;
             if (project.IsRunning) continue;
             if (!IsDue(project.CronSchedule, project.LastRunAt, now)) continue;
 
-            // Admit a unique run owner, rechecking enabled state atomically.
+            // Deactivating a Connected System is the operator saying "this system is off". The
+            // scheduler used to gate only on IsEnabled and a cron expression, so it kept firing into
+            // connections that the UI showed as switched off, writing to a target the admin believed
+            // was unreachable. Skipping here is what stops the traffic; the claim below re-checks it
+            // atomically so a connection deactivated in the meantime cannot get one more run.
+            //
+            // Logged at Warning, once per due occurrence, and NAMED: a silent gap in the run history
+            // is what made this expensive to find. An operator who switches a connection off and
+            // later wonders why a schedule stopped has something to search for.
+            if (!candidate.BothActive)
+            {
+                _logger.LogWarning(
+                    "Scheduled sync project {ProjectName} ({ProjectId}) skipped: its {InactiveSide} connection is deactivated or missing. "
+                    + "Reactivate the Connected System, or clear the schedule, to stop this recurring.",
+                    project.Name, project.Id, candidate.InactiveSideLabel);
+                continue;
+            }
+
+            // Admit a unique run owner, rechecking enabled state AND both connections atomically.
             // Due-occurrence arbitration remains separate from this running guard.
             var ownerRunId = Guid.NewGuid();
             bool claimed;
             try
             {
-                claimed = await _projectRepo.SetRunningAsync(project.Id, ownerRunId, requireEnabled: true);
+                claimed = await _projectRepo.SetRunningAsync(
+                    project.Id, ownerRunId, requireEnabled: true, requireActiveConnections: true);
             }
             catch (Exception ex)
             {
@@ -80,8 +100,12 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
             }
             if (!claimed)
             {
+                // The claim refuses for three reasons now, and saying only "already running" would
+                // send an operator hunting a phantom run when the real cause is a connection that
+                // was switched off between the read above and this statement.
                 _logger.LogInformation(
-                    "Scheduled sync project {ProjectName} ({ProjectId}) skipped: a run is already in progress.",
+                    "Scheduled sync project {ProjectName} ({ProjectId}) skipped: a run is already in progress, "
+                    + "or the project was disabled or one of its connections deactivated since this tick began.",
                     project.Name, project.Id);
                 continue;
             }

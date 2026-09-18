@@ -390,3 +390,30 @@ public static class WorkflowStepTypes
         LicenseSync, SignInLogSync, UsageReportSync, AppRoleSync, GroupMembership
     };
 }
+
+/// <summary>
+/// A scheduled project together with the live state of the two Connected Systems it runs between.
+///
+/// <para>The scheduler needs both in one read. Selecting the projects and then asking after each
+/// connection would be a query per project, and filtering the inactive ones out in SQL alone would
+/// leave the scheduler unable to say WHY a schedule stopped firing — an operator who deactivates a
+/// connection and then finds a silent gap in the run history has nothing to search the log for.</para>
+/// </summary>
+/// <param name="Project">The scheduled project.</param>
+/// <param name="SourceActive">False when the source connection is deactivated, or no longer exists.</param>
+/// <param name="SinkActive">False when the sink connection is deactivated, or no longer exists.</param>
+public sealed record ScheduledProjectConnectionState(
+    SyncProject Project,
+    bool SourceActive,
+    bool SinkActive)
+{
+    /// <summary>True when neither side is switched off, so the project may be admitted for a run.</summary>
+    public bool BothActive => SourceActive && SinkActive;
+
+    /// <summary>Names the side or sides an operator has switched off, for the skip log.</summary>
+    public string InactiveSideLabel =>
+        !SourceActive && !SinkActive ? "source and sink"
+        : !SourceActive ? "source"
+        : !SinkActive ? "sink"
+        : "";
+}

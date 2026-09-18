@@ -93,8 +93,11 @@ public class SyncRunOwnershipContractTests
     [Fact]
     public void Scheduled_and_discovery_admission_recheck_enabled_without_changing_manual_policy()
     {
-        Assert.Contains("SetRunningAsync(project.Id, ownerRunId, requireEnabled: true)",
-            Read("src/Conduit.Sync/Orchestration/ScheduledSyncRunnerJob.cs"));
+        // The scheduler additionally re-checks both Connected Systems, so a connection deactivated
+        // between its candidate read and this claim cannot get one more run into a system the
+        // operator has switched off. The enabled re-check it always had is still here.
+        var scheduler = Read("src/Conduit.Sync/Orchestration/ScheduledSyncRunnerJob.cs");
+        Assert.Contains("project.Id, ownerRunId, requireEnabled: true, requireActiveConnections: true", scheduler);
         Assert.Contains("SetRunningAsync(project.Id, ownerRunId, requireEnabled: true)",
             Read("src/Conduit.Web/Services/SqlDiscoveryRunner.cs"));
         foreach (var path in new[] { "src/Conduit.Web/Controllers/ApiV1SyncRunsController.cs",

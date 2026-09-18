@@ -25,6 +25,42 @@ public class SyncProjectRepository : BaseRepository
     public Task<SyncProject?> GetByIdAsync(Guid id) =>
         QuerySingleOrDefaultAsync<SyncProject>("SELECT * FROM SyncProjects WHERE Id = @Id", new { Id = id });
 
+    /// <summary>
+    /// The scheduler's candidate read: every enabled, cron-bearing project together with whether
+    /// each of its two Connected Systems is still switched on.
+    ///
+    /// <para>LEFT JOIN, not INNER: a project whose source or sink row has been DELETED outright must
+    /// come back with that side reported inactive, rather than vanishing from the result set. A
+    /// missing connection is exactly as unrunnable as a deactivated one, and the operator needs it
+    /// named in the log either way.</para>
+    /// </summary>
+    public async Task<List<ScheduledProjectConnectionState>> GetEnabledScheduledWithConnectionStateAsync()
+    {
+        // A flat row that IS a SyncProject plus the two joined flags, so Dapper maps the whole shape
+        // in one pass. Multi-map would need a splitOn seam and a new BaseRepository overload for a
+        // single caller; this needs neither, and the projection stays explicit below.
+        var rows = await QueryAsync<ScheduledRow>(@"
+            SELECT p.*,
+                   CAST(CASE WHEN src.IsActive = 1 THEN 1 ELSE 0 END AS bit) AS SourceActive,
+                   CAST(CASE WHEN snk.IsActive = 1 THEN 1 ELSE 0 END AS bit) AS SinkActive
+              FROM SyncProjects p
+              LEFT JOIN Tenants src ON src.Id = p.SourceTenantId
+              LEFT JOIN Tenants snk ON snk.Id = p.SinkTenantId
+             WHERE p.IsEnabled = 1
+               AND p.CronSchedule IS NOT NULL
+               AND LEN(p.CronSchedule) > 0");
+        return rows
+            .Select(r => new ScheduledProjectConnectionState(r, r.SourceActive, r.SinkActive))
+            .ToList();
+    }
+
+    /// <summary>Query shape only: SyncProject plus the two joined connection flags.</summary>
+    private sealed class ScheduledRow : SyncProject
+    {
+        public bool SourceActive { get; set; }
+        public bool SinkActive { get; set; }
+    }
+
     public async Task<List<SyncProject>> GetEnabledScheduledAsync()
     {
         var rows = await QueryAsync<SyncProject>(@"
@@ -358,8 +394,27 @@ public class SyncProjectRepository : BaseRepository
             DELETE FROM SyncProjects      WHERE Id = @Id;",
             new { Id = id });
 
-    /// <summary>Atomically admits one uniquely identified run. Manual callers may run disabled schedules.</summary>
-    public async Task<bool> SetRunningAsync(Guid projectId, Guid runId, bool requireEnabled = false)
+    /// <summary>
+    /// Atomically admits one uniquely identified run. Manual callers may run disabled schedules.
+    ///
+    /// <para><paramref name="requireActiveConnections"/> re-checks, INSIDE the same statement, that
+    /// both Connected Systems are still switched on. Filtering them out of the candidate read is not
+    /// sufficient on its own: an operator who deactivates a connection in the seconds between that
+    /// read and this claim would still get one more run into a system they had just switched off.
+    /// The existing <paramref name="requireEnabled"/> guard closes the identical race for the
+    /// project's own enabled flag, and this is the same guarantee for its two endpoints.</para>
+    ///
+    /// <para>It is a separate flag rather than being folded into <paramref name="requireEnabled"/>
+    /// because the two mean different things. Disabling a project says "do not run this on a
+    /// cadence", which manual callers are deliberately allowed to override; deactivating a
+    /// connection says "this system is off", which is about the endpoint and not the timing. It
+    /// defaults to false so no existing caller changes behaviour by accident — each one opts in.</para>
+    ///
+    /// <para>EXISTS also requires the connection ROW to be present, so a project pointing at a
+    /// deleted Connected System refuses rather than being admitted against nothing.</para>
+    /// </summary>
+    public async Task<bool> SetRunningAsync(Guid projectId, Guid runId, bool requireEnabled = false,
+                                            bool requireActiveConnections = false)
     {
         SyncRunOwnership.RequireOwner(runId);
         var rows = await ExecuteScalarAsync<int>(@"
@@ -371,9 +426,15 @@ public class SyncProjectRepository : BaseRepository
                    TotalRuns = TotalRuns + 1,
                    LastModified = SYSUTCDATETIME()
              WHERE Id = @ProjectId AND IsRunning = 0
-               AND (@RequireEnabled = 0 OR IsEnabled = 1);
+               AND (@RequireEnabled = 0 OR IsEnabled = 1)
+               AND (@RequireActiveConnections = 0 OR (
+                        EXISTS (SELECT 1 FROM Tenants src
+                                 WHERE src.Id = SyncProjects.SourceTenantId AND src.IsActive = 1)
+                    AND EXISTS (SELECT 1 FROM Tenants snk
+                                 WHERE snk.Id = SyncProjects.SinkTenantId   AND snk.IsActive = 1)));
             SELECT @@ROWCOUNT;",
-            new { ProjectId = projectId, RunId = runId, RequireEnabled = requireEnabled });
+            new { ProjectId = projectId, RunId = runId, RequireEnabled = requireEnabled,
+                  RequireActiveConnections = requireActiveConnections });
         return rows > 0;
     }
 
