@@ -10,9 +10,9 @@ namespace Conduit.Web.Tests;
 /// have been migrated onto the shared vocabulary must not quietly acquire raw Bootstrap form controls
 /// again, because every one that does re-opens the drift the consolidation closed.
 ///
-/// <para>This asserts only what has ALREADY been migrated. ConnectedSystems.razor is deliberately
-/// absent: it is the last unmigrated page and is being converted separately. Add it here when it
-/// lands, and the ratchet tightens by one page.</para>
+/// <para>This asserts only what has ALREADY been migrated. ConnectedSystems.razor, the last page to
+/// convert, landed in wave 4b and is listed below, so the ratchet now covers every migrated Conduit
+/// page. Add the next one here when it lands.</para>
 /// </summary>
 public class SharedComponentRatchetTests
 {
@@ -33,6 +33,7 @@ public class SharedComponentRatchetTests
         Path.Combine("Pages", "Sync", "SyncProjects.razor"),
         Path.Combine("Pages", "Sync", "ScheduleManager.razor"),
         Path.Combine("Pages", "Sync", "SyncHistory.razor"),
+        Path.Combine("Pages", "ConnectedSystems.razor"),
         Path.Combine("Pages", "Configuration.razor"),
         Path.Combine("Pages", "Setup.razor"),
         Path.Combine("Pages", "DatabaseSettings.razor"),

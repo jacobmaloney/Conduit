@@ -1,6 +1,7 @@
 @page "/schedule-manager"
 @page "/schedules"
 @attribute [Authorize]
+@using IdentityCenter.Brand.Components.Modals
 @using Conduit.Core.SyncModels
 @using Conduit.DataAccess.Repositories
 @using Conduit.Sync.Orchestration
@@ -192,7 +193,11 @@
     </div>
 }
 
-<CcConfirmationModal @ref="runConfirm" ConfirmLabel="Run Now" ConfirmButtonClass="ic-btn icb-btn-success" />
+@* The shared component, like every other Conduit page. Intent replaces the raw CSS string:
+   CcConfirmationModal hard-coded a Bootstrap "btn " prefix onto whatever class it was given,
+   so passing shared classes through it produced mixed markup. *@
+<BrandConfirmationModal @ref="runConfirm" ConfirmLabel="Run Now"
+                        Intent="BrandConfirmationModal.ConfirmIntent.Success" />
 
 @* ───────── Edit Schedule Modal (reuses shared CcScheduleEditor) ───────── *@
 @if (editProject is not null)
@@ -260,7 +265,7 @@
     // Run-now state. runningRowId marks the row whose run is being STARTED (the
     // brief window between Confirm and the navigate-away). toastClass + lastRunId
     // are retained for the enable/disable/save toasts on this page.
-    private CcConfirmationModal? runConfirm;
+    private BrandConfirmationModal? runConfirm;
     private Guid? runningRowId;
     private string toastClass = "text-bg-success";
     private Guid? lastRunId;
