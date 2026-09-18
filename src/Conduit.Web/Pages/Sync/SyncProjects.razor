@@ -2096,7 +2096,8 @@
 {
     var mmInherit = !stepMappingsInherit.TryGetValue(mmStepId, out var mmInh) || mmInh;
     var mmRows = GetStepMappings(mmStepId);
-    <div class="modal show d-block sync-form-modal" tabindex="-1">
+    var mmClassLabel = string.IsNullOrWhiteSpace(mmStep.ObjectClass) ? "user" : mmStep.ObjectClass;
+    <div class="modal show d-block sync-form-modal icb-modal-stacked" tabindex="-1">
         <div class="modal-dialog modal-xl modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
@@ -2134,14 +2135,36 @@
                         <i class="fas fa-key fa-lg me-3 mt-1"></i>
                         <div class="flex-grow-1">
                             <strong>@(mmInherit ? "Inheriting project-level Mappings" : "This step owns its Mappings")</strong>
+                            @* The heading already follows the state; so must the instruction. The old copy was written
+                               for the inheriting case only and was rendered in both, so a step that ALREADY owned its map
+                               was still being told to "turn the toggle off" to get one. Both branches are true of the
+                               handler: turning inherit back on keeps the rules below, it does not discard them. *@
                             <p class="mb-2 mt-1"><small>
-                                When inheriting, this step runs the project Mappings tab's rules. Turn the toggle off (or add a
-                                rule below) to give this step its own attribute map for the <strong>@(string.IsNullOrWhiteSpace(mmStep.ObjectClass) ? "user" : mmStep.ObjectClass)</strong> class.
+                                @if (mmInherit)
+                                {
+                                    <text>
+                                        This step is running the rules from the project <strong>Mappings</strong> tab. Turn the
+                                        toggle off, or add a rule below, to give it its own attribute map for the
+                                        <strong>@mmClassLabel</strong> class.
+                                    </text>
+                                }
+                                else
+                                {
+                                    <text>
+                                        This step has its own attribute map for the <strong>@mmClassLabel</strong> class, so the
+                                        project <strong>Mappings</strong> tab is ignored here. Turn the toggle back on to follow
+                                        the project rules again; the @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") below
+                                        @(mmRows.Count == 1 ? "is" : "are") kept either way.
+                                    </text>
+                                }
                             </small></p>
                             <div class="form-check form-switch">
+                                @* @bind:get/@bind:set, never checked="@x" + @onchange: with the latter Blazor can
+                                   diff the checkbox as unchanged and leave the pixel showing the OLD state after a
+                                   re-entrant or refused update. This is a recorded defect family in this codebase. *@
                                 <input class="form-check-input" type="checkbox" id="@($"mmInherit_{mmStepId}")"
-                                       checked="@mmInherit"
-                                       @onchange="@(e => OnStepMappingsInheritChanged(mmStepId, e))" />
+                                       @bind:get="mmInherit"
+                                       @bind:set="@(v => SetStepMappingsInherit(mmStepId, v))" />
                                 <label class="form-check-label small" for="@($"mmInherit_{mmStepId}")">Inherit from project Mappings tab</label>
                             </div>
                         </div>
@@ -2246,7 +2269,7 @@
             </div>
         </div>
     </div>
-    <div class="modal-backdrop fade show"></div>
+    <div class="modal-backdrop fade show icb-modal-stacked"></div>
 }
 
 @* ────────── Nested per-step Settings modal (gear) ──────────
@@ -2269,7 +2292,7 @@
                 ? "IdentityCenter has no tags defined yet — see the message above."
                 : "Tag list unavailable — see the message above.";
     var smAddTagClass = smPickerOpen ? "step-tag-add open" : "step-tag-add";
-    <div class="modal show d-block sync-form-modal" tabindex="-1">
+    <div class="modal show d-block sync-form-modal icb-modal-stacked" tabindex="-1">
         <div class="modal-dialog modal-lg modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
@@ -2546,7 +2569,7 @@
             </div>
         </div>
     </div>
-    <div class="modal-backdrop fade show"></div>
+    <div class="modal-backdrop fade show icb-modal-stacked"></div>
 }
 
 @* ────────── Nested per-step Scope modal (filter button) ──────────
@@ -2561,7 +2584,7 @@
     // is on, so the discard notice keys off the same value: copy and behaviour cannot
     // drift apart.
     var scOwnsScope = stepScopes.ContainsKey(scStepId) && stepScopes[scStepId] is not null;
-    <div class="modal show d-block sync-form-modal" tabindex="-1">
+    <div class="modal show d-block sync-form-modal icb-modal-stacked" tabindex="-1">
         <div class="modal-dialog modal-lg modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
@@ -2769,7 +2792,7 @@
             </div>
         </div>
     </div>
-    <div class="modal-backdrop fade show"></div>
+    <div class="modal-backdrop fade show icb-modal-stacked"></div>
 }
 
 @* ────────── Pending step-scope discard confirmation (Save changes) ──────────
@@ -2780,7 +2803,7 @@
    z-index 1055, so DOM order is what puts this on top. *@
 @if (showScopeDiscardConfirm)
 {
-    <div class="modal show d-block sync-form-modal" tabindex="-1">
+    <div class="modal show d-block sync-form-modal icb-modal-stacked-2" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header sync-modal-header-danger">
@@ -2827,7 +2850,7 @@
             </div>
         </div>
     </div>
-    <div class="modal-backdrop fade show"></div>
+    <div class="modal-backdrop fade show icb-modal-stacked-2"></div>
 }
 
 @* Shared live container browser for the Scope step's Base DN picker. Rendered
@@ -4553,9 +4576,11 @@
     /// operator typed; if the list is empty, seed one blank row to make the
     /// table visible.
     /// </summary>
-    private void OnStepMappingsInheritChanged(Guid stepId, ChangeEventArgs e)
+    /// <summary>Sole writer for the per-step inherit flag from the Mappings modal. Takes the value
+    /// directly because the checkbox binds with @bind:get/@bind:set; parsing a ChangeEventArgs back
+    /// into a bool was an extra place for the UI and the state to disagree.</summary>
+    private void SetStepMappingsInherit(Guid stepId, bool inherit)
     {
-        var inherit = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var parsed) && parsed;
         stepMappingsInherit[stepId] = inherit;
         if (!inherit && GetStepMappings(stepId).Count == 0)
         {
