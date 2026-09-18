@@ -10,7 +10,10 @@
     <title>Error</title>
     <link href="~/css/bootstrap/bootstrap.min.css" rel="stylesheet" />
     <link href="~/css/open-iconic/font/css/open-iconic-bootstrap.min.css" rel="stylesheet" />
-    <link href="_content/IdentityCenter.Brand/css/products/conduit.css" rel="stylesheet" asp-append-version="true" />
+    @* asp-append-version does nothing here: Conduit.Web registers no tag helpers (there is no
+       _ViewImports.cshtml), so the attribute was emitted literally on the links this replaced.
+       With one stylesheet a stale cache is now all-or-nothing, so bust it at deploy instead. *@
+    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/identitycenter.css" />
 </head>
 
 <body>

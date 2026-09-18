@@ -30,7 +30,10 @@
        (css/brand-tokens.css). Everything below consumes these variables; change
        the brand in that one file. Must load before Bootstrap so our tokens are
        defined when later rules reference them. *@
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/tokens.css" asp-append-version="true" />
+    @* asp-append-version does nothing here: Conduit.Web registers no tag helpers (there is no
+       _ViewImports.cshtml), so the attribute was emitted literally on the links this replaced.
+       With one stylesheet a stale cache is now all-or-nothing, so bust it at deploy instead. *@
+    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/identitycenter.css" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
     @* Font Awesome — the shared center-shared.css and the ported IdentityCenter
@@ -39,29 +42,11 @@
     <link rel="stylesheet" href="lib/fontawesome/css/all.min.css" />
     @* Shared design system stylesheet (cc-* components), then Conduit-owned
        overrides so consumer rules win where they overlap. *@
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/products/conduit-design.css" asp-append-version="true" />
     @* Shared Brand assets; preserve this cascade until the page migration. *@
-    <link href="_content/IdentityCenter.Brand/css/components/center.css" rel="stylesheet" asp-append-version="true" />
     @* Shared design-system definitions from the same Brand project. *@
-    <link href="_content/IdentityCenter.Brand/css/components/design-system.css" rel="stylesheet" asp-append-version="true" />
-    <link href="_content/IdentityCenter.Brand/css/products/conduit.css" rel="stylesheet" asp-append-version="true" />
     @* Conduit Redesign brand sheet — the .cx-* shell/pages look. Loaded LAST so
        its rules win over every earlier design system. *@
-    <link href="_content/IdentityCenter.Brand/css/products/conduit-brand.css" rel="stylesheet" asp-append-version="true" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/scoped/index.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/inline-utilities.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/product-identity.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/scope-tree.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/navigation.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/primitives.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/list.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/filter-tabs.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/table.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/badge.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/browse.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/settings.css" asp-append-version="true" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/modal-stack.css" asp-append-version="true" />
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
 </head>
 <body>

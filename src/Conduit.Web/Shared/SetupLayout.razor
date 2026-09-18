@@ -21,20 +21,12 @@
     @* Shared brand / design-system stack — SAME files, SAME order as Pages/_Layout.cshtml
        so first-run setup uses the identical IdentityCenter theme instead of half-loading
        only conduit.css (which assumes these already defined the base tokens). *@
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/tokens.css" />
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
     <link rel="stylesheet" href="lib/fontawesome/css/all.min.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/products/conduit-design.css" />
-    <link href="_content/IdentityCenter.Brand/css/components/center.css" rel="stylesheet" />
-    <link href="_content/IdentityCenter.Brand/css/components/design-system.css" rel="stylesheet" />
-    <link href="_content/IdentityCenter.Brand/css/products/conduit.css" rel="stylesheet" />
     <link href="Conduit.Web.styles.css" rel="stylesheet" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/scoped/index.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/primitives.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/badge.css" />
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/components/settings.css" />
     <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
+    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/identitycenter.css" />
 </head>
 <body>
     @* Wrap in .ic-content so the wizard inherits IC's warm-paper palette — critically
