@@ -311,10 +311,10 @@
 
         // Claim a unique run owner before dispatch; a concurrent winner is refused.
         var ownerRunId = Guid.NewGuid();
-        bool claimed;
+        SyncAdmissionOutcome admission;
         try
         {
-            claimed = await ProjectRepo.SetRunningAsync(projectId, ownerRunId);
+            admission = await ProjectRepo.TryAdmitRunAsync(projectId, ownerRunId, requireActiveConnections: true);
         }
         catch (Exception ex)
         {
@@ -325,12 +325,16 @@
             await Reload();
             return;
         }
-        if (!claimed)
+        if (admission != SyncAdmissionOutcome.Admitted)
         {
             runningRowId = null;
             busyId = null;
-            toastClass = "text-bg-warning";
-            toast = $"'{projectName}' already has a run in progress — view its live progress in Sync History.";
+            // A deactivated Connected System is a configuration problem the operator must fix, not
+            // the transient "come back later" that a warning implies.
+            toastClass = admission == SyncAdmissionOutcome.RefusedAlreadyRunning
+                ? "text-bg-warning"
+                : "text-bg-danger";
+            toast = SyncAdmissionRefusal.Describe(admission, projectName);
             await Reload();
             return;
         }

@@ -107,6 +107,114 @@ public class ScheduledConnectionStateTests
         Assert.Contains("\"sink\"", state);
     }
 
+    [Fact]
+    public void Every_path_that_can_start_a_run_refuses_a_deactivated_connection()
+    {
+        // The scheduler alone was not enough. A manual Run Now, a full-sync reset, the schedule
+        // page, the REST API, the IdentityCenter job runner, the SQL discovery runner and the
+        // orchestrator's own catch-all claim could each still start a run into a system the
+        // operator had switched off. Any path left ungated simply routes around the fix.
+        var paths = new[]
+        {
+            "src/Conduit.Sync/Orchestration/ScheduledSyncRunnerJob.cs",
+            "src/Conduit.Sync/Orchestration/SyncProjectOrchestrator.cs",
+            "src/Conduit.Web/Controllers/ApiV1SyncRunsController.cs",
+            "src/Conduit.Web/Pages/Sync/ScheduleManager.razor",
+            "src/Conduit.Web/Pages/Sync/SyncProjects.razor",
+            "src/Conduit.Web/Services/IcSyncProjectJobRunner.cs",
+            "src/Conduit.Web/Services/SqlDiscoveryRunner.cs",
+        };
+
+        foreach (var path in paths)
+        {
+            var source = Read(path);
+            Assert.True(source.Contains("requireActiveConnections: true", StringComparison.Ordinal),
+                $"{path} admits a run without requiring its Connected Systems to be active.");
+        }
+    }
+
+    [Fact]
+    public void No_caller_claims_a_run_without_gating_its_connections()
+    {
+        // Guards the gap rather than the fix: a NEW call site that uses the bare bool wrapper and
+        // forgets the flag would reopen this silently, and nothing else in the suite would notice.
+        foreach (var path in Directory.EnumerateFiles(RepoFile("src"), "*.cs", SearchOption.AllDirectories)
+                     .Concat(Directory.EnumerateFiles(RepoFile("src"), "*.razor", SearchOption.AllDirectories)))
+        {
+            if (path.EndsWith("SyncProjectRepository.cs", StringComparison.Ordinal)) continue;
+            var source = File.ReadAllText(path);
+            foreach (var call in new[] { "SetRunningAsync(", "TryAdmitRunAsync(" })
+            {
+                var at = source.IndexOf(call, StringComparison.Ordinal);
+                while (at >= 0)
+                {
+                    // The call may wrap, so look at a window rather than the line.
+                    var window = source[at..Math.Min(source.Length, at + 220)];
+                    Assert.True(window.Contains("requireActiveConnections: true", StringComparison.Ordinal),
+                        $"{Path.GetFileName(path)} claims a run near offset {at} without requireActiveConnections: true.");
+                    at = source.IndexOf(call, at + call.Length, StringComparison.Ordinal);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void The_refusal_is_diagnosed_rather_than_reported_as_a_phantom_run()
+    {
+        var repo = Read("src/Conduit.DataAccess/Repositories/SyncProjectRepository.cs");
+        var admit = Between(repo, "public async Task<SyncAdmissionOutcome> TryAdmitRunAsync", "// Matched by exact token");
+
+        // Zero rows is explained, not assumed. Each reason is distinguished so no surface has to
+        // guess, which is how every caller came to report "already running" for everything.
+        Assert.Contains("'RefusedNotFound'", admit);
+        Assert.Contains("'RefusedAlreadyRunning'", admit);
+        Assert.Contains("'RefusedDisabled'", admit);
+        Assert.Contains("'RefusedInactiveConnection'", admit);
+
+        // An answer the repository cannot name must throw rather than read as a plausible outcome.
+        Assert.Contains("SyncAdmissionOutcomeUnknown", repo);
+        // The CALL, not the word: the comment beside the switch names Enum.TryParse to explain why
+        // it is not used, so asserting on the bare name fails against the very reasoning it guards.
+        Assert.DoesNotContain("Enum.TryParse(", repo);
+    }
+
+    [Fact]
+    public void One_wording_is_shared_by_every_surface_that_can_start_a_run()
+    {
+        // Four call sites each writing their own sentence is how the page and the runner came to
+        // disagree. The operator-facing text has one owner.
+        foreach (var path in new[]
+        {
+            "src/Conduit.Web/Pages/Sync/SyncProjects.razor",
+            "src/Conduit.Web/Pages/Sync/ScheduleManager.razor",
+            "src/Conduit.Web/Controllers/ApiV1SyncRunsController.cs",
+            "src/Conduit.Sync/Orchestration/SyncProjectOrchestrator.cs",
+            "src/Conduit.Web/Services/SqlDiscoveryRunner.cs",
+        })
+        {
+            Assert.Contains("SyncAdmissionRefusal.Describe(", Read(path));
+        }
+
+        // And the old hard-coded guess is gone from the surfaces that used to make it.
+        Assert.DoesNotContain("already has a run in progress — view its live progress",
+            Read("src/Conduit.Web/Pages/Sync/ScheduleManager.razor"));
+    }
+
+    [Fact]
+    public void The_api_separates_a_retryable_conflict_from_a_configuration_problem()
+    {
+        var controller = Read("src/Conduit.Web/Controllers/ApiV1SyncRunsController.cs");
+
+        // 409 invites a retry. A deactivated Connected System is not something a client can retry
+        // past, so it answers 422 and a retrying client does not spin on it forever.
+        Assert.Contains("RefusedAlreadyRunning => Conflict(payload)", controller);
+        Assert.Contains("RefusedNotFound => NotFound(payload)", controller);
+        Assert.Contains("_ => UnprocessableEntity(payload)", controller);
+
+        // A machine-readable token, so a client branches without parsing prose.
+        Assert.Contains("SyncAdmissionRefusal.Code(admission)", controller);
+    }
+
     private static string Read(string relativePath) =>
         File.ReadAllText(RepoFile(relativePath.Replace('/', Path.DirectorySeparatorChar)));
 

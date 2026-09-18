@@ -97,10 +97,17 @@ public sealed class IcSyncProjectJobRunner : IIcSyncProjectJobRunner
         // are decided on the read row; this swap is the authority that settles the race, and a
         // lost swap must never execute connectors.
         var ownerRunId = Guid.NewGuid();
-        if (!await projects.SetRunningAsync(project.Id, ownerRunId, requireEnabled: true))
+        var admission = await projects.TryAdmitRunAsync(
+            project.Id, ownerRunId, requireEnabled: true, requireActiveConnections: true);
+        if (admission != SyncAdmissionOutcome.Admitted)
         {
-            return new IcSyncRunOutcome(false, null, "NotAdmitted", 0, 0, 0,
-                IcSyncJobReasons.AdmissionLost(project), null);
+            // AdmissionLost says "another run started first", which is only true of the race. A
+            // deactivated Connected System reported that way would be completed back to
+            // IdentityCenter with a reason naming a run that never existed.
+            var reason = admission == SyncAdmissionOutcome.RefusedAlreadyRunning
+                ? IcSyncJobReasons.AdmissionLost(project)
+                : SyncAdmissionRefusal.Describe(admission, project.Name);
+            return new IcSyncRunOutcome(false, null, "NotAdmitted", 0, 0, 0, reason, null);
         }
 
         using var progressStop = new CancellationTokenSource();

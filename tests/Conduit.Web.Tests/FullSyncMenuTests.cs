@@ -15,7 +15,10 @@ public class FullSyncMenuTests
         Assert.Contains("All object classes", page);
         Assert.Contains("FullSyncObjectClasses", page);
         Assert.Contains("ResetForFullSyncAsync", page);
-        Assert.Contains("SetRunningAsync(projectId, ownerRunId)", page);
+        // The owner is still claimed BEFORE the destructive cursor/hash reset; the claim just answers
+        // a diagnosed outcome now instead of a bare bool, so a refusal can say what actually happened.
+        Assert.Contains("TryAdmitRunAsync(projectId, ownerRunId, requireActiveConnections: true)", page);
+        Assert.Contains("Full-sync state was not reset.", page);
     }
 
     [Fact]

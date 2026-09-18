@@ -123,10 +123,16 @@ public sealed class SyncProjectOrchestrator
                 // Single-run ownership CAS. Losing means a run is already in
                 // flight for this project (scheduler overlap, double-click, …):
                 // record the skip honestly and leave the other run's flag alone.
-                var won = await _projectRepo.SetRunningAsync(project.Id, run.Id);
-                if (!won)
+                // This is the catch-all claim for any caller that did not pre-claim, so the
+                // connection gate has to be here too or it is simply routed around. The reason is
+                // diagnosed rather than assumed: recording "already in progress" on a run that was
+                // actually refused for a deactivated Connected System leaves a permanently wrong
+                // row in Sync History, which is where an operator goes to find out what happened.
+                var admission = await _projectRepo.TryAdmitRunAsync(
+                    project.Id, run.Id, requireActiveConnections: true);
+                if (admission != SyncAdmissionOutcome.Admitted)
                 {
-                    const string skipReason = "A run is already in progress for this project.";
+                    var skipReason = SyncAdmissionRefusal.Describe(admission, project.Name);
                     await _runRepo.FinishAsync(run.Id, "Skipped", skipReason, 0);
                     await Log(run.Id, "Warning", $"Run skipped: {skipReason}");
                     return run.Id;

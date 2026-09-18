@@ -376,9 +376,26 @@ namespace Conduit.Web.Controllers
             // (Worf HIGH-1). Two concurrent POSTs cannot both win this swap;
             // the loser gets 409. The winner passes its exact owner to execution.
             var ownerRunId = Guid.NewGuid();
-            var claimed = await _projects.SetRunningAsync(projectId, ownerRunId).ConfigureAwait(false);
-            if (!claimed)
-                return Conflict(new { error = "Project run already in progress" });
+            var admission = await _projects
+                .TryAdmitRunAsync(projectId, ownerRunId, requireActiveConnections: true)
+                .ConfigureAwait(false);
+            if (admission != SyncAdmissionOutcome.Admitted)
+            {
+                // 409 only for the genuine race. A deactivated Connected System is not a conflict a
+                // client can retry past — it is a configuration problem an operator must fix, so it
+                // answers 422 and a client that retries a 409 does not spin on it forever.
+                var payload = new
+                {
+                    error = SyncAdmissionRefusal.Describe(admission, project.Name),
+                    reason = SyncAdmissionRefusal.Code(admission),
+                };
+                return admission switch
+                {
+                    SyncAdmissionOutcome.RefusedAlreadyRunning => Conflict(payload),
+                    SyncAdmissionOutcome.RefusedNotFound => NotFound(payload),
+                    _ => UnprocessableEntity(payload),
+                };
+            }
 
             // Fire-and-forget. Errors inside ExecuteAsync are caught and stamped
             // onto the SyncRun row by the orchestrator itself; we log at the

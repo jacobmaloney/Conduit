@@ -6438,10 +6438,12 @@
 
         // Claim a unique run owner before dispatch; a concurrent winner is refused.
         var ownerRunId = Guid.NewGuid();
-        var claimed = await ProjectRepo.SetRunningAsync(projectId, ownerRunId);
-        if (!claimed)
+        // Diagnosed, not guessed: the claim also refuses a deactivated Connected System, and
+        // reporting that as "already running" sends an operator hunting a run that is not there.
+        var admission = await ProjectRepo.TryAdmitRunAsync(projectId, ownerRunId, requireActiveConnections: true);
+        if (admission != SyncAdmissionOutcome.Admitted)
         {
-            toastError = $"'{projectName}' already has a run in progress — view its live progress in Sync History.";
+            toastError = SyncAdmissionRefusal.Describe(admission, projectName);
             await Reload();
             return;
         }
@@ -6506,12 +6508,14 @@
         var selectedClass = string.IsNullOrWhiteSpace(fullSyncObjectClass) ? null : fullSyncObjectClass;
 
         var ownerRunId = Guid.NewGuid();
-        var claimed = await ProjectRepo.SetRunningAsync(projectId, ownerRunId);
-        if (!claimed)
+        var admission = await ProjectRepo.TryAdmitRunAsync(projectId, ownerRunId, requireActiveConnections: true);
+        if (admission != SyncAdmissionOutcome.Admitted)
         {
             fullSyncInProgress = false;
             showFullSyncConfirmModal = false;
-            toastError = $"'{projectName}' already has a run in progress — full-sync state was not reset.";
+            // The reset is destructive, so say plainly that it did NOT happen alongside the reason.
+            toastError = SyncAdmissionRefusal.Describe(admission, projectName)
+                       + " Full-sync state was not reset.";
             await Reload();
             return;
         }

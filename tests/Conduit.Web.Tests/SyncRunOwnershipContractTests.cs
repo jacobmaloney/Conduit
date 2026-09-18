@@ -91,20 +91,28 @@ public class SyncRunOwnershipContractTests
     }
 
     [Fact]
-    public void Scheduled_and_discovery_admission_recheck_enabled_without_changing_manual_policy()
+    public void Automatic_admission_rechecks_enabled_while_manual_runs_may_still_run_a_disabled_project()
     {
-        // The scheduler additionally re-checks both Connected Systems, so a connection deactivated
-        // between its candidate read and this claim cannot get one more run into a system the
-        // operator has switched off. The enabled re-check it always had is still here.
-        var scheduler = Read("src/Conduit.Sync/Orchestration/ScheduledSyncRunnerJob.cs");
-        Assert.Contains("project.Id, ownerRunId, requireEnabled: true, requireActiveConnections: true", scheduler);
-        Assert.Contains("SetRunningAsync(project.Id, ownerRunId, requireEnabled: true)",
-            Read("src/Conduit.Web/Services/SqlDiscoveryRunner.cs"));
+        // Renamed from "...without_changing_manual_policy". Manual policy DID change, deliberately:
+        // every surface now refuses a deactivated Connected System. What has NOT changed, and is
+        // what this still guards, is that a manual caller may run a DISABLED project — a disabled
+        // schedule means "not on a cadence", which an operator is allowed to override by hand.
+        var automatic = new[]
+        {
+            "src/Conduit.Sync/Orchestration/ScheduledSyncRunnerJob.cs",
+            "src/Conduit.Web/Services/SqlDiscoveryRunner.cs",
+            "src/Conduit.Web/Services/IcSyncProjectJobRunner.cs",
+        };
+        foreach (var path in automatic)
+            Assert.Contains("requireEnabled: true", Read(path));
+
         foreach (var path in new[] { "src/Conduit.Web/Controllers/ApiV1SyncRunsController.cs",
             "src/Conduit.Web/Pages/Sync/SyncProjects.razor", "src/Conduit.Web/Pages/Sync/ScheduleManager.razor" })
         {
             var source = Read(path);
-            Assert.Contains("SetRunningAsync(projectId, ownerRunId)", source);
+            // No requireEnabled on the manual surfaces: running a disabled project by hand is allowed.
+            Assert.DoesNotContain("requireEnabled: true", source);
+            // Owner-fenced dispatch and release are unchanged by the admission rework.
             Assert.Contains("claimedRunId: ownerRunId", source);
             Assert.Contains("ClearRunningAsync(projectId, ownerRunId)", source);
             Assert.DoesNotContain("SetRunningAsync(projectId, Guid.Empty)", source);

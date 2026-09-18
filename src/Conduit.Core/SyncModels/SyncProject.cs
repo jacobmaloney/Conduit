@@ -417,3 +417,67 @@ public sealed record ScheduledProjectConnectionState(
         : !SinkActive ? "sink"
         : "";
 }
+
+/// <summary>
+/// Why an attempt to admit a run was accepted or refused.
+///
+/// <para>The admission CAS used to answer a bare bool, so every caller had to guess a reason and all
+/// of them guessed the same one: "a run is already in progress". Once the claim also refuses a
+/// disabled project or a deactivated Connected System, that guess becomes a lie that sends an
+/// operator hunting a run which is not there.</para>
+/// </summary>
+public enum SyncAdmissionOutcome
+{
+    /// <summary>The caller owns the run and must release it.</summary>
+    Admitted,
+
+    /// <summary>The project no longer exists.</summary>
+    RefusedNotFound,
+
+    /// <summary>Another owner holds the run.</summary>
+    RefusedAlreadyRunning,
+
+    /// <summary>The caller required an enabled project and this one is disabled.</summary>
+    RefusedDisabled,
+
+    /// <summary>The caller required live endpoints and a Connected System is deactivated or deleted.</summary>
+    RefusedInactiveConnection,
+}
+
+/// <summary>
+/// One wording for an admission refusal, shared by every surface that can trigger a run.
+///
+/// <para>Four call sites each writing their own sentence is how the page and the runner came to
+/// disagree in the first place. The operator-facing text lives here so the Run Now button, the
+/// full-sync reset, the schedule page and the REST API cannot drift apart.</para>
+/// </summary>
+public static class SyncAdmissionRefusal
+{
+    /// <summary>A sentence naming what actually happened and what to do about it.</summary>
+    public static string Describe(SyncAdmissionOutcome outcome, string projectName) => outcome switch
+    {
+        SyncAdmissionOutcome.Admitted =>
+            $"'{projectName}' started.",
+        SyncAdmissionOutcome.RefusedNotFound =>
+            $"'{projectName}' no longer exists — it may have been deleted in another session.",
+        SyncAdmissionOutcome.RefusedAlreadyRunning =>
+            $"'{projectName}' already has a run in progress — view its live progress in Sync History.",
+        SyncAdmissionOutcome.RefusedDisabled =>
+            $"'{projectName}' is disabled — enable it before running.",
+        SyncAdmissionOutcome.RefusedInactiveConnection =>
+            $"'{projectName}' was not started: one of its Connected Systems is deactivated or no longer exists. "
+            + "Reactivate it in Connected Systems, then run again.",
+        _ => $"'{projectName}' could not be started.",
+    };
+
+    /// <summary>A stable token for machine callers, so an API client can branch without parsing prose.</summary>
+    public static string Code(SyncAdmissionOutcome outcome) => outcome switch
+    {
+        SyncAdmissionOutcome.Admitted => "admitted",
+        SyncAdmissionOutcome.RefusedNotFound => "project_not_found",
+        SyncAdmissionOutcome.RefusedAlreadyRunning => "run_in_progress",
+        SyncAdmissionOutcome.RefusedDisabled => "project_disabled",
+        SyncAdmissionOutcome.RefusedInactiveConnection => "connection_inactive",
+        _ => "refused",
+    };
+}

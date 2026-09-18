@@ -416,8 +416,29 @@ public class SyncProjectRepository : BaseRepository
     public async Task<bool> SetRunningAsync(Guid projectId, Guid runId, bool requireEnabled = false,
                                             bool requireActiveConnections = false)
     {
+        var outcome = await TryAdmitRunAsync(projectId, runId, requireEnabled, requireActiveConnections);
+        return outcome == SyncAdmissionOutcome.Admitted;
+    }
+
+    /// <summary>
+    /// The admission CAS, answering WHY rather than just whether.
+    ///
+    /// <para>The claim itself is still one atomic UPDATE and is the only thing that decides the
+    /// outcome. The diagnosis that follows is a best-effort read of the row AFTER the refusal, taken
+    /// in the same round trip: it explains a decision already made, and it is deliberately not a
+    /// second gate. The state could in principle move again between the two, so the reason is a
+    /// message and never an authorisation — a caller that is told RefusedAlreadyRunning still does
+    /// not own the run, which is the only fact that matters for safety.</para>
+    ///
+    /// <para>Diagnosing rather than assuming matters because every caller previously reported the
+    /// same guess. Once the claim can also refuse a disabled project or a deactivated Connected
+    /// System, "a run is already in progress" sends an operator hunting a run that is not there.</para>
+    /// </summary>
+    public async Task<SyncAdmissionOutcome> TryAdmitRunAsync(Guid projectId, Guid runId,
+        bool requireEnabled = false, bool requireActiveConnections = false)
+    {
         SyncRunOwnership.RequireOwner(runId);
-        var rows = await ExecuteScalarAsync<int>(@"
+        var answer = await ExecuteScalarAsync<string>(@"
             UPDATE SyncProjects
                SET IsRunning = 1,
                    LastRunId = @RunId,
@@ -432,10 +453,45 @@ public class SyncProjectRepository : BaseRepository
                                  WHERE src.Id = SyncProjects.SourceTenantId AND src.IsActive = 1)
                     AND EXISTS (SELECT 1 FROM Tenants snk
                                  WHERE snk.Id = SyncProjects.SinkTenantId   AND snk.IsActive = 1)));
-            SELECT @@ROWCOUNT;",
+
+            IF @@ROWCOUNT > 0
+                SELECT 'Admitted';
+            ELSE
+                SELECT CASE
+                    WHEN NOT EXISTS (SELECT 1 FROM SyncProjects WHERE Id = @ProjectId)
+                        THEN 'RefusedNotFound'
+                    WHEN EXISTS (SELECT 1 FROM SyncProjects WHERE Id = @ProjectId AND IsRunning = 1)
+                        THEN 'RefusedAlreadyRunning'
+                    WHEN @RequireEnabled = 1
+                         AND EXISTS (SELECT 1 FROM SyncProjects WHERE Id = @ProjectId AND IsEnabled = 0)
+                        THEN 'RefusedDisabled'
+                    WHEN @RequireActiveConnections = 1
+                         AND EXISTS (SELECT 1 FROM SyncProjects p
+                                      WHERE p.Id = @ProjectId
+                                        AND (NOT EXISTS (SELECT 1 FROM Tenants src
+                                                          WHERE src.Id = p.SourceTenantId AND src.IsActive = 1)
+                                          OR NOT EXISTS (SELECT 1 FROM Tenants snk
+                                                          WHERE snk.Id = p.SinkTenantId   AND snk.IsActive = 1)))
+                        THEN 'RefusedInactiveConnection'
+                    ELSE 'RefusedAlreadyRunning'
+                END;",
             new { ProjectId = projectId, RunId = runId, RequireEnabled = requireEnabled,
                   RequireActiveConnections = requireActiveConnections });
-        return rows > 0;
+
+        // Matched by exact token rather than Enum.TryParse, which would also accept a numeric string
+        // and turn an unexpected answer into a plausible-looking outcome.
+        return answer switch
+        {
+            "Admitted" => SyncAdmissionOutcome.Admitted,
+            "RefusedNotFound" => SyncAdmissionOutcome.RefusedNotFound,
+            "RefusedAlreadyRunning" => SyncAdmissionOutcome.RefusedAlreadyRunning,
+            "RefusedDisabled" => SyncAdmissionOutcome.RefusedDisabled,
+            "RefusedInactiveConnection" => SyncAdmissionOutcome.RefusedInactiveConnection,
+            _ => throw new InvalidOperationException(
+                $"SyncAdmissionOutcomeUnknown: admitting a run for project {projectId} answered "
+                + $"'{answer ?? "<null>"}', which is not an outcome this repository can report. "
+                + "The claim state is unknown; do not treat it as admitted."),
+        };
     }
 
     /// <summary>Only the admission owner can release its claim; late cleanup cannot release another run.</summary>

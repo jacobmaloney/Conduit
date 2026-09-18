@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Conduit.Core.SyncModels;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Orchestration;
 
@@ -55,9 +56,10 @@ public sealed class SqlDiscoveryRunner
         }
 
         var ownerRunId = Guid.NewGuid();
-        var claimed = await projectRepo.SetRunningAsync(project.Id, ownerRunId, requireEnabled: true);
-        if (!claimed)
-            return (false, $"Project '{project.Name}' already has a run in progress.");
+        var admission = await projectRepo.TryAdmitRunAsync(
+            project.Id, ownerRunId, requireEnabled: true, requireActiveConnections: true);
+        if (admission != SyncAdmissionOutcome.Admitted)
+            return (false, SyncAdmissionRefusal.Describe(admission, project.Name));
 
         try
         {
