@@ -15,11 +15,11 @@
     the fix for Conduit's blank state icons. Renders identically in either host.
 
     The component depends only on the neutral contract (IScopeDataSource / ScopeNode /
-    ScopeState). It binds two HashSet<string class="icb-s-scope-tree"> DN sets — Included and Blocked — exactly
+    ScopeState). It binds two HashSet<string> DN sets — Included and Blocked — exactly
     like IC. Inherited is computed from Included ancestors, never stored.
 *@
 
-<div class="st-scope-browser">
+<div class="icb-s-scope-tree st-scope-browser">
     @if (IsLoading)
     {
         <div class="st-center st-pad">
