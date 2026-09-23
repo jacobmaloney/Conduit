@@ -125,10 +125,13 @@ public sealed class AwsIamWriter : IDisposable
         RequireName(userName, "userName");
         if (!IsValidIamName(tagKey)) throw new ArgumentException("tagKey is not a valid IAM tag key.");
         if (tagValue is null || !TagValueRegex.IsMatch(tagValue)) throw new ArgumentException("tagValue is not a valid IAM tag value.");
+        // Tags = { ... } is a collection INITIALIZER: it compiles to Tags.Add(...). In SDK v3
+        // the constructor pre-filled an empty list so that worked; in v4 the property defaults
+        // to null, so this threw NullReferenceException before reaching AWS. Assign the list.
         await _iam.TagUserAsync(new TagUserRequest
         {
             UserName = userName,
-            Tags = { new Tag { Key = tagKey, Value = tagValue } }
+            Tags = new List<Tag> { new Tag { Key = tagKey, Value = tagValue } }
         }, ct);
     }
 
@@ -136,10 +139,12 @@ public sealed class AwsIamWriter : IDisposable
     {
         RequireName(userName, "userName");
         if (!IsValidIamName(tagKey)) throw new ArgumentException("tagKey is not a valid IAM tag key.");
+        // Same v4 change as TagUserAsync above: TagKeys defaults to null, so the add-style
+        // initializer threw rather than untagging.
         await _iam.UntagUserAsync(new UntagUserRequest
         {
             UserName = userName,
-            TagKeys = { tagKey }
+            TagKeys = new List<string> { tagKey }
         }, ct);
     }
 

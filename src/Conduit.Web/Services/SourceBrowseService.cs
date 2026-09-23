@@ -190,7 +190,12 @@ public sealed partial class SourceBrowseService(ISourceBrowseStore store, Connec
                 RequireMappingAdministrator(user);
                 if (targets == null) throw new SourceBrowseException("TargetSchemaUnavailable", "Mapping target discovery is unavailable on this host.");
                 var target = targetConnection ?? throw new SourceBrowseException("TargetUnavailable", "The target connection is unavailable.");
-                schema = await targets.ReadAsync(target, project, step, ct);
+                // A step cannot be selected without a project - guarded where the selection is
+                // resolved - but that is an invariant the compiler cannot see from here. State it
+                // rather than suppress it, so a change to the earlier guard refuses with a named
+                // reason instead of dereferencing null.
+                var mappingProject = project ?? throw new SourceBrowseException("ProjectRequired", "Choose a project before selecting an import step.");
+                schema = await targets.ReadAsync(target, mappingProject, step, ct);
                 if (mapping.Notice != null) reason = "The preview omits saved fields. Use the project editor to preserve the complete mapping set.";
             }
             catch (SourceBrowseException ex) { reason = ex.Message; }
