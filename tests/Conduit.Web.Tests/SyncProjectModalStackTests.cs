@@ -56,7 +56,7 @@ public class SyncProjectModalStackTests
     {
         // All CSS lives in IdentityCenter.Brand. A local override here would drift the moment the
         // other product hit the same stacked-modal problem.
-        var css = File.ReadAllText(BrandFile("modal-stack.css"));
+        var css = File.ReadAllText(BrandStylesheet());
         Assert.Contains(".modal.icb-modal-stacked", css);
         Assert.Contains(".modal-backdrop.icb-modal-stacked", css);
         Assert.Contains(".modal.icb-modal-stacked-2", css);
@@ -64,7 +64,9 @@ public class SyncProjectModalStackTests
 
         // And the product actually loads it, or the classes above are inert.
         var layout = File.ReadAllText(RepoFile(Path.Combine("src", "Conduit.Web", "Pages", "_Layout.cshtml")));
-        Assert.Contains("_content/IdentityCenter.Brand/css/components/modal-stack.css", layout);
+        // One stylesheet since 2026-09-18, so the link to pin is identitycenter.css - the rule
+        // itself is asserted above, which is what stops it being inert.
+        Assert.Contains("_content/IdentityCenter.Brand/css/identitycenter.css", layout);
     }
 
     [Fact]
@@ -113,7 +115,11 @@ public class SyncProjectModalStackTests
     private static string RepoFile(string relativePath, [CallerFilePath] string thisFile = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", relativePath));
 
-    private static string BrandFile(string cssFile, [CallerFilePath] string thisFile = "") =>
+    // There is no css/components directory any more. The 2026-09-18 consolidation collapsed
+    // every Brand stylesheet into ONE file, so the rule this test pins now lives in
+    // identitycenter.css. The assertions below are unchanged - the rule still has to exist and
+    // still has to be in Brand rather than a local Conduit sheet.
+    private static string BrandStylesheet([CallerFilePath] string thisFile = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", "..",
-            "IdentityCenter.Brand", "src", "IdentityCenter.Brand", "wwwroot", "css", "components", cssFile));
+            "IdentityCenter.Brand", "src", "IdentityCenter.Brand", "wwwroot", "css", "identitycenter.css"));
 }

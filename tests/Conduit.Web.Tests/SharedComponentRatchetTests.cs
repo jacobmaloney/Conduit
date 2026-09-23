@@ -100,6 +100,9 @@ public class SharedComponentRatchetTests
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", relativePath));
 
     private static string BrandCssDir([CallerFilePath] string thisFile = "") =>
+        // css/components is gone: the 2026-09-18 consolidation made Brand one stylesheet.
+        // Enumerating wwwroot/css non-recursively now yields identitycenter.css alone, which is
+        // exactly the set this ratchet means by "defined in brand".
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", "..",
-            "IdentityCenter.Brand", "src", "IdentityCenter.Brand", "wwwroot", "css", "components"));
+            "IdentityCenter.Brand", "src", "IdentityCenter.Brand", "wwwroot", "css"));
 }
