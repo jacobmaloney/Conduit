@@ -2,9 +2,9 @@ name: build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
@@ -13,7 +13,25 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      # Conduit.Web references IdentityCenter.Brand by SOURCE PATH
+      # (../../../IdentityCenter.Brand/...), so a checkout of Conduit alone cannot restore:
+      # MSB3202, which is why the only runs that ever passed were shared-mapping, whose
+      # projects do not reach Brand. Both repos are checked out side by side, exactly as
+      # the IdentityCenter deploy does it. Brand is private, so it needs a credential: a
+      # READ-ONLY deploy key scoped to that one repository, not an account-wide token.
+      - name: Checkout Conduit
+        uses: actions/checkout@v4
+        with:
+          path: Conduit
+
+      - name: Checkout IdentityCenter.Brand beside it
+        uses: actions/checkout@v4
+        with:
+          repository: jacobmaloney/IdentityCenter.Brand
+          ssh-key: ${{ secrets.SHARED_BRAND_SSH_KEY }}
+          ref: master
+          path: IdentityCenter.Brand
+          persist-credentials: false
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -21,15 +39,15 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore
-        run: dotnet restore Conduit.sln
+        run: dotnet restore Conduit/Conduit.sln
 
       - name: Build (Release, warnings-as-errors)
         # We treat the warning bar as a regression gate. The repo currently builds
         # warning-free; new warnings should fail CI rather than silently merge.
-        run: dotnet build Conduit.sln --configuration Release --no-restore /warnaserror
+        run: dotnet build Conduit/Conduit.sln --configuration Release --no-restore /warnaserror
 
       # Tests will be added once the test project lands — keeping the step as a
       # placeholder so the matrix shape is stable.
       - name: Test (if any)
-        run: dotnet test Conduit.sln --configuration Release --no-build --no-restore --verbosity normal
+        run: dotnet test Conduit/Conduit.sln --configuration Release --no-build --no-restore --verbosity normal
         continue-on-error: true

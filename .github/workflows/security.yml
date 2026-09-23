@@ -2,9 +2,9 @@ name: security
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
   schedule:
     # Weekly Sunday 06:00 UTC — picks up newly-disclosed NuGet vulns
     # without anyone having to push.
@@ -23,7 +23,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # Conduit.Web references IdentityCenter.Brand by SOURCE PATH
+      # (../../../IdentityCenter.Brand/...), so a checkout of Conduit alone cannot restore:
+      # MSB3202, which is why the only runs that ever passed were shared-mapping, whose
+      # projects do not reach Brand. Both repos are checked out side by side, exactly as
+      # the IdentityCenter deploy does it. Brand is private, so it needs a credential: a
+      # READ-ONLY deploy key scoped to that one repository, not an account-wide token.
+      - name: Checkout Conduit
+        uses: actions/checkout@v4
+        with:
+          path: Conduit
+
+      - name: Checkout IdentityCenter.Brand beside it
+        uses: actions/checkout@v4
+        with:
+          repository: jacobmaloney/IdentityCenter.Brand
+          ssh-key: ${{ secrets.SHARED_BRAND_SSH_KEY }}
+          ref: master
+          path: IdentityCenter.Brand
+          persist-credentials: false
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -31,12 +49,12 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore (with transitive lock)
-        run: dotnet restore Conduit.sln
+        run: dotnet restore Conduit/Conduit.sln
 
       - name: Direct vulnerable packages
         run: |
           set -e
-          OUT=$(dotnet list Conduit.sln package --vulnerable 2>&1 || true)
+          OUT=$(dotnet list Conduit/Conduit.sln package --vulnerable 2>&1 || true)
           echo "$OUT"
           if echo "$OUT" | grep -E '^\s+>' >/dev/null; then
             echo "::error::Vulnerable direct package(s) found."
@@ -46,7 +64,7 @@ jobs:
       - name: Transitive vulnerable packages
         run: |
           set -e
-          OUT=$(dotnet list Conduit.sln package --vulnerable --include-transitive 2>&1 || true)
+          OUT=$(dotnet list Conduit/Conduit.sln package --vulnerable --include-transitive 2>&1 || true)
           echo "$OUT"
           if echo "$OUT" | grep -E '^\s+>' >/dev/null; then
             echo "::warning::Vulnerable transitive package(s) found — review and bump."
@@ -54,12 +72,12 @@ jobs:
 
       - name: Deprecated packages
         run: |
-          dotnet list Conduit.sln package --deprecated 2>&1 || true
+          dotnet list Conduit/Conduit.sln package --deprecated 2>&1 || true
 
       - name: Outdated packages
         run: |
           # Informational only — does not fail the build.
-          dotnet list Conduit.sln package --outdated 2>&1 || true
+          dotnet list Conduit/Conduit.sln package --outdated 2>&1 || true
 
   dependency-review:
     # Surfaces newly-introduced vulnerable deps in PRs against main.
