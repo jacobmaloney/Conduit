@@ -36,14 +36,32 @@ public class SyncProjectBlueprintTests
         return Assert.Single(projects);
     }
 
-    // V23.1: each class is now its own workflow holding a single Mapping step.
-    // Flatten back to the per-class step list (workflow order, then step order)
-    // so the behavioral assertions below read the same as before the IC-parity split.
+    // V23.1: each class is its own workflow. Flatten back to a step list (workflow order,
+    // then step order) so the behavioral assertions below read as before the IC-parity split.
     private static List<GeneratedSyncStep> StepsOf(GeneratedSyncProject p) =>
         p.Workflows.SelectMany(w => w.Steps).ToList();
 
-    private static string[] StepClasses(GeneratedSyncProject p) =>
+    // A class's coverage is its MAPPING step. A workflow also carries a Lookup step for the
+    // same class (structural, mirroring IC) and marker governance steps whose ObjectClass is
+    // the governance subject rather than a synced class - "GroupMembership" among them. Taking
+    // every step's ObjectClass therefore reports each class twice plus the governance
+    // subjects, which is what made these read as failures the first time CI ever ran them.
+    // The expectations below were right; this helper was measuring the wrong thing.
+    private static string[] MappingClasses(GeneratedSyncProject p) =>
+        StepsOf(p).Where(s => s.Step.StepType == WorkflowStepTypes.Mapping)
+                  .Select(s => s.Step.ObjectClass!).ToArray();
+
+    /// <summary>
+    /// EVERY step's class, governance markers and Lookup steps included. Right for comparing
+    /// two generation paths for shape equivalence, where an extra or missing step matters;
+    /// wrong for asking which classes a blueprint covers.
+    /// </summary>
+    private static string[] AllStepClasses(GeneratedSyncProject p) =>
         StepsOf(p).Select(s => s.Step.ObjectClass!).ToArray();
+
+    /// <summary>Mapping steps carry attribute mappings; governance markers deliberately do not.</summary>
+    private static List<GeneratedSyncStep> MappingStepsOf(GeneratedSyncProject p) =>
+        StepsOf(p).Where(s => s.Step.StepType == WorkflowStepTypes.Mapping).ToList();
 
     [Fact]
     public void Catalog_ShipsThe15CuratedBlueprints_WithUniqueIdsAndNames()
@@ -75,38 +93,51 @@ public class SyncProjectBlueprintTests
     }
 
     [Fact]
-    public void AwsIamGovernance_Expands_To_FiveClasses_WithMappings()
+    public void AwsIamGovernance_Expands_To_SixClasses_WithMappings()
     {
         var bp = SyncProjectBlueprintCatalog.GetById("aws-iam-governance")!;
         Assert.Equal("AWS", bp.SourceSystemType);
         var project = ExpandOne(bp);
 
-        Assert.Equal(new[] { "user", "group", "role", "policy", "account" }, StepClasses(project));
-        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
+        // The curated Full set for this connector, from SyncProjectGenerator's per-system
+        // arrays. A *Governance* blueprint means "everything this connector supports", so a
+        // class added there belongs here too - update both together.
+        Assert.Equal(new[] { "user", "group", "role", "policy", "account", "computer" }, MappingClasses(project));
+        Assert.All(MappingStepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
     [Fact]
-    public void AwsIdentityCenterGovernance_Expands_To_ThreeClasses_WithMappings()
+    public void AwsIdentityCenterGovernance_Expands_To_FourClasses_WithMappings()
     {
         var bp = SyncProjectBlueprintCatalog.GetById("aws-identity-center-governance")!;
         Assert.Equal("AWSIdentityCenter", bp.SourceSystemType);
         var project = ExpandOne(bp);
 
-        Assert.Equal(new[] { "user", "group", "permissionSet" }, StepClasses(project));
-        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
+        // The curated Full set for this connector, from SyncProjectGenerator's per-system
+        // arrays. A *Governance* blueprint means "everything this connector supports", so a
+        // class added there belongs here too - update both together.
+        Assert.Equal(new[] { "user", "group", "permissionSet", "application" }, MappingClasses(project));
+        Assert.All(MappingStepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
     [Fact]
-    public void GwsDirectoryGovernance_Expands_To_FiveClasses_WithMappings()
+    public void GwsDirectoryGovernance_Expands_To_NineClasses_WithMappings()
     {
         var bp = SyncProjectBlueprintCatalog.GetById("gws-directory-governance")!;
         Assert.Equal("GoogleWorkspace", bp.SourceSystemType);
         var project = ExpandOne(bp);
 
-        Assert.Equal(new[] { "user", "group", "organizationalUnit", "role", "domain" }, StepClasses(project));
-        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
+        // The curated Full set for this connector, from SyncProjectGenerator's per-system
+        // arrays. A *Governance* blueprint means "everything this connector supports", so a
+        // class added there belongs here too - update both together.
+        Assert.Equal(new[]
+        {
+            "user", "group", "organizationalUnit", "role", "domain",
+            "mobiledevice", "chromeosdevice", "roleAssignment", "calendarresource"
+        }, MappingClasses(project));
+        Assert.All(MappingStepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
@@ -170,23 +201,22 @@ public class SyncProjectBlueprintTests
             var project = ExpandOne(bp);
             Assert.False(project.Project.IsEnabled);
             Assert.True(project.Project.SkipUnchanged);
-            Assert.Equal(StepClasses(project)[0], project.Project.ObjectClass);
-            Assert.All(StepsOf(project), s =>
-                Assert.Equal(WorkflowStepTypes.Mapping, s.Step.StepType));
-
+            Assert.Equal(MappingClasses(project)[0], project.Project.ObjectClass);
             // IC parity: one workflow per class, each holding exactly one Mapping step,
-            // named "<class> Upsert Sync".
-            Assert.Equal(StepClasses(project).Length, project.Workflows.Count);
+            // named "<class> Upsert Sync". A workflow may ALSO carry a structural Lookup step
+            // and marker governance steps (GroupMembership, LicenseSync and friends), so the
+            // Mapping step is singled out rather than assuming it is the only one.
+            Assert.Equal(MappingClasses(project).Length, project.Workflows.Count);
             Assert.All(project.Workflows, w =>
             {
-                var step = Assert.Single(w.Steps);
+                var step = Assert.Single(w.Steps, x => x.Step.StepType == WorkflowStepTypes.Mapping);
                 Assert.Equal($"{step.Step.ObjectClass} Upsert Sync", w.Workflow.Name);
             });
         }
     }
 
     [Fact]
-    public void EntraDirectoryGovernance_Expands_To_All11_DirectoryClasses_WithMappings()
+    public void EntraDirectoryGovernance_Expands_To_All14_DirectoryClasses_WithMappings()
     {
         var bp = SyncProjectBlueprintCatalog.GetById("entra-directory-governance")!;
         var project = ExpandOne(bp);
@@ -195,17 +225,21 @@ public class SyncProjectBlueprintTests
         {
             "user", "group", "servicePrincipal", "directoryRole",
             "application", "device", "administrativeUnit", "conditionalAccessPolicy",
-            "oAuth2PermissionGrant", "domain", "m365usage"
+            "oAuth2PermissionGrant", "domain", "m365usage", "signinlog", "license",
+            "approleassignment"
         };
 
-        var actual = StepClasses(project);
-        Assert.Equal(11, actual.Length);
+        var actual = MappingClasses(project);
+        Assert.Equal(14, actual.Length);
         Assert.Equal(expected, actual);
         Assert.Contains("m365usage", actual);
 
-        // Every step in this blueprint is a real (non-deferred) class, so each must
-        // have at least one attribute mapping resolved from the catalog.
-        foreach (var step in StepsOf(project))
+        // Every MAPPING step in this blueprint is a real (non-deferred) class, so each must
+        // have at least one attribute mapping resolved from the catalog. Governance markers are
+        // excluded deliberately: they carry no mappings by design, and several of them take the
+        // governed class as their ObjectClass - the Entra sign-in-log and licence markers are
+        // both ObjectClass "user" - so including them asserted that a marker was a sync step.
+        foreach (var step in MappingStepsOf(project))
         {
             Assert.False(SyncProjectBlueprintCatalog.IsDeferredClass(step.Step.ObjectClass!));
             Assert.True(step.Mappings.Count > 0,
@@ -215,7 +249,9 @@ public class SyncProjectBlueprintTests
         // Spot-check the called-out non-empty classes explicitly.
         foreach (var cls in new[] { "user", "group", "m365usage" })
         {
-            var step = StepsOf(project).Single(s => s.Step.ObjectClass == cls);
+            // Single over ALL steps now finds several: "user" is also the ObjectClass of the
+            // sign-in-log and licence governance markers. The mapping step is the one meant.
+            var step = MappingStepsOf(project).Single(s => s.Step.ObjectClass == cls);
             Assert.True(step.Mappings.Count > 0, $"{cls} mappings empty");
         }
     }
@@ -226,9 +262,9 @@ public class SyncProjectBlueprintTests
         var bp = SyncProjectBlueprintCatalog.GetById("azure-resource-inventory")!;
         var project = ExpandOne(bp);
 
-        var actual = StepClasses(project);
+        var actual = MappingClasses(project);
         Assert.Equal(new[] { "azuresubscription", "azureresource" }, actual);
-        Assert.All(StepsOf(project), s => Assert.True(s.Mappings.Count > 0,
+        Assert.All(MappingStepsOf(project), s => Assert.True(s.Mappings.Count > 0,
             $"class {s.Step.ObjectClass} should have > 0 mappings"));
     }
 
@@ -238,7 +274,7 @@ public class SyncProjectBlueprintTests
         var bp = SyncProjectBlueprintCatalog.GetById("m365-license-usage")!;
         var project = ExpandOne(bp);
 
-        Assert.Equal(new[] { "user", "m365usage", "site" }, StepClasses(project));
+        Assert.Equal(new[] { "user", "m365usage", "site" }, MappingClasses(project));
     }
 
     [Fact]
@@ -258,7 +294,7 @@ public class SyncProjectBlueprintTests
 
         var viaModeSteps = StepsOf(viaMode);
         var viaExplicitSteps = StepsOf(viaExplicit);
-        Assert.Equal(StepClasses(viaMode), StepClasses(viaExplicit));
+        Assert.Equal(AllStepClasses(viaMode), AllStepClasses(viaExplicit));
         Assert.Equal(viaModeSteps.Count, viaExplicitSteps.Count);
 
         for (var i = 0; i < viaModeSteps.Count; i++)
@@ -286,6 +322,6 @@ public class SyncProjectBlueprintTests
             new[] { "user", "", "group", "user", "  " },
             null, Array.Empty<string>()));
 
-        Assert.Equal(new[] { "user", "group" }, StepClasses(project));
+        Assert.Equal(new[] { "user", "group" }, MappingClasses(project));
     }
 }

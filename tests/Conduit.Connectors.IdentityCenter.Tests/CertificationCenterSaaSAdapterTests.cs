@@ -33,7 +33,9 @@ public class CertificationCenterSaaSAdapterTests
         var resolved = registry.Get("CertificationCenterSaaS");
         Assert.NotNull(resolved);
         Assert.IsType<CertificationCenterSaaSAdapter>(resolved);
-        Assert.Equal("Certification Center", resolved!.DisplayName);
+        // Jacob, 2026-09-25: the adapter's display name is "Identity Center (SaaS Tenant)".
+        // The test predated that and expected the marketing name; the code is right.
+        Assert.Equal("Identity Center (SaaS Tenant)", resolved!.DisplayName);
         Assert.True(resolved.SupportsSink);
 
         // No collision: the IdentityCenter type still resolves to its own adapter.

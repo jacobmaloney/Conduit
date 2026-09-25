@@ -46,23 +46,9 @@ jobs:
         # warning-free; new warnings should fail CI rather than silently merge.
         run: dotnet build Conduit/Conduit.sln --configuration Release --no-restore /warnaserror
 
-      # The test projects landed long ago - seven of them, 1,046 tests - but this step kept
-      # the placeholder comment above and `continue-on-error: true`, so it reported nothing.
-      # The first honest run (2026-09-22) found 12 failures that had been invisible.
-      #
-      # Eight are still excluded, by name, because they encode PRODUCT decisions that have
-      # moved and changing them to match observed output would be updating a baseline to get
-      # green rather than testing anything:
-      #
-      #   SyncProjectBlueprintTests (7) - blueprints now emit two steps per class and classes
-      #     the expectations predate (GroupMembership). Whether those belong in each blueprint
-      #     is a product call.
-      #   CertificationCenterSaaSAdapterTests (1) - expects the display name "Certification
-      #     Center"; the code says "Identity Center (SaaS Tenant)". That is the open
-      #     white-label/product-name debt, not a bug this gate should pick a side on.
-      #
-      # Delete an exclusion when its question is answered - do not add one to go green.
+      # Seven test projects, 1,046 tests. This step used to run them under
+      # `continue-on-error: true`, so the suite was decorative; the first honest run
+      # (2026-09-22) found 12 failures that had been invisible. All twelve are fixed and
+      # there are NO exclusions - if a test fails here, the build fails.
       - name: Test
-        run: >
-          dotnet test Conduit/Conduit.sln --configuration Release --no-build --no-restore --verbosity normal
-          --filter "FullyQualifiedName!~SyncProjectBlueprintTests&FullyQualifiedName!~CertificationCenterSaaSAdapterTests"
+        run: dotnet test Conduit/Conduit.sln --configuration Release --no-build --no-restore --verbosity normal
