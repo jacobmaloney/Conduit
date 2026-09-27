@@ -15,14 +15,12 @@
                Icon="fas fa-history"
                IconAccent="amber">
         <PrimaryAction>
-            <div class="d-flex gap-2">
-                <button type="button" class="icb-list-action" @onclick="ToggleFilters">
-                    <i class="oi oi-filter"></i> @(showFilters ? "Hide" : "Show") Filters
-                </button>
-                <button type="button" class="icb-list-action" @onclick="ExportLogs">
-                    <i class="oi oi-data-transfer-download"></i> Export
-                </button>
-            </div>
+            <button type="button" class="icb-list-action" @onclick="ToggleFilters">
+                <i class="oi oi-filter"></i> @(showFilters ? "Hide" : "Show") Filters
+            </button>
+            <button type="button" class="icb-list-action" @onclick="ExportLogs">
+                <i class="oi oi-data-transfer-download"></i> Export
+            </button>
         </PrimaryAction>
     </Template1>
 

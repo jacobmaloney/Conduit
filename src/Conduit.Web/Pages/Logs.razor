@@ -14,14 +14,12 @@
                Icon="fas fa-bug"
                IconAccent="amber">
         <PrimaryAction>
-            <div class="d-flex gap-2">
-                <button type="button" class="icb-list-action" @onclick="RefreshLogs">
-                    <i class="oi oi-loop-circular"></i> Refresh
-                </button>
-                <button type="button" class="icb-list-action" @onclick="ClearLogs">
-                    <i class="oi oi-trash"></i> Clear
-                </button>
-            </div>
+            <button type="button" class="icb-list-action" @onclick="RefreshLogs">
+                <i class="oi oi-loop-circular"></i> Refresh
+            </button>
+            <button type="button" class="icb-list-action" @onclick="ClearLogs">
+                <i class="oi oi-trash"></i> Clear
+            </button>
         </PrimaryAction>
     </Template1>
 
