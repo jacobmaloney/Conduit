@@ -1400,20 +1400,20 @@
                                     <div class="input-group">
                                         <input class="icb-form-input" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
                                         <button type="button" class="ic-btn ic-btn-ghost" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a single container">
-                                            <i class="bi bi-diagram-3 me-1"></i>Browse
+                                            <i class="fas fa-sitemap me-1"></i>Browse
                                         </button>
                                         <button type="button" class="ic-btn icb-btn-accent" @onclick="OpenScopeBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Pick multiple Included / Blocked containers">
-                                            <i class="bi bi-folder-symlink me-1"></i>Select Scope Locations
+                                            <i class="fas fa-folder-open me-1"></i>Select Scope Locations
                                         </button>
                                     </div>
                                     @{ var projInc = scopeForm.GetIncludedBaseList(); var projBlk = scopeForm.GetExcludedBaseList(); }
                                     @if (projInc.Count > 1 || projBlk.Count > 0)
                                     {
                                         <small class="icb-form-help text-muted">
-                                            <i class="bi bi-check-circle-fill text-success me-1"></i>@projInc.Count included
+                                            <i class="fas fa-check-circle text-success me-1"></i>@projInc.Count included
                                             @if (projBlk.Count > 0)
                                             {
-                                                <span><i class="bi bi-slash-circle-fill text-danger ms-2 me-1"></i>@projBlk.Count blocked</span>
+                                                <span><i class="fas fa-ban text-danger ms-2 me-1"></i>@projBlk.Count blocked</span>
                                             }
                                         </small>
                                     }
@@ -2665,7 +2665,7 @@
                                     @onclick="OpenScopeDraftBrowser"
                                     disabled="@(scopeDraftInherit || form.SourceTenantId == Guid.Empty)"
                                     title="Pick Included / Blocked containers from the live directory">
-                                <i class="bi bi-folder-symlink me-1"></i>Browse…
+                                <i class="fas fa-folder-open me-1"></i>Browse…
                             </button>
                         </div>
                         @* An empty included set is a LEGAL choice, not an error — but with Inherit
@@ -2706,7 +2706,7 @@
                                 {
                                     var dnRef = dn;
                                     <li class="step-scope-row">
-                                        <i class="bi bi-check-circle-fill text-success"></i>
+                                        <i class="fas fa-check-circle text-success"></i>
                                         <span class="step-scope-dn" title="@dnRef">@dnRef</span>
                                         <button type="button" class="step-scope-x" title="Remove this path"
                                                 disabled="@scopeDraftInherit"
@@ -2742,7 +2742,7 @@
                                     @onclick="OpenScopeDraftBrowser"
                                     disabled="@(scopeDraftInherit || form.SourceTenantId == Guid.Empty)"
                                     title="Pick Included / Blocked containers from the live directory">
-                                <i class="bi bi-folder-symlink me-1"></i>Browse…
+                                <i class="fas fa-folder-open me-1"></i>Browse…
                             </button>
                         </div>
                         @if (scopeDraftBlocked.Count == 0)
@@ -2756,7 +2756,7 @@
                                 {
                                     var dnRef = dn;
                                     <li class="step-scope-row">
-                                        <i class="bi bi-slash-circle-fill text-danger"></i>
+                                        <i class="fas fa-ban text-danger"></i>
                                         <span class="step-scope-dn" title="@dnRef">@dnRef</span>
                                         <button type="button" class="step-scope-x" title="Remove this path"
                                                 disabled="@scopeDraftInherit"

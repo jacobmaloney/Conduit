@@ -31,7 +31,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">
-                        <i class="bi bi-diagram-3 me-2"></i>@(ScopeMode ? "Select Scope Locations" : "Select Base DN")
+                        <i class="fas fa-sitemap me-2"></i>@(ScopeMode ? "Select Scope Locations" : "Select Base DN")
                     </h5>
                     <button type="button" class="btn-close" @onclick="Cancel" aria-label="Close"></button>
                 </div>
@@ -56,7 +56,7 @@
                         else if (!string.IsNullOrEmpty(ErrorMessage))
                         {
                             <div class="alert alert-danger mb-0" role="alert">
-                                <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
+                                <i class="fas fa-triangle-exclamation me-2"></i>@ErrorMessage
                             </div>
                         }
                         else if (_scopeDataSource is not null)
@@ -91,7 +91,7 @@
                         else if (!string.IsNullOrEmpty(ErrorMessage))
                         {
                             <div class="alert alert-danger mb-0" role="alert">
-                                <i class="bi bi-exclamation-triangle me-2"></i>@ErrorMessage
+                                <i class="fas fa-triangle-exclamation me-2"></i>@ErrorMessage
                             </div>
                         }
                         else if (_scopeDataSource is not null)
@@ -107,18 +107,18 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" @onclick="Cancel">
-                        <i class="bi bi-x-circle me-1"></i>Cancel
+                        <i class="fas fa-circle-xmark me-1"></i>Cancel
                     </button>
                     @if (ScopeMode)
                     {
                         <button type="button" class="btn btn-primary" @onclick="ApplyScopes">
-                            <i class="bi bi-check-circle me-1"></i>Apply Scopes
+                            <i class="fas fa-check-circle me-1"></i>Apply Scopes
                         </button>
                     }
                     else
                     {
                         <button type="button" class="btn btn-primary" disabled="@(string.IsNullOrEmpty(selectedDn))" @onclick="Apply">
-                            <i class="bi bi-check-circle me-1"></i>Use this DN
+                            <i class="fas fa-check-circle me-1"></i>Use this DN
                         </button>
                     }
                 </div>
