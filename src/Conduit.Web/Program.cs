@@ -571,6 +571,11 @@ builder.Services.AddScoped<Conduit.Web.Services.SqlServiceAgentExecutor>();
 // Scoped: it resolves the scoped CredentialProtector. The poller resolves it per-
 // command from its scope.
 builder.Services.AddScoped<Conduit.Web.Services.AwsAgentWriteExecutor>();
+// ApplyScimWrite executor — validates + allow-lists an IC-routed lifecycle change to one
+// SCIM user (enable/disable, replace attributes through a closed name map, set manager)
+// and drives ScimSink's PatchOp writes; ALL SCIM HTTP stays in the connector. Scoped: it
+// resolves the scoped CredentialProtector. The poller resolves it per-command from its scope.
+builder.Services.AddScoped<Conduit.Web.Services.ScimAgentWriteExecutor>();
 // Enrollment/heartbeat status shared between the poller (writer) and the Configuration page (reader).
 builder.Services.AddSingleton<Conduit.Web.Services.IcAgentStatusService>();
 // The one reader of this installation's IC endpoints + key selection, shared by the command

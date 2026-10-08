@@ -44,6 +44,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandApplySqlWrite = "ApplySqlWrite";
     private const string CommandStopSqlService = "StopSqlService";
     private const string CommandApplyAwsWrite = "ApplyAwsWrite";
+    private const string CommandApplyScimWrite = "ApplyScimWrite";
     private const string CommandCreateAdAccount = "CreateAdAccount";
     private const string CommandBrowseContainers = "BrowseContainers";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
@@ -432,6 +433,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         {
             (success, message) = await ApplyAwsWriteAsync(command.Id, command.PayloadJson, ct);
         }
+        else if (string.Equals(command.CommandType, CommandApplyScimWrite, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message) = await ApplyScimWriteAsync(command.Id, command.PayloadJson, ct);
+        }
         else if (string.Equals(command.CommandType, CommandCreateAdAccount, StringComparison.OrdinalIgnoreCase))
         {
             (success, message, resultJson) = await CreateAdAccountAsync(command.Id, command.PayloadJson, ct);
@@ -524,6 +529,19 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AwsAgentWriteExecutor>();
+        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+    }
+
+    /// <summary>
+    /// ApplyScimWrite: route one lifecycle change to one SCIM user (enable/disable, replace
+    /// attributes, set manager) through this agent. Thin shim — the allow-lists, the closed
+    /// attribute map and the credential resolution live in ScimAgentWriteExecutor, resolved from
+    /// a per-command DI scope (the CredentialProtector it needs is scoped). Raw payload NEVER logged.
+    /// </summary>
+    private async Task<(bool Success, string Message)> ApplyScimWriteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.ScimAgentWriteExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
 

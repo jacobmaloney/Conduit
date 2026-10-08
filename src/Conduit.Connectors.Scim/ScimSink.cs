@@ -340,6 +340,72 @@ public sealed class ScimSink : IConnectorSink
         }
     }
 
+    // ─── Agent-routed single-user writes (IdentityCenter ApplyScimWrite) ───────
+    //
+    // The lifecycle verbs IC's engine issues for one account: enable/disable, replace a few
+    // attributes, set the manager. Each is one PatchOp (RFC 7644 §3.5.2) against the user
+    // resolved by id or userName; a PUT would replace the whole resource and silently drop
+    // every attribute the command did not carry, so these never PUT.
+
+    /// <summary>Sets the SCIM <c>active</c> flag (enable = true, disable = false).</summary>
+    public Task<SinkWriteResult> SetActiveAsync(string userExternalId, bool active, CancellationToken cancellationToken)
+        => PatchUserAsync(userExternalId, "SetActive",
+            new object[] { new Dictionary<string, object?> { ["op"] = "replace", ["path"] = "active", ["value"] = active } },
+            cancellationToken);
+
+    /// <summary>
+    /// Replaces the given SCIM attribute paths (already SCIM paths, e.g. <c>name.givenName</c> or the
+    /// enterprise extension's <c>department</c>); a null value removes the attribute.
+    /// </summary>
+    public Task<SinkWriteResult> ReplaceAttributesAsync(string userExternalId, IReadOnlyDictionary<string, string?> scimPathToValue, CancellationToken cancellationToken)
+    {
+        if (scimPathToValue.Count == 0)
+            return Task.FromResult(SinkWriteResult.Fail("ReplaceAttributes: no attributes."));
+        var operations = new List<object>(scimPathToValue.Count);
+        foreach (var (path, value) in scimPathToValue)
+            operations.Add(value is null
+                ? new Dictionary<string, object?> { ["op"] = "remove", ["path"] = path }
+                : new Dictionary<string, object?> { ["op"] = "replace", ["path"] = path, ["value"] = value });
+        return PatchUserAsync(userExternalId, "ReplaceAttributes", operations, cancellationToken);
+    }
+
+    private async Task<SinkWriteResult> PatchUserAsync(string userExternalId, string verb, IReadOnlyList<object> operations, CancellationToken ct)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(userExternalId))
+                return SinkWriteResult.Fail($"{verb}: userExternalId is empty.");
+
+            var creds = await ScimCredentialReader.ReadAsync(_protector, _tenantId)
+                ?? throw new InvalidOperationException($"No 'scim' credential for tenant {_tenantId}.");
+            var client = ScimCredentialReader.BuildClient(_httpFactory, creds);
+
+            var userId = await TryFindUserAsync(client, creds, userExternalId, userExternalId, ct);
+            if (userId is null)
+                return SinkWriteResult.Fail($"{verb}: target user '{userExternalId}' not found in SCIM endpoint.");
+
+            var body = new { schemas = new[] { "urn:ietf:params:scim:api:messages:2.0:PatchOp" }, Operations = operations };
+            var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/scim+json");
+            using var req = new HttpRequestMessage(new HttpMethod("PATCH"), $"{creds.BaseUrl}{creds.UserEndpoint}/{userId}") { Content = content };
+            var resp = await client.SendAsync(req, ct);
+
+            if (resp.StatusCode == HttpStatusCode.MethodNotAllowed || resp.StatusCode == HttpStatusCode.NotImplemented)
+                return SinkWriteResult.Fail($"{verb}: SCIM server returned {(int)resp.StatusCode} on PATCH — server may not support PatchOp.");
+            if (!resp.IsSuccessStatusCode)
+                return SinkWriteResult.Fail($"{verb}: PATCH returned HTTP {(int)resp.StatusCode}: {await resp.Content.ReadAsStringAsync(ct)}");
+            return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SCIM {Verb} failed for {UserId}", verb, userExternalId);
+            return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
     private async Task<SinkWriteResult> UpsertUserAsync(HttpClient client, ScimCredentials creds, ConnectorObject obj, CancellationToken ct)
     {
         var userName = Get(obj, "userName") ?? Get(obj, "userPrincipalName");
