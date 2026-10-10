@@ -8,40 +8,33 @@
 @inject IConfiguration Configuration
 @inject ILogger<Setup> Logger
 @layout SetupLayout
+@using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Components.Marks
 
-<div class="icb-wizard">
-    <aside class="icb-wizard-aside">
-        <div class="icb-wizard-brand">
-            <ConduitMark Size="72" Color="var(--accent)" HubFill="var(--bg-2)" />
-            <span><b>Conduit</b></span>
-        </div>
-        <div class="icb-wizard-steps">
-            @foreach (var (label, num) in StepList())
-            {
-                var state = num == currentStep ? "is-current" : (num < currentStep ? "is-done" : "");
-                <div class="icb-wizard-step @state">
-                    <span class="icb-wizard-step-num">
-                        @if (num < currentStep)
-                        {
-                            <i class="oi oi-check" aria-hidden="true"></i>
-                        }
-                        else
-                        {
-                            @num
-                        }
-                    </span>
-                    <span>@label</span>
-                </div>
-            }
-        </div>
-        <div class="icb-wizard-aside-foot">
-            <div>First-run setup</div>
-            <p class="icb-wizard-aside-foot-note">Point Conduit at a database, create your admin sign-in, and you're ready to connect your first system. You can change everything later in Configuration.</p>
-        </div>
-    </aside>
-
-    <main class="icb-wizard-main">
-        <div class="icb-wizard-pane">
+@* The shell is Brand's: one component for both products' setup wizards (SETUP-02). Steps, eyebrow,
+   title and lede are data computed from this page's state; the footer is a template so the submit
+   button can sit in the shell's foot while still submitting the EditForm (form="conduit-setup-form"). *@
+<BrandWizardShell ProductName="Conduit" Label="Conduit setup steps" Steps="@ShellSteps()"
+                  Eyebrow="@ShellEyebrow()" Lede="@ShellLede()"
+                  FootTitle="First-run setup"
+                  FootNote="Point Conduit at a database, create your admin sign-in, and you're ready to connect your first system. You can change everything later in Configuration."
+                  Footer="@(ShowForm ? FormFooter : null)">
+    <Mark><BrandConduitMark Size="72" Color="var(--accent)" HubFill="var(--bg-2)" /></Mark>
+    <Title>
+        @if (setupComplete)
+        {
+            <text>Setup <span class="icb-wizard-title-accent">complete</span>.</text>
+        }
+        else if (prefill.RecoveryRequired)
+        {
+            <text>This install needs its <span class="icb-wizard-title-accent">administrator</span> back.</text>
+        }
+        else
+        {
+            @WizardHeading()
+        }
+    </Title>
+    <ChildContent>
             @if (isProcessing)
             {
                 <div class="text-center py-5" role="status">
@@ -52,9 +45,7 @@
             }
             else if (setupComplete)
             {
-                <div class="icb-wizard-eyebrow">All set</div>
-                <h1 class="icb-wizard-title">Setup <span class="icb-wizard-title-accent">complete</span>.</h1>
-                <p class="icb-wizard-lede">Conduit has been successfully configured. Redirecting to the login page…</p>
+                @* Eyebrow, title and lede come from the shell's parameters for this state. *@
             }
             else if (prefill.RecoveryRequired)
             {
@@ -88,8 +79,6 @@
                         it redirects. Deleting that assignment does NOT make this branch fall
                         back to the redirect; it silently renders the whole form instead.
                 -->
-                <div class="icb-wizard-eyebrow">Recovery required</div>
-                <h1 class="icb-wizard-title">This install needs its <span class="icb-wizard-title-accent">administrator</span> back.</h1>
                 <p class="icb-wizard-lede">
                     Conduit already has a database and a schema — this is not a first run, so the
                     setup wizard will not open. What it does not have is an active portal
@@ -99,19 +88,12 @@
             }
             else
             {
-                <div class="icb-wizard-eyebrow">First-run setup · @StepList()[currentStep - 1].label</div>
-                <h1 class="icb-wizard-title">@WizardHeading()</h1>
-                <p class="icb-wizard-lede">@WizardLede()</p>
-
-                <EditForm Model="@config" OnValidSubmit="@HandleValidSubmit">
+                <EditForm id="conduit-setup-form" Model="@config" OnValidSubmit="@HandleValidSubmit">
                     <DataAnnotationsValidator />
 
                             @if (currentStep == 1)
                             {
                                 <!-- Step 1: Database Configuration -->
-                                <h4 class="section-title">Database Configuration</h4>
-                                <p class="text-muted">Configure the database connection for Conduit.</p>
-
                                 <div class="icb-form-field mb-3">
                                     <label class="icb-form-label" for="setupDbType">Database Type</label>
                                     <select id="setupDbType" class="icb-form-select" @bind="databaseType">
@@ -262,9 +244,6 @@
                             else if (currentStep == 2)
                             {
                                 <!-- Step 2: Admin User -->
-                                <h4 class="section-title">Administrator Account</h4>
-                                <p class="text-muted">Create the administrator account for Conduit.</p>
-
                                 <div class="icb-form-field mb-3">
                                     <label class="icb-form-label" for="setupAdminUser">Admin Username</label>
                                     <InputText id="setupAdminUser" class="icb-form-input" @bind-Value="config.AdminUsername" />
@@ -290,9 +269,6 @@
                             else if (currentStep == 3)
                             {
                                 <!-- Step 3: Security Settings -->
-                                <h4 class="section-title">Security Configuration</h4>
-                                <p class="text-muted">Configure security settings for Conduit.</p>
-
                                 <div class="icb-form-field mb-3">
                                     <label class="icb-form-label" for="setupJwtKey">JWT Secret Key</label>
                                     <div class="icb-form-input-group">
@@ -336,9 +312,6 @@
                             else if (currentStep == 4)
                             {
                                 <!-- Step 4: Review -->
-                                <h4 class="section-title">Review Configuration</h4>
-                                <p class="text-muted">Please review your settings before completing setup.</p>
-
                                 <div class="ic-field-grid p-0 mb-3">
                                     <div class="ic-field">
                                         <span class="ic-field-label">Server</span>
@@ -399,30 +372,10 @@
                                 }
                             }
 
-                    <div class="icb-wizard-foot">
-                        <button type="button" class="ic-btn ic-btn-ghost" @onclick="PreviousStep"
-                                disabled="@(currentStep == 1)">
-                            ← Previous
-                        </button>
-
-                        @if (currentStep < 4)
-                        {
-                            <button type="button" class="ic-btn ic-btn-primary" @onclick="NextStep">
-                                Next →
-                            </button>
-                        }
-                        else
-                        {
-                            <button type="submit" class="ic-btn ic-btn-primary" disabled="@isProcessing">
-                                Complete Setup
-                            </button>
-                        }
-                    </div>
                 </EditForm>
             }
-        </div>
-    </main>
-</div>
+    </ChildContent>
+</BrandWizardShell>
 
 @code {
     private static readonly (string label, int num)[] _steps = new[]
@@ -433,6 +386,36 @@
         ("Review", 4)
     };
     private static (string label, int num)[] StepList() => _steps;
+
+    // ── Shell data (SETUP-02): what BrandWizardShell renders for this page's state ──
+    private bool ShowForm => !isProcessing && !setupComplete && !prefill.RecoveryRequired;
+
+    private IReadOnlyList<BrandWizardSteps.Step> ShellSteps() => _steps
+        .Select(s => new BrandWizardSteps.Step(s.label, s.label,
+            s.num == currentStep ? BrandWizardSteps.StepState.Active
+            : s.num < currentStep ? BrandWizardSteps.StepState.Done
+            : BrandWizardSteps.StepState.Pending))
+        .ToList();
+
+    private string ShellEyebrow() => setupComplete ? "All set"
+        : prefill.RecoveryRequired ? "Recovery required"
+        : $"First-run setup · {_steps[currentStep - 1].label}";
+
+    private string? ShellLede() => setupComplete ? "Conduit has been successfully configured. Redirecting to the login page…"
+        : prefill.RecoveryRequired ? null
+        : WizardLede();
+
+    private RenderFragment FormFooter => @<text>
+        <button type="button" class="ic-btn ic-btn-ghost" @onclick="PreviousStep" disabled="@(currentStep == 1)">← Previous</button>
+        @if (currentStep < 4)
+        {
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="NextStep">Next →</button>
+        }
+        else
+        {
+            <button type="submit" form="conduit-setup-form" class="ic-btn ic-btn-primary" disabled="@isProcessing">Complete Setup</button>
+        }
+    </text>;
 
     private string WizardHeading() => currentStep switch
     {
