@@ -144,7 +144,8 @@ public sealed class ActiveDirectoryContainerBrowser : IConnectorContainerBrowser
 
     // ─── credential + host helpers (mirror ActiveDirectorySource) ────────────
 
-    private sealed record AdCredentials(string Username, string Password);
+    private sealed record AdCredentials(string Username, string Password,
+        bool AllowUntrustedCertificate = false, string? ExpectedServerCertificateThumbprint = null);
 
     /// <summary>
     /// Build a bound LdapConnection using Negotiate (GSS-SPNEGO → Kerberos/NTLM).
@@ -156,28 +157,15 @@ public sealed class ActiveDirectoryContainerBrowser : IConnectorContainerBrowser
     /// same path here. DOMAIN\user is split into NetworkCredential(user){Domain}
     /// the way SSPI expects; UPN / bare names pass through unchanged.
     /// </summary>
-    private static LdapConnection CreateBoundConnection(string host, int port, AdCredentials creds)
+    private LdapConnection CreateBoundConnection(string host, int port, AdCredentials creds)
     {
-        var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-        {
-            AuthType = AuthType.Negotiate
-        };
-        connection.SessionOptions.ProtocolVersion = 3;
-        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.All;
-
-        NetworkCredential netCred;
-        if (creds.Username.Contains('\\'))
-        {
-            var parts = creds.Username.Split('\\', 2);
-            netCred = new NetworkCredential(parts[1], creds.Password) { Domain = parts[0] };
-        }
-        else
-        {
-            netCred = new NetworkCredential(creds.Username, creds.Password);
-        }
-        connection.Credential = netCred;
-        connection.Bind();
-        return connection;
+        // The same bind the sink and the source use (AdLdapBinder, 2026-10-16); the browser keeps
+        // its one-level reads and referral chasing as before.
+        return AdLdapBinder.Bind(
+            new AdBindOptions(host, port, creds.Username, creds.Password,
+                creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint,
+                ReferralChasingOptions.All),
+            _logger, _tenantId.ToString(), out _);
     }
 
     private async Task<AdCredentials?> ReadCredsAsync()
@@ -193,11 +181,10 @@ public sealed class ActiveDirectoryContainerBrowser : IConnectorContainerBrowser
         if (string.IsNullOrEmpty(raw)) return null;
         try
         {
-            using var doc = JsonDocument.Parse(raw);
-            var u = doc.RootElement.TryGetProperty("Username", out var uEl) ? uEl.GetString() : null;
-            var p = doc.RootElement.TryGetProperty("Password", out var pEl) ? pEl.GetString() : null;
-            if (string.IsNullOrEmpty(u) || p is null) return null;
-            return new AdCredentials(u, p);
+            var parsed = AdLdapBinder.ParseCredentialJson(raw);
+            if (parsed is null) return null;
+            var (u, p, allowUntrusted, pin) = parsed.Value;
+            return new AdCredentials(u, p, allowUntrusted, pin);
         }
         catch
         {

@@ -347,6 +347,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
     }
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
     {
+        string? probeHost = null; var probePort = 0;
         try
         {
             var tenant = await _tenantRepo.GetByIdAsync(_tenantId);
@@ -358,6 +359,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 return new ConnectorTestResult { IsSuccessful = false, Message = "No 'ldap' credential stored." };
 
             var (host, port) = ParseHostPort(tenant.Domain);
+            probeHost = host; probePort = port;
             using var connection = CreateBoundConnection(host, port, creds);
 
             // RootDSE probe.
@@ -374,6 +376,13 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 Message = $"Bound to {host}:{port}. defaultNamingContext={dnc ?? "(unknown)"}."
             };
         }
+        catch (LdapException ex) when (ex.ErrorCode == 81 && probeHost is not null)
+        {
+            // ServerDown says nothing about WHY. Probe the socket (and the TLS handshake on 636) so the
+            // operator reads the cause, not the symptom (2026-10-16: a DC with no server certificate).
+            var why = await LdapServerDownDiagnosis.DescribeAsync(probeHost, probePort, cancellationToken);
+            return new ConnectorTestResult { IsSuccessful = false, Message = string.Concat(ex.Message, " ", why) };
+        }
         catch (Exception ex)
         {
             return new ConnectorTestResult { IsSuccessful = false, Message = ex.Message };
@@ -382,7 +391,8 @@ public sealed class ActiveDirectorySource : IConnectorSource
 
     // ─── helpers ──────────────────────────────────────────────────────────
 
-    private sealed record AdCredentials(string Username, string Password);
+    private sealed record AdCredentials(string Username, string Password,
+        bool AllowUntrustedCertificate = false, string? ExpectedServerCertificateThumbprint = null);
 
     /// <summary>
     /// Build a bound LdapConnection using Negotiate (GSS-SPNEGO → Kerberos/NTLM).
@@ -392,35 +402,16 @@ public sealed class ActiveDirectorySource : IConnectorSource
     /// standalone. DOMAIN\user is split into NetworkCredential(user){Domain} the way
     /// SSPI expects; UPN/bare names pass through unchanged.
     /// </summary>
-    private static LdapConnection CreateBoundConnection(string host, int port, AdCredentials creds)
+    private LdapConnection CreateBoundConnection(string host, int port, AdCredentials creds)
     {
-        var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-        {
-            AuthType = AuthType.Negotiate,
-            Timeout = TimeSpan.FromSeconds(30)
-        };
-        connection.SessionOptions.ProtocolVersion = 3;
-        // Single-domain read: never chase referrals. ReferralChasingOptions.All
-        // makes the DC hand back continuation referrals (subordinate/external
-        // naming contexts), and S.DS.P then tries to bind+search each one — DNS
-        // resolution, fresh binds, and timeouts that add seconds-to-minutes of
-        // dead latency per page on a Subtree search. We read exactly the included
-        // bases we were given, so suppress chasing entirely.
-        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
-
-        NetworkCredential netCred;
-        if (creds.Username.Contains('\\'))
-        {
-            var parts = creds.Username.Split('\\', 2);
-            netCred = new NetworkCredential(parts[1], creds.Password) { Domain = parts[0] };
-        }
-        else
-        {
-            netCred = new NetworkCredential(creds.Username, creds.Password);
-        }
-        connection.Credential = netCred;
-        try { connection.Bind(); return connection; }
-        catch { connection.Dispose(); throw; }
+        // The same bind the sink uses (AdLdapBinder): until 2026-10-16 this was a plain Negotiate
+        // bind that ignored :636, so a connection on LDAPS could never be read or tested. Single-domain
+        // read: never chase referrals (ReferralChasingOptions.All turned a 4 s read into minutes).
+        return AdLdapBinder.Bind(
+            new AdBindOptions(host, port, creds.Username, creds.Password,
+                creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint,
+                ReferralChasingOptions.None, TimeSpan.FromSeconds(30)),
+            _logger, _tenantId.ToString(), out _);
     }
 
     private async Task<AdCredentials?> ReadCredsAsync()
@@ -430,11 +421,10 @@ public sealed class ActiveDirectorySource : IConnectorSource
         if (string.IsNullOrEmpty(raw)) return null;
         try
         {
-            var doc = JsonDocument.Parse(raw);
-            var u = doc.RootElement.TryGetProperty("Username", out var uEl) ? uEl.GetString() : null;
-            var p = doc.RootElement.TryGetProperty("Password", out var pEl) ? pEl.GetString() : null;
-            if (string.IsNullOrEmpty(u) || p is null) return null;
-            return new AdCredentials(u, p);
+            var parsed = AdLdapBinder.ParseCredentialJson(raw);
+            if (parsed is null) return null;
+            var (u, p, allowUntrusted, pin) = parsed.Value;
+            return new AdCredentials(u, p, allowUntrusted, pin);
         }
         catch
         {

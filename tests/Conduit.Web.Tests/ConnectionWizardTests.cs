@@ -44,6 +44,26 @@ public class ConnectionWizardTests
         Assert.Contains(": \"Objects\";", proxy);
     }
 
+    /// <summary>
+    /// Jacob, 2026-10-16: ":389 hard coded" while the test banner kept naming :636. In edit mode the
+    /// test probed the SAVED row and Save waited for that test, so a saved bad host could never be
+    /// repaired. The test now always builds a throw-away tenant from the form and merges entered
+    /// credentials over the saved blob, so an "unchanged" secret still binds.
+    /// </summary>
+    [Fact]
+    public void The_connection_test_probes_the_form_not_the_saved_row()
+    {
+        var src = Page();
+        Assert.DoesNotContain("probeTenantId = editingId.Value;", src);
+        Assert.Contains("await PersistCreateCredentialsAsync(scratchId, existingFrom: editingId);", src);
+        Assert.Contains("private async Task PersistCreateCredentialsAsync(Guid tenantId, Guid? existingFrom = null)", src);
+        Assert.Contains("await CredentialProtector.RetrieveAsync(mergeFrom, ctype.Name);", src);
+        // The throw-away tenant carries the form's host and inbound table, never the saved ones.
+        var test = src.IndexOf("The test always probes the FORM", StringComparison.Ordinal);
+        Assert.True(test > 0);
+        Assert.Contains("Domain = string.IsNullOrWhiteSpace(form.Domain) ? null : form.Domain.Trim(),", src.Substring(test, 1200));
+    }
+
     private static string RepoFile(string relativePath, [CallerFilePath] string thisFile = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", relativePath));
 }

@@ -1091,110 +1091,13 @@ public sealed class ActiveDirectorySink : IConnectorSink
     /// </summary>
     private LdapConnection Bind(string? domain, AdCredentials creds, out bool isSecure)
     {
+        // One bind for every AD path (AdLdapBinder, 2026-10-16): LDAPS on 636, StartTLS elsewhere,
+        // Negotiate sign+seal when neither, the per-connection certificate policy throughout.
         var (host, port) = ParseHostPort(domain);
-        var connection = new LdapConnection(new LdapDirectoryIdentifier(host, port))
-        {
-            AuthType = AuthType.Basic
-        };
-        connection.SessionOptions.ProtocolVersion = 3;
-        // Shared fail-closed server-certificate policy, wired identically to both
-        // the :636 SSL path and the :389 StartTLS upgrade path.
-        //
-        // Wrapped so we KNOW whether a certificate was actually rejected, rather than inferring it
-        // from the exception type below. TlsOperationException means both "your validator said no"
-        // and "this server does not offer StartTLS at all", and those need opposite handling.
-        var certificateRejected = false;
-        var verify = Conduit.Sync.Security.LdapServerCertificateValidator.Build(
-            _logger, _tenantId.ToString(), host,
-            creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint);
-        connection.SessionOptions.VerifyServerCertificate = (conn, certificate) =>
-        {
-            var accepted = verify(conn, certificate);
-            if (!accepted) certificateRejected = true;
-            return accepted;
-        };
-        isSecure = false;
-
-        if (port == 636)
-        {
-            connection.SessionOptions.SecureSocketLayer = true;
-            isSecure = true;
-        }
-        else
-        {
-            // Best-effort StartTLS upgrade on :389. If the server doesn't support
-            // it we stay plaintext — and any password-write attempt will throw
-            // when it gets to RequireSecureForPasswordWrite. A cert that FAILS
-            // validation on this path is a hard reject (the callback returns
-            // false → StartTransportLayerSecurity throws), never a silent
-            // downgrade to plaintext.
-            try
-            {
-                connection.SessionOptions.StartTransportLayerSecurity(null);
-                isSecure = true;
-            }
-            catch (TlsOperationException) when (certificateRejected)
-            {
-                // Our validator refused the server's certificate. Never downgrade: a rejected cert
-                // is an active trust failure, not an absent capability.
-                throw;
-            }
-            catch (TlsOperationException ex)
-            {
-                // The server does not offer StartTLS at all -- a domain controller with no LDAPS
-                // certificate answers the extended operation with "unavailable" and .NET surfaces
-                // that as TlsOperationException too. Rethrowing it here made the documented
-                // best-effort upgrade mandatory in practice: on such a DC EVERY write threw,
-                // including enable/disable, which never required a secure channel. Only password
-                // writes do, and RequireSecureForPasswordWrite still refuses those below because
-                // isSecure stays false.
-                _logger.LogDebug(ex,
-                    "StartTLS not offered by {Host}:{Port} — connection will be plaintext. " +
-                    "Password writes will be refused.", host, port);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex,
-                    "StartTLS not available on {Host}:{Port} — connection will be plaintext. " +
-                    "Password writes will be refused.", host, port);
-            }
-        }
-
-        connection.Credential = new NetworkCredential(creds.Username, creds.Password);
-
-        if (!isSecure)
-        {
-            // No LDAPS and no StartTLS, so a simple bind would put the service account's password
-            // on the wire in clear text. Any domain controller with "LDAP server signing
-            // requirements = Require signing" (the default on current Windows Server) refuses that
-            // outright with strongerAuthRequired — which is what the lab DC did.
-            //
-            // Negotiate with signing and sealing encrypts and integrity-protects the channel using
-            // Kerberos/NTLM, with no certificate and no PKI anywhere. It is the standard way to
-            // write to AD over :389, and it is strictly MORE secure than the simple bind it
-            // replaces — this is not a downgrade to make the write succeed.
-            //
-            // The :636 and StartTLS paths keep AuthType.Basic: that channel is already encrypted,
-            // and simple bind there is what non-Windows directories expect.
-            connection.AuthType = AuthType.Negotiate;
-            connection.SessionOptions.Signing = true;
-            connection.SessionOptions.Sealing = true;
-
-            // SASL needs the domain as a SEPARATE field. A simple bind happily takes
-            // "domain.local\Administrator" as one string, but Negotiate rejects that exact value
-            // with "The supplied credential is invalid" — the same account binds fine when the
-            // domain is passed as its own argument. Measured against the lab DC, all three forms.
-            var (bindUser, bindDomain) = SplitDownLevelLogonName(creds.Username);
-            if (bindDomain is not null)
-                connection.Credential = new NetworkCredential(bindUser, creds.Password, bindDomain);
-            _logger.LogDebug(
-                "Binding to {Host}:{Port} with Negotiate sign+seal — the channel is not TLS-protected, "
-                + "so a simple bind would expose credentials and be refused by a signing-required DC.",
-                host, port);
-        }
-
-        connection.Bind();
-        return connection;
+        return AdLdapBinder.Bind(
+            new AdBindOptions(host, port, creds.Username, creds.Password,
+                creds.AllowUntrustedCertificate, creds.ExpectedServerCertificateThumbprint),
+            _logger, _tenantId.ToString(), out isSecure);
     }
 
     /// <summary>
@@ -1207,16 +1110,7 @@ public sealed class ActiveDirectorySink : IConnectorSink
     /// that silently produced "The supplied credential is invalid" against a correct password.
     /// </summary>
     public static (string User, string? Domain) SplitDownLevelLogonName(string? username)
-    {
-        if (string.IsNullOrWhiteSpace(username)) return (username ?? string.Empty, null);
-
-        var slash = username.IndexOf('\\');
-        if (slash <= 0 || slash == username.Length - 1) return (username, null);
-
-        var domain = username[..slash];
-        var user = username[(slash + 1)..];
-        return string.IsNullOrWhiteSpace(user) ? (username, null) : (user, domain);
-    }
+        => AdLdapBinder.SplitDownLevelLogonName(username);
 
     private static (string Host, int Port) ParseHostPort(string? domain)
     {

@@ -3336,27 +3336,25 @@
         var scratchId = Guid.Empty;
         try
         {
-            Guid probeTenantId;
-            if (editingId.HasValue)
+            // The test always probes the FORM, through a throw-away tenant. Until 2026-10-16 the edit
+            // path probed the SAVED row (and wrote the entered credentials onto it before Save): an
+            // operator who had saved a bad host could edit it, test, and be told about the old host
+            // forever, while Save stayed disabled until that test passed (Jacob: ":389 hard coded",
+            // the banner still naming :636). Entered credentials are merged over the saved blob so an
+            // "unchanged" secret still binds; nothing on the saved row changes until Save.
+            var scratch = await TenantRepo.CreateAsync(new Tenant
             {
-                await PersistCreateCredentialsAsync(editingId.Value);
-                probeTenantId = editingId.Value;
-            }
-            else
-            {
-                var scratch = await TenantRepo.CreateAsync(new Tenant
-                {
-                    Id = Guid.NewGuid(),
-                    Name = string.Concat("__test__", Guid.NewGuid().ToString("N")),
-                    Slug = string.Concat("__test__", Guid.NewGuid().ToString("N")),
-                    SystemType = form.SystemType,
-                    Domain = string.IsNullOrWhiteSpace(form.Domain) ? null : form.Domain.Trim(),
-                    IsActive = false
-                });
-                scratchId = scratch.Id;
-                await PersistCreateCredentialsAsync(scratchId);
-                probeTenantId = scratchId;
-            }
+                Id = Guid.NewGuid(),
+                Name = string.Concat("__test__", Guid.NewGuid().ToString("N")),
+                Slug = string.Concat("__test__", Guid.NewGuid().ToString("N")),
+                SystemType = form.SystemType,
+                Domain = string.IsNullOrWhiteSpace(form.Domain) ? null : form.Domain.Trim(),
+                TargetTable = string.IsNullOrWhiteSpace(form.TargetTable) ? null : form.TargetTable,
+                IsActive = false
+            });
+            scratchId = scratch.Id;
+            await PersistCreateCredentialsAsync(scratchId, existingFrom: editingId);
+            var probeTenantId = scratchId;
 
             var result = await ProbeTenantAsync(adapter, probeTenantId);
             formTestMessage = result.Message;
@@ -3489,8 +3487,12 @@
 
     // Persist each credential type the operator filled. Merges with the stored
     // blob on edit so untouched secrets survive.
-    private async Task PersistCreateCredentialsAsync(Guid tenantId)
+    /// <param name="tenantId">Where the merged blobs are stored.</param>
+    /// <param name="existingFrom">Whose stored blobs the entered values are merged over; defaults to <paramref name="tenantId"/>.
+    /// The connection test passes the connection being edited so a throw-away tenant binds with the saved secret.</param>
+    private async Task PersistCreateCredentialsAsync(Guid tenantId, Guid? existingFrom = null)
     {
+        var mergeFrom = existingFrom ?? tenantId;
         var adapter = string.IsNullOrEmpty(form.SystemType) ? null : ConnectorRegistry.Get(form.SystemType);
         if (adapter is null) return;
 
@@ -3516,7 +3518,7 @@
                 // Merge entered values over the existing blob so untouched (esp.
                 // secret) fields are preserved.
                 string? existingRaw;
-                try { existingRaw = await CredentialProtector.RetrieveAsync(tenantId, ctype.Name); }
+                try { existingRaw = await CredentialProtector.RetrieveAsync(mergeFrom, ctype.Name); }
                 catch { existingRaw = null; }
                 if (!string.IsNullOrEmpty(existingRaw)
                     && System.Text.Json.Nodes.JsonNode.Parse(existingRaw) is System.Text.Json.Nodes.JsonObject existing)
