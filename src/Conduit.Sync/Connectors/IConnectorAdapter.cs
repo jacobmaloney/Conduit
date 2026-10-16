@@ -806,6 +806,13 @@ public sealed class SyncEnumerationResult
     /// this to true. Set it true only at the enumerator's proven natural terminus.
     /// </summary>
     public Func<bool> WasCompleteRead { get; init; } = () => false;
+
+    /// <summary>
+    /// Subordinate naming contexts a complete read referred to but did not enter (Active Directory:
+    /// DomainDnsZones, ForestDnsZones, Configuration, child domains). Empty for every other source.
+    /// Read after the enumeration drains; a host shows it beside "complete" so the word stays honest.
+    /// </summary>
+    public Func<IReadOnlyList<string>> SkippedPartitions { get; init; } = () => Array.Empty<string>();
 }
 
 public sealed class ConnectorTestResult

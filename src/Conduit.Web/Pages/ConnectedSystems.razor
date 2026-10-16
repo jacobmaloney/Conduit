@@ -823,26 +823,6 @@
             }
             @if (ShowStep3)
             {
-                @if (form.SystemType == "IdentityCenter")
-                {
-                    <div class="icb-settings-grid">
-                        <div class="icb-form-field icb-settings-grid-full">
-                            <label class="icb-form-label" for="connTargetTable">Target table *</label>
-                            <select id="connTargetTable" class="icb-form-select" @bind="form.TargetTable" @bind:after="InvalidateFormTest">
-                                <option value="">— choose Objects or Identities —</option>
-                                <option value="Objects">Objects (directory accounts)</option>
-                                <option value="Identities">Identities (people / golden records)</option>
-                            </select>
-                            <span class="icb-form-help">
-                                <strong>Required for IdentityCenter.</strong> The table an inbound REST/SCIM write to this
-                                connection lands in: <strong>Objects</strong> (/api/objects) or <strong>Identities</strong>
-                                (/api/identities). This governs the connection's write endpoint only. Sync Projects still pick
-                                the table per side (source/sink) when you build them, so one connection can still
-                                source=Identities and sink=Objects in a project.
-                            </span>
-                        </div>
-                    </div>
-                }
                 @* Certification Center: the ONE bespoke choice, framed as an outcome, not a
                    table name. Persists to Tenant.TargetTable exactly like the IC block above —
                    the inbound/proxy path stamps IdentityCenterTableContext from it. "People" →
@@ -868,11 +848,9 @@
                     </div>
                 }
 
-                @* Active + Authoritative toggles (IC "New Connection" parity). Active is
-                   the real Tenant.IsActive flag. Authoritative has NO Tenant column today
-                   — Conduit's symmetric router decides "which side wins" per sync project /
-                   per attribute, not per connection. Rendered disabled + explained until
-                   Jacob decides the data-model mapping (see the flagged decision). *@
+                @* The Active toggle is the real Tenant.IsActive flag. The disabled "Authoritative (soon)"
+                   toggle that sat beside it was retired 2026-10-16: Conduit's symmetric router decides
+                   which side wins per sync project and per attribute, never per connection. *@
                 <hr class="icb-form-divider" />
                 <div class="icb-settings-grid">
                     <div class="icb-form-field">
@@ -884,13 +862,6 @@
                            CronSchedule IS NOT NULL only — it does not look at the tenant's
                            IsActive — so the old "won't run scheduled syncs" was false. *@
                         <span class="icb-form-help">Inactive connections are hidden from the pickers, and an inbound POST is written locally instead of being forwarded. Scheduled sync projects that already reference this connection keep running — disable those in Sync Projects.</span>
-                    </div>
-                    <div class="icb-form-field" title="Authoritative source is decided per sync project / per attribute in Conduit's symmetric router, not per connection. Pending data-model decision.">
-                        <div class="icb-form-check">
-                            <input class="icb-form-switch" type="checkbox" role="switch" id="connAuthoritative" disabled />
-                            <label class="icb-form-check-label" for="connAuthoritative">Authoritative <BrandBadge Text="soon" Soft="true" Compact="true" /></label>
-                        </div>
-                        <span class="icb-form-help">Set the winning side in the Sync Project (per-attribute), not here — see Sync Projects.</span>
                     </div>
                 </div>
 
@@ -1044,7 +1015,19 @@
                         it is forwarded to <strong>@endpointsFor.SystemType</strong> ("@endpointsFor.Name").
                         @if (string.Equals(endpointsFor.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase))
                         {
-                            <text> Writes land in the <strong>@(string.IsNullOrWhiteSpace(endpointsFor.TargetTable) ? "Objects" : endpointsFor.TargetTable)</strong> table (set on this connection).</text>
+                            <text> Inbound writes land in </text>
+                            <select id="endpointsInboundTable" class="icb-form-select icb-form-select-sm icb-form-input-short d-inline-block w-auto align-baseline"
+                                    aria-label="Inbound target table"
+                                    value="@(string.IsNullOrWhiteSpace(endpointsFor.TargetTable) ? "Objects" : endpointsFor.TargetTable)"
+                                    @onchange="OnInboundTableChanged">
+                                <option value="Objects">Objects (directory accounts)</option>
+                                <option value="Identities">Identities (people / golden records)</option>
+                            </select>
+                            <text> — sync projects choose their own table per side; this only governs a direct POST to the URLs below.</text>
+                            @if (!string.IsNullOrEmpty(inboundTableMessage))
+                            {
+                                <div class="icb-form-help mt-1">@inboundTableMessage</div>
+                            }
                         }
                         The 201 response carries the target's assigned id and a <code>Location</code> that
                         resolves back to the created object.
@@ -1874,6 +1857,35 @@
     // Endpoints, Legal Hold, Clear Data — renders only in Development. The
     // primary directory-bind connection view stays clean in production.
     private bool ShowDevChrome => Environment.IsDevelopment();
+
+    private string? inboundTableMessage;
+
+    /// <summary>
+    /// The Endpoints dialog's inbound-table control (2026-10-16): the one place a connection's
+    /// TargetTable is set now that the wizard no longer asks. Saves immediately; sync projects are
+    /// unaffected because they carry their own per-side table.
+    /// </summary>
+    private async Task OnInboundTableChanged(ChangeEventArgs e)
+    {
+        if (endpointsFor is null) return;
+        var value = e.Value?.ToString();
+        if (!string.Equals(value, "Objects", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(value, "Identities", StringComparison.OrdinalIgnoreCase)) return;
+        try
+        {
+            var tenant = await TenantRepo.GetByIdAsync(endpointsFor.TenantId);
+            if (tenant is null) { inboundTableMessage = "Connection no longer exists."; return; }
+            tenant.TargetTable = value;
+            await TenantRepo.UpdateAsync(tenant);
+            endpointsFor.TargetTable = value;
+            inboundTableMessage = string.Concat("Saved: inbound writes now land in ", value, ".");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to change the inbound target table for connection {TenantId}", endpointsFor.TenantId);
+            inboundTableMessage = "The change could not be saved. Check the log on this host and retry.";
+        }
+    }
 
     // True when the connection shown in the Endpoints modal is a writable external
     // target — its adapter advertises SupportsCreate, so an inbound SCIM/REST POST
@@ -3256,14 +3268,12 @@
         && GetMissingRequiredTenantFieldsForForm().Count == 0
         && IcTargetTableSatisfied;
 
-    // Jacob's explicit requirement: an IdentityCenter connection CANNOT be created
-    // without choosing the inbound target table (Objects | Identities). Every other
-    // connector type ignores TargetTable, so the gate is a no-op for them.
-    private bool IcTargetTableSatisfied =>
-        !string.Equals(form.SystemType, "IdentityCenter", StringComparison.OrdinalIgnoreCase)
-        || (!string.IsNullOrWhiteSpace(form.TargetTable)
-            && (string.Equals(form.TargetTable, "Objects", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(form.TargetTable, "Identities", StringComparison.OrdinalIgnoreCase)));
+    // Until 2026-10-16 an IdentityCenter connection could not be created without choosing the
+    // inbound target table (Objects | Identities) here. Jacob, 2026-10-16: "should we even have a
+    // target table in the sync connection?" Sync projects pick the table per side, so the wizard no
+    // longer asks; a blank TargetTable means inbound writes land in Objects, and the Endpoints dialog
+    // (the one place inbound writes are explained) lets an operator switch it to Identities.
+    private bool IcTargetTableSatisfied => true;
 
     // The Test-before-Save gate only applies when the adapter declares credential
     // fields worth binding — i.e. there's something to test. Sink-only / credential-

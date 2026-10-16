@@ -14,6 +14,30 @@ public class SharedAdReaderTests
         Assert.Equal(new byte[] { 1 }, source.Requests[1].Cookie); Assert.Empty(source.Requests[2].Cookie);
         Assert.Equal("OU=Two,DC=x", source.Requests[2].BaseDn); Assert.All(source.Requests, r => Assert.Equal("mail", Assert.Single(r.Query.Attributes)));
     }
+    [Fact] public async Task SubordinatePartitionReferralsAreNamedAndDoNotBlockCompletion()
+    {
+        // Every AD domain root refers to DomainDnsZones / ForestDnsZones; a complete read of the domain
+        // partition must still complete and must name what it did not enter (2026-10-16, lab root read).
+        var source = new Pages(
+            new AdPage([Row("CN=A,DC=x")], [1], false, ["DC=DomainDnsZones,DC=x", "DC=ForestDnsZones,DC=x"]),
+            new AdPage([Row("CN=B,DC=x")], [], false, ["DC=DomainDnsZones,DC=x"]));
+        var state = new AdReadState();
+        Assert.Equal(2, (await Drain(source, new(), state)).Count);
+        Assert.True(state.IsComplete);
+        Assert.Equal(["DC=DomainDnsZones,DC=x", "DC=ForestDnsZones,DC=x"], state.SubordinatePartitions);
+    }
+    [Theory]
+    [InlineData("ldap://dc1.x.test/DC=DomainDnsZones,DC=x,DC=test", "DC=x,DC=test", true)]
+    [InlineData("ldap://dc1.x.test/CN=Configuration,DC=x,DC=test", "DC=x,DC=test", true)]
+    [InlineData("ldap://dc1.x.test/DC=child,DC=x,DC=test", "DC=x,DC=test", true)]
+    [InlineData("ldap://other.forest/DC=other,DC=forest", "DC=x,DC=test", false)]
+    [InlineData("ldap://dc1.x.test/DC=x,DC=test", "OU=Staff,DC=x,DC=test", false)]
+    public void ReferencesInsideTheSearchedBaseAreSubordinatePartitions(string url, string baseDn, bool subordinate)
+    {
+        var (list, external) = LdapSession.ClassifyReferences([new Uri(url)], baseDn);
+        Assert.Equal(subordinate, list.Count == 1);
+        Assert.Equal(!subordinate, external);
+    }
     [Theory] [InlineData("missing", "IncompleteRead")] [InlineData("referral", "IncompleteRead")] [InlineData("repeat", "RepeatedPage")]
     public async Task IncompleteOrLoopingPagesCannotClaimCompletion(string fault, string code)
     {

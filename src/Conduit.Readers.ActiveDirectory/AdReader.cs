@@ -43,6 +43,7 @@ public static class AdReader
                 if (pageNumber >= 10000) throw new AdReadException("PagingLimit", "The directory exceeded the paging safety limit. Narrow the source scope.");
                 var page = await source.ReadPageAsync(new(dn, query, cookie), ct);
                 ct.ThrowIfCancellationRequested();
+                foreach (var partition in page.SubordinatePartitions ?? []) state.AddSubordinatePartition(partition);
                 if (page.Cookie == null || page.HasReferrals)
                     throw new AdReadException("IncompleteRead", "The directory returned referrals or did not confirm paging completion. No complete read was established.");
                 // RFC 2696 cookies are opaque and may stay constant while the result cursor advances.

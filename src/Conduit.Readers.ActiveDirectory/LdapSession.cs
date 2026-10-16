@@ -24,7 +24,31 @@ public sealed class LdapSession(LdapConnection connection) : IAdPageSource
             records.Add(ConvertEntry(entry));
         }
         var control = response.Controls.OfType<PageResultResponseControl>().SingleOrDefault();
-        return new(records, control?.Cookie, response.References.Count > 0);
+        var (subordinate, external) = ClassifyReferences(
+            response.References.Cast<SearchResultReference>().SelectMany(r => r.Reference ?? []), request.BaseDn);
+        return new(records, control?.Cookie, external, subordinate);
+    }
+
+    /// <summary>
+    /// Splits continuation references into the two kinds a reader must treat differently: a reference whose
+    /// DN lies within <paramref name="baseDn"/> names a SUBORDINATE naming context (every domain root returns
+    /// DomainDnsZones and ForestDnsZones, a forest root adds Configuration, a parent domain adds each child);
+    /// those hold no objects of the searched partition, so the read lists them and carries on. Any other
+    /// reference (another forest, an unparseable URL) is <c>External</c> and the read must refuse completion.
+    /// </summary>
+    public static (IReadOnlyList<string> Subordinate, bool External) ClassifyReferences(IEnumerable<Uri> references, string baseDn)
+    {
+        var subordinate = new List<string>();
+        var external = false;
+        foreach (var uri in references)
+        {
+            string dn;
+            try { dn = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')); }
+            catch (InvalidOperationException) { external = true; continue; }
+            if (string.IsNullOrWhiteSpace(dn) || !AdQuery.Within(dn, baseDn)) { external = true; continue; }
+            if (!subordinate.Contains(dn, StringComparer.OrdinalIgnoreCase)) subordinate.Add(dn);
+        }
+        return (subordinate, external);
     }
     public async Task<AdRecord> ReadEntryAsync(string dn, IReadOnlyList<string> attributes, TimeSpan timeout, CancellationToken ct)
     {

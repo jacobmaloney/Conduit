@@ -36,7 +36,15 @@ public sealed record AdQuery
 }
 
 public sealed record AdRecord(string DistinguishedName, IReadOnlyDictionary<string, object?> Attributes);
-public sealed record AdPage(IReadOnlyList<AdRecord> Records, byte[]? Cookie, bool HasReferrals = false);
+/// <summary>
+/// One page of a paged search. <paramref name="HasReferrals"/> is true only for a referral the read cannot
+/// account for (a naming context outside the searched base); a referral to a SUBORDINATE naming context
+/// (DomainDnsZones, ForestDnsZones, Configuration, a child domain) is listed in
+/// <paramref name="SubordinatePartitions"/> instead, because every Active Directory domain root returns those
+/// and they hold no objects of the searched partition.
+/// </summary>
+public sealed record AdPage(IReadOnlyList<AdRecord> Records, byte[]? Cookie, bool HasReferrals = false,
+    IReadOnlyList<string>? SubordinatePartitions = null);
 public sealed record AdPageRequest(string BaseDn, AdQuery Query, byte[] Cookie);
 public interface IAdPageSource
 {
@@ -47,9 +55,20 @@ public interface IAdPageSource
 }
 public sealed class AdReadState
 {
+    private readonly List<string> _subordinatePartitions = [];
     public bool IsComplete { get; internal set; }
     public bool IsTruncated { get; internal set; }
     public int Emitted { get; internal set; }
+    /// <summary>
+    /// Subordinate naming contexts the directory referred to and this read did NOT enter, distinct, in the
+    /// order first seen. A complete read of the searched partition may still list these; the host names them
+    /// in its completion evidence so nobody mistakes "complete" for "every partition".
+    /// </summary>
+    public IReadOnlyList<string> SubordinatePartitions => _subordinatePartitions;
+    internal void AddSubordinatePartition(string dn)
+    {
+        if (!_subordinatePartitions.Contains(dn, StringComparer.OrdinalIgnoreCase)) _subordinatePartitions.Add(dn);
+    }
 }
 public sealed class AdReadException(string code, string message) : InvalidOperationException(message)
 {

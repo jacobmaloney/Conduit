@@ -118,8 +118,11 @@ public sealed partial class SourceBrowseService(ISourceBrowseStore store, Connec
                 !hasMore && !(savedCap.HasValue && rows.Count == savedCap.Value) && !enumeration.WasCompleteRead())
                 throw new SourceBrowseException("IncompleteRead", "The directory did not confirm a complete sample read. Retry; partial results were discarded.");
             var context = resolved.Context with { ObjectClass = objectClass, Scope = DescribeScope(scope, objectClass, resolved.CredentialName, savedCap, resolved.Connection.SystemType.Equals("CSV", StringComparison.OrdinalIgnoreCase)) };
-            return new(context, rows, hasMore, DateTimeOffset.UtcNow,
-                mappings == null ? "Source sample before mappings; no sync, scripts or writes were run. Saved project record limits are respected." : schema != null ? "Draft mappings checked against supported target fields and this sample. No sync or scripts were run; changes are not saved yet. This is not full-population or write-permission validation." : "Trial field mappings evaluated on a fresh source sample. Target validation is unavailable. No sync, scripts or writes were run; changes are not saved.");
+            var note = mappings == null ? "Source sample before mappings; no sync, scripts or writes were run. Saved project record limits are respected." : schema != null ? "Draft mappings checked against supported target fields and this sample. No sync or scripts were run; changes are not saved yet. This is not full-population or write-permission validation." : "Trial field mappings evaluated on a fresh source sample. Target validation is unavailable. No sync, scripts or writes were run; changes are not saved.";
+            var skipped = enumeration.SkippedPartitions();
+            if (skipped.Count > 0)
+                note += " Not read: " + string.Join(", ", skipped.Select(PartitionName)) + " (other partitions the directory referred to).";
+            return new(context, rows, hasMore, DateTimeOffset.UtcNow, note);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         { throw new SourceBrowseException("TimedOut", "The source read timed out. Narrow the scope and retry."); }
@@ -131,6 +134,13 @@ public sealed partial class SourceBrowseService(ISourceBrowseStore store, Connec
             logger.LogWarning("Source browse failed ({ErrorType}); no partial sample returned", ex.GetType().Name);
             throw new SourceBrowseException("SourceReadFailed", "Could not read source data. Check the saved connection, credentials and scope on this Conduit host.");
         }
+    }
+
+    private static string PartitionName(string dn)
+    {
+        var leaf = dn.Split(',')[0];
+        var eq = leaf.IndexOf('=');
+        return eq >= 0 ? leaf[(eq + 1)..].Trim() : leaf.Trim();
     }
 
     private async Task<Resolved> ResolveAsync(ClaimsPrincipal user, SourceBrowseSelection selection, CancellationToken ct)

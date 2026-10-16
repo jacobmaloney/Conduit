@@ -138,6 +138,38 @@ public class SharedComponentRatchetTests
         }
     }
 
+    /// <summary>
+    /// Jacob's dashboard screenshot, 2026-10-16: primary list-action buttons rendered blue text on a blue
+    /// fill (the light-theme anchor rule outranked .icb-list-action-primary), and six stat tiles laid
+    /// value / label / sub-line in a ROW until "No schedule" wrapped mid-word. Both fixes live in the one
+    /// Brand sheet; this reads it so neither can be tidied away under green.
+    /// </summary>
+    [Fact]
+    public void Light_theme_links_and_stat_tiles_keep_the_dashboard_readable()
+    {
+        var css = string.Concat(Directory.EnumerateFiles(BrandCssDir(), "*.css").Select(File.ReadAllText));
+        Assert.Contains("html.light-theme a:not(.btn):not(.ic-btn):not(.icb-list-action)", css);
+        Assert.Contains("html.light-theme a:hover:not(.btn):not(.ic-btn):not(.icb-list-action)", css);
+        Assert.Contains(".icb-stat-row .stat-card { display:flex; flex-direction:column;", css);
+        Assert.Contains(".icb-stat-row .stat-number { font-size:28px; font-weight:700; white-space:nowrap; }", css);
+        Assert.DoesNotContain(".icb-stat-row .icb-stat-prominent .stat-number { font-size:34px; line-height:1.1; letter-spacing:-.02em; overflow-wrap:anywhere; }", css);
+    }
+
+    /// <summary>
+    /// The sheet's "Error State" component once put display:flex on the bare .alert, so every
+    /// Bootstrap alert with more than one inline child rendered as columns (Run Sync Project,
+    /// 2026-10-16). The row layout is scoped to .alert.alert-error; the bare rule keeps spacing only.
+    /// </summary>
+    [Fact]
+    public void A_bootstrap_alert_is_not_a_flex_row()
+    {
+        var css = string.Concat(Directory.EnumerateFiles(BrandCssDir(), "*.css").Select(File.ReadAllText));
+        var normalized = css.Replace("\r\n", "\n");
+        Assert.Contains(".alert.alert-error {\n    display: flex;", normalized);
+        foreach (Match m in Regex.Matches(normalized, @"(?m)^\.alert\s*\{([^}]*)\}"))
+            Assert.DoesNotContain("display", m.Groups[1].Value);
+    }
+
     private static string RepoFile(string relativePath, [CallerFilePath] string thisFile = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", relativePath));
 

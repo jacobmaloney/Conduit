@@ -112,7 +112,8 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 IssuedAt = DateTime.UtcNow
             },
             IsIncremental = isIncremental,
-            WasCompleteRead = () => completion.IsComplete
+            WasCompleteRead = () => completion.IsComplete,
+            SkippedPartitions = () => completion.SkippedPartitions
         });
     }
 
@@ -126,6 +127,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
     private sealed class ReadCompletion
     {
         public bool IsComplete { get; set; }
+        public IReadOnlyList<string> SkippedPartitions { get; set; } = Array.Empty<string>();
     }
 
     private async IAsyncEnumerable<ConnectorObject> EnumerateWithTombstonesAsync(
@@ -334,7 +336,14 @@ public sealed class ActiveDirectorySource : IConnectorSource
             yield return EntryToConnectorObject(record, objectClass);
         }
         // Never set this on early consumer disposal, cancellation, failure, missing cookies or truncated ranges.
-        if (completion != null) completion.IsComplete = state.IsComplete;
+        if (completion != null)
+        {
+            completion.IsComplete = state.IsComplete;
+            completion.SkippedPartitions = state.SubordinatePartitions;
+        }
+        if (state.SubordinatePartitions.Count > 0)
+            _logger.LogInformation("AD read for tenant {TenantId} skipped {Count} subordinate partition(s) the directory referred to: {Partitions}",
+                _tenantId, state.SubordinatePartitions.Count, string.Join("; ", state.SubordinatePartitions));
     }
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
     {

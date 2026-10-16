@@ -112,7 +112,7 @@
     private string EnabledProjectsSub =>
         projectCount > 0 && enabledProjectCount == projectCount ? "all enabled" : $"{enabledProjectCount} enabled";
 
-    private string NextRunLabel => nextScheduledRun is { } n ? n.ToLocalTime().ToString("ddd, h:mm tt") : "No schedule";
+    private string NextRunLabel => nextScheduledRun is { } n ? n.ToLocalTime().ToString("ddd, h:mm tt") : "None";
 
     private string LastRunShort => lastRunWhen is { } w ? ShortRelative(w) : "—";
     private string LastRunSub => lastRunWhen is null ? "no runs yet" : $"ago · {(lastRunStatus ?? "unknown").ToLowerInvariant()}";
