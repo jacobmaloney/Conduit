@@ -622,8 +622,28 @@ public sealed class ProvisionResult
     public string? TaskId { get; init; }
     public string? ErrorMessage { get; init; }
 
+    // ── Create detail (additive, all default false/null; only CreateAsync implementations set them) ──
+
+    /// <summary>
+    /// Outcome=Success but the sink attached the caller to an EXISTING object instead of creating one
+    /// (create-else-link). <see cref="ExternalId"/> is the existing object's id; nothing was written.
+    /// </summary>
+    public bool Linked { get; init; }
+    /// <summary>True when an initial password was requested on the create AND the write landed.</summary>
+    public bool PasswordSet { get; init; }
+    /// <summary>True only when the sink actually cleared the disable state and that write succeeded.</summary>
+    public bool AccountEnabled { get; init; }
+    /// <summary>
+    /// Non-fatal detail carried on Success (e.g. the object was created but a later best-effort step —
+    /// password, must-change flag, enable — did not apply). Null when there is nothing to say.
+    /// </summary>
+    public string? Warning { get; init; }
+
     public static ProvisionResult Success(string? externalId = null) =>
         new() { Outcome = ProvisionOutcome.Success, ExternalId = externalId };
+
+    public static ProvisionResult LinkedExisting(string externalId) =>
+        new() { Outcome = ProvisionOutcome.Success, ExternalId = externalId, Linked = true };
 
     public static ProvisionResult Accepted(string taskId, string? externalId = null) =>
         new() { Outcome = ProvisionOutcome.Accepted, TaskId = taskId, ExternalId = externalId };

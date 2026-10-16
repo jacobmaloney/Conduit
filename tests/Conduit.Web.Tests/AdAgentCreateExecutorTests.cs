@@ -26,7 +26,7 @@ public class AdAgentCreateExecutorTests
     // executor's containment behaviour is tested independently of the DB (the policy's own DB→config→
     // deny resolution is tested in CreationBaseDnPolicyTests). Credential resolution still hits a bogus,
     // never-openable DB — reached only after containment passes.
-    private sealed class FakePolicy : ICreationBaseDnPolicy
+    internal sealed class FakePolicy : ICreationBaseDnPolicy
     {
         private readonly IReadOnlyList<string> _dns;
         public FakePolicy(IReadOnlyList<string> dns) => _dns = dns;
@@ -140,6 +140,8 @@ public class AdAgentCreateExecutorTests
     [InlineData("enabled")]
     [InlineData("userAccountControl")]
     [InlineData("accountExpires")]
+    [InlineData("pwdLastSet")]
+    [InlineData("mustChangePasswordAtLogon")]
     public async Task Smuggled_password_or_enable_key_is_rejected(string key)
     {
         var attrs = $"{{\"givenName\":\"Nora\",\"{key}\":\"x\"}}";

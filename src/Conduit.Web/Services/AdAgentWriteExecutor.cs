@@ -290,14 +290,14 @@ public sealed class AdAgentWriteExecutor
         }
 
         var requireChange = p.RequireChangeAtLogon ?? sealedMode; // sealed (a human receives it) defaults true
-        var password = GeneratePassword(24);
+        var password = AgentPasswordGenerator.Generate(AgentPasswordGenerator.DefaultLength);
         try
         {
             var applied = await sink.ResetPasswordAsync(p.ObjectGuid!, password, requireChange, ct);
             if (applied.Outcome != ProvisionOutcome.Success)
             {
                 // One retry at 32 chars for fine-grained policies demanding more.
-                password = GeneratePassword(32);
+                password = AgentPasswordGenerator.Generate(AgentPasswordGenerator.RetryLength);
                 applied = await sink.ResetPasswordAsync(p.ObjectGuid!, password, requireChange, ct);
                 if (applied.Outcome != ProvisionOutcome.Success)
                     return (false, $"ResetPassword failed: {applied.ErrorMessage}");
@@ -313,31 +313,6 @@ public sealed class AdAgentWriteExecutor
         {
             password = null!; // drop the only reference; never logged, never in messages
         }
-    }
-
-    /// <summary>CSPRNG password: guaranteed lower/upper/digit/symbol, no ambiguous glyphs.</summary>
-    private static string GeneratePassword(int length)
-    {
-        const string lower = "abcdefghjkmnpqrstuvwxyz";
-        const string upper = "ABCDEFGHJKMNPQRSTUVWXYZ";
-        const string digit = "23456789";
-        const string symbol = "!@#$%^*-_=+?";
-        const string all = lower + upper + digit + symbol;
-
-        var chars = new char[length];
-        chars[0] = lower[System.Security.Cryptography.RandomNumberGenerator.GetInt32(lower.Length)];
-        chars[1] = upper[System.Security.Cryptography.RandomNumberGenerator.GetInt32(upper.Length)];
-        chars[2] = digit[System.Security.Cryptography.RandomNumberGenerator.GetInt32(digit.Length)];
-        chars[3] = symbol[System.Security.Cryptography.RandomNumberGenerator.GetInt32(symbol.Length)];
-        for (var i = 4; i < length; i++)
-            chars[i] = all[System.Security.Cryptography.RandomNumberGenerator.GetInt32(all.Length)];
-        // Fisher-Yates so the guaranteed classes are not positionally predictable.
-        for (var i = length - 1; i > 0; i--)
-        {
-            var j = System.Security.Cryptography.RandomNumberGenerator.GetInt32(i + 1);
-            (chars[i], chars[j]) = (chars[j], chars[i]);
-        }
-        return new string(chars);
     }
 
     /// <summary>

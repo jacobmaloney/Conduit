@@ -76,6 +76,19 @@ public sealed record AdResolvedObject(
 ///       member list per group; we Replace the 'member' attribute wholesale.
 ///       Matches the Emulator sink and IC's current behavior post-V115.
 /// </summary>
+/// <summary>
+/// An existing user found by the create pre-search (UC008-D04(a)): the account a caller must LINK to,
+/// never duplicate. <see cref="Enabled"/> is null when userAccountControl could not be read.
+/// </summary>
+public sealed record AdExistingAccount(string DistinguishedName, Guid? ObjectGuid, bool? Enabled, string MatchedBy);
+
+/// <summary>
+/// What <see cref="ActiveDirectorySink.PrecheckCreateAsync"/> learned from ONE bind: whether this
+/// connection can carry a unicodePwd write (LDAPS on :636 or a negotiated StartTLS upgrade) and whether
+/// a user with the requested sAMAccountName / UPN already exists.
+/// </summary>
+public sealed record AdCreatePrecheck(bool SecurePasswordChannel, AdExistingAccount? Existing);
+
 public sealed class ActiveDirectorySink : IConnectorSink
 {
     private readonly Guid _tenantId;
@@ -651,6 +664,79 @@ public sealed class ActiveDirectorySink : IConnectorSink
     // MoveAsync   — ModifyDNRequest to relocate the object under a new parent.
     // ResetPasswordAsync — unicodePwd write; requires LDAPS.
 
+    /// <summary>
+    /// Create pre-flight (UC008-D04(a)/D07) in ONE bind: reports whether the channel can carry a
+    /// password write, and searches the domain for an existing user by sAMAccountName or
+    /// userPrincipalName (sAM match preferred). Throws on bind/search failure so the caller fails
+    /// CLOSED — nothing is created when the directory cannot be asked. Reads only.
+    /// </summary>
+    public async Task<AdCreatePrecheck> PrecheckCreateAsync(string sam, string? upn, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sam))
+            throw new ArgumentException("sAMAccountName is required.", nameof(sam));
+        var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+            ?? throw new InvalidOperationException($"Tenant {_tenantId} not found.");
+        var creds = await ReadCredsAsync()
+            ?? throw new InvalidOperationException(
+                $"No 'ldap' credential stored for tenant {_tenantId}. Save credentials before running.");
+
+        using var conn = Bind(tenant.Domain, creds, out var isSecure);
+        var existing = FindExistingUser(conn, sam.Trim(), string.IsNullOrWhiteSpace(upn) ? null : upn!.Trim());
+        return new AdCreatePrecheck(isSecure, existing);
+    }
+
+    /// <summary>
+    /// Domain-wide search for a user by sAMAccountName or UPN under RootDSE.defaultNamingContext
+    /// (falling back to the configured scope base DN). The earlier (sAMAccountName=…) pre-check in
+    /// CreateAsync searched with an EMPTY base DN, which AD rejects (the RootDSE is not a search root —
+    /// see FindDnByGuid), so it never matched and only the ENTRY_EXISTS catch ever linked. Throws when
+    /// no search base is available or the search fails.
+    /// </summary>
+    private AdExistingAccount? FindExistingUser(LdapConnection conn, string sam, string? upn)
+    {
+        var searchBase = QueryRootDseDefaultNamingContext(conn) ?? _defaultBaseDn;
+        if (string.IsNullOrWhiteSpace(searchBase))
+            throw new InvalidOperationException(
+                "Cannot search for an existing account: RootDSE.defaultNamingContext is unreadable and no scope BaseDN is configured.");
+
+        var byUpn = string.IsNullOrEmpty(upn) ? string.Empty : $"(userPrincipalName={EscapeFilter(upn!)})";
+        var filter = $"(&(objectCategory=person)(objectClass=user)(|(sAMAccountName={EscapeFilter(sam)}){byUpn}))";
+        var req = new SearchRequest(searchBase, filter, SearchScope.Subtree,
+            new[] { "distinguishedName", "objectGUID", "userAccountControl", "sAMAccountName" });
+        var resp = (SearchResponse)conn.SendRequest(req);
+        if (resp.Entries.Count == 0) return null;
+
+        SearchResultEntry? pick = null;
+        var matchedBy = "userPrincipalName";
+        foreach (SearchResultEntry e in resp.Entries)
+        {
+            var eSam = e.Attributes.Contains("sAMAccountName") ? e.Attributes["sAMAccountName"][0]?.ToString() : null;
+            if (string.Equals(eSam, sam, StringComparison.OrdinalIgnoreCase))
+            {
+                pick = e;
+                matchedBy = "sAMAccountName";
+                break;
+            }
+        }
+        pick ??= resp.Entries[0];
+
+        Guid? guid = null;
+        if (pick.Attributes.Contains("objectGUID"))
+        {
+            var raw = pick.Attributes["objectGUID"].GetValues(typeof(byte[]));
+            if (raw.Length > 0 && raw[0] is byte[] b && b.Length == 16) guid = new Guid(b);
+        }
+        bool? enabled = null;
+        if (pick.Attributes.Contains("userAccountControl")
+            && int.TryParse(pick.Attributes["userAccountControl"][0]?.ToString(), out var uac))
+            enabled = (uac & ADS_UF_ACCOUNTDISABLE) == 0;
+
+        var dn = pick.Attributes.Contains("distinguishedName")
+            ? pick.Attributes["distinguishedName"][0]?.ToString()
+            : null;
+        return new AdExistingAccount(string.IsNullOrWhiteSpace(dn) ? pick.DistinguishedName : dn!, guid, enabled, matchedBy);
+    }
+
     public async Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken cancellationToken)
     {
         try
@@ -667,19 +753,30 @@ public sealed class ActiveDirectorySink : IConnectorSink
             if (string.IsNullOrWhiteSpace(sam))
                 return ProvisionResult.Failed("Cannot create AD user without a sAMAccountName / userName mapping.");
 
+            string? upn = GetStr(newObject, "userPrincipalName") ?? GetStr(newObject, "UserPrincipalName");
+
             // Create-else-LINK (correlate-first, "create if it doesn't exist, else link them"): when an
-            // account with this sAMAccountName already exists, ATTACH the identity to it instead of
-            // failing/duplicating. Return Success with the EXISTING DN so the caller records the linked
-            // account (not a new create). The account's own attributes are left as-is — this is a link,
-            // not an overwrite.
-            var dupe = FindDnByFilter(conn, $"(sAMAccountName={EscapeFilter(sam!)})");
+            // account with this sAMAccountName (or UPN) already exists, ATTACH the identity to it instead
+            // of failing/duplicating. Return Success + Linked with the EXISTING DN so the caller records a
+            // link, not a create. The account's own attributes are left as-is — this is a link, not an
+            // overwrite. A failed pre-search does not block the add: AD enforces sAM uniqueness itself,
+            // and the agent executor runs its own PrecheckCreateAsync first (the source of truth).
+            AdExistingAccount? dupe = null;
+            try
+            {
+                dupe = FindExistingUser(conn, sam!.Trim(), upn);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "AD create pre-search failed for sAMAccountName='{Sam}' — proceeding to the add.", sam);
+            }
             if (dupe is not null)
             {
-                _logger.LogInformation("AD account sAMAccountName='{Sam}' already exists at {Dn} — linking (not creating).", sam, dupe);
-                return ProvisionResult.Success(externalId: dupe);
+                _logger.LogInformation("AD account sAMAccountName='{Sam}' already exists at {Dn} (matched by {MatchedBy}) — linking (not creating).",
+                    sam, dupe.DistinguishedName, dupe.MatchedBy);
+                return ProvisionResult.LinkedExisting(dupe.DistinguishedName);
             }
 
-            string? upn = GetStr(newObject, "userPrincipalName") ?? GetStr(newObject, "UserPrincipalName");
             var baseDn = ResolveBaseDn(conn, newObject);
             if (string.IsNullOrWhiteSpace(baseDn))
                 return ProvisionResult.Failed(
@@ -707,6 +804,13 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
             add.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
 
+            // Optional initial password (UC008-D07). The secure-channel guard runs BEFORE the add: a
+            // password request on a plaintext channel refuses the whole create rather than leave a
+            // permanently disabled, password-less account behind (worse than no account).
+            var password = GetStr(newObject, "password") ?? GetStr(newObject, "userPassword");
+            if (!string.IsNullOrEmpty(password))
+                RequireSecureForPasswordWrite(isSecure);
+
             try
             {
                 conn.SendRequest(add);
@@ -715,23 +819,63 @@ public sealed class ActiveDirectorySink : IConnectorSink
                 dex.Response?.ResultCode == ResultCode.EntryAlreadyExists ||
                 (dex.Message?.IndexOf("ENTRY_EXISTS", StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
             {
-                // The sAM pre-search can miss (scoped search / replication lag), but AD reports the DN
-                // already exists → LINK to the existing account rather than fail. Same create-else-link
-                // outcome as the pre-check above ("create if it doesn't exist, else link them").
+                // The pre-search can miss (replication lag), but AD reports the DN already exists →
+                // LINK to the existing account rather than fail. Same create-else-link outcome as the
+                // pre-check above; reported as Linked so the caller never mistakes it for a create.
                 _logger.LogInformation("AD create hit an existing entry at {Dn} — linking (not creating).", newDn);
-                return ProvisionResult.Success(externalId: newDn);
+                return ProvisionResult.LinkedExisting(newDn);
             }
 
-            // Optional initial password — same LDAPS guard as upsert path.
-            var password = GetStr(newObject, "password") ?? GetStr(newObject, "userPassword");
+            // Password → must-change flag → enable, each reported truthfully. The account exists from
+            // here on, so a refused password does not fail the create: the result says PasswordSet=false
+            // and the caller may retry through ResetPasswordAsync. The value is never logged.
+            var passwordSet = false;
+            var accountEnabled = false;
+            string? warning = null;
             if (!string.IsNullOrEmpty(password))
             {
-                RequireSecureForPasswordWrite(isSecure);
-                SetPassword(conn, newDn, password!);
+                try
+                {
+                    SetPassword(conn, newDn, password!);
+                    passwordSet = true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "AD create succeeded but the initial password write was refused for {Dn}", newDn);
+                    warning = "initial password refused: " + ex.Message;
+                }
 
-                var requestedEnabled = !TryGetBool(newObject, "active", out var a) || a;
-                if (requestedEnabled)
-                    SetUacFlag(conn, newDn, ADS_UF_ACCOUNTDISABLE, set: false);
+                if (passwordSet)
+                {
+                    if (TryGetBool(newObject, "mustChangePasswordAtLogon", out var mustChange) && mustChange)
+                    {
+                        // pwdLastSet=0 forces change at next logon — best-effort, as in ResetPasswordAsync.
+                        var pls = new DirectoryAttributeModification { Name = "pwdLastSet", Operation = DirectoryAttributeOperation.Replace };
+                        pls.Add("0");
+                        try { conn.SendRequest(new ModifyRequest(newDn, pls)); }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "AD create set the password but pwdLastSet=0 write failed for {Dn}", newDn);
+                            warning = "password set but must-change-at-logon could not be applied: " + ex.Message;
+                        }
+                    }
+
+                    var requestedEnabled = !TryGetBool(newObject, "active", out var a) || a;
+                    if (requestedEnabled)
+                    {
+                        try
+                        {
+                            accountEnabled = SetUacFlag(conn, newDn, ADS_UF_ACCOUNTDISABLE, set: false);
+                            if (!accountEnabled)
+                                warning = "password set but the new account could not be read back to enable it";
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "AD create set the password but the enable failed for {Dn}", newDn);
+                            warning = "password set but enable failed: " + ex.Message;
+                        }
+                    }
+                }
             }
 
             // Manager hint — provisioning callers often pass managerExternalId.
@@ -753,7 +897,14 @@ public sealed class ActiveDirectorySink : IConnectorSink
                 }
             }
 
-            return ProvisionResult.Success(externalId: newDn);
+            return new ProvisionResult
+            {
+                Outcome = ProvisionOutcome.Success,
+                ExternalId = newDn,
+                PasswordSet = passwordSet,
+                AccountEnabled = accountEnabled,
+                Warning = warning
+            };
         }
         catch (Exception ex)
         {
@@ -1220,16 +1371,21 @@ public sealed class ActiveDirectorySink : IConnectorSink
         conn.SendRequest(new ModifyRequest(dn, mod));
     }
 
-    private static void SetUacFlag(LdapConnection conn, string dn, int flag, bool set)
+    /// <returns>
+    /// true when the entry was read and now carries the requested flag state (written, or already so);
+    /// false when the entry or its userAccountControl could not be read, so nothing was written.
+    /// Throws when the write itself fails.
+    /// </returns>
+    private static bool SetUacFlag(LdapConnection conn, string dn, int flag, bool set)
     {
         var req = new SearchRequest(dn, "(objectClass=*)", SearchScope.Base, new[] { "userAccountControl" });
         var resp = (SearchResponse)conn.SendRequest(req);
-        if (resp.Entries.Count == 0) return;
+        if (resp.Entries.Count == 0) return false;
         var attrs = resp.Entries[0].Attributes;
-        if (!attrs.Contains("userAccountControl")) return;
+        if (!attrs.Contains("userAccountControl")) return false;
         var current = int.Parse(attrs["userAccountControl"][0]!.ToString()!);
         var updated = set ? current | flag : current & ~flag;
-        if (updated == current) return;
+        if (updated == current) return true;
 
         var mod = new DirectoryAttributeModification
         {
@@ -1238,6 +1394,7 @@ public sealed class ActiveDirectorySink : IConnectorSink
         };
         mod.Add(updated.ToString());
         conn.SendRequest(new ModifyRequest(dn, mod));
+        return true;
     }
 
     private static void AppendIfPresent(AddRequest add, ConnectorObject obj, params string[] keys)
