@@ -9,6 +9,7 @@
 @using Microsoft.Extensions.Logging
 @using NCrontab
 @using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Components.Inputs
 @using IdentityCenter.Brand.Models
 @inject SyncProjectRepository ProjectRepo
 @inject SyncCancellationRegistry CancellationRegistry
@@ -27,17 +28,17 @@
     list project / schedule (human-readable) / next run / last run+status /
     enabled, with inline enable-disable and an edit-schedule modal.
 
-    The edit modal reuses the SHARED CcScheduleEditor (same presets + same
-    ScheduledSyncRunnerJob.TryValidate validator the inline Sync Projects modal and
-    the create/edit wizard use) so the schedule-edit logic is not forked.
+    The edit modal reuses the SHARED BrandScheduleEditor (IdentityCenter.Brand; same
+    presets + the same ScheduledSyncRunnerJob.TryValidate validator the inline Sync
+    Projects modal and the create/edit wizard use) so the schedule-edit logic is not forked.
 *@
 
 <PageTitle>Schedules - Conduit</PageTitle>
 
 <div class="container-fluid">
-    @* CcTemplate1 is the thin adapter over the shared BrandPageHeader, so Schedules gets the same
-       header as every other migrated page instead of a local cx-* copy that drifts. *@
-    <CcTemplate1 Title="Schedules"
+    @* The shared BrandPageHeader directly (the Conduit-local header adapter retired 2026-10-16,
+       CC-RETIRE-01), so Schedules gets the same header as every other migrated page. *@
+    <BrandPageHeader Title="Schedules"
                  Subtitle="@($"Recurring runs across all sync projects. Next run {NextScheduledRunText} · {FailingCount} failing.")"
                  Icon="fas fa-clock"
                  IconAccent="amber">
@@ -46,7 +47,10 @@
                 <i class="fas fa-plus"></i> Assign Schedule
             </button>
         </PrimaryAction>
-    </CcTemplate1>
+    </BrandPageHeader>
+
+    <BrandStatRow Stats="@StatItems" />
+    <BrandFilterTabs Tabs="@_tabs" ActiveTab="@activeTab" OnTabChanged="HandleTabChanged" Label="Schedule filter" CountDescription="sync projects" />
 
     <BrandListTable TItem="SyncProject" Title="Schedules" Items="@Filtered" TotalCount="@Filtered.Count"
                     PageSize="@Math.Max(1, Filtered.Count)" State="@(loading ? BrandListState.Loading : loadError != null ? BrandListState.Failed : BrandListState.Ready)"
@@ -153,7 +157,7 @@
                             }
                         </select>
                     </div>
-                    <CcScheduleEditor @bind-Value="assignCron" Error="@assignError" />
+                    <BrandScheduleEditor @bind-Value="assignCron" Error="@assignError" />
                     <div class="icb-form-check mt-3">
                         <input type="checkbox" id="enableAssignedProject" @bind="assignEnable" />
                         <label class="icb-form-check-label" for="enableAssignedProject">Enable this sync project</label>
@@ -194,12 +198,12 @@
 }
 
 @* The shared component, like every other Conduit page. Intent replaces the raw CSS string:
-   CcConfirmationModal hard-coded a Bootstrap "btn " prefix onto whatever class it was given,
+   the retired local confirmation modal hard-coded a Bootstrap "btn " prefix onto whatever class it was given,
    so passing shared classes through it produced mixed markup. *@
 <BrandConfirmationModal @ref="runConfirm" ConfirmLabel="Run Now"
                         Intent="BrandConfirmationModal.ConfirmIntent.Success" />
 
-@* ───────── Edit Schedule Modal (reuses shared CcScheduleEditor) ───────── *@
+@* ───────── Edit Schedule Modal (reuses shared BrandScheduleEditor) ───────── *@
 @if (editProject is not null)
 {
     <div class="modal show d-block" tabindex="-1">
@@ -212,7 +216,7 @@
                     <button type="button" class="btn-close" @onclick="CloseEdit" disabled="@editSaving"></button>
                 </div>
                 <div class="modal-body">
-                    <CcScheduleEditor @bind-Value="editCron" Error="@editError" />
+                    <BrandScheduleEditor @bind-Value="editCron" Error="@editError" />
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseEdit" disabled="@editSaving">Cancel</button>
@@ -248,7 +252,7 @@
     private bool assignEnable = true;
     private bool assignSaving;
 
-    private static readonly IReadOnlyList<CcFilterTabs.Tab> _tabs = new List<CcFilterTabs.Tab>
+    private static readonly IReadOnlyList<BrandFilterTabs.Tab> _tabs = new List<BrandFilterTabs.Tab>
     {
         new("all", "All", null, "fas fa-list"),
         new("scheduled", "Scheduled", null, "fas fa-clock"),
@@ -406,7 +410,7 @@
         _           => projects,
     };
 
-    private IReadOnlyList<CcStatRow.StatItem> StatItems => new List<CcStatRow.StatItem>
+    private IReadOnlyList<BrandStatRow.StatItem> StatItems => new List<BrandStatRow.StatItem>
     {
         new("Projects", projects.Count.ToString("N0")),
         new("Scheduled", projects.Count(p => p.IsEnabled && HasSchedule(p)).ToString("N0"), "text-info"),

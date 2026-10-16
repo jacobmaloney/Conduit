@@ -1,0 +1,152 @@
+@*
+    DirectoryBrowserModal — Conduit's product adapter over the shared BrandScopeBrowserDialog.
+
+    Given a source tenant id, it resolves that tenant's connector adapter, asks for an
+    IConnectorContainerBrowser, and hands the shared dialog a ConduitScopeDataSource over the
+    live bind. The dialog owns the shell, the states and the footer (the same ones IdentityCenter's
+    sync wizard shows); this file owns only what Conduit knows: tenants, connectors, credentials.
+
+    Usage:
+      <DirectoryBrowserModal @ref="_dnBrowser" OnSelected="dn => { scopeForm.BaseDN = dn; }" />
+      await _dnBrowser.ShowAsync(form.SourceTenantId, form.SourceCredentialName);
+      await _dnBrowser.ShowForScopeAsync(tenantId, credentialName, included, blocked);
+
+    Replaced the local CcDirectoryBrowserModal on 2026-10-16 (ledger CC-RETIRE-01).
+*@
+
+@using IdentityCenter.Brand.Models.Scope
+@using IdentityCenter.Brand.Components.Modals
+@inject Conduit.Sync.Connectors.ConnectorRegistry ConnectorRegistry
+@inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
+
+<BrandScopeBrowserDialog Visible="@isVisible"
+                         Mode="@(scopeMode ? ScopeBrowserMode.ScopeLocations : ScopeBrowserMode.SingleContainer)"
+                         DataSource="@scopeDataSource"
+                         ContextKey="@scopeContextKey"
+                         Loading="@isLoadingRoot"
+                         Error="@errorMessage"
+                         NoSourceMessage="No source system selected."
+                         DefaultRootWhenEmpty="false"
+                         @bind-SelectedScopes="includedScopes"
+                         @bind-BlockedScopes="blockedScopes"
+                         @bind-SelectedDistinguishedName="selectedDn"
+                         OnApply="ApplyAsync"
+                         OnClose="Cancel" />
+
+@code {
+    /// <summary>Fires with the chosen distinguished name when the operator confirms in single-container mode.</summary>
+    [Parameter] public EventCallback<string> OnSelected { get; set; }
+
+    /// <summary>
+    /// Fires with (Included DNs, Blocked DNs) when the operator applies in scope mode. Inherited is
+    /// not returned: it is the computed state of a child whose ancestor is Included, derived in the
+    /// UI and re-derived at read time, never persisted as its own entry.
+    /// </summary>
+    [Parameter] public EventCallback<(HashSet<string> Included, HashSet<string> Blocked)> OnScopesSelected { get; set; }
+
+    private bool isVisible;
+    private bool isLoadingRoot;
+    private bool scopeMode;
+    private string? errorMessage;
+    private string? selectedDn;
+    private HashSet<string> includedScopes = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> blockedScopes = new(StringComparer.OrdinalIgnoreCase);
+
+    private Guid tenantId;
+    private string? credentialName;
+    private IScopeDataSource? scopeDataSource;
+    private string? scopeContextKey;
+
+    /// <summary>Open in single-container (Base DN) mode for the given source tenant.</summary>
+    public Task ShowAsync(Guid sourceTenantId, string? sourceCredentialName = null)
+        => OpenAsync(sourceTenantId, sourceCredentialName, scope: false, included: null, blocked: null);
+
+    /// <summary>Open in include/block scope mode, pre-seeded with the current sets.</summary>
+    public Task ShowForScopeAsync(Guid sourceTenantId, string? sourceCredentialName, IEnumerable<string>? included, IEnumerable<string>? blocked)
+        => OpenAsync(sourceTenantId, sourceCredentialName, scope: true, included, blocked);
+
+    private async Task OpenAsync(Guid sourceTenantId, string? sourceCredentialName, bool scope, IEnumerable<string>? included, IEnumerable<string>? blocked)
+    {
+        scopeMode = scope;
+        includedScopes = new HashSet<string>(
+            (included ?? Array.Empty<string>()).Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+        blockedScopes = new HashSet<string>(
+            (blocked ?? Array.Empty<string>()).Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+        tenantId = sourceTenantId;
+        credentialName = sourceCredentialName;
+        selectedDn = null;
+        errorMessage = null;
+        scopeDataSource = null;
+        isVisible = true;
+        isLoadingRoot = true;
+        StateHasChanged();
+
+        await ResolveBrowserAsync();
+
+        isLoadingRoot = false;
+        StateHasChanged();
+    }
+
+    private async Task ResolveBrowserAsync()
+    {
+        if (tenantId == Guid.Empty)
+        {
+            errorMessage = "No source system selected.";
+            return;
+        }
+
+        var tenant = await TenantRepo.GetByIdAsync(tenantId);
+        if (tenant is null)
+        {
+            errorMessage = "Source system not found.";
+            return;
+        }
+
+        var adapter = ConnectorRegistry.Get(tenant.SystemType);
+        if (adapter is null)
+        {
+            errorMessage = string.Concat("No connector registered for '", tenant.SystemType, "'.");
+            return;
+        }
+
+        // The per-project credential-name override applies to the live bind.
+        using var scope = Conduit.Sync.Security.CredentialNameContext.Push(credentialName, null);
+
+        var browser = adapter.CreateContainerBrowser(tenantId);
+        if (browser is null)
+        {
+            errorMessage = string.Concat(tenant.SystemType, " does not support container browsing. Enter the Base DN manually.");
+            return;
+        }
+
+        scopeDataSource = new ConduitScopeDataSource(browser, credentialName);
+        scopeContextKey = Guid.NewGuid().ToString("N");
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (scopeMode)
+        {
+            isVisible = false;
+            StateHasChanged();
+            await OnScopesSelected.InvokeAsync(
+                (new HashSet<string>(includedScopes, StringComparer.OrdinalIgnoreCase),
+                 new HashSet<string>(blockedScopes, StringComparer.OrdinalIgnoreCase)));
+            return;
+        }
+
+        if (string.IsNullOrEmpty(selectedDn)) return;
+        var dn = selectedDn;
+        isVisible = false;
+        StateHasChanged();
+        await OnSelected.InvokeAsync(dn);
+    }
+
+    private void Cancel()
+    {
+        isVisible = false;
+        StateHasChanged();
+    }
+}

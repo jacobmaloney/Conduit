@@ -68,8 +68,10 @@
 
         try
         {
+            // The same set the Connections page lists: every row except the built-in Default
+            // sandbox tenant, which the page hides (Jacob 2026-10-16: the badge said 1 on an empty list).
             var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
-            connectionCount = tenants.Count;
+            connectionCount = tenants.Count(t => t.Id != TenantRepository.DefaultTenantId);
         }
         catch { }
     }

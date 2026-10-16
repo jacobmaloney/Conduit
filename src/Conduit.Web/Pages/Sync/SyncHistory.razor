@@ -24,7 +24,7 @@
         - ?project=GUID query-string filter so the SyncProjects "History" link
           deep-links into the relevant subset.
 
-    Visuals: CcTemplate1 header + BrandStatRow + BrandFilterTabs + BrandListPanel
+    Visuals: BrandPageHeader header + BrandStatRow + BrandFilterTabs + BrandListPanel
     (BrandSummaryRow rows with Soft BrandBadge counters) on the left; the shared
     icb-detail-* / icb-log-* families and BrandListTable on the right; the step
     drill-down opens in BrandEditorDialog. Zero inline style= attributes.
@@ -33,7 +33,7 @@
 <PageTitle>Sync History - Conduit</PageTitle>
 
 <div class="container-fluid sync-page-container ops-section">
-    <CcTemplate1 Title="Sync History"
+    <BrandPageHeader Title="Sync History"
                  Subtitle="Every sync project run, every log line, kept forever."
                  Icon="fas fa-history"
                  IconAccent="violet" />

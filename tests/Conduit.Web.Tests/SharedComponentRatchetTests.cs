@@ -46,7 +46,49 @@ public class SharedComponentRatchetTests
         Path.Combine("Pages", "Logs.razor"),
         Path.Combine("Pages", "QuickConnect.razor"),
         Path.Combine("Pages", "ProvisioningBaseDns.razor"),
+        // The two product adapters left in Shared/Design after CC-RETIRE-01 (2026-10-16).
+        Path.Combine("Shared", "Design", "DirectoryBrowserModal.razor"),
+        Path.Combine("Shared", "Design", "SourceDataBrowser.razor"),
     };
+
+    /// <summary>
+    /// CC-RETIRE-01 (Jacob, 2026-10-16: "same lists, same buttons, same setup wizard"): the local
+    /// Cc* design-system copies are gone. Shared/Design may hold only product adapters that bind
+    /// Conduit services to a Brand component; a new Cc* file there is a fork of the shared owner.
+    /// </summary>
+    [Fact]
+    public void No_local_design_system_component_remains()
+    {
+        var design = RepoFile(Path.Combine("src", "Conduit.Web", "Shared", "Design"));
+        var local = Directory.EnumerateFiles(design)
+            .Select(Path.GetFileName)
+            .Where(n => n!.StartsWith("Cc", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(local.Count == 0, "Local design-system copies found: " + string.Join(", ", local)
+            + ". The shared owner is IdentityCenter.Brand (BrandHelpHint, BrandScheduleEditor, BrandScopeBrowserDialog, ...).");
+
+        // And no page still composes one.
+        var pages = Directory.EnumerateFiles(RepoFile(Path.Combine("src", "Conduit.Web", "Pages")), "*.razor", SearchOption.AllDirectories)
+            .Where(f => Regex.IsMatch(File.ReadAllText(f), @"<Cc[A-Z]\w*|Cc[A-Z]\w+\."))
+            .Select(f => Path.GetFileName(f))
+            .ToList();
+        Assert.True(pages.Count == 0, "Pages still composing a retired Cc* component: " + string.Join(", ", pages));
+    }
+
+    /// <summary>The sync pages render the shared summary row and filter tabs they used to declare and never show.</summary>
+    [Theory]
+    [InlineData("ScheduleManager.razor", "<BrandStatRow Stats=\"@StatItems\" />")]
+    [InlineData("ScheduleManager.razor", "<BrandFilterTabs Tabs=\"@_tabs\" ActiveTab=\"@activeTab\" OnTabChanged=\"HandleTabChanged\"")]
+    [InlineData("ScheduleManager.razor", "<BrandScheduleEditor @bind-Value=\"editCron\"")]
+    [InlineData("SyncProjects.razor", "<BrandStatRow Stats=\"@statRows\" />")]
+    [InlineData("SyncProjects.razor", "<BrandScheduleEditor @bind-Value=\"form.CronSchedule\"")]
+    [InlineData("SyncProjects.razor", "<DirectoryBrowserModal @ref=\"baseDnBrowser\"")]
+    [InlineData("SyncProjects.razor", "<BrandHelpHint Text=")]
+    public void A_sync_page_composes_the_shared_component(string page, string fragment)
+    {
+        var source = File.ReadAllText(RepoFile(Path.Combine("src", "Conduit.Web", "Pages", "Sync", page)));
+        Assert.Contains(fragment, source);
+    }
 
     [Theory]
     [MemberData(nameof(MigratedPages))]

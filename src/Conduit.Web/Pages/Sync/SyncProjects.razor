@@ -9,6 +9,7 @@
 @using Conduit.Sync.Connectors
 @using Conduit.Connectors.IdentityCenter
 @using IdentityCenter.Brand.Components.Layout
+@using IdentityCenter.Brand.Components.Inputs
 @using IdentityCenter.Brand.Models
 @using Microsoft.Extensions.DependencyInjection
 @inject ConnectorRegistry Connectors
@@ -33,7 +34,7 @@
         Target System Projects tab + Internal Projects tab (Conduit has no
             internal-only projects today, so the second tab shows an empty-state
             with a forward-looking message; the tab stays so the UX matches IC),
-        Summary metric cards via CcStatRow,
+        Summary metric cards via the shared BrandStatRow,
         Project cards with badges (Connection / Enabled / Scheduled / Stats)
             and action buttons (Run Now / Schedule / History / Manage / Delete),
         Auto-Generate-from-connection modal (User + Group project, source→sink),
@@ -44,19 +45,19 @@
         Edit / Create modal (Setup + Scope + Mappings — Schedule sits inline
             because IC's Schedule tab is just a cron field, no need for a tab).
 
-    Visuals come from the Conduit design system (CcTemplate1 / CcStatRow /
-    CcScheduleEditor / CcHelpHint / CcDirectoryBrowserModal) and conduit.css classes.
-    The project cards are hand-rolled here rather than a shared list panel, and the
-    confirm dialogs are local modals. No inline style= attributes.
+    Visuals come from IdentityCenter.Brand (BrandPageHeader / BrandStatRow /
+    BrandScheduleEditor / BrandHelpHint / BrandScopeBrowserDialog through the
+    DirectoryBrowserModal adapter) and the one shared stylesheet; the local Cc*
+    copies retired on 2026-10-16 (ledger CC-RETIRE-01). The confirm dialogs are
+    still local modals. No inline style= attributes.
 *@
 
 <PageTitle>Sync Projects - Conduit</PageTitle>
 
 <div class="container-fluid sync-page-container">
-    @* The last cx-* header in the product. CcTemplate1 is the thin adapter over the shared
-       BrandPageHeader, so this page gets the same header as Sync History and every other
-       migrated page instead of a local copy that drifts. *@
-    <CcTemplate1 Title="Sync Projects"
+    @* The shared BrandPageHeader directly (the Conduit-local header adapter retired 2026-10-16, CC-RETIRE-01),
+       so this page gets the same header as Sync History and every other migrated page. *@
+    <BrandPageHeader Title="Sync Projects"
                  Subtitle="Read from a Source, map, write to a Target — scheduled or on demand."
                  Icon="fas fa-project-diagram"
                  IconAccent="teal">
@@ -66,7 +67,7 @@
                 <i class="fas fa-plus"></i> New Sync Project
             </button>
         </PrimaryAction>
-    </CcTemplate1>
+    </BrandPageHeader>
 
     @if (!string.IsNullOrEmpty(toastSuccess))
     {
@@ -82,6 +83,8 @@
             <button type="button" class="btn-close" @onclick="() => toastError = string.Empty"></button>
         </div>
     }
+
+    <BrandStatRow Stats="@statRows" />
 
     @{
         var projectTabs = new BrandFilterTabs.Tab[]
@@ -901,7 +904,7 @@
                     <button type="button" class="btn-close" @onclick="CloseScheduleModal" disabled="@scheduleSaving"></button>
                 </div>
                 <div class="modal-body">
-                    <CcScheduleEditor @bind-Value="scheduleForm" Error="@scheduleError" />
+                    <BrandScheduleEditor @bind-Value="scheduleForm" Error="@scheduleError" />
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseScheduleModal" disabled="@scheduleSaving">Cancel</button>
@@ -1396,7 +1399,7 @@
                             </p>
                             <div class="row g-3">
                                 <div class="col-md-7">
-                                    <label class="icb-form-label fw-semibold">Base DN <CcHelpHint Text="The directory container the read starts from (e.g. OU=Staff,DC=corp,DC=local). Leave blank to start at the domain root. Everything beneath it is in scope." /></label>
+                                    <label class="icb-form-label fw-semibold">Base DN <BrandHelpHint Text="The directory container the read starts from (e.g. OU=Staff,DC=corp,DC=local). Leave blank to start at the domain root. Everything beneath it is in scope." /></label>
                                     <div class="input-group">
                                         <input class="icb-form-input" @bind="scopeForm.BaseDN" placeholder="DC=demo,DC=local — or blank to auto-detect" />
                                         <button type="button" class="ic-btn ic-btn-ghost" @onclick="OpenBaseDnBrowser" disabled="@(form.SourceTenantId == Guid.Empty)" title="Browse and pick a single container">
@@ -1425,7 +1428,7 @@
                             </div>
                             <div class="row g-3 mt-1">
                                 <div class="col-md-9">
-                                    <label class="icb-form-label fw-semibold">LDAP filter override <CcHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></label>
+                                    <label class="icb-form-label fw-semibold">LDAP filter override <BrandHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></label>
                                     <input class="icb-form-input" @bind="scopeForm.LdapFilter" placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default" />
                                     <small class="icb-form-help text-muted">RFC 4515 LDAP filter. Blank = the per-object-class default.</small>
                                 </div>
@@ -1969,12 +1972,12 @@
                         <div class="row g-3">
                             <div class="col-md-12">
                                 <label class="icb-form-label fw-semibold">Schedule</label>
-                                <CcScheduleEditor @bind-Value="form.CronSchedule" />
+                                <BrandScheduleEditor @bind-Value="form.CronSchedule" />
                             </div>
                             <div class="col-md-12">
                                 <div class="icb-form-check mt-2">
                                     <input class="icb-form-checkbox" type="checkbox" id="formSkipUnchanged" @bind="form.SkipUnchanged" />
-                                    <label class="icb-form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records <CcHelpHint Text="When on, a record whose mapped attributes haven't changed since the last run is skipped (compared by content hash) — much faster on large directories, and the run still reports it as skipped." /></label>
+                                    <label class="icb-form-check-label fw-semibold" for="formSkipUnchanged">Skip unchanged records <BrandHelpHint Text="When on, a record whose mapped attributes haven't changed since the last run is skipped (compared by content hash) — much faster on large directories, and the run still reports it as skipped." /></label>
                                     <small class="icb-form-help text-muted d-block">Only write records whose mapped attributes changed since the last run (faster; uses a per-record content hash). Recommended for large directories.</small>
                                 </div>
                             </div>
@@ -2198,7 +2201,7 @@
                                         <th class="mm-col-src">Source Attribute</th>
                                         <th class="mm-col-arrow text-center">→</th>
                                         <th class="mm-col-tgt">Target Attribute</th>
-                                        <th class="mm-col-xform">Transform / Value <CcHelpHint Text="Direct copies the source value (optionally through a transform chain like trim|lower). Constant (const:) writes a fixed value to every object, ignoring the source. Default (default:) writes a fixed value only when the source is empty." /></th>
+                                        <th class="mm-col-xform">Transform / Value <BrandHelpHint Text="Direct copies the source value (optionally through a transform chain like trim|lower). Constant (const:) writes a fixed value to every object, ignoring the source. Default (default:) writes a fixed value only when the source is empty." /></th>
                                         <th class="mm-col-req text-center">Req</th>
                                         <th class="mm-col-act"></th>
                                     </tr>
@@ -2359,7 +2362,7 @@
                                     <div class="step-tag-head">
                                         <label class="icb-form-label fw-semibold mb-0">
                                             Tags
-                                            <CcHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." />
+                                            <BrandHelpHint Text="Tags applied to every object this step syncs into IdentityCenter (e.g. a step scoped to the Contractor OU → 'Contractor'). IC applies ONLY tags that already exist in its vocabulary; unknown names are skipped." />
                                         </label>
                                         <button type="button" class="step-tag-refresh" @onclick="LoadIcTagsAsync"
                                                 title="Re-read the tag list from IdentityCenter">
@@ -2659,7 +2662,7 @@
                         <div class="step-scope-section-head">
                             <label class="icb-form-label fw-semibold mb-0">
                                 Included paths
-                                <CcHelpHint Text="Each included container becomes a subtree LDAP base for this step's read. With Inherit off and no included path, this step reads the ENTIRE directory from the source's root (RootDSE defaultNamingContext) — the project Scope tab is not consulted." />
+                                <BrandHelpHint Text="Each included container becomes a subtree LDAP base for this step's read. With Inherit off and no included path, this step reads the ENTIRE directory from the source's root (RootDSE defaultNamingContext) — the project Scope tab is not consulted." />
                             </label>
                             <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                     @onclick="OpenScopeDraftBrowser"
@@ -2736,7 +2739,7 @@
                         <div class="step-scope-section-head">
                             <label class="icb-form-label fw-semibold mb-0">
                                 Blocked paths
-                                <CcHelpHint Text="Any object at or under a blocked container is dropped from the read even when it sits under an included path." />
+                                <BrandHelpHint Text="Any object at or under a blocked container is dropped from the read even when it sits under an included path." />
                             </label>
                             <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                     @onclick="OpenScopeDraftBrowser"
@@ -2875,7 +2878,7 @@
 @* Shared live container browser for the Scope step's Base DN picker. Rendered
    LAST on purpose: every modal above it is z-index 1055 too, so DOM order is
    what puts the container tree on top when Browse opens it from one of them. *@
-<CcDirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" OnScopesSelected="OnScopesPicked" />
+<DirectoryBrowserModal @ref="baseDnBrowser" OnSelected="OnBaseDnPicked" OnScopesSelected="OnScopesPicked" />
 
 @if (sourceBrowse != null)
 {
@@ -3158,7 +3161,7 @@
     private string formTab = "setup";
 
     // Scope step: live Base DN container browser (shared component).
-    private CcDirectoryBrowserModal? baseDnBrowser;
+    private DirectoryBrowserModal? baseDnBrowser;
 
     private async Task OpenBaseDnBrowser()
     {
@@ -5300,7 +5303,7 @@
     private List<SyncProject> targetProjects => filteredProjects;
     private List<SyncProject> internalProjects => new();
 
-    private IReadOnlyList<CcStatRow.StatItem> statRows = Array.Empty<CcStatRow.StatItem>();
+    private IReadOnlyList<BrandStatRow.StatItem> statRows = Array.Empty<BrandStatRow.StatItem>();
 
     protected override async Task OnInitializedAsync()
     {
@@ -5354,10 +5357,10 @@
     {
         statRows = new[]
         {
-            new CcStatRow.StatItem("Projects",  allProjects.Count.ToString("N0")),
-            new CcStatRow.StatItem("Enabled",   allProjects.Count(p => p.IsEnabled).ToString("N0")),
-            new CcStatRow.StatItem("Running",   allProjects.Count(p => p.IsRunning).ToString("N0"),  ValueColor: "text-info"),
-            new CcStatRow.StatItem("Scheduled", allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule)).ToString("N0"))
+            new BrandStatRow.StatItem("Projects",  allProjects.Count.ToString("N0")),
+            new BrandStatRow.StatItem("Enabled",   allProjects.Count(p => p.IsEnabled).ToString("N0")),
+            new BrandStatRow.StatItem("Running",   allProjects.Count(p => p.IsRunning).ToString("N0"),  ValueColor: "text-info"),
+            new BrandStatRow.StatItem("Scheduled", allProjects.Count(p => !string.IsNullOrEmpty(p.CronSchedule)).ToString("N0"))
         };
     }
 
