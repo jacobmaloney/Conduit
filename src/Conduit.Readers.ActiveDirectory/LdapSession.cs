@@ -62,8 +62,9 @@ public sealed class LdapSession(LdapConnection connection) : IAdPageSource
         var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["distinguishedName"] = entry.DistinguishedName };
         foreach (string name in entry.Attributes.AttributeNames)
         {
-            var attribute = entry.Attributes[name];
-            values[name] = attribute.Count switch { 0 => null, 1 => attribute[0], _ => attribute.Cast<object?>().ToArray() };
+            // One conversion for every value (AdAttributeValues): text attributes decode, binary
+            // ones stay bytes, multi-valued ones never leak the raw wire byte[] (2026-10-16).
+            values[name] = AdAttributeValues.FromDirectoryAttribute(entry.Attributes[name]);
         }
         return new(entry.DistinguishedName, values);
     }

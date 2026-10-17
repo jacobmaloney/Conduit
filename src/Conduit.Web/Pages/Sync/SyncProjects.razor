@@ -1760,15 +1760,15 @@
                                             </button>
                                             <button type="button" class="ic-btn ic-btn-sm @(wfSettings ? "btn-info" : "icb-btn-accent")"
                                                     @onclick="() => ToggleWorkflowSettings(wfRef.Id)" title="Rename Workflow">
-                                                <i class="fas fa-edit"></i>
+                                                <i class="fas fa-edit me-1" aria-hidden="true"></i>Rename
                                             </button>
                                             <button type="button" class="ic-btn ic-btn-sm icb-btn-success"
                                                     @onclick="() => CopyWorkflowById(wfRef.Id)" title="Copy Workflow">
-                                                <i class="fas fa-copy"></i>
+                                                <i class="fas fa-copy me-1" aria-hidden="true"></i>Copy
                                             </button>
                                             <button type="button" class="ic-btn ic-btn-sm ic-btn-danger"
                                                     @onclick="() => DeleteWorkflowById(wfRef.Id)" title="Delete Workflow">
-                                                <i class="fas fa-trash"></i>
+                                                <i class="fas fa-trash me-1" aria-hidden="true"></i>Delete
                                             </button>
                                         </div>
                                     </div>
@@ -1925,20 +1925,20 @@
                                                                     </button>
                                                                     <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                                                             @onclick="() => OpenStepScopeModal(stepRef.Id)" title="Configure scope and filter">
-                                                                        <i class="fas fa-filter"></i>
+                                                                        <i class="fas fa-filter me-1" aria-hidden="true"></i>Scope
                                                                     </button>
                                                                 }
                                                                 <button type="button" class="ic-btn ic-btn-sm ic-btn-ghost"
                                                                         @onclick="() => OpenStepSettingsModal(stepRef.Id)" title="Edit settings">
-                                                                    <i class="fas fa-cog"></i>
+                                                                    <i class="fas fa-cog me-1" aria-hidden="true"></i>Settings
                                                                 </button>
                                                                 <button type="button" class="ic-btn ic-btn-sm icb-btn-success"
                                                                         @onclick="() => CopyStepById(stepRef.Id)" title="Copy Step">
-                                                                    <i class="fas fa-copy fa-sm"></i>
+                                                                    <i class="fas fa-copy me-1" aria-hidden="true"></i>Copy
                                                                 </button>
                                                                 <button type="button" class="ic-btn ic-btn-sm ic-btn-danger"
                                                                         @onclick="() => DeleteStepById(stepRef.Id)" title="Delete Step">
-                                                                    <i class="fas fa-trash fa-sm"></i>
+                                                                    <i class="fas fa-trash me-1" aria-hidden="true"></i>Delete
                                                                 </button>
                                                             </div>
                                                         </div>

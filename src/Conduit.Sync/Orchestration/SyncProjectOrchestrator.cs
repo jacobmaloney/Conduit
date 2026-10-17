@@ -1039,6 +1039,12 @@ public sealed class SyncProjectOrchestrator
         // created. Empty/missing config = no tagging (back-compat).
         var stepTagNames = ParseStepTagNames(step?.Configuration);
         var stepTagsCsv = stepTagNames.Count > 0 ? string.Join(",", stepTagNames) : null;
+        // UC009-F4: say what was parsed, so a step whose tags never reach IC is visible in
+        // the run log instead of silently reporting "updated". Pinned by SyncStepTagLogTests.
+        if (step is not null)
+            await Log(run, "Info", stepTagNames.Count > 0
+                ? $"    Step '{step.Name}': tags = {string.Join(", ", stepTagNames)}"
+                : $"    Step '{step.Name}': no tags");
 
         // Recover the prior incremental cursor if the source supports it.
         //

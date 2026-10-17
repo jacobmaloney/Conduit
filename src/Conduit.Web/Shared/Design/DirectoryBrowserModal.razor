@@ -20,6 +20,7 @@
 @inject Conduit.DataAccess.Repositories.TenantRepository TenantRepo
 
 <BrandScopeBrowserDialog Visible="@isVisible"
+                         StackLevel="2"
                          Mode="@(scopeMode ? ScopeBrowserMode.ScopeLocations : ScopeBrowserMode.SingleContainer)"
                          DataSource="@scopeDataSource"
                          ContextKey="@scopeContextKey"

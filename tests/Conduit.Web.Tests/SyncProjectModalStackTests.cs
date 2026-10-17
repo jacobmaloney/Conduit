@@ -51,6 +51,24 @@ public class SyncProjectModalStackTests
         }
     }
 
+    /// <summary>
+    /// 2026-10-16: the shared scope browser (BrandScopeBrowserDialog) opens from inside the level-1
+    /// step-scope modal, so it must declare level 2 on both its modal and its backdrop; the popover
+    /// plane it first used (1060) sat below level 1 (1075) and the browser rendered behind the modal
+    /// that opened it (Jacob: "what happened to the browse I had before?").
+    /// </summary>
+    [Fact]
+    public void The_shared_scope_browser_opens_above_the_step_scope_modal()
+    {
+        var adapter = File.ReadAllText(RepoFile(Path.Combine("src", "Conduit.Web", "Shared", "Design", "DirectoryBrowserModal.razor")));
+        Assert.Contains("StackLevel=\"2\"", adapter);
+        var dialog = File.ReadAllText(Path.Combine(Path.GetDirectoryName(BrandStylesheet())!, "..", "..", "Components", "Modals", "BrandScopeBrowserDialog.razor"));
+        Assert.Contains("<div class=\"modal-backdrop fade show @StackClass\"", dialog);
+        Assert.Contains("<div class=\"modal fade show d-block @StackClass\"", dialog);
+        Assert.Contains("StackLevel >= 2 ? \"icb-modal-stacked-2\" : StackLevel == 1 ? \"icb-modal-stacked\"", dialog);
+        Assert.DoesNotContain("icb-u-z-popover", dialog);
+    }
+
     [Fact]
     public void The_stacking_rule_lives_in_brand_not_in_a_conduit_stylesheet()
     {

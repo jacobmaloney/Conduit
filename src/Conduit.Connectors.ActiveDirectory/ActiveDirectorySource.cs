@@ -264,9 +264,8 @@ public sealed class ActiveDirectorySource : IConnectorSource
         };
         foreach (string name in entry.Attributes.AttributeNames!)
         {
-            var attr = entry.Attributes[name];
-            if (attr.Count == 0) continue;
-            attrs[name] = attr.Count == 1 ? attr[0] : (object)attr.GetValues(typeof(object));
+            var value = AdAttributeValues.FromDirectoryAttribute(entry.Attributes[name]);
+            if (value is not null) attrs[name] = value;
         }
 
         string? sourceId = null;
@@ -451,6 +450,14 @@ public sealed class ActiveDirectorySource : IConnectorSource
             ? new Guid(bytes).ToString()
             : entry.DistinguishedName;
 
+        // Everything downstream (mapping, hashing, the IdentityCenter sink, IdentityCenter's own
+        // columns) wants text: a GUID string for objectGUID, an S-1-5 string for objectSid, Base64
+        // for other binary values, and a list of strings for a multi-valued attribute. Until
+        // 2026-10-16 bytes leaked through as "System.Byte[]" (19,746 objectGUID copies and 36,021
+        // group member references in the lab catalog).
+        foreach (var key in attrs.Keys.ToList())
+            attrs[key] = AdAttributeValues.ToTextValue(key, attrs[key]);
+
         // Derived enabled-ness: AD stores it as bit 0x2 (ACCOUNTDISABLE) of the
         // userAccountControl bitmask, which no sink understands natively. Surface it as
         // the standard "isActive" attribute (same name the cloud sources emit) so a
@@ -514,14 +521,6 @@ public sealed class ActiveDirectorySource : IConnectorSource
                 out var dt))
             return dt.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
         return null;
-    }
-
-    private static object? ConvertAttributeValue(object? raw)
-    {
-        // S.DS.P returns strings or byte[]. Strings pass through; binary attributes
-        // (objectGUID, objectSid, ntSecurityDescriptor, etc.) stay as byte[] for the
-        // mapper or sink to handle.
-        return raw;
     }
 
     private static PageResultResponseControl? FindPageResponseControl(DirectoryControl[] controls)

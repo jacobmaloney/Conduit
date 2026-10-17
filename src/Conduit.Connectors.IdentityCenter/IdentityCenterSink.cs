@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Conduit.Sync.Connectors;
+using Conduit.Sync.Orchestration;
 using Conduit.Sync.Security;
 using Microsoft.Extensions.Logging;
 
@@ -461,6 +462,9 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     {
         var batchId = Guid.NewGuid();
         var items = new List<object>(slice.Count);
+        // UC009-F4: whether any item in this slice carried tags decides if the tag
+        // outcome IC reports is logged (a tag-less batch says nothing about tags).
+        var sentTags = false;
         foreach (var o in slice)
         {
             var attrs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
@@ -481,7 +485,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                     if (!string.IsNullOrWhiteSpace(raw))
                     {
                         var split = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                        if (split.Length > 0) tags = split;
+                        if (split.Length > 0) { tags = split; sentTags = true; }
                     }
                     continue;
                 }
@@ -567,7 +571,51 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             }
         }
 
+        // UC009-F4: IC's tag flush is best-effort and the upserts above stand either way;
+        // the run log is where the operator learns whether the tags landed.
+        if (sentTags)
+            await ReportTagOutcomeAsync(doc.RootElement);
+
         return MapResults(slice, byId);
+    }
+
+    /// <summary>
+    /// Reads <c>tagsApplied</c> / <c>unknownTags</c> / <c>tagError</c> from IC's
+    /// <c>BulkUpsertResponse</c> and writes one run-log line per finding through the
+    /// ambient per-run appender (<see cref="SourceRunLogContext"/>, bound by the
+    /// orchestrator for the whole run; a no-op outside a run). Unknown names and a flush
+    /// error are Warnings; the batch result is NOT changed (objects were upserted).
+    /// An IC that predates the fields gets a Warning too: silence would be the old lie.
+    /// </summary>
+    private async Task ReportTagOutcomeAsync(JsonElement root)
+    {
+        var hasOutcome = root.TryGetProperty("tagsApplied", out var appliedEl);
+        if (!hasOutcome)
+        {
+            const string stale = "    Tags: IdentityCenter did not report a tag outcome (API predates UC009-F4); whether the tags landed is unknown.";
+            _logger.LogWarning("IC bulk upsert response carried no tag outcome (tenant={TenantId}).", _tenantId);
+            await SourceRunLogContext.LogAsync("Warning", stale);
+            return;
+        }
+
+        var applied = appliedEl.ValueKind == JsonValueKind.Number ? appliedEl.GetInt32() : 0;
+        var unknown = new List<string>();
+        if (root.TryGetProperty("unknownTags", out var unknownEl) && unknownEl.ValueKind == JsonValueKind.Array)
+            foreach (var u in unknownEl.EnumerateArray())
+                if (u.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(u.GetString()))
+                    unknown.Add(u.GetString()!);
+        var error = root.TryGetProperty("tagError", out var errEl) && errEl.ValueKind == JsonValueKind.String
+            ? errEl.GetString()
+            : null;
+
+        _logger.LogInformation("IC bulk upsert tag outcome (tenant={TenantId}): applied={Applied}, unknown={Unknown}, error={Error}.",
+            _tenantId, applied, unknown.Count, error ?? "none");
+        await SourceRunLogContext.LogAsync("Info", $"    Tags: applied {applied}");
+        if (unknown.Count > 0)
+            await SourceRunLogContext.LogAsync("Warning",
+                $"    Tags: unknown in IdentityCenter: {string.Join(", ", unknown)} (create them there first)");
+        if (!string.IsNullOrWhiteSpace(error))
+            await SourceRunLogContext.LogAsync("Warning", $"    Tags: IdentityCenter could not apply tags: {error}");
     }
 
     /// <summary>

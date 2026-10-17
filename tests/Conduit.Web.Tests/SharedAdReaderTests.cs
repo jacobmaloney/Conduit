@@ -138,7 +138,11 @@ public class SharedAdReaderTests
         var raw = Row("CN=A,DC=x", new() { ["objectGUID"] = id.ToByteArray(), ["userAccountControl"] = "514", ["pwdLastSet"] = at.ToFileTimeUtc().ToString(), ["memberOf"] = new object[] { "A", "B" } });
         var row = (Conduit.Sync.Connectors.ConnectorObject)method.Invoke(null, [raw, "User"])!;
         Assert.Equal(id.ToString(), row.SourceId); Assert.Equal("false", row.Attributes["isActive"]);
-        Assert.Equal(at.ToString("O"), row.Attributes["pwdLastSet"]); Assert.IsType<List<object?>>(row.Attributes["memberOf"]);
+        Assert.Equal(at.ToString("O"), row.Attributes["pwdLastSet"]);
+        // 2026-10-16: every attribute value is text or a list of text (AdAttributeValues); the
+        // objectGUID copy reads as the GUID string, never "System.Byte[]".
+        Assert.Equal(new[] { "A", "B" }, Assert.IsType<List<string>>(row.Attributes["memberOf"]));
+        Assert.Equal(id.ToString(), row.Attributes["objectGUID"]);
     }
     [Fact] public async Task MissingSelectedSourceCredentialCannotBorrowTheSinkCredential()
     {

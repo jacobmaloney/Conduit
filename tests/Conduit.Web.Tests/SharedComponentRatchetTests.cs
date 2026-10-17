@@ -170,6 +170,26 @@ public class SharedComponentRatchetTests
             Assert.DoesNotContain("display", m.Groups[1].Value);
     }
 
+    /// <summary>
+    /// Jacob, 2026-10-16: "should use the standard shared schedule selector, no more cron statements".
+    /// The shared editor is the visual picker only; no mode toggle, no preset list, no cron field, no
+    /// cron chip in the preview. The stored value is still cron, which is the schedulers' business.
+    /// </summary>
+    [Fact]
+    public void The_shared_schedule_editor_shows_no_cron()
+    {
+        var components = Path.GetFullPath(Path.Combine(BrandCssDir(), "..", "..", "Components"));
+        var editor = File.ReadAllText(Path.Combine(components, "Inputs", "BrandScheduleEditor.razor"));
+        var picker = File.ReadAllText(Path.Combine(components, "Inputs", "BrandSchedulePicker.razor"));
+        Assert.DoesNotContain("Advanced (cron)", editor);
+        Assert.DoesNotContain("<input", editor);
+        Assert.DoesNotContain("<select", editor);
+        Assert.Contains("<BrandSchedulePicker Value=\"@Value\" ValueChanged=\"OnPickerChanged\" />", editor);
+        Assert.DoesNotContain("<code", picker);
+        var css = string.Concat(Directory.EnumerateFiles(BrandCssDir(), "*.css").Select(File.ReadAllText));
+        Assert.DoesNotContain(".cc-schedule-editor .btn-group", css);
+    }
+
     private static string RepoFile(string relativePath, [CallerFilePath] string thisFile = "") =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", "..", relativePath));
 
