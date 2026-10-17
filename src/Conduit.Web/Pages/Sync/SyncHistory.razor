@@ -11,6 +11,9 @@
 @inject SyncProjectRepository ProjectRepo
 @inject SyncRunAsyncJobRepository AsyncJobRepo
 @inject NavigationManager Navigation
+@inject Conduit.Sync.Orchestration.SyncCancellationRegistry Cancellation
+@inject Conduit.Web.Services.AuditLogService Audit
+@inject Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider AuthState
 @implements IDisposable
 
 @*
@@ -23,6 +26,11 @@
         - 2-second polling for any "Running" run (matches IC).
         - ?project=GUID query-string filter so the SyncProjects "History" link
           deep-links into the relevant subset.
+        - A Running run offers "Stop run" when THIS process owns it (SyncCancellationRegistry,
+          cancels at the next checkpoint) or "Mark interrupted" when no process here owns it:
+          an operator assertion, fenced on Status = 'Running' and on the project's exact owner
+          (FinishRunAsync), logged on the run and audited. Startup never sweeps Running rows
+          (SyncRunOwnershipContractTests); a human says so, with their name on it.
 
     Visuals: BrandPageHeader header + BrandStatRow + BrandFilterTabs + BrandListPanel
     (BrandSummaryRow rows with Soft BrandBadge counters) on the left; the shared
@@ -121,6 +129,29 @@
                                     <BrandBadge Text="Live" Tone="BrandBadgeTone.Success" Dot="true" Soft="true" Compact="true" />
                                 }
                             </h3>
+                            @if (selectedRun.Status == "Running")
+                            {
+                                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                    @if (Cancellation.IsRunningHere(selectedRun.SyncProjectId, selectedRun.Id))
+                                    {
+                                        <button type="button" class="icb-list-action" @onclick="StopRun" disabled="@runActionBusy">
+                                            <i class="fas fa-stop me-1"></i>Stop run
+                                        </button>
+                                        <span class="icb-table-note mb-0">Running in this Conduit process; Stop cancels at its next checkpoint.</span>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="icb-list-action" @onclick="ConfirmMarkInterrupted" disabled="@runActionBusy">
+                                            <i class="fas fa-flag-checkered me-1"></i>Mark interrupted
+                                        </button>
+                                        <span class="icb-table-note mb-0">No Conduit process here owns this run. If the process that started it was restarted, it will never finish on its own.</span>
+                                    }
+                                </div>
+                            }
+                            @if (!string.IsNullOrEmpty(runActionMessage))
+                            {
+                                <div class="alert @(runActionIsError ? "alert-warning" : "alert-success") py-2 mb-2" role="status">@runActionMessage</div>
+                            }
                             <div class="icb-detail-subtitle">
                                 Run started @selectedRun.StartedAt.ToString("yyyy-MM-dd HH:mm:ss 'UTC'")
                                 @if (selectedRun.CompletedAt.HasValue)
@@ -412,6 +443,8 @@
     </BrandEditorDialog>
 }
 
+<BrandConfirmationModal @ref="interruptConfirm" ConfirmLabel="Mark interrupted" CancelLabel="Keep as Running" />
+
 @code {
     [Parameter] public Guid? RunId { get; set; }
 
@@ -606,9 +639,95 @@
     private async Task HandleSelect(Conduit.Core.SyncModels.SyncRun r)
     {
         selectedRun = r;
+        runActionMessage = string.Empty;
         await LoadLogs();
         await LoadAsyncJobs();
         StartPollingIfNeeded();
+    }
+
+    // ── Operator actions on a Running run (UC009-F12) ────────────────────────────────────────
+    // Two honest buttons, never one that pretends: "Stop run" only when THIS process owns the run
+    // (the registry can really cancel it); "Mark interrupted" otherwise, as a human assertion
+    // fenced on Status = 'Running' (run row) and on the exact owner (project flag). Startup never
+    // does this by itself - see SyncRunOwnershipContractTests.
+    private BrandConfirmationModal? interruptConfirm;
+    private bool runActionBusy;
+    private string runActionMessage = string.Empty;
+    private bool runActionIsError;
+
+    private void StopRun()
+    {
+        if (selectedRun is null) return;
+        var signalled = Cancellation.RequestCancel(selectedRun.SyncProjectId, selectedRun.Id);
+        runActionIsError = !signalled;
+        runActionMessage = signalled
+            ? "Stop requested. The run will cancel at its next checkpoint and finish as Cancelled."
+            : "This process no longer owns the run (it finished or moved on). Nothing was changed; refresh to see its state.";
+    }
+
+    private async Task ConfirmMarkInterrupted()
+    {
+        if (selectedRun is null || interruptConfirm is null) return;
+        var run = selectedRun;
+        var ok = await interruptConfirm.ShowAsync(
+            "Mark this run as interrupted?",
+            $"'{ProjectName(run.SyncProjectId)}' started {run.StartedAt:yyyy-MM-dd HH:mm:ss} UTC still says Running, but no Conduit process here owns it.",
+            "Only confirm if you know no other Conduit process is still running it: the run is closed as Failed with your name on it, " +
+            "the project is released so it can run again, and the action is written to the run log and the audit log. " +
+            "A process that is still running it would finish its own row later; the project would stay released.");
+        if (!ok) return;
+        await MarkInterruptedAsync(run);
+    }
+
+    private async Task MarkInterruptedAsync(Conduit.Core.SyncModels.SyncRun run)
+    {
+        runActionBusy = true;
+        try
+        {
+            var auth = await AuthState.GetAuthenticationStateAsync();
+            var userName = auth.User?.Identity?.Name ?? "unknown";
+            var stamp = DateTime.UtcNow;
+            var message = $"Interrupted: marked by {userName} at {stamp:yyyy-MM-dd HH:mm:ss} UTC. No Conduit process owned this run " +
+                          "(the process that started it stopped before it finished).";
+
+            var changed = await RunRepo.MarkInterruptedAsync(run.Id, message);
+            if (changed == 0)
+            {
+                runActionIsError = true;
+                runActionMessage = "The run is no longer Running (it finished or was already closed). Nothing was changed.";
+            }
+            else
+            {
+                // Owner-fenced: releases the project only if THIS run is still its recorded owner.
+                await ProjectRepo.FinishRunAsync(run.SyncProjectId, run.Id, "Failed");
+                await RunRepo.AppendLogAsync(run.Id, "Warning", message);
+                await Audit.LogAsync(
+                    action: "SyncRunMarkedInterrupted",
+                    resourceType: "SyncRun",
+                    resourceId: run.Id.ToString(),
+                    userName: userName,
+                    statusCode: 200,
+                    details: $"Project {run.SyncProjectId} ('{ProjectName(run.SyncProjectId)}'). {message}",
+                    oldValue: "Running",
+                    newValue: "Failed");
+                runActionIsError = false;
+                runActionMessage = $"Marked interrupted by {userName}. The project can run again.";
+            }
+
+            await ReloadList();
+            selectedRun = await RunRepo.GetByIdAsync(run.Id) ?? run;
+            await LoadLogs();
+            StartPollingIfNeeded();
+        }
+        catch (Exception ex)
+        {
+            runActionIsError = true;
+            runActionMessage = $"Could not mark the run interrupted: {ex.Message}";
+        }
+        finally
+        {
+            runActionBusy = false;
+        }
     }
 
     // Fix 7: rendered-log cap + high-water mark for incremental tailing. The poll

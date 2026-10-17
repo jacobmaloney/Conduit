@@ -135,6 +135,25 @@ public class SyncRunRepository : BaseRepository
              WHERE Id = @RunId;",
             new { RunId = runId, Status = status, DurationMs = durationMs, ErrorMessage = errorMessage });
 
+    /// <summary>
+    /// An OPERATOR's assertion that a run still marked Running has no owner (the Conduit process that
+    /// started it stopped before it finished) - UC009-F12, Jacob 2026-10-16 "conduit run looks to be
+    /// stuck". Fenced on <c>Status = 'Running'</c> so a run that finished in the meantime is untouched;
+    /// returns the rows changed (0 = nothing was Running any more, the caller says so). This is the
+    /// human half of the ownership doctrine: startup only OBSERVES Running rows
+    /// (<c>DatabaseInitializer.ObserveRunningOwnershipAsync</c>) and never calls this - a sweep that
+    /// inferred "orphaned" from process-local knowledge is exactly what the doctrine forbids.
+    /// </summary>
+    public Task<int> MarkInterruptedAsync(Guid runId, string errorMessage) =>
+        ExecuteAsync(@"
+            UPDATE SyncRuns
+               SET Status = 'Failed',
+                   CompletedAt = SYSUTCDATETIME(),
+                   DurationMs = DATEDIFF_BIG(MILLISECOND, StartedAt, SYSUTCDATETIME()),
+                   ErrorMessage = @ErrorMessage
+             WHERE Id = @RunId AND Status = 'Running';",
+            new { RunId = runId, ErrorMessage = errorMessage });
+
     // ─── Logs ─────────────────────────────────────────────────────────────
 
     public Task AppendLogAsync(Guid runId, string level, string message) =>

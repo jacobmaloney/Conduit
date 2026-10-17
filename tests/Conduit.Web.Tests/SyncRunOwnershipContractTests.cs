@@ -18,6 +18,35 @@ public class SyncRunOwnershipContractTests
         Assert.DoesNotContain("SweepInterruptedRunsAsync", source);
     }
 
+    /// <summary>
+    /// UC009-F12 (Jacob, 2026-10-16: "conduit run looks to be stuck"): a run orphaned by a process
+    /// restart is closed by a HUMAN from Sync History, never by startup. The run write is fenced on
+    /// Status = 'Running', the project release goes through the owner-fenced FinishRunAsync, the page
+    /// offers Stop only when this process really owns the run, and the initializer still only observes.
+    /// </summary>
+    [Fact]
+    public void Mark_interrupted_is_an_operator_action_fenced_on_Running_and_never_a_startup_sweep()
+    {
+        var runs = Read("src/Conduit.DataAccess/Repositories/SyncRunRepository.cs");
+        var mark = Between(runs, "public Task<int> MarkInterruptedAsync", "// ─── Logs");
+        Assert.Contains("SET Status = 'Failed'", mark);
+        Assert.Contains("WHERE Id = @RunId AND Status = 'Running'", mark);
+        Assert.DoesNotContain("SyncProjects", mark);
+
+        var page = Read("src/Conduit.Web/Pages/Sync/SyncHistory.razor");
+        Assert.Contains("Cancellation.IsRunningHere(selectedRun.SyncProjectId, selectedRun.Id)", page);
+        Assert.Contains("Cancellation.RequestCancel(selectedRun.SyncProjectId, selectedRun.Id)", page);
+        Assert.Contains("RunRepo.MarkInterruptedAsync(run.Id, message)", page);
+        Assert.Contains("ProjectRepo.FinishRunAsync(run.SyncProjectId, run.Id, \"Failed\")", page);
+        Assert.Contains("interruptConfirm.ShowAsync(", page);
+        Assert.Contains("action: \"SyncRunMarkedInterrupted\"", page);
+
+        var initializer = Read("src/Conduit.DataAccess/DatabaseInitializer.cs");
+        Assert.DoesNotContain("MarkInterruptedAsync", initializer);
+        var orchestrator = Read("src/Conduit.Sync/Orchestration/SyncProjectOrchestrator.cs");
+        Assert.DoesNotContain("MarkInterruptedAsync", orchestrator);
+    }
+
     [Fact]
     public void Admission_cleanup_completion_and_recovery_keep_exact_owner_predicates()
     {
