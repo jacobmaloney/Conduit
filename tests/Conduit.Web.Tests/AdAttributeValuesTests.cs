@@ -42,10 +42,10 @@ public class AdAttributeValuesTests
     {
         var guid = Guid.NewGuid();
         Assert.Equal(guid.ToString(), AdAttributeValues.ToText("objectGUID", guid.ToByteArray()));
-        var sid = new System.Security.Principal.SecurityIdentifier("S-1-5-21-1-2-3-1105");
-        var sidBytes = new byte[sid.BinaryLength];
-        sid.GetBinaryForm(sidBytes, 0);
+        // S-1-5-21-1-2-3-1105 in the binary layout: revision 1, five sub-authorities, authority 5.
+        var sidBytes = new byte[] { 1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0x51, 0x04, 0, 0 };
         Assert.Equal("S-1-5-21-1-2-3-1105", AdAttributeValues.ToText("objectSid", sidBytes));
+        Assert.False(AdAttributeValues.TrySidToText(new byte[] { 2, 1, 0, 0, 0, 0, 0, 5, 1, 0, 0, 0 }, out _));
         var descriptor = new byte[] { 1, 0, 4, 128, 20, 0 };
         Assert.Equal(Convert.ToBase64String(descriptor), AdAttributeValues.ToText("ntSecurityDescriptor", descriptor));
         Assert.Equal("CN=a;CN=b", AdAttributeValues.ToText("member", new object?[] { "CN=a", Utf8("CN=b") }));

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.DirectoryServices.Protocols;
 using System.Linq;
-using System.Security.Principal;
 using System.Text;
 
 namespace Conduit.Readers.ActiveDirectory;
@@ -110,11 +109,9 @@ public static class AdAttributeValues
         var name = attributeName ?? string.Empty;
         if (bytes.Length == 16 && name.EndsWith("GUID", StringComparison.OrdinalIgnoreCase))
             return new Guid(bytes).ToString();
-        if (name.EndsWith("Sid", StringComparison.OrdinalIgnoreCase) || name.Equals("securityIdentifier", StringComparison.OrdinalIgnoreCase))
-        {
-            try { return new SecurityIdentifier(bytes, 0).Value; }
-            catch (ArgumentException) { /* not a SID after all; fall through to Base64 */ }
-        }
+        if ((name.EndsWith("Sid", StringComparison.OrdinalIgnoreCase) || name.Equals("securityIdentifier", StringComparison.OrdinalIgnoreCase))
+            && TrySidToText(bytes, out var sid))
+            return sid;
         if (!IsBinaryAttribute(name))
         {
             // A text attribute that still arrived as bytes (a caller bypassed the reader): decode strictly.
@@ -122,5 +119,26 @@ public static class AdAttributeValues
             catch (DecoderFallbackException) { }
         }
         return Convert.ToBase64String(bytes);
+    }
+
+    /// <summary>
+    /// The SID binary layout (revision, sub-authority count, 48-bit big-endian identifier authority,
+    /// 32-bit little-endian sub-authorities) rendered as S-1-5-21-...; decoded here rather than
+    /// through SecurityIdentifier so the reader builds and runs on every platform.
+    /// </summary>
+    public static bool TrySidToText(byte[] bytes, out string text)
+    {
+        text = string.Empty;
+        if (bytes is null || bytes.Length < 8) return false;
+        var revision = bytes[0];
+        var count = bytes[1];
+        if (revision != 1 || count > 15 || bytes.Length != 8 + count * 4) return false;
+        long authority = 0;
+        for (var i = 2; i < 8; i++) authority = (authority << 8) | bytes[i];
+        var sb = new StringBuilder("S-1-").Append(authority);
+        for (var i = 0; i < count; i++)
+            sb.Append('-').Append(BitConverter.ToUInt32(bytes, 8 + i * 4));
+        text = sb.ToString();
+        return true;
     }
 }
