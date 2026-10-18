@@ -24,22 +24,24 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    @* Vendor stylesheets first (Bootstrap grid + open-iconic), then the single
-       canonical Conduit stylesheet last so its rules win where they need to. *@
-    @* Brand tokens FIRST — the single source of truth for the whole palette
-       (css/brand-tokens.css). Everything below consumes these variables; change
-       the brand in that one file. Must load before Bootstrap so our tokens are
-       defined when later rules reference them. *@
-    @* asp-append-version does nothing here: Conduit.Web registers no tag helpers (there is no
-       _ViewImports.cshtml), so the attribute was emitted literally on the links this replaced.
-       With one stylesheet a stale cache is now all-or-nothing, so bust it at deploy instead. *@
-    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/identitycenter.css" />
+    @* Vendor stylesheets FIRST (Bootstrap grid, open-iconic, Font Awesome), the shared Brand
+       stylesheet AFTER them. Order is a cascade question, not a token question: custom properties
+       resolve at computed-value time, so the Brand tokens never had to load before Bootstrap. What
+       does depend on order is every equal-specificity conflict, and Bootstrap's own
+       body { color: #212529 } loaded after the Brand sheet beat its body { color: var(--text-primary) }:
+       in the dark theme every card heading and paragraph that inherited from body rendered
+       #212529 on the dark card (CONTRAST-02, Jacob 2026-10-17 "can't see that either"). IC's
+       _Layout links Bootstrap first; Conduit now matches it. *@
     <link rel="stylesheet" href="css/bootstrap/bootstrap.min.css" />
     <link rel="stylesheet" href="css/open-iconic/font/css/open-iconic-bootstrap.min.css" />
     @* Font Awesome — the shared center-shared.css and the ported IdentityCenter
        workflow/step action buttons use fa-* glyphs; without this they render as
        empty boxes. Loaded locally (lib/fontawesome) to match IC, no CDN. *@
     <link rel="stylesheet" href="lib/fontawesome/css/all.min.css" />
+    @* The one shared stylesheet, last of the vendor set so its rules win where they overlap.
+       asp-append-version works here (this file declares @addTagHelper above), so a Brand change
+       is never hidden behind a cached sheet. *@
+    <link rel="stylesheet" href="_content/IdentityCenter.Brand/css/identitycenter.css" asp-append-version="true" />
     @* Shared design system stylesheet (cc-* components), then Conduit-owned
        overrides so consumer rules win where they overlap. *@
     @* Shared Brand assets; preserve this cascade until the page migration. *@

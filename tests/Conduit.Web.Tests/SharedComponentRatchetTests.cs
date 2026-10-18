@@ -151,7 +151,8 @@ public class SharedComponentRatchetTests
         Assert.Contains("html.light-theme a:not(.btn):not(.ic-btn):not(.icb-list-action)", css);
         Assert.Contains("html.light-theme a:hover:not(.btn):not(.ic-btn):not(.icb-list-action)", css);
         Assert.Contains(".icb-stat-row .stat-card { display:flex; flex-direction:column;", css);
-        Assert.Contains(".icb-stat-row .stat-number { font-size:28px; font-weight:700; white-space:nowrap; }", css);
+        // FONT-SCALE-01 (2026-10-17): numerals sit on the 3xl step of the one type scale, not a literal 28px.
+        Assert.Contains(".icb-stat-row .stat-number { font-size: var(--text-3xl); font-weight:700; white-space:nowrap; }", css);
         Assert.DoesNotContain(".icb-stat-row .icb-stat-prominent .stat-number { font-size:34px; line-height:1.1; letter-spacing:-.02em; overflow-wrap:anywhere; }", css);
     }
 
