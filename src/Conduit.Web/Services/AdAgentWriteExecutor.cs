@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Conduit.Connectors.ActiveDirectory;
 using Conduit.DataAccess.Repositories;
@@ -408,9 +408,13 @@ public sealed class AdAgentWriteExecutor
                 $"MoveObject: targetOu is not within any permitted creation base DN for connection '{sourceConnectionName}' — refusing the move (deny-all containment).");
 
         var result = await sink.MoveAsync(p.ObjectGuid!, targetOu, ct);
-        return result.Outcome == ProvisionOutcome.Success
-            ? (true, $"Moved object to {result.ExternalId}.")
-            : (false, $"MoveObject failed: {result.ErrorMessage}");
+        if (result.Outcome != ProvisionOutcome.Success)
+            return (false, $"MoveObject failed: {result.ErrorMessage}");
+
+        // The DN AD now holds rides back as structured data, so IdentityCenter can settle the
+        // catalog row's DN on confirmation instead of waiting for the next sync (MOVE-SETTLE-01).
+        LastResultJson = JsonSerializer.Serialize(new { distinguishedName = result.ExternalId });
+        return (true, $"Moved object to {result.ExternalId}.");
     }
 
     private async Task<(bool, string)> DoSetAttributesAsync(

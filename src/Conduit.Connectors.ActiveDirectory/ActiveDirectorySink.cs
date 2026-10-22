@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.DirectoryServices.Protocols;
 using System.Linq;
@@ -944,7 +944,10 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var modDn = new ModifyDNRequest(sourceDn, newContainer, rdn) { DeleteOldRdn = true };
             conn.SendRequest(modDn);
 
-            var newDn = $"{rdn},{newContainer}";
+            // Report the DN the directory now holds, read back by GUID on the same bind, so
+            // IdentityCenter settles its catalog row from AD's answer (MOVE-SETTLE-01). The
+            // composed DN is only the fallback when that read finds nothing.
+            var newDn = ResolveToDn(conn, externalId) ?? $"{rdn},{newContainer}";
             return ProvisionResult.Success(externalId: newDn);
         }
         catch (Exception ex)
