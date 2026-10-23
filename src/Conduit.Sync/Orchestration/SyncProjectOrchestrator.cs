@@ -882,12 +882,13 @@ public sealed class SyncProjectOrchestrator
                 $"is performed by IdentityCenter during bulk ingest (DN → ObjectId) — marker step delegated (no-op). " +
                 $"{delegatedRefs} object(s) carried a {relationshipLabel} reference for IC to resolve.");
 
-            // Surface the delegated references as the meaningful "resolved" number so the
-            // run never again shows "resolved=0 skipped=ALL" for relationships IC really
-            // resolved. No per-object IC calls were made → skipped/failed = 0.
+            // SYNC-COUNT-01: the delegated references are reported in the line above, not as
+            // Updated. Counted as Updated they were added to the run's written-object total
+            // (lab: 444 + 16 of 1,370 "updated" a run were these, for no write). No per-object
+            // IC calls were made, so nothing was updated, skipped or failed by this step.
             return new StepResult
             {
-                Delta = new SyncStepDelta(0, 0, delegatedRefs, 0, 0, 0),
+                Delta = new SyncStepDelta(0, 0, 0, 0, 0, 0),
                 EmittedBatch = lastBatch
             };
         }
@@ -1111,11 +1112,26 @@ public sealed class SyncProjectOrchestrator
         // fake-pass source.
         var isLicenseClass = string.Equals(objectClass, "license", StringComparison.OrdinalIgnoreCase);
         bool skipUnchanged = project.SkipUnchanged && !isLicenseClass;
+        // Partial scope = BaseDN-scoped or include/exclude DN lists: the read is a slice of the
+        // class, not its population (see the delete-detection gate below for what that rules out).
+        var scopeIsPartial =
+            !string.IsNullOrWhiteSpace(scope.BaseDN)
+            || !string.IsNullOrWhiteSpace(scope.IncludedBaseDNs)
+            || !string.IsNullOrWhiteSpace(scope.ExcludedBaseDNs);
+        // SYNC-HASH-01: the skip-unchanged memory of a partial-scope step is its OWN, keyed by the
+        // step. With one slot per (class, record), a full "user" step and a scoped "Contractor" step
+        // that stamps _tags each found the other's hash for the same 448 contractors and rewrote
+        // them every run (896 writes an hour on the lab, nothing changed in AD). The class key stays
+        // the class-population registry delete-detection diffs against; a partial step never
+        // tombstones, so it never needs that registry.
+        var hashKey = HashScopeKey(objectClass, scopeIsPartial ? step?.Id : null);
         Dictionary<string, SinkHashEntry> priorHashes = skipUnchanged
-            ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, objectClass)
+            ? await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, hashKey)
             : new Dictionary<string, SinkHashEntry>(StringComparer.Ordinal);
         if (skipUnchanged)
-            await Log(run, "Info", $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es) for class '{objectClass}'.");
+            await Log(run, "Info", hashKey == objectClass
+                ? $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es) for class '{objectClass}'."
+                : $"    Skip-unchanged ON; loaded {priorHashes.Count} prior sink hash(es) for this step (partial scope keeps its own, apart from class '{objectClass}').");
         else if (project.SkipUnchanged && isLicenseClass)
             await Log(run, "Info", "    Skip-unchanged EXEMPT for class 'license': every row is re-asserted each run so IC's stale-deactivate pass stays truthful.");
         var writtenHashes = new List<KeyValuePair<string, string>>(256);
@@ -1188,7 +1204,7 @@ public sealed class SyncProjectOrchestrator
         }
         var deleteDetectionOn = tombstoneSink is not null;
         HashSet<string> priorIdsForDelete;
-        if (deleteDetectionOn && !skipUnchanged)
+        if (deleteDetectionOn && (!skipUnchanged || hashKey != objectClass))
         {
             var map = await _hashRepo.LoadMapAsync(project.Id, sinkTenant.Id, objectClass);
             priorIdsForDelete = new HashSet<string>(map.Keys, StringComparer.Ordinal);
@@ -1253,6 +1269,10 @@ public sealed class SyncProjectOrchestrator
         // populated for the "group" class + a sink that absorbs membership; otherwise
         // it stays empty and the second pass is a no-op.
         var groupMembershipBuffer = new List<GroupMembership>();
+        // SYNC-MEMBERS-01: AD member edges to well-known-SID foreign security principals
+        // (Authenticated Users, Interactive, ...) left out of the push; see IsWellKnownForeignPrincipal.
+        var wellKnownPrincipalEdges = 0;
+        var sourceIsActiveDirectory = string.Equals(sourceAdapter.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase);
         // Capture membership only on a group-like step into a sink that absorbs it.
         // Conduit native class names are lowercase; compare case-insensitively.
         // "team" and "site" carry member edges in Attributes["members"] exactly like
@@ -1309,6 +1329,8 @@ public sealed class SyncProjectOrchestrator
                 if (!sourceObj.Attributes.TryGetValue("members", out var memberVal))
                     sourceObj.Attributes.TryGetValue("member", out memberVal);
                 var memberIds = CoerceToStringList(memberVal);
+                if (sourceIsActiveDirectory)
+                    wellKnownPrincipalEdges += memberIds.RemoveAll(IsWellKnownForeignPrincipal);
                 if (memberIds.Count > 0)
                     groupMembershipBuffer.Add(new GroupMembership(sinkObj.SourceId, memberIds));
             }
@@ -1402,7 +1424,7 @@ public sealed class SyncProjectOrchestrator
         // scoped to this pump's class.
         if (skipUnchanged && writtenHashes.Count > 0)
         {
-            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, objectClass, writtenHashes); }
+            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, hashKey, writtenHashes); }
             catch (Exception ex) { await Log(run, "Warning", $"    Could not persist sink hashes: {ex.Message}"); }
         }
 
@@ -1437,10 +1459,6 @@ public sealed class SyncProjectOrchestrator
         // everything outside the slice "gone from source". Observed live 2026-08-03: a dedicated
         // admin-OU user step (45 reads) tombstoned the other ~1,733 user records. A scoped read
         // is never class-complete, so diff-based delete-detection is structurally invalid for it.
-        var scopeIsPartial =
-            !string.IsNullOrWhiteSpace(scope.BaseDN)
-            || !string.IsNullOrWhiteSpace(scope.IncludedBaseDNs)
-            || !string.IsNullOrWhiteSpace(scope.ExcludedBaseDNs);
         if (deleteDetectionOn && scopeIsPartial && tombstoneSink is not null)
         {
             await Log(run, "Info",
@@ -1661,6 +1679,9 @@ public sealed class SyncProjectOrchestrator
                 var edges = await memSink.EmitGroupMembershipsAsync(icUpsertSource, groupMembershipBuffer, ct);
                 await Log(run, "Info",
                     $"    Group memberships: pushed {edges} edge(s) across {groupMembershipBuffer.Count} group(s).");
+                if (wellKnownPrincipalEdges > 0)
+                    await Log(run, "Info",
+                        $"    Group memberships: left out {wellKnownPrincipalEdges} edge(s) to well-known security principals (e.g. Authenticated Users). They are built-in Windows identities, not accounts, so there is no object for them to resolve to.");
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -1751,15 +1772,49 @@ public sealed class SyncProjectOrchestrator
             if (volatileAttributes is not null && volatileAttributes.Contains(key))
                 continue;
             sb.Append(key).Append(HashFieldSep);
-            var v = obj.Attributes[key];
-            sb.Append(v is null
-                ? "\x00"
-                : System.Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture));
+            AppendHashValue(sb, obj.Attributes[key]);
             sb.Append(HashUnitSep);
         }
         var bytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
         var digest = System.Security.Cryptography.SHA256.HashData(bytes);
         return System.Convert.ToBase64String(digest);
+    }
+
+    /// <summary>
+    /// SYNC-HASH-01: one attribute value in the canonical form. Before this a multi-valued value
+    /// (AD hands every one over as a List&lt;string&gt;) and a byte[] went through Convert.ToString,
+    /// which writes the TYPE NAME, so a change to proxyAddresses or a photo never moved the hash and
+    /// the record was skipped as unchanged. Values are now written out, sorted ordinally (directory
+    /// multi-values are unordered, so a re-ordered read is not a change); bytes as Base64.
+    /// </summary>
+    private static void AppendHashValue(System.Text.StringBuilder sb, object? value)
+    {
+        switch (value)
+        {
+            case null:
+                sb.Append('\x00');
+                return;
+            case string text:
+                sb.Append(text);
+                return;
+            case byte[] bytes:
+                sb.Append(System.Convert.ToBase64String(bytes));
+                return;
+            case System.Collections.IEnumerable values:
+                var parts = new List<string>();
+                foreach (var item in values)
+                {
+                    var one = new System.Text.StringBuilder();
+                    AppendHashValue(one, item);
+                    parts.Add(one.ToString());
+                }
+                parts.Sort(StringComparer.Ordinal);
+                sb.Append('[').Append(string.Join(HashFieldSep, parts)).Append(']');
+                return;
+            default:
+                sb.Append(System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture));
+                return;
+        }
     }
 
     /// <summary>
@@ -1853,6 +1908,32 @@ public sealed class SyncProjectOrchestrator
         if (asyncSubmitted > 0)
             await Log(runId, "Info", $"    Submitted {asyncSubmitted} async job(s); poller will advance them out-of-band.");
         return new FlushDelta(c, u, s, f, pending);
+    }
+
+    /// <summary>
+    /// SYNC-HASH-01: the SinkRecordHashes scope for one step's skip-unchanged memory. The class name
+    /// for a step that reads the whole class (that set doubles as the delete-detection registry);
+    /// <c>step:{id:N}</c> for a partial-scope step (37 chars, inside ObjectClass NVARCHAR(50)).
+    /// </summary>
+    public static string HashScopeKey(string objectClass, Guid? partialStepId) =>
+        partialStepId is { } id ? $"step:{id:N}" : objectClass;
+
+    /// <summary>
+    /// SYNC-MEMBERS-01: an AD member DN that names a well-known-SID foreign security principal,
+    /// e.g. <c>CN=S-1-5-11,CN=ForeignSecurityPrincipals,DC=Domain,DC=Local</c> (Authenticated Users).
+    /// Built-in groups hold these; they are not accounts, no sync reads them as objects, so the sink
+    /// could never resolve them and every run reported them unresolved and kept its checkpoint.
+    /// A trusted-domain principal (<c>S-1-5-21-…</c>) is a real account and is NOT matched: an outside
+    /// account in a local group stays visible as unresolved.
+    /// </summary>
+    public static bool IsWellKnownForeignPrincipal(string memberDn)
+    {
+        const string container = ",CN=ForeignSecurityPrincipals,";
+        if (!memberDn.StartsWith("CN=S-1-", StringComparison.OrdinalIgnoreCase)) return false;
+        var at = memberDn.IndexOf(container, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return false;
+        var sid = memberDn[3..at];
+        return !sid.StartsWith("S-1-5-21-", StringComparison.OrdinalIgnoreCase) && sid.IndexOf(',') < 0;
     }
 
     /// <summary>
