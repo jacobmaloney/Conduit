@@ -105,102 +105,104 @@
         </div>
     }
 
-    <BrandListPanel TItem="TenantStats" Width="BrandListWidth.Fill" Title="Connections" Items="@stats"
-                    ShowPaging="false" ShowSearch="false"
-                    State="@(loading ? BrandListState.Loading : BrandListState.Ready)">
-        <EmptyTemplate>
-            <p>No connected systems yet. Connect one to get started.</p>
-            <button type="button" class="icb-list-action icb-list-action-primary" @onclick="ShowCreateModal">
-                <i class="fas fa-plus" aria-hidden="true"></i> Connect a system
-            </button>
-        </EmptyTemplate>
+    @* The same table as the Source catalog and Sync Projects (Jacob 2026-10-22), controls kept in the row. *@
+    <BrandListTable TItem="TenantStats" Title="Connections" Items="@stats" TotalCount="@stats.Count"
+                    PageSize="@Math.Max(1, stats.Count)" ShowPaging="false"
+                    State="@(loading ? BrandListState.Loading : BrandListState.Ready)"
+                    EmptyMessage="No connected systems yet. Use New Connection to connect one.">
+        <HeaderTemplate>
+            <th scope="col">Name</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Actions</th>
+        </HeaderTemplate>
         <RowTemplate Context="s">
             @{
                 var rowMissing = GetMissingRequiredTenantFields(s);
                 var rowMissingTitle = rowMissing.Count > 0
                     ? string.Concat("Configuration incomplete — missing: ", string.Join(", ", rowMissing), ". Open Edit to fix.")
                     : string.Empty;
+                var browseReason = SourceBrowseService.UnavailableReason(s.SystemType, s.IsActive);
             }
-            <BrandSummaryRow Title="@s.Name" Meta="@(string.IsNullOrWhiteSpace(s.Slug) ? s.Domain : s.Slug)">
-                <Badges>
-                    <BrandBadge Text="@s.SystemType" Icon="@ConnIcon(s.SystemType)" Soft="true" />
-                    @if (s.IsActive)
-                    {
-                        <BrandBadge Text="Active" Tone="BrandBadgeTone.Success" Dot="true" Soft="true" />
-                    }
-                    else
-                    {
-                        <BrandBadge Text="Inactive" Tone="BrandBadgeTone.Neutral" Icon="fas fa-pause" Soft="true" />
-                    }
-                    @if (rowMissing.Count > 0)
-                    {
-                        <span title="@rowMissingTitle">
-                            <BrandBadge Text="Config incomplete" Tone="BrandBadgeTone.Warning" Icon="fas fa-exclamation-triangle" Soft="true" />
-                        </span>
-                    }
-                </Badges>
-            </BrandSummaryRow>
-        </RowTemplate>
-        <RowActions Context="s">
-            @* A permanent delete or a data wipe runs after the shared dialog has closed, so the
-               whole action set stands down until it finishes rather than only the button that
-               started it. *@
-            @if (HasAdapter(s.SystemType))
-            {
-                <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => TestCardConnectionAsync(s)" disabled="@(cardTestBusyId == s.TenantId || DestructiveWorkInFlight)" title="Test Connection — attempts a real bind with this connection's stored credentials, if any are stored">
-                    @if (cardTestBusyId == s.TenantId)
-                    {
-                        <span class="spinner-border spinner-border-sm" role="status"></span>
-                    }
-                    else
-                    {
-                        <i class="fas fa-bolt" aria-hidden="true"></i>
-                    }
-                    <span>Test</span>
-                </button>
-            }
-            <div>
-                <button type="button" class="icb-list-action" disabled="@(SourceBrowseService.UnavailableReason(s.SystemType, s.IsActive) != null || DestructiveWorkInFlight)" aria-describedby="@($"browse-reason-{s.TenantId}")" @onclick="() => sourceBrowse = new(s.TenantId)">Browse data</button>
-                @if (SourceBrowseService.UnavailableReason(s.SystemType, s.IsActive) is { } browseReason) { <p id="@($"browse-reason-{s.TenantId}")" class="icb-table-note">@browseReason</p> }
-            </div>
-            <button type="button" class="icb-list-action" @onclick="() => EditSystem(s.TenantId)" disabled="@DestructiveWorkInFlight" title="Edit connection"><i class="fas fa-edit" aria-hidden="true"></i> Edit</button>
-            <button type="button" class="icb-list-action" @onclick="GoToSyncHistory" disabled="@DestructiveWorkInFlight" title="All sync history (not filtered to this connection)">History</button>
-            @if (HasCredentialFields(s.SystemType))
-            {
-                <button type="button" class="icb-list-action" @onclick="() => ShowCredentialsModal(s)" disabled="@DestructiveWorkInFlight" title="Credentials and test (directory bind)"><i class="fas fa-key" aria-hidden="true"></i></button>
-            }
-            <button type="button" class="icb-list-action" @onclick="() => ShowRenameModal(s)" disabled="@DestructiveWorkInFlight" title="Rename connection"><i class="fas fa-tag" aria-hidden="true"></i></button>
-            @if (ShowDevChrome)
-            {
-                @if (IsConnectorType(s.SystemType))
-                {
-                    <button type="button" class="icb-list-action" @onclick="() => ShowQuickSyncModal(s)" disabled="@DestructiveWorkInFlight" title="[Dev] Quick Sync — clone into a local browser tenant"><i class="fas fa-download" aria-hidden="true"></i></button>
-                }
-                <button type="button" class="icb-list-action" @onclick="() => ShowEndpoints(s)" disabled="@DestructiveWorkInFlight" title="[Dev] View SCIM/REST endpoints + tokens"><i class="fas fa-external-link-alt" aria-hidden="true"></i></button>
-                <button type="button" class="icb-list-action" @onclick="() => ToggleLegalHold(s)" disabled="@DestructiveWorkInFlight" title="@(s.LegalHold ? "[Dev] Legal hold ON — click to release." : "[Dev] Put on legal hold.")"><i class="fas @(s.LegalHold ? "fa-lock" : "fa-lock-open")" aria-hidden="true"></i></button>
-                <button type="button" class="icb-list-action" @onclick="() => ClearData(s)" disabled="@(DestructiveWorkInFlight || s.LegalHold)" title="@(s.LegalHold ? "[Dev] Refused — legal hold." : "[Dev] Clear users + groups")"><i class="fas fa-eraser" aria-hidden="true"></i></button>
-            }
-            @if (s.TenantId != TenantRepository.DefaultTenantId)
-            {
-                @* DeactivateSystem calls DeactivateAsync unconditionally and there is no reactivate
-                   path, so an already-inactive row must not offer a control that would confirm a
-                   deactivation and then write IsActive = 0 a second time. The Inactive badge on the
-                   row carries the state. *@
+            <td class="nm-cell">
+                <div class="fw-semibold">@s.Name</div>
+                <div class="icb-table-note">@(string.IsNullOrWhiteSpace(s.Slug) ? s.Domain : s.Slug)</div>
+            </td>
+            <td><BrandBadge Text="@s.SystemType" Icon="@ConnIcon(s.SystemType)" Soft="true" /></td>
+            <td>
                 @if (s.IsActive)
                 {
-                    <button type="button" class="icb-list-action" @onclick="() => DeactivateSystem(s)" disabled="@(DestructiveWorkInFlight || s.LegalHold)" title="@(s.LegalHold ? "Refused — legal hold." : "Deactivate (soft delete)")"><i class="fas fa-toggle-on" aria-hidden="true"></i></button>
+                    <BrandBadge Text="Active" Tone="BrandBadgeTone.Success" Dot="true" Soft="true" />
                 }
-                <button type="button" class="icb-list-action" @onclick="() => ShowDeleteModal(s)" disabled="@(DestructiveWorkInFlight || s.LegalHold)" title="@(s.LegalHold ? "Refused — legal hold." : "Delete forever")"><i class="fas fa-trash-alt" aria-hidden="true"></i></button>
-            }
-            @if (cardTestResultId == s.TenantId && !string.IsNullOrEmpty(cardTestMessage))
-            {
-                <div class="card-test-result @(cardTestSuccess ? "ok" : "err")">
-                    <i class="fas @(cardTestSuccess ? "fa-check-circle" : "fa-times-circle")" aria-hidden="true"></i>
-                    <span>@cardTestMessage</span>
+                else
+                {
+                    <BrandBadge Text="Inactive" Tone="BrandBadgeTone.Neutral" Icon="fas fa-pause" Soft="true" />
+                }
+                @if (rowMissing.Count > 0)
+                {
+                    <span title="@rowMissingTitle">
+                        <BrandBadge Text="Config incomplete" Tone="BrandBadgeTone.Warning" Icon="fas fa-exclamation-triangle" Soft="true" />
+                    </span>
+                }
+            </td>
+            <td>
+                @* A permanent delete or a data wipe runs after the shared dialog has closed, so the
+                   whole action set stands down until it finishes rather than only the button that
+                   started it. *@
+                <div class="icb-table-actions">
+                    @if (HasAdapter(s.SystemType))
+                    {
+                        <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => TestCardConnectionAsync(s)" disabled="@(cardTestBusyId == s.TenantId || DestructiveWorkInFlight)" title="Test Connection — attempts a real bind with this connection's stored credentials, if any are stored">
+                            @if (cardTestBusyId == s.TenantId)
+                            {
+                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                            }
+                            else
+                            {
+                                <i class="fas fa-bolt" aria-hidden="true"></i>
+                            }
+                            <span>Test</span>
+                        </button>
+                    }
+                    <button type="button" class="icb-list-action" disabled="@(browseReason != null || DestructiveWorkInFlight)" aria-describedby="@($"browse-reason-{s.TenantId}")" @onclick="() => sourceBrowse = new(s.TenantId)">Browse data</button>
+                    <button type="button" class="icb-list-action" @onclick="() => EditSystem(s.TenantId)" disabled="@DestructiveWorkInFlight" title="Edit connection"><i class="fas fa-edit" aria-hidden="true"></i> Edit</button>
+                    <button type="button" class="icb-list-action" @onclick="GoToSyncHistory" disabled="@DestructiveWorkInFlight" title="All sync history (not filtered to this connection)">History</button>
+                    @if (HasCredentialFields(s.SystemType))
+                    {
+                        <button type="button" class="icb-list-action" @onclick="() => ShowCredentialsModal(s)" disabled="@DestructiveWorkInFlight" title="Credentials and test (directory bind)"><i class="fas fa-key" aria-hidden="true"></i></button>
+                    }
+                    <button type="button" class="icb-list-action" @onclick="() => ShowRenameModal(s)" disabled="@DestructiveWorkInFlight" title="Rename connection"><i class="fas fa-tag" aria-hidden="true"></i></button>
+                    @if (ShowDevChrome)
+                    {
+                        @if (IsConnectorType(s.SystemType))
+                        {
+                            <button type="button" class="icb-list-action" @onclick="() => ShowQuickSyncModal(s)" disabled="@DestructiveWorkInFlight" title="[Dev] Quick Sync — clone into a local browser tenant"><i class="fas fa-download" aria-hidden="true"></i></button>
+                        }
+                        <button type="button" class="icb-list-action" @onclick="() => ShowEndpoints(s)" disabled="@DestructiveWorkInFlight" title="[Dev] View SCIM/REST endpoints + tokens"><i class="fas fa-external-link-alt" aria-hidden="true"></i></button>
+                        <button type="button" class="icb-list-action" @onclick="() => ToggleLegalHold(s)" disabled="@DestructiveWorkInFlight" title="@(s.LegalHold ? "[Dev] Legal hold ON — click to release." : "[Dev] Put on legal hold.")"><i class="fas @(s.LegalHold ? "fa-lock" : "fa-lock-open")" aria-hidden="true"></i></button>
+                        <button type="button" class="icb-list-action" @onclick="() => ClearData(s)" disabled="@(DestructiveWorkInFlight || s.LegalHold)" title="@(s.LegalHold ? "[Dev] Refused — legal hold." : "[Dev] Clear users + groups")"><i class="fas fa-eraser" aria-hidden="true"></i></button>
+                    }
+                    @if (s.TenantId != TenantRepository.DefaultTenantId)
+                    {
+                        @* DeactivateSystem calls DeactivateAsync unconditionally and there is no reactivate
+                           path, so an already-inactive row must not offer a control that would confirm a
+                           deactivation and then write IsActive = 0 a second time. The Inactive badge on the
+                           row carries the state. *@
+                        @if (s.IsActive)
+                        {
+                            <button type="button" class="icb-list-action" @onclick="() => DeactivateSystem(s)" disabled="@(DestructiveWorkInFlight || s.LegalHold)" title="@(s.LegalHold ? "Refused — legal hold." : "Deactivate (soft delete)")"><i class="fas fa-toggle-on" aria-hidden="true"></i></button>
+                        }
+                        <button type="button" class="icb-list-action" @onclick="() => ShowDeleteModal(s)" disabled="@(DestructiveWorkInFlight || s.LegalHold)" title="@(s.LegalHold ? "Refused — legal hold." : "Delete forever")"><i class="fas fa-trash-alt" aria-hidden="true"></i></button>
+                    }
                 </div>
-            }
-        </RowActions>
-    </BrandListPanel>
+                @if (browseReason is not null) { <p id="@($"browse-reason-{s.TenantId}")" class="icb-table-note">@browseReason</p> }
+                @if (cardTestResultId == s.TenantId && !string.IsNullOrEmpty(cardTestMessage))
+                {
+                    <div class="card-test-result @(cardTestSuccess ? "ok" : "err")">
+                        <i class="fas @(cardTestSuccess ? "fa-check-circle" : "fa-times-circle")" aria-hidden="true"></i>
+                        <span>@cardTestMessage</span>
+                    </div>
+                }
+            </td>
+        </RowTemplate>
+    </BrandListTable>
 
     @* Destructive confirmations. Both are typed-slug gated: ConfirmDisabled carries the same
        equality check the buttons carried before, and the impact table plus the typed input
