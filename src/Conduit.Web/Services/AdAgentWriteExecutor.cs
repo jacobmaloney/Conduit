@@ -57,8 +57,8 @@ public sealed class AdAgentWriteExecutor
 
     /// <summary>
     /// Structured result of the LAST executed command in this (per-command-scope) executor
-    /// instance — currently only the sealed password reset produces one (the ciphertext
-    /// envelope). Read by the poller immediately after ExecuteAsync; never logged.
+    /// instance: the sealed password reset (the ciphertext envelope), MoveObject (the new DN)
+    /// and SetAttributes (the prior values). Read by the poller immediately after ExecuteAsync; never logged.
     /// </summary>
     public string? LastResultJson { get; private set; }
 
@@ -90,6 +90,10 @@ public sealed class AdAgentWriteExecutor
         ["userPrincipalName"] = "userPrincipalName",
         ["givenName"] = "givenName",
         ["sn"] = "sn",
+        // UC014-D08 (deprovisioning): hide a leaver's mailbox from the address book. Only the Exchange
+        // attribute itself, never a generic one; a domain without the Exchange schema refuses it and the
+        // results card shows why.
+        ["msExchHideFromAddressLists"] = "msExchHideFromAddressLists",
     };
 
     /// <summary>Well-known privileged-group RIDs (objectSid suffix).</summary>
@@ -438,6 +442,11 @@ public sealed class AdAgentWriteExecutor
             resolved.Add((canonical, JsonValueToString(kvp.Value)));
         }
 
+        // UC014-D08: what each attribute held before this write, so IdentityCenter can record it and Undo can
+        // put it back (a deprovisioning that clears a phone number must know the number). Null when the read
+        // failed: the write still happens, the prior values are just not reported.
+        var prior = await sink.ReadAttributesByGuidAsync(p.ObjectGuid!, resolved.Select(r => r.Name).ToList(), ct);
+
         int applied = 0;
         foreach (var (name, value) in resolved)
         {
@@ -448,6 +457,7 @@ public sealed class AdAgentWriteExecutor
                 return (false, $"ApplyObjectWrite: SetAttributes('{name}') failed: {r.ErrorMessage}");
             applied++;
         }
+        if (prior is not null) LastResultJson = JsonSerializer.Serialize(new { priorValues = prior });
         return (true, $"SetAttributes applied {applied} attribute(s) to {SafeDn(target)}.");
     }
 

@@ -493,6 +493,47 @@ public sealed class ActiveDirectorySink : IConnectorSink
     }
 
     /// <summary>
+    /// UC014-D08: the current values of caller-validated attributes on the GUID-resolved object, read just
+    /// before a write so the write can report what it replaced (Undo puts it back). First value as text; an
+    /// absent attribute is null. Returns null when the read itself fails: the caller still writes, and the
+    /// prior values are simply not reported. Never throws.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, string?>?> ReadAttributesByGuidAsync(
+        string objectGuid, IReadOnlyCollection<string> attributeNames, CancellationToken cancellationToken)
+    {
+        if (attributeNames.Count == 0) return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId);
+            if (tenant is null) return null;
+            var creds = await ReadCredsAsync();
+            if (creds is null) return null;
+            using var conn = Bind(tenant.Domain, creds, out _);
+            var target = ResolveByGuid(conn, objectGuid);
+            if (target is null) return null;
+
+            var req = new SearchRequest(target.DistinguishedName, "(objectClass=*)", SearchScope.Base, attributeNames.ToArray());
+            var resp = (SearchResponse)conn.SendRequest(req);
+            if (resp.Entries.Count == 0) return null;
+            var entry = resp.Entries[0];
+            var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in attributeNames)
+            {
+                var key = entry.Attributes.AttributeNames.Cast<string>()
+                    .FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+                var raw = key is null ? Array.Empty<object>() : entry.Attributes[key].GetValues(typeof(string));
+                values[name] = raw.Length > 0 ? raw[0] as string : null;
+            }
+            return values;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AD prior-value read failed (tenant={TenantId}) — the write proceeds without them.", _tenantId);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Replace a single, caller-validated attribute on the GUID-resolved object.
     /// A null/empty value clears the attribute (Replace with no values = remove).
     /// The attribute name MUST already be allow-listed by the executor — this
