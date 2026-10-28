@@ -134,7 +134,7 @@ public class AdAgentCreateExecutorEnableAndLinkTests
         // enableOnCreate on the payload is NOT enough: only the executor's generated password places the keys.
         var obj = AdAgentCreateExecutor.BuildCreateObject(p, "nora.quint", Ou);
 
-        foreach (var key in new[] { "password", "userPassword", "unicodePwd", "active", "enabled", "userAccountControl", "accountExpires", "pwdLastSet", "mustChangePasswordAtLogon" })
+        foreach (var key in new[] { "password", "userPassword", "unicodePwd", "active", "enabled", "userAccountControl", "pwdLastSet", "mustChangePasswordAtLogon" })
             Assert.False(obj.Attributes.ContainsKey(key), $"credential key leaked: {key}");
         Assert.Equal("Nora", obj.Attributes["givenName"]);
     }

@@ -4,6 +4,12 @@ All notable changes to Conduit. Format roughly follows [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed — agent attribute allow-list (ALLOW-LIST-02, IdentityCenter UC015-D06 / UC017-F06)
+- `AdAgentWriteExecutor` SetAttributes now also writes `employeeID`, `employeeType`, `employeeNumber`, `accountExpires`, `homeDirectory`, `homeDrive` and `extensionAttribute1`-`15` (22 -> 43 names). `userAccountControl` stays out: Enable/Disable are their own operations.
+- New `AdAttributeValueShaper`: the one place a sent value takes the shape AD stores. `accountExpires` accepts a date (`yyyy-MM-dd` = end of that day, DC-local, as ADUC stores it), an ISO 8601 date-time, a FILETIME, `0` or `never`; anything else refuses the whole command before any LDAP call. Used by SetAttributes and by the create executor's attribute bag.
+- `AdAgentCreateExecutor` no longer forbids `accountExpires` in the bag (an expiry date is not an enable/UAC shape); a contractor's account is created with its end date. The password/enable/UAC keys stay forbidden.
+- Tests: `AdAttributeValueShaperTests` (shaper cases, the create object carries a FILETIME, the allow-list and the order of shaping before the first write pinned by source); the two create-executor test lists updated. IdentityCenter's `DirectoryAttributeCatalogTests` mirror the list from this source in the same change.
+
 ### Changed — demo seed
 - Replaced demo Connected Systems (Kodak — Entra ID Staging, Internal App Demo) with three department-based apps for the Unite 2026 ARS attribute-based provisioning demo: **IT Helpdesk Portal** (`it-helpdesk`), **Finance Suite** (`finance-suite`), **HR Connect** (`hr-connect`).
 - Seed users + groups + SOD trap pair now land in IT Helpdesk Portal; Finance Suite and HR Connect are empty targets the ARS workflow provisions into.

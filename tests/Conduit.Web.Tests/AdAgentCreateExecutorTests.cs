@@ -139,7 +139,6 @@ public class AdAgentCreateExecutorTests
     [InlineData("active")]
     [InlineData("enabled")]
     [InlineData("userAccountControl")]
-    [InlineData("accountExpires")]
     [InlineData("pwdLastSet")]
     [InlineData("mustChangePasswordAtLogon")]
     public async Task Smuggled_password_or_enable_key_is_rejected(string key)
@@ -207,7 +206,7 @@ public class AdAgentCreateExecutorTests
         Assert.Equal("Nora", obj.Attributes["givenName"]);
         Assert.Equal("Finance", obj.Attributes["department"]);
         // No password / enable / UAC keys anywhere.
-        foreach (var key in new[] { "password", "userPassword", "unicodePwd", "active", "enabled", "userAccountControl", "accountExpires" })
+        foreach (var key in new[] { "password", "userPassword", "unicodePwd", "active", "enabled", "userAccountControl" })
             Assert.False(obj.Attributes.ContainsKey(key), $"forbidden key leaked: {key}");
     }
 

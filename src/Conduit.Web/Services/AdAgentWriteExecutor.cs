@@ -94,6 +94,33 @@ public sealed class AdAgentWriteExecutor
         // attribute itself, never a generic one; a domain without the Exchange schema refuses it and the
         // results card shows why.
         ["msExchHideFromAddressLists"] = "msExchHideFromAddressLists",
+        // ALLOW-LIST-02 (IdentityCenter UC015-D06, UC017-F06): each name below is a deliberate addition.
+        // employeeID/employeeType/employeeNumber: HR identifiers the Mover keeps current (employeeID was
+        // written on create and refused on update until now). extensionAttribute1-15: the customer's
+        // own fields (a status code, a linked admin account), plain strings. accountExpires: a FILETIME
+        // the shaper builds from the date IdentityCenter sends (AdAttributeValueShaper). homeDirectory/
+        // homeDrive: profile paths. userAccountControl stays OUT: enable/disable are their own operations.
+        ["employeeID"] = "employeeID",
+        ["employeeType"] = "employeeType",
+        ["employeeNumber"] = "employeeNumber",
+        ["accountExpires"] = "accountExpires",
+        ["homeDirectory"] = "homeDirectory",
+        ["homeDrive"] = "homeDrive",
+        ["extensionAttribute1"] = "extensionAttribute1",
+        ["extensionAttribute2"] = "extensionAttribute2",
+        ["extensionAttribute3"] = "extensionAttribute3",
+        ["extensionAttribute4"] = "extensionAttribute4",
+        ["extensionAttribute5"] = "extensionAttribute5",
+        ["extensionAttribute6"] = "extensionAttribute6",
+        ["extensionAttribute7"] = "extensionAttribute7",
+        ["extensionAttribute8"] = "extensionAttribute8",
+        ["extensionAttribute9"] = "extensionAttribute9",
+        ["extensionAttribute10"] = "extensionAttribute10",
+        ["extensionAttribute11"] = "extensionAttribute11",
+        ["extensionAttribute12"] = "extensionAttribute12",
+        ["extensionAttribute13"] = "extensionAttribute13",
+        ["extensionAttribute14"] = "extensionAttribute14",
+        ["extensionAttribute15"] = "extensionAttribute15",
     };
 
     /// <summary>Well-known privileged-group RIDs (objectSid suffix).</summary>
@@ -439,7 +466,11 @@ public sealed class AdAgentWriteExecutor
         {
             if (!AllowedAttributes.TryGetValue(kvp.Key, out var canonical))
                 return (false, $"ApplyObjectWrite: attribute '{kvp.Key}' is not in the writable allow-list.");
-            resolved.Add((canonical, JsonValueToString(kvp.Value)));
+            // ALLOW-LIST-02: the value takes the shape AD stores (accountExpires -> FILETIME); a value that
+            // cannot be shaped refuses the WHOLE command before any write, like an unlisted name.
+            if (!AdAttributeValueShaper.TryShape(canonical, JsonValueToString(kvp.Value), out var shaped, out var shapeError))
+                return (false, $"ApplyObjectWrite: attribute '{canonical}': {shapeError}");
+            resolved.Add((canonical, shaped));
         }
 
         // UC014-D08: what each attribute held before this write, so IdentityCenter can record it and Undo can

@@ -51,8 +51,11 @@ public sealed class AdAgentCreateExecutor
     private static readonly HashSet<string> ForbiddenAttributeKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "password", "userPassword", "unicodePwd",
-        "active", "enabled", "userAccountControl", "accountExpires",
+        "active", "enabled", "userAccountControl",
         "pwdLastSet", "mustChangePasswordAtLogon"
+        // accountExpires left this list in ALLOW-LIST-02: it is an expiry date, not an enable/UAC shape, and
+        // a contractor's account is created WITH its end date. AdAttributeValueShaper turns the date into
+        // the FILETIME AD stores; an unshapeable value fails the create before any LDAP call (step 3b).
     };
 
     // Location / identity / structural keys the SINK reads to place and name the object
@@ -150,6 +153,17 @@ public sealed class AdAgentCreateExecutor
             {
                 if (IsRejectedAttributeKey(key))
                     return Fail($"CreateAdAccount: attribute '{key}' is not permitted in the bag (password/enable/UAC or location/identity keys are rejected — those come from the validated request fields).");
+            }
+        }
+
+        // ── (3b) ALLOW-LIST-02: a value that cannot take the shape AD stores fails here, before containment
+        //        and before any LDAP call (today only accountExpires has a shape; the shaper is the one place).
+        if (p.Attributes is not null)
+        {
+            foreach (var kvp in p.Attributes)
+            {
+                if (!AdAttributeValueShaper.TryShape(kvp.Key, JsonValueToString(kvp.Value), out _, out var shapeError))
+                    return Fail($"CreateAdAccount: attribute '{kvp.Key}': {shapeError}");
             }
         }
 
@@ -321,7 +335,9 @@ public sealed class AdAgentCreateExecutor
             foreach (var kvp in p.Attributes)
             {
                 if (IsRejectedAttributeKey(kvp.Key)) continue;
-                var value = JsonValueToString(kvp.Value);
+                // ALLOW-LIST-02: the stored shape (accountExpires -> FILETIME). ExecuteAsync refused an unshapeable
+                // value at step 3b; here a bad one is dropped rather than thrown, so BuildCreateObject stays pure.
+                if (!AdAttributeValueShaper.TryShape(kvp.Key, JsonValueToString(kvp.Value), out var value, out _)) continue;
                 if (value is not null) attrs[kvp.Key] = value;
             }
         }
