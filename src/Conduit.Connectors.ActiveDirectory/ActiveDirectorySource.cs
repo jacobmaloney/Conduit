@@ -475,8 +475,8 @@ public sealed class ActiveDirectorySource : IConnectorSource
         // so IC lands a real datetime, not junk that TRY_CONVERT silently drops. Prefer
         // lastLogonTimestamp (replicated, ~9-14 day lazy accuracy); lastLogon is per-DC
         // and non-replicated, so it's only a fallback when the replicated value is absent.
-        var logonIso = ConvertAdFileTime(attrs.TryGetValue("lastLogonTimestamp", out var llt) ? llt : null)
-                    ?? ConvertAdFileTime(attrs.TryGetValue("lastLogon", out var ll) ? ll : null);
+        var logonIso = AdFileTime.ToIsoUtc(attrs.TryGetValue("lastLogonTimestamp", out var llt) ? llt : null)
+                    ?? AdFileTime.ToIsoUtc(attrs.TryGetValue("lastLogon", out var ll) ? ll : null);
         if (logonIso != null)
             attrs["lastLogonTimestamp"] = logonIso;
 
@@ -486,7 +486,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
         // next logon"), so that case lands as no value rather than a bogus 1601 date.
         if (attrs.TryGetValue("pwdLastSet", out var pls))
         {
-            var pwdIso = ConvertAdFileTime(pls);
+            var pwdIso = AdFileTime.ToIsoUtc(pls);
             if (pwdIso != null)
                 attrs["pwdLastSet"] = pwdIso;
         }
@@ -497,30 +497,6 @@ public sealed class ActiveDirectorySource : IConnectorSource
             ObjectClass = objectClass,
             Attributes = attrs
         };
-    }
-
-    /// <summary>
-    /// Convert an AD FILETIME attribute value (100ns ticks since 1601, as an 18-digit
-    /// string) to an ISO-8601 UTC string ("o"). Returns null for absent / unparseable /
-    /// the sentinel "never" values (0 and 0x7FFFFFFFFFFFFFFF), and passes an already-ISO
-    /// datetime through unchanged so this is safe to call on either shape.
-    /// </summary>
-    private static string? ConvertAdFileTime(object? raw)
-    {
-        if (raw is not string s || string.IsNullOrWhiteSpace(s)) return null;
-        if (long.TryParse(s, out var ticks))
-        {
-            // 0 = never logged on; 0x7FFFFFFFFFFFFFFF = the AD "never expires" sentinel.
-            if (ticks <= 0 || ticks == long.MaxValue) return null;
-            try { return DateTime.FromFileTimeUtc(ticks).ToString("o", System.Globalization.CultureInfo.InvariantCulture); }
-            catch { return null; }
-        }
-        // Already a datetime string (e.g. re-processed value) -> normalize to UTC ISO.
-        if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
-                out var dt))
-            return dt.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
-        return null;
     }
 
     private static PageResultResponseControl? FindPageResponseControl(DirectoryControl[] controls)
