@@ -99,6 +99,8 @@ public sealed class ActiveDirectorySink : IConnectorSink
 
     private const int ADS_UF_ACCOUNTDISABLE = 0x0002;
     private const int ADS_UF_NORMAL_ACCOUNT = 0x0200;
+    private const int ADS_UF_PASSWD_NOTREQD = 0x0020;
+    private const int ADS_UF_WORKSTATION_TRUST_ACCOUNT = 0x1000;
 
     public ActiveDirectorySink(
         Guid tenantId,
@@ -347,16 +349,127 @@ public sealed class ActiveDirectorySink : IConnectorSink
 
         var cn = GetStr(obj, "cn") ?? sam!;
         var newDn = $"CN={EscapeDnComponent(cn)},{baseDn}";
-        var addRequest = new AddRequest(newDn,
-            new DirectoryAttribute("objectClass", new[] { "top", "group" }));
-        addRequest.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam));
-        AppendIfPresent(addRequest, obj, "description");
-        AppendIfPresent(addRequest, obj, "displayName");
-        // Members on create — same full-set semantics, expressed as an initial
-        // multi-valued add of the 'member' attribute.
-        AppendMembersOnCreate(addRequest, obj);
-        conn.SendRequest(addRequest);
+        conn.SendRequest(BuildAddRequest("group", newDn, obj, sam!));
         return SinkWriteResult.Ok(SinkWriteOutcome.Created);
+    }
+
+    // ─── Directory objects other than users (CREATE-CONSOLE-02) ────────────────
+
+    /// <summary>
+    /// Create a group, organizational unit, computer or contact (the object's ObjectClass says which) under
+    /// <c>targetOU</c>, named by <c>cn</c>. Create-else-link: an entry already at that DN is reported as
+    /// Linked with the existing DN and left untouched. No credential, no enable: a computer is pre-staged as
+    /// ADUC does (workstation trust account, password not required). The agent executor has validated the
+    /// OU against the allow-list before this is called.
+    /// </summary>
+    public async Task<ProvisionResult> CreateDirectoryObjectAsync(ConnectorObject newObject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var objectClass = (newObject.ObjectClass ?? "").Trim().ToLowerInvariant();
+            if (objectClass is not ("group" or "organizationalunit" or "computer" or "contact"))
+                return ProvisionResult.Failed($"Cannot create an AD '{newObject.ObjectClass}' here: group, organizationalUnit, computer and contact only.");
+
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException($"Tenant {_tenantId} not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException(
+                    $"No 'ldap' credential stored for tenant {_tenantId}. Save credentials before running.");
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var sam = GetStr(newObject, "sAMAccountName");
+            var name = GetStr(newObject, "cn") ?? GetStr(newObject, "displayName") ?? sam?.TrimEnd('$');
+            if (string.IsNullOrWhiteSpace(name))
+                return ProvisionResult.Failed($"Cannot create an AD {objectClass} without a name (cn).");
+            if ((objectClass is "group" or "computer") && string.IsNullOrWhiteSpace(sam))
+                return ProvisionResult.Failed($"Cannot create an AD {objectClass} without a sAMAccountName.");
+
+            var baseDn = ResolveBaseDn(conn, newObject);
+            if (string.IsNullOrWhiteSpace(baseDn))
+                return ProvisionResult.Failed($"Cannot create an AD {objectClass}: no target Base DN. Supply targetOU on the request.");
+
+            var newDn = BuildRdn(objectClass, name!) + "," + baseDn;
+            if (DnExists(conn, newDn))
+            {
+                _logger.LogInformation("AD {Class} already exists at {Dn} — linking (not creating).", objectClass, newDn);
+                return ProvisionResult.LinkedExisting(newDn);
+            }
+
+            try
+            {
+                conn.SendRequest(BuildAddRequest(objectClass, newDn, newObject, sam));
+            }
+            catch (DirectoryOperationException dex) when (
+                dex.Response?.ResultCode == ResultCode.EntryAlreadyExists ||
+                (dex.Message?.IndexOf("ENTRY_EXISTS", StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
+            {
+                _logger.LogInformation("AD {Class} create hit an existing entry at {Dn} — linking (not creating).", objectClass, newDn);
+                return ProvisionResult.LinkedExisting(newDn);
+            }
+            return ProvisionResult.Success(newDn);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD create of a {Class} failed (tenant={TenantId})", newObject.ObjectClass, _tenantId);
+            return ProvisionResult.Failed(ex.Message);
+        }
+    }
+
+    /// <summary>The RDN for a class: <c>OU=</c> for an organizational unit, <c>CN=</c> for everything else.</summary>
+    public static string BuildRdn(string objectClass, string name) =>
+        (string.Equals(objectClass, "organizationalunit", StringComparison.OrdinalIgnoreCase) ? "OU=" : "CN=") + EscapeDnComponent(name);
+
+    /// <summary>
+    /// The LDAP add for a non-user class: the objectClass chain and the attributes the directory accepts on
+    /// an add, read from the ConnectorObject. One builder for the sync upsert's group create and the agent's
+    /// console creates. Pure (no connection), so it is pinned without a DC.
+    /// </summary>
+    public static AddRequest BuildAddRequest(string objectClass, string dn, ConnectorObject obj, string? sam)
+    {
+        switch ((objectClass ?? "").Trim().ToLowerInvariant())
+        {
+            case "group":
+            {
+                var add = new AddRequest(dn, new DirectoryAttribute("objectClass", new[] { "top", "group" }));
+                add.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam ?? throw new ArgumentNullException(nameof(sam))));
+                AppendIfPresent(add, obj, "description");
+                AppendIfPresent(add, obj, "displayName");
+                AppendIfPresent(add, obj, "groupType");
+                AppendIfPresent(add, obj, "mail");
+                // Members on create — same full-set semantics, expressed as an initial
+                // multi-valued add of the 'member' attribute.
+                AppendMembersOnCreate(add, obj);
+                return add;
+            }
+            case "organizationalunit":
+            {
+                var add = new AddRequest(dn, new DirectoryAttribute("objectClass", new[] { "top", "organizationalUnit" }));
+                AppendIfPresent(add, obj, "description");
+                return add;
+            }
+            case "computer":
+            {
+                var add = new AddRequest(dn, new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "user", "computer" }));
+                add.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam ?? throw new ArgumentNullException(nameof(sam))));
+                add.Attributes.Add(new DirectoryAttribute("userAccountControl", (ADS_UF_WORKSTATION_TRUST_ACCOUNT | ADS_UF_PASSWD_NOTREQD).ToString()));
+                AppendIfPresent(add, obj, "description");
+                AppendIfPresent(add, obj, "displayName");
+                return add;
+            }
+            case "contact":
+            {
+                var add = new AddRequest(dn, new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "contact" }));
+                AppendIfPresent(add, obj, "displayName");
+                AppendIfPresent(add, obj, "givenName");
+                AppendIfPresent(add, obj, "sn", "familyName");
+                AppendIfPresent(add, obj, "mail", "email");
+                AppendIfPresent(add, obj, "description");
+                AppendIfPresent(add, obj, "telephoneNumber", "phoneNumber");
+                return add;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(objectClass), objectClass, "group, organizationalUnit, computer and contact only");
+        }
     }
 
     // ─── Phase 7 person-aware step methods ──────────────────────────────────

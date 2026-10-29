@@ -57,6 +57,9 @@ public class AdAgentCreateExecutorEnableAndLinkTests
             return Task.FromResult(OnCreate(newObject));
         }
 
+        public Task<ProvisionResult> CreateDirectoryObjectAsync(ConnectorObject newObject, CancellationToken ct)
+            => throw new InvalidOperationException("the user path never creates a non-user object");
+
         public Task<Guid?> ReadObjectGuidByDnAsync(string distinguishedName, CancellationToken ct) => Task.FromResult(ReadBack);
 
         public Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken ct)

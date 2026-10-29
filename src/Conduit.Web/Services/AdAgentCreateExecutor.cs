@@ -8,9 +8,12 @@ using Conduit.Sync.Connectors;
 namespace Conduit.Web.Services;
 
 /// <summary>
-/// Executes an IdentityCenter "CreateAdAccount" agent command: create a NEW Active Directory user
+/// Executes an IdentityCenter "CreateAdAccount" agent command: create a NEW Active Directory object
 /// through this Conduit agent, which holds DC line-of-sight + bind creds. IC is a SEPARATE trust
-/// domain — nothing in the payload is taken on faith.
+/// domain — nothing in the payload is taken on faith. The operation names the class (CREATE-CONSOLE-02):
+/// CreateUser (the account path below, with its credential rules), CreateGroup, CreateOrganizationalUnit,
+/// CreateComputer and CreateContact (<see cref="ProvisionObjectAsync"/>: no credential, no enable; the
+/// same containment, the same search-before-create by DN, the same read-back and result shape).
 ///
 /// SECURITY MODEL:
 ///   - By default (`enableOnCreate` absent/false) the account is created DISABLED and with NO password.
@@ -43,7 +46,20 @@ public sealed class AdAgentCreateExecutor
     private const int MaxAttributeCount = 64;
     private const int MaxLdapErrorChars = 2000;
 
-    private const string ExpectedOperation = "CreateUser";
+    private const string OperationCreateUser = "CreateUser";
+
+    /// <summary>The operations this command carries and the AD class each creates (the catalog spelling).</summary>
+    public static readonly IReadOnlyDictionary<string, string> OperationClasses = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [OperationCreateUser] = "user",
+        ["CreateGroup"] = "group",
+        ["CreateOrganizationalUnit"] = "organizationalunit",
+        ["CreateComputer"] = "computer",
+        ["CreateContact"] = "contact"
+    };
+
+    /// <summary>Classes named by a sAMAccountName; an OU or a contact is named by its common name only.</summary>
+    private static bool HasSamAccountName(string objectClass) => objectClass is "user" or "group" or "computer";
 
     // Keys that must NEVER be honoured in the attribute bag — password material, enable/UAC shapes and
     // the change-at-logon instruction the sink now reads. The executor alone places password / active /
@@ -125,13 +141,18 @@ public sealed class AdAgentCreateExecutor
         if (p.SchemaVersion != 1)
             return Fail($"CreateAdAccount: unsupported schemaVersion {p.SchemaVersion}.");
 
-        // ── (2) operation + required fields ───────────────────────────────────
-        if (!string.Equals(p.Operation?.Trim(), ExpectedOperation, StringComparison.Ordinal))
+        // ── (2) operation + required fields. The operation decides the class; a payload objectClass that
+        //        says otherwise is refused rather than reconciled (one truth, no guessing).
+        if (p.Operation is null || !OperationClasses.TryGetValue(p.Operation.Trim(), out var objectClass))
             return Fail($"CreateAdAccount: operation '{p.Operation}' is not allowed.");
+        if (!string.IsNullOrWhiteSpace(p.ObjectClass) && !string.Equals(p.ObjectClass.Trim(), objectClass, StringComparison.OrdinalIgnoreCase))
+            return Fail($"CreateAdAccount: operation '{p.Operation}' creates a {objectClass}, not '{p.ObjectClass}'.");
 
         var sam = p.SamAccountName?.Trim();
-        if (string.IsNullOrEmpty(sam))
+        if (HasSamAccountName(objectClass) && string.IsNullOrEmpty(sam))
             return Fail("CreateAdAccount: samAccountName is required.");
+        if (!HasSamAccountName(objectClass) && string.IsNullOrWhiteSpace(p.DisplayName))
+            return Fail($"CreateAdAccount: displayName (the {objectClass}'s name) is required.");
 
         var sourceConnectionName = p.SourceConnectionName?.Trim();
         if (string.IsNullOrEmpty(sourceConnectionName))
@@ -203,7 +224,78 @@ public sealed class AdAgentCreateExecutor
         }
 
         // ── (6)-(10) Search-before-create, the secure-channel refusal, the create, the read-back. ──
-        return await ProvisionAsync(commandId, new ActiveDirectorySinkCreateAdapter(sink), p, sam!, targetOu!, ct);
+        if (objectClass == "user")
+            return await ProvisionAsync(commandId, new ActiveDirectorySinkCreateAdapter(sink), p, sam!, targetOu!, ct);
+        return await ProvisionObjectAsync(commandId, new ActiveDirectorySinkCreateAdapter(sink), p, objectClass, sam, targetOu!, ct);
+    }
+
+    /// <summary>
+    /// CREATE-CONSOLE-02: the post-validation phase for a group, organizational unit, computer or contact. No
+    /// credential and no enable exist for these classes, so the phase is: the create with the executor-built
+    /// ConnectorObject (the sink links an entry that already exists at the DN instead of failing), then the
+    /// objectGUID read-back (degrades, never fails the create). Same seam, same result shape as the user's;
+    /// <c>accountEnabled</c> and <c>passwordSet</c> are reported false because they do not apply. NEVER throws.
+    /// </summary>
+    public async Task<(bool Success, string Message, string? ResultJson)> ProvisionObjectAsync(
+        Guid commandId, IAdAccountCreateSink sink, CreateAdAccountPayload p, string objectClass, string? sam, string targetOu, CancellationToken ct)
+    {
+        try
+        {
+            var result = await sink.CreateDirectoryObjectAsync(BuildObjectCreateObject(p, objectClass, sam, targetOu), ct);
+            if (result.Outcome != ProvisionOutcome.Success)
+                return Fail("CreateAdAccount: " + SanitizeLdapError(result.ErrorMessage));
+
+            var dn = result.ExternalId;
+            if (string.IsNullOrWhiteSpace(dn))
+                return Fail("CreateAdAccount: the sink reported success without a distinguished name.");
+
+            var objectGuid = await sink.ReadObjectGuidByDnAsync(dn!, ct);
+            if (result.Linked)
+            {
+                _logger.LogInformation("CreateAdAccount {CommandId}: a {Class} already exists at the DN — linked, nothing created or changed.", commandId, objectClass);
+                return (true, $"Linked existing {objectClass} {dn}.", BuildSuccessResultJson(objectGuid, dn, sam ?? "", upn: null, linked: true));
+            }
+
+            var message = (objectGuid is null ? "Created (degraded — objectGUID read-back failed) " : "Created ") + dn + ".";
+            return (true, message, BuildSuccessResultJson(objectGuid, dn, sam ?? "", upn: null));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CreateAdAccount {CommandId} threw during the {Class} create.", commandId, objectClass);
+            return Fail("CreateAdAccount: " + SanitizeLdapError(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Build the sink's ConnectorObject for a non-user class: the descriptive passthrough first (forbidden and
+    /// reserved keys dropped, values shaped), then the controlled keys last from the validated top-level fields:
+    /// <c>targetOU</c>, <c>cn</c> (the name the object is created under) and, for a group or computer,
+    /// <c>sAMAccountName</c>. A passthrough entry can never override the OU or the name. No credential key exists.
+    /// </summary>
+    public static ConnectorObject BuildObjectCreateObject(CreateAdAccountPayload p, string objectClass, string? sam, string targetOu)
+    {
+        var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        if (p.Attributes is not null)
+        {
+            foreach (var kvp in p.Attributes)
+            {
+                if (IsRejectedAttributeKey(kvp.Key)) continue;
+                if (!AdAttributeValueShaper.TryShape(kvp.Key, JsonValueToString(kvp.Value), out var value, out _)) continue;
+                if (value is not null) attrs[kvp.Key] = value;
+            }
+        }
+
+        var name = string.IsNullOrWhiteSpace(p.DisplayName) ? (sam ?? "").TrimEnd('$') : p.DisplayName!.Trim();
+        attrs["targetOU"] = targetOu;
+        attrs["cn"] = name;
+        if (HasSamAccountName(objectClass) && !string.IsNullOrWhiteSpace(sam)) attrs["sAMAccountName"] = sam!.Trim();
+        if (!string.IsNullOrWhiteSpace(p.DisplayName) && objectClass != "organizationalunit") attrs["displayName"] = p.DisplayName!.Trim();
+
+        if (!string.Equals(attrs["targetOU"] as string, targetOu, StringComparison.Ordinal) || attrs.ContainsKey("ou")
+            || ForbiddenAttributeKeys.Any(attrs.ContainsKey))
+            throw new InvalidOperationException("CreateAdAccount: internal invariant violated — the create OU, name or credential keys do not match the validated values.");
+
+        return new ConnectorObject { SourceId = string.IsNullOrEmpty(sam) ? name : sam!, ObjectClass = objectClass, Attributes = attrs };
     }
 
     /// <summary>
@@ -500,6 +592,8 @@ public sealed class AdAgentCreateExecutor
             => _sink.PrecheckCreateAsync(sam, upn, ct);
         public Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken ct)
             => _sink.CreateAsync(newObject, ct);
+        public Task<ProvisionResult> CreateDirectoryObjectAsync(ConnectorObject newObject, CancellationToken ct)
+            => _sink.CreateDirectoryObjectAsync(newObject, ct);
         public Task<Guid?> ReadObjectGuidByDnAsync(string distinguishedName, CancellationToken ct)
             => _sink.ReadObjectGuidByDnAsync(distinguishedName, ct);
         public Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken ct)
@@ -519,6 +613,8 @@ public interface IAdAccountCreateSink
 {
     Task<AdCreatePrecheck> PrecheckCreateAsync(string sam, string? upn, CancellationToken ct);
     Task<ProvisionResult> CreateAsync(ConnectorObject newObject, CancellationToken ct);
+    /// <summary>CREATE-CONSOLE-02: a group, OU, computer or contact (the object's ObjectClass says which); links an entry that already exists at the DN.</summary>
+    Task<ProvisionResult> CreateDirectoryObjectAsync(ConnectorObject newObject, CancellationToken ct);
     Task<Guid?> ReadObjectGuidByDnAsync(string distinguishedName, CancellationToken ct);
     Task<ProvisionResult> ResetPasswordAsync(string externalId, string newPassword, bool requireChangeAtNextLogin, CancellationToken ct);
     Task<SinkWriteResult> SetEnabledByGuidAsync(string objectGuid, bool enabled, CancellationToken ct);
