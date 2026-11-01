@@ -592,7 +592,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         var hasOutcome = root.TryGetProperty("tagsApplied", out var appliedEl);
         if (!hasOutcome)
         {
-            const string stale = "    Tags: IdentityCenter did not report a tag outcome (API predates UC009-F4); whether the tags landed is unknown.";
+            const string stale = "    Tags: IdentityCenter did not report a tag outcome (an older API); whether the tags landed is unknown.";
             _logger.LogWarning("IC bulk upsert response carried no tag outcome (tenant={TenantId}).", _tenantId);
             await SourceRunLogContext.LogAsync("Warning", stale);
             return;
