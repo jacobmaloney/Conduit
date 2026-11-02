@@ -416,6 +416,25 @@ public sealed class ActiveDirectorySink : IConnectorSink
     }
 
     /// <summary>The RDN for a class: <c>OU=</c> for an organizational unit, <c>CN=</c> for everything else.</summary>
+    /// <summary>
+    /// The leaf RDN and the parent of a DN, split at the first unescaped comma; a backslash escapes the character
+    /// after it (RFC 4514), so a comma inside a name stays inside the RDN. Null when there is no "name=value" leaf
+    /// or no parent.
+    /// </summary>
+    public static (string Rdn, string Parent)? SplitLeafRdn(string dn)
+    {
+        if (string.IsNullOrWhiteSpace(dn)) return null;
+        for (var i = 0; i < dn.Length; i++)
+        {
+            if (dn[i] == '\\') { i++; continue; }
+            if (dn[i] != ',') continue;
+            var rdn = dn[..i].Trim();
+            var parent = dn[(i + 1)..].Trim();
+            return rdn.IndexOf('=') > 0 && parent.Length > 0 ? (rdn, parent) : null;
+        }
+        return null;
+    }
+
     public static string BuildRdn(string objectClass, string name) =>
         (string.Equals(objectClass, "organizationalunit", StringComparison.OrdinalIgnoreCase) ? "OU=" : "CN=") + EscapeDnComponent(name);
 
@@ -1084,14 +1103,15 @@ public sealed class ActiveDirectorySink : IConnectorSink
             if (sourceDn is null) return ProvisionResult.Failed($"AD object '{externalId}' not found.");
 
             // ModifyDNRequest: new RDN keeps the same CN; new parent is the supplied container.
-            // Extract the leading RDN from sourceDn so the object name is preserved.
-            var rdnEnd = sourceDn.IndexOf(',');
-            if (rdnEnd <= 0) return ProvisionResult.Failed($"Cannot parse RDN from '{sourceDn}'.");
-            var rdn = sourceDn.Substring(0, rdnEnd);
+            // The leading RDN ends at the first UNESCAPED comma: "CN=User3\,Employee,OU=..." keeps
+            // "CN=User3\,Employee" whole (MOVE-RDN-01; a split at the first comma sent "CN=User3\"
+            // and AD answered "The distinguished name contains invalid syntax", 2026-11-02).
+            var leaf = SplitLeafRdn(sourceDn);
+            if (leaf is null) return ProvisionResult.Failed($"Cannot parse RDN from '{sourceDn}'.");
+            var (rdn, currentParent) = leaf.Value;
 
             // Idempotent: already under the requested container -> success no-op, so a re-run
             // (Mover retry, redelivered command) never errors on an already-completed move.
-            var currentParent = sourceDn.Substring(rdnEnd + 1).Trim();
             if (string.Equals(currentParent, newContainer.Trim(), StringComparison.OrdinalIgnoreCase))
                 return ProvisionResult.Success(externalId: sourceDn);
 
