@@ -1269,7 +1269,7 @@ public sealed class ActiveDirectorySink : IConnectorSink
         return byMail;
     }
 
-    private static string EscapeLdapFilter(string s)
+    internal static string EscapeLdapFilter(string s)
     {
         // RFC 4515 minimal — escape * ( ) \ NUL
         var sb = new StringBuilder(s.Length);

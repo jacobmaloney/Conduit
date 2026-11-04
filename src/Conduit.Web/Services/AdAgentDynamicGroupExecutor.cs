@@ -31,9 +31,11 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
     public const string OpRebuild = "RebuildDynamicGroup";
     public const string OpSetRules = "SetDynamicGroupRules";
     public const string OpConvertToStatic = "ConvertDynamicGroupToStatic";
+    /// <summary>MEMBERSHIP-RULES-01 (UC034-D13): one rule previewed on its own, read-only; the console's Preview Rule.</summary>
+    public const string OpPreview = "PreviewDynamicGroupRule";
     /// <summary>Cap on the rules one definition may carry through this verb.</summary>
     public const int MaxRules = 64;
-    private static readonly HashSet<string> Operations = new(StringComparer.Ordinal) { OpEvaluate, OpRebuild, OpSetRules, OpConvertToStatic };
+    private static readonly HashSet<string> Operations = new(StringComparer.Ordinal) { OpEvaluate, OpRebuild, OpSetRules, OpConvertToStatic, OpPreview };
 
     private readonly IEnumerable<IConnectorAdapter> _adapters;
     private readonly SinkConnectionCredentialMapRepository _credentialMap;
@@ -99,14 +101,19 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             rules = new List<DynamicGroupRuleSpec>(p.Rules.Count);
             foreach (var r in p.Rules)
             {
-                if (r is null || r.TypeCode is < 1 or > 6)
-                    return Fail(verb, "a rule's type is not one of the six membership rule types of a group.");
-                if (!Guid.TryParse(r.ObjectGuid, out var ruleObject) || ruleObject == Guid.Empty)
-                    return Fail(verb, "a rule names no objectGUID.");
-                if (r.TypeCode is 1 or 2 && string.IsNullOrWhiteSpace(r.Filter))
-                    return Fail(verb, "a query rule needs an LDAP filter.");
-                rules.Add(new DynamicGroupRuleSpec(r.TypeCode, ruleObject.ToString(), r.Filter));
+                if (!TryReadRule(r, out var spec, out var why))
+                    return Fail(verb, why!);
+                rules.Add(spec!);
             }
+        }
+        // PreviewDynamicGroupRule: the one rule, checked the same way.
+        DynamicGroupRuleSpec? previewRule = null;
+        if (verb == OpPreview)
+        {
+            if (p.Rule is null)
+                return Fail(verb, "rule is missing.");
+            if (!TryReadRule(p.Rule, out previewRule, out var why))
+                return Fail(verb, why!);
         }
 
         // ── (3) Resolve the tenant and the evaluator; evaluate, rebuild, set the rules or convert back. Never throws to the caller. ──
@@ -129,6 +136,13 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
                 if (evaluation.ErrorMessage is not null)
                     return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(evaluation.ErrorMessage));
                 return (true, Describe(evaluation), BuildResultJson(evaluation));
+            }
+            if (verb == OpPreview)
+            {
+                var preview = await evaluator.PreviewRuleAsync(previewRule!, ct);
+                if (preview.ErrorMessage is not null)
+                    return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(preview.ErrorMessage));
+                return (true, DescribePreview(preview), BuildPreviewResultJson(preview));
             }
 
             // The writes: the group must be a group, and never one of the privileged groups ApplyObjectWrite refuses.
@@ -154,6 +168,53 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
     }
 
     /// <summary>One sentence for a rebuild's completion message; counts, never names.</summary>
+    /// <summary>One rule of a payload as a spec: one of the seven types, an objectGUID, and a filter for a query type. False with the reason otherwise.</summary>
+    public static bool TryReadRule(RulePayload? r, out DynamicGroupRuleSpec? spec, out string? reason)
+    {
+        spec = null;
+        reason = null;
+        if (r is null || r.TypeCode is < 1 or > 7)
+        {
+            reason = "a rule's type is not one of the seven membership rule types.";
+            return false;
+        }
+        if (!Guid.TryParse(r.ObjectGuid, out var ruleObject) || ruleObject == Guid.Empty)
+        {
+            reason = "a rule names no objectGUID.";
+            return false;
+        }
+        if (r.TypeCode is 1 or 2 && string.IsNullOrWhiteSpace(r.Filter))
+        {
+            reason = "a query rule needs an LDAP filter.";
+            return false;
+        }
+        spec = new DynamicGroupRuleSpec(r.TypeCode, ruleObject.ToString(), r.Filter);
+        return true;
+    }
+
+    /// <summary>One sentence for a preview's completion message; the count, never names.</summary>
+    public static string DescribePreview(DynamicGroupRulePreview p)
+    {
+        if (p.TypeCode == (int)DynamicGroupRuleType.RetainDeprovisioned)
+            return "Retain Deprovisioned keeps deprovisioned members in place; it matches nothing of its own.";
+        var cap = p.Truncated ? " at least" : string.Empty;
+        return string.Concat("'", p.Type, "' matches", cap, " ", p.MatchCount.ToString("N0"), p.MatchCount == 1 ? " object." : " objects.");
+    }
+
+    /// <summary>The preview's ResultJson: the type, the resolved object, the exact count, and a sample of names sized under <see cref="MaxResultBytes"/>.</summary>
+    public static string BuildPreviewResultJson(DynamicGroupRulePreview p) =>
+        FitUnderWireCap(listed => JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            typeCode = p.TypeCode,
+            type = p.Type,
+            objectDn = p.ObjectDistinguishedName,
+            matchCount = p.MatchCount,
+            truncated = p.Truncated,
+            sample = p.Sample.Take(listed).ToList(),
+            sampleTruncated = p.MatchCount > Math.Min(listed, p.Sample.Count),
+        }));
+
     public static string DescribeRebuild(DynamicGroupRebuild r)
     {
         var failed = r.Failed > 0 ? $" {r.Failed} change(s) failed." : "";
@@ -355,6 +416,8 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
         [JsonPropertyName("objectGuid")] public string? ObjectGuid { get; set; }
         /// <summary>SetDynamicGroupRules: the rule list to write.</summary>
         [JsonPropertyName("rules")] public List<RulePayload>? Rules { get; set; }
+        /// <summary>PreviewDynamicGroupRule: the one rule to preview.</summary>
+        [JsonPropertyName("rule")] public RulePayload? Rule { get; set; }
         /// <summary>SetDynamicGroupRules: a conversion removes every current member first.</summary>
         [JsonPropertyName("clearMembers")] public bool ClearMembers { get; set; }
         /// <summary>The sentence for the group's Notes on a conversion; on a conversion back, the sentence to clear.</summary>

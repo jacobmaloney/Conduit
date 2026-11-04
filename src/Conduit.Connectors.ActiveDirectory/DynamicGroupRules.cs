@@ -18,7 +18,11 @@ public enum DynamicGroupRuleType
     ExcludeExplicitly = 4,
     IncludeGroupMembers = 5,
     ExcludeGroupMembers = 6,
-    /// <summary>Managed units only; the group wizard offers the first six. Reported, never evaluated for a group.</summary>
+    /// <summary>
+    /// Offered for a managed unit and for a group alike (the console's rule type list, UC034-F13): a member whose account
+    /// has been deprovisioned is not removed by a rebuild, whatever the other rules say. Names no object, matches nothing
+    /// of its own; <see cref="DynamicGroupRules.Diff(IReadOnlyList{string}, IReadOnlyCollection{string}, IReadOnlyCollection{string}?)"/> applies it.
+    /// </summary>
     RetainDeprovisioned = 7,
 }
 
@@ -29,6 +33,7 @@ public sealed record DynamicGroupRule(DynamicGroupRuleType Type, Guid ObjectGuid
     public bool IsQuery => Type is DynamicGroupRuleType.IncludeByQuery or DynamicGroupRuleType.ExcludeByQuery;
     public bool IsExplicit => Type is DynamicGroupRuleType.IncludeExplicitly or DynamicGroupRuleType.ExcludeExplicitly;
     public bool IsGroupMembers => Type is DynamicGroupRuleType.IncludeGroupMembers or DynamicGroupRuleType.ExcludeGroupMembers;
+    public bool IsRetain => Type is DynamicGroupRuleType.RetainDeprovisioned;
 }
 
 /// <summary>A group's rule list as the directory holds it, plus the Administration Service that owned it.</summary>
@@ -105,16 +110,16 @@ public static class DynamicGroupRules
     }
 
     /// <summary>
-    /// A rule a group may carry, before it is written: one of the six group rule types (Retain Deprovisioned is a
-    /// unit's), an object, and for a query type a filter that is at least a parenthesised, balanced LDAP filter.
+    /// A rule a group may carry, before it is written: one of the seven rule types, an object (Retain Deprovisioned
+    /// names the group itself), and for a query type a filter that is at least a parenthesised, balanced LDAP filter.
     /// False with the reason otherwise.
     /// </summary>
     public static bool IsWritable(DynamicGroupRule rule, out string? reason)
     {
         reason = null;
-        if (rule.Type is < DynamicGroupRuleType.IncludeByQuery or > DynamicGroupRuleType.ExcludeGroupMembers)
+        if (rule.Type is < DynamicGroupRuleType.IncludeByQuery or > DynamicGroupRuleType.RetainDeprovisioned)
         {
-            reason = string.Concat("Rule type ", (int)rule.Type, " is not one of the six membership rule types of a group.");
+            reason = string.Concat("Rule type ", (int)rule.Type, " is not one of the seven membership rule types.");
             return false;
         }
         if (rule.ObjectGuid == Guid.Empty)
@@ -288,7 +293,7 @@ public static class DynamicGroupRules
         foreach (var (rule, matched) in evaluations)
         {
             var precedence = Precedence(rule.Type);
-            if (precedence == 0) continue;   // Retain Deprovisioned: a unit's rule, nothing for a group
+            if (precedence == 0) continue;   // Retain Deprovisioned decides nothing of its own; Diff applies it to the current members
             foreach (var dn in matched)
             {
                 if (string.IsNullOrWhiteSpace(dn)) continue;
@@ -302,12 +307,23 @@ public static class DynamicGroupRules
     }
 
     /// <summary>What a rebuild would write: the desired set, the names to add and the names to remove.</summary>
-    public static DynamicGroupDelta Diff(IReadOnlyList<string> desired, IReadOnlyCollection<string> current)
+    public static DynamicGroupDelta Diff(IReadOnlyList<string> desired, IReadOnlyCollection<string> current) => Diff(desired, current, null);
+
+    /// <summary>
+    /// The same difference with Retain Deprovisioned applied (MEMBERSHIP-RULES-01, UC034-F13): every name in
+    /// <paramref name="retained"/> that is a current member stays one, so it is never in the removes and it is in the
+    /// desired set. Null means the definition carries no Retain rule.
+    /// </summary>
+    public static DynamicGroupDelta Diff(IReadOnlyList<string> desired, IReadOnlyCollection<string> current, IReadOnlyCollection<string>? retained)
     {
-        var want = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
         var have = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
-        var adds = desired.Where(dn => !have.Contains(dn)).ToList();
+        var keep = retained is null ? null : new HashSet<string>(retained.Where(have.Contains), StringComparer.OrdinalIgnoreCase);
+        var wanted = keep is { Count: > 0 }
+            ? desired.Concat(current.Where(keep.Contains)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(dn => dn, StringComparer.OrdinalIgnoreCase).ToList()
+            : desired;
+        var want = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
+        var adds = wanted.Where(dn => !have.Contains(dn)).ToList();
         var removes = current.Where(dn => !want.Contains(dn)).OrderBy(dn => dn, StringComparer.OrdinalIgnoreCase).ToList();
-        return new DynamicGroupDelta(desired, adds, removes);
+        return new DynamicGroupDelta(wanted, adds, removes);
     }
 }

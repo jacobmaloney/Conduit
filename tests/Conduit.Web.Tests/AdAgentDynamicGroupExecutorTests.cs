@@ -219,7 +219,7 @@ public class AdAgentDynamicGroupExecutorTests
         => "{\"schemaVersion\":1,\"operation\":\"" + operation + "\",\"sourceConnectionName\":\"" + Conn + "\",\"objectGuid\":\"" + GroupGuid + "\",\"rules\":" + rulesJson + ",\"clearMembers\":true,\"notes\":\"Managed by rules\"}";
 
     [Theory]
-    [InlineData("[{\"type\":7,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}]", "six membership rule types")]
+    [InlineData("[{\"type\":9,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}]", "seven membership rule types")]
     [InlineData("[{\"type\":3,\"objectGuid\":\"not-a-guid\"}]", "names no objectGUID")]
     [InlineData("[{\"type\":1,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}]", "needs an LDAP filter")]
     public async Task A_rule_that_cannot_be_written_is_refused_before_any_directory_call(string rules, string reason)
@@ -388,6 +388,85 @@ public class AdAgentDynamicGroupExecutorTests
     }
 
     private static string TestsDirectory([System.Runtime.CompilerServices.CallerFilePath] string file = "") => Path.GetDirectoryName(file)!;
+
+    // ── MEMBERSHIP-RULES-01 (UC034-D13): the preview verb ─────────────────────
+
+    private static Task<(bool Success, string Message, string? ResultJson)> RunPreview(string? payload)
+        => Build().ExecuteAsync(System.Guid.NewGuid(), payload, CancellationToken.None, AdAgentDynamicGroupExecutor.OpPreview);
+
+    private static string PreviewPayload(string ruleJson)
+        => "{\"schemaVersion\":1,\"operation\":\"PreviewDynamicGroupRule\",\"sourceConnectionName\":\"" + Conn + "\",\"objectGuid\":\"" + GroupGuid + "\",\"rule\":" + ruleJson + "}";
+
+    [Fact]
+    public async Task A_preview_without_its_rule_is_refused()
+    {
+        var (ok, msg, _) = await RunPreview(Payload(operation: "PreviewDynamicGroupRule"));
+        Assert.False(ok);
+        Assert.StartsWith("PreviewDynamicGroupRule:", msg);
+        Assert.Contains("rule is missing", msg);
+    }
+
+    [Theory]
+    [InlineData("{\"type\":0,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}", "seven membership rule types")]
+    [InlineData("{\"type\":5,\"objectGuid\":\"nope\"}", "names no objectGUID")]
+    [InlineData("{\"type\":2,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}", "needs an LDAP filter")]
+    public async Task A_preview_rule_is_checked_like_a_written_one(string rule, string reason)
+    {
+        var (ok, msg, _) = await RunPreview(PreviewPayload(rule));
+        Assert.False(ok);
+        Assert.Contains(reason, msg);
+    }
+
+    [Fact]
+    public async Task A_preview_under_another_operations_name_is_refused()
+    {
+        var (ok, msg, _) = await RunPreview(PreviewPayload("{\"type\":7,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}").Replace("PreviewDynamicGroupRule", "EvaluateDynamicGroup"));
+        Assert.False(ok);
+        Assert.Contains("not allowed", msg);
+    }
+
+    [Fact]
+    public async Task A_sound_preview_reaches_the_tenant_lookup()
+    {
+        // Past every payload gate; the harness has no database, so the tenant lookup is where it stops.
+        var (ok, msg, _) = await RunPreview(PreviewPayload("{\"type\":7,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}"));
+        Assert.False(ok);
+        Assert.StartsWith("PreviewDynamicGroupRule:", msg);
+        Assert.DoesNotContain("rule is missing", msg);
+        Assert.DoesNotContain("a rule's type", msg);
+        Assert.DoesNotContain("names no objectGUID", msg);
+        Assert.DoesNotContain("needs an LDAP filter", msg);
+    }
+
+    [Fact]
+    public void The_preview_result_carries_the_exact_count_and_a_sample_under_the_wire_cap()
+    {
+        var names = Enumerable.Range(0, 5000).Select(i => $"CN=Member {i} with a long common name,OU=Somewhere,OU=Organization,DC=Domain,DC=Local").ToList();
+        var preview = new DynamicGroupRulePreview { TypeCode = 1, Type = "Include by Query", ObjectDistinguishedName = "OU=Organization,DC=Domain,DC=Local", MatchCount = 7000, Truncated = false, Sample = names };
+        var json = AdAgentDynamicGroupExecutor.BuildPreviewResultJson(preview);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(json) <= AdAgentDynamicGroupExecutor.MaxResultBytes);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(7000, root.GetProperty("matchCount").GetInt32());
+        Assert.InRange(root.GetProperty("sample").GetArrayLength(), 1, 4999);
+        Assert.True(root.GetProperty("sampleTruncated").GetBoolean());
+        Assert.Equal("'Include by Query' matches 7,000 objects.", AdAgentDynamicGroupExecutor.DescribePreview(preview));
+        Assert.Equal("Retain Deprovisioned keeps deprovisioned members in place; it matches nothing of its own.",
+            AdAgentDynamicGroupExecutor.DescribePreview(new DynamicGroupRulePreview { TypeCode = 7, Type = "Retain Deprovisioned" }));
+
+        var small = new DynamicGroupRulePreview { TypeCode = 3, Type = "Include Explicitly", MatchCount = 1, Sample = new[] { "CN=One,OU=X" } };
+        using var smallDoc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildPreviewResultJson(small));
+        Assert.False(smallDoc.RootElement.GetProperty("sampleTruncated").GetBoolean());
+        Assert.Equal("'Include Explicitly' matches 1 object.", AdAgentDynamicGroupExecutor.DescribePreview(small));
+    }
+
+    [Fact]
+    public void The_poller_dispatches_the_preview_verb()
+    {
+        var poller = File.ReadAllText(Path.Combine(TestsDirectory(), "..", "..", "src", "Conduit.Web", "Services", "IcAgentCommandPollerService.cs"));
+        Assert.Contains("CommandPreviewDynamicGroupRule = \"PreviewDynamicGroupRule\"", poller);
+        Assert.Contains("await DynamicGroupAsync(command.Id, command.PayloadJson, CommandPreviewDynamicGroupRule, ct)", poller);
+    }
 
     [Fact]
     public void The_message_counts_and_never_names()

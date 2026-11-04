@@ -177,10 +177,31 @@ public interface IConnectorDynamicGroupEvaluator
 
     /// <summary>DYNAMIC-GROUPS-05: whether any object in the directory changed since <paramref name="sinceUtc"/> (the change watch's one question).</summary>
     Task<bool> AnyChangeSinceAsync(DateTime sinceUtc, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// MEMBERSHIP-RULES-01 (UC034-D13): what one rule would match on its own, before it is written anywhere: the
+    /// console's Preview Rule. READ-ONLY. The count is exact up to the evaluator's cap; the sample is the first names.
+    /// </summary>
+    Task<DynamicGroupRulePreview> PreviewRuleAsync(DynamicGroupRuleSpec rule, CancellationToken cancellationToken);
 }
 
-/// <summary>A rule to write: the type number (1..6), the object it names, and for a query type the LDAP filter.</summary>
+/// <summary>A rule to write or preview: the type number (1..7), the object it names, and for a query type the LDAP filter.</summary>
 public sealed record DynamicGroupRuleSpec(int TypeCode, string ObjectGuid, string? Filter);
+
+/// <summary>MEMBERSHIP-RULES-01: one rule previewed on its own. Distinguished names in the sample.</summary>
+public sealed class DynamicGroupRulePreview
+{
+    public int TypeCode { get; init; }
+    public string Type { get; init; } = string.Empty;
+    /// <summary>The named object as the directory resolved it; null when it was not found.</summary>
+    public string? ObjectDistinguishedName { get; init; }
+    public int MatchCount { get; init; }
+    /// <summary>True when the search was capped; the count is then a lower bound.</summary>
+    public bool Truncated { get; init; }
+    public IReadOnlyList<string> Sample { get; init; } = Array.Empty<string>();
+    public string? ErrorMessage { get; init; }
+    public static DynamicGroupRulePreview Fail(string message) => new() { ErrorMessage = message };
+}
 
 /// <summary>A dynamic group as listed: its address, its name, the service its definition names (null when none), or why its definition could not be read.</summary>
 public sealed record DynamicGroupListing(string ObjectGuid, string DistinguishedName, string Name, Guid? OriginatingService, string? Error);

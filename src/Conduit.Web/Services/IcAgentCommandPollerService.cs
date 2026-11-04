@@ -51,6 +51,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandRebuildDynamicGroup = "RebuildDynamicGroup";
     private const string CommandSetDynamicGroupRules = "SetDynamicGroupRules";
     private const string CommandConvertDynamicGroupToStatic = "ConvertDynamicGroupToStatic";
+    private const string CommandPreviewDynamicGroupRule = "PreviewDynamicGroupRule";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
 
     private static readonly string[] DefaultCapabilities = { "AdIdentitySync", "SqlDiscovery", "AdDynamicGroups" };
@@ -464,6 +465,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         else if (string.Equals(command.CommandType, CommandConvertDynamicGroupToStatic, StringComparison.OrdinalIgnoreCase))
         {
             (success, message, resultJson) = await DynamicGroupAsync(command.Id, command.PayloadJson, CommandConvertDynamicGroupToStatic, ct);
+        }
+        else if (string.Equals(command.CommandType, CommandPreviewDynamicGroupRule, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message, resultJson) = await DynamicGroupAsync(command.Id, command.PayloadJson, CommandPreviewDynamicGroupRule, ct);
         }
         else
         {

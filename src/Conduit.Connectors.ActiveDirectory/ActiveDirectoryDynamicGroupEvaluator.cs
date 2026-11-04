@@ -26,6 +26,8 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
 {
     /// <summary>Cap on the objects one query rule may match; above it the report is marked truncated rather than left to run.</summary>
     public const int MaxMatchesPerRule = 20_000;
+    /// <summary>How many names a rule preview carries beside its exact count.</summary>
+    public const int PreviewSample = 200;
     private const int PageSize = 1000;
 
     private readonly Func<Task<LdapConnection>> _open;
@@ -55,6 +57,70 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
         {
             // The LDAP API is synchronous; keep the caller's thread free as the browser does.
             return await Task.Run(() => Evaluate(connection, groupGuid, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>MEMBERSHIP-RULES-01 (UC034-D13): one rule on its own, the console's Preview Rule; read-only, nothing written.</summary>
+    public async Task<DynamicGroupRulePreview> PreviewRuleAsync(DynamicGroupRuleSpec rule, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        if (!Enum.IsDefined(typeof(DynamicGroupRuleType), rule.TypeCode))
+            return DynamicGroupRulePreview.Fail(string.Concat("Rule type ", rule.TypeCode, " is not one of the seven membership rule types."));
+        if (!Guid.TryParse(rule.ObjectGuid, out var objectGuid) || objectGuid == Guid.Empty)
+            return DynamicGroupRulePreview.Fail("The rule's objectGuid is missing or not a GUID.");
+        var parsed = new DynamicGroupRule((DynamicGroupRuleType)rule.TypeCode, objectGuid, rule.Filter);
+        if (!DynamicGroupRules.IsWritable(parsed, out var reason))
+            return DynamicGroupRulePreview.Fail(reason!);
+        LdapConnection connection;
+        try { connection = await _open().ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dynamic group rule preview: the connection could not be opened.");
+            return DynamicGroupRulePreview.Fail("The directory connection could not be opened: " + ex.Message);
+        }
+        using (connection)
+        {
+            return await Task.Run(() => Preview(connection, parsed, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private DynamicGroupRulePreview Preview(LdapConnection connection, DynamicGroupRule rule, CancellationToken ct)
+    {
+        try
+        {
+            var type = DynamicGroupRules.Describe(rule.Type);
+            if (rule.IsRetain)
+                return new DynamicGroupRulePreview { TypeCode = (int)rule.Type, Type = type, MatchCount = 0 };   // keeps members in place; matches nothing of its own
+            var target = ReadByGuid(connection, rule.ObjectGuid, new[] { "distinguishedName", "objectClass" });
+            if (target is null)
+                return DynamicGroupRulePreview.Fail("The rule's object was not found in the directory.");
+            IReadOnlyCollection<string> matched;
+            var truncated = false;
+            if (rule.IsExplicit)
+                matched = new[] { target.DistinguishedName };
+            else if (rule.IsGroupMembers)
+            {
+                if (!Classes(target).Contains("group", StringComparer.OrdinalIgnoreCase))
+                    return DynamicGroupRulePreview.Fail("The rule's object is not a group.");
+                matched = ReadMembers(connection, target.DistinguishedName, ct);
+            }
+            else
+            {
+                var (dns, capped) = Search(connection, target.DistinguishedName, rule.Filter ?? "(objectClass=*)", ct);
+                matched = dns;
+                truncated = capped;
+            }
+            return new DynamicGroupRulePreview
+            {
+                TypeCode = (int)rule.Type, Type = type, ObjectDistinguishedName = target.DistinguishedName,
+                MatchCount = matched.Count, Truncated = truncated, Sample = matched.Take(PreviewSample).ToList(),
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Dynamic group rule preview threw.");
+            return DynamicGroupRulePreview.Fail(ex.Message);
         }
     }
 
@@ -364,6 +430,7 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
             var reports = new List<DynamicGroupRuleReport>();
             var evaluations = new List<(DynamicGroupRule Rule, IReadOnlyCollection<string> Matched)>();
             var truncated = false;
+            IReadOnlyCollection<string>? retained = null;
             foreach (var rule in definition!.Rules)
             {
                 ct.ThrowIfCancellationRequested();
@@ -374,7 +441,11 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
                 reports.Add(report);
                 if (rule.Type == DynamicGroupRuleType.RetainDeprovisioned)
                 {
-                    report.Error = "Retain Deprovisioned applies to a managed unit, not a group; ignored.";
+                    // MEMBERSHIP-RULES-01 (UC034-F13): the console offers this rule for a group too. A current member
+                    // whose account is disabled, which is what this product's deprovisioning does to an account, stays
+                    // a member whatever the other rules say. The rule names no object and matches nothing of its own.
+                    retained ??= ReadDisabledMembers(connection, groupDn, ct);
+                    report.MatchCount = retained.Count;
                     continue;
                 }
 
@@ -413,7 +484,7 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
             }
 
             var desired = DynamicGroupRules.Decide(evaluations, groupDn);
-            var delta = DynamicGroupRules.Diff(desired, current);
+            var delta = DynamicGroupRules.Diff(desired, current, retained);
             return new DynamicGroupEvaluation
             {
                 GroupDistinguishedName = groupDn, GroupName = name, IsDynamic = true,
@@ -461,6 +532,14 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
             page.Cookie = cookie;
         }
         return (dns, false);
+    }
+
+    /// <summary>The group's direct members whose account is disabled: what Retain Deprovisioned keeps in place (one search under the domain, paged).</summary>
+    private static IReadOnlyCollection<string> ReadDisabledMembers(LdapConnection connection, string groupDn, CancellationToken ct)
+    {
+        var baseDn = ActiveDirectorySink.ReadDefaultNamingContext(connection) ?? groupDn;
+        var filter = string.Concat("(&(memberOf=", ActiveDirectorySink.EscapeLdapFilter(groupDn), ")(userAccountControl:1.2.840.113556.1.4.803:=2))");
+        return Search(connection, baseDn, filter, ct).Dns;
     }
 
     /// <summary>The group's direct members, through ranged retrieval so a group past the server's 1500-value page reads whole.</summary>

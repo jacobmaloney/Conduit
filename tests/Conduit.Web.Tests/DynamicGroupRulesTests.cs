@@ -143,7 +143,7 @@ public class DynamicGroupRulesTests
         {
             (Rule(DynamicGroupRuleType.ExcludeExplicitly), new[] { "CN=Z,OU=X" }),
             (Rule(DynamicGroupRuleType.IncludeByQuery), new[] { "cn=dynamo,ou=x", "CN=A,OU=X" }),
-            (Rule(DynamicGroupRuleType.RetainDeprovisioned), new[] { "CN=R,OU=X" }),   // a unit's rule: nothing for a group
+            (Rule(DynamicGroupRuleType.RetainDeprovisioned), new[] { "CN=R,OU=X" }),   // decides nothing of its own; Diff applies it
         };
 
         Assert.Equal(new[] { "CN=A,OU=X" }, DynamicGroupRules.Decide(evaluations, self));
@@ -208,16 +208,37 @@ public class DynamicGroupRulesTests
     [InlineData(DynamicGroupRuleType.ExcludeByQuery, "(&(objectCategory=person)(department=Finance))", true, null)]
     [InlineData(DynamicGroupRuleType.IncludeExplicitly, null, true, null)]
     [InlineData(DynamicGroupRuleType.ExcludeGroupMembers, null, true, null)]
-    [InlineData(DynamicGroupRuleType.RetainDeprovisioned, null, false, "six membership rule types")]
+    [InlineData(DynamicGroupRuleType.RetainDeprovisioned, null, true, null)]
+    [InlineData((DynamicGroupRuleType)9, null, false, "seven membership rule types")]
     [InlineData(DynamicGroupRuleType.IncludeByQuery, null, false, "needs an LDAP filter")]
     [InlineData(DynamicGroupRuleType.IncludeByQuery, "objectCategory=person", false, "needs an LDAP filter")]
     [InlineData(DynamicGroupRuleType.IncludeByQuery, "(&(a=1)(b=2)", false, "needs an LDAP filter")]
     [InlineData(DynamicGroupRuleType.IncludeByQuery, "(cn=a[1])", false, "needs an LDAP filter")]
-    public void Only_a_groups_six_types_with_a_sound_filter_are_writable(DynamicGroupRuleType type, string? filter, bool writable, string? reason)
+    public void Only_the_seven_types_with_a_sound_filter_are_writable(DynamicGroupRuleType type, string? filter, bool writable, string? reason)
     {
         var ok = DynamicGroupRules.IsWritable(new DynamicGroupRule(type, Guid.Parse(Explicit1), filter), out var why);
         Assert.Equal(writable, ok);
         if (reason is not null) Assert.Contains(reason, why);
+    }
+
+    // MEMBERSHIP-RULES-01 (UC034-F13): Retain Deprovisioned keeps a current member in place, whatever the other rules say.
+    [Fact]
+    public void Retain_keeps_a_deprovisioned_current_member_and_never_adds_one_that_is_not_a_member()
+    {
+        var desired = new[] { "CN=A,OU=X", "CN=B,OU=X" };
+        var current = new[] { "CN=B,OU=X", "CN=Gone,OU=X", "CN=Kept,OU=X" };
+        var retained = new[] { "cn=kept,ou=x", "CN=NotAMember,OU=X" };
+
+        var delta = DynamicGroupRules.Diff(desired, current, retained);
+
+        Assert.Equal(new[] { "CN=A,OU=X" }, delta.Adds);
+        Assert.Equal(new[] { "CN=Gone,OU=X" }, delta.Removes);
+        Assert.Contains("CN=Kept,OU=X", delta.Desired);
+        Assert.DoesNotContain("CN=NotAMember,OU=X", delta.Desired);
+
+        var plain = DynamicGroupRules.Diff(desired, current, null);
+        Assert.Equal(new[] { "CN=Gone,OU=X", "CN=Kept,OU=X" }, plain.Removes);
+        Assert.Equal(plain.Removes, DynamicGroupRules.Diff(desired, current).Removes);
     }
 
     [Fact]
