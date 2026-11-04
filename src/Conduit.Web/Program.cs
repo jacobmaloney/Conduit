@@ -537,6 +537,14 @@ builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob>(sp =>
             s.GetRequiredService<ILogger<Conduit.Sync.Orchestration.AsyncJobPollerService>>()));
 });
 
+// DYNAMIC-GROUPS-05: the dynamic-group clock ticks every minute through the same scoped wrapper.
+builder.Services.AddSingleton<Conduit.Scheduling.IScheduledJob>(sp =>
+{
+    var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+    return new ScheduledJobScopedWrapper(scopeFactory,
+        s => s.GetRequiredService<Conduit.Web.Services.DynamicGroupUpdaterJob>());
+});
+
 builder.Services.AddHostedService<Conduit.Scheduling.SchedulerService>();
 
 // Outbound-only "Scan now": polls IC's agent-command API (when an IdentityCenter
@@ -561,6 +569,13 @@ builder.Services.AddScoped<Conduit.Web.Services.AdAgentCreateExecutor>();
 builder.Services.AddScoped<Conduit.Web.Services.AdAgentBrowseExecutor>();
 // DYNAMIC-GROUPS-01 (UC034): the read-only EvaluateDynamicGroup verb.
 builder.Services.AddScoped<Conduit.Web.Services.AdAgentDynamicGroupExecutor>();
+// DYNAMIC-GROUPS-05: the agent's clock over the dynamic groups (the scheduled rebuild and the change watch) runs
+// through the same executor; its marks live in SystemConfiguration; its rebuilds are reported to IdentityCenter.
+builder.Services.Configure<Conduit.Web.Services.DynamicGroupClockOptions>(builder.Configuration.GetSection(Conduit.Web.Services.DynamicGroupClockOptions.Section));
+builder.Services.AddScoped<Conduit.Web.Services.IDynamicGroupClockWork>(sp => sp.GetRequiredService<Conduit.Web.Services.AdAgentDynamicGroupExecutor>());
+builder.Services.AddScoped<Conduit.Web.Services.IDynamicGroupClockState, Conduit.Web.Services.SystemConfigurationClockState>();
+builder.Services.AddSingleton<Conduit.Web.Services.IAgentWriteReporter, Conduit.Web.Services.IcAgentWriteReporter>();
+builder.Services.AddScoped<Conduit.Web.Services.DynamicGroupUpdaterJob>();
 // ApplySqlWrite executor — validates + allow-lists an IC-routed SQL security DDL
 // change (CREATE/DROP user/login, role membership) and runs it through parameterized
 // QUOTENAME dynamic SQL with the per-connection scan credential. Scoped: it resolves

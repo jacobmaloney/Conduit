@@ -192,9 +192,15 @@ public class AdAgentDynamicGroupExecutorTests
         Assert.Contains("the rebuild was not run on a partial set", evaluator);
 
         var executor = Read("src/Conduit.Web/Services/AdAgentDynamicGroupExecutor.cs");
-        var guard = executor.IndexOf("AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why)", StringComparison.Ordinal);
-        var rebuild = executor.IndexOf("await evaluator.RebuildAsync(groupGuid.ToString(), ct)", StringComparison.Ordinal);
-        Assert.True(guard > 0 && rebuild > guard, "the privileged-group guard runs before the rebuild");
+        // DYNAMIC-GROUPS-05: the guard is one method (RefuseWriteAsync) that the command path and the clock both await before their rebuild.
+        var guardMethod = executor.IndexOf("private static async Task<string?> RefuseWriteAsync(", StringComparison.Ordinal);
+        Assert.True(guardMethod > 0 && executor.IndexOf("AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why)", StringComparison.Ordinal) > guardMethod, "the privileged-group rule lives in the one guard");
+        var commandGuard = executor.IndexOf("var refusal = await RefuseWriteAsync(adapter!, resolvedTenantId.Value, groupGuid, ct);", StringComparison.Ordinal);
+        var commandRebuild = executor.IndexOf("OpRebuild => await evaluator.RebuildAsync(groupGuid.ToString(), ct)", StringComparison.Ordinal);
+        Assert.True(commandGuard > 0 && commandRebuild > commandGuard, "the command's guard runs before its rebuild");
+        var clockGuard = executor.IndexOf("var refusal = await RefuseWriteAsync(adapter!, tenantId, groupGuid, ct);", StringComparison.Ordinal);
+        var clockRebuild = executor.IndexOf("return (await evaluator.RebuildAsync(groupGuid.ToString(), ct), null);", StringComparison.Ordinal);
+        Assert.True(clockGuard > 0 && clockRebuild > clockGuard, "the clock's guard runs before its rebuild");
         Assert.Contains("internal static bool IsPrivilegedGroup(AdResolvedObject group, out string reason)", Read("src/Conduit.Web/Services/AdAgentWriteExecutor.cs"));
 
         var poller = Read("src/Conduit.Web/Services/IcAgentCommandPollerService.cs");
@@ -338,5 +344,24 @@ public class AdAgentDynamicGroupExecutorTests
 
         var stillStatic = AdAgentDynamicGroupExecutor.Describe(new DynamicGroupEvaluation { GroupName = "Sales", IsDynamic = false, CurrentMembers = new[] { "CN=A" } });
         Assert.Equal("'Sales' carries no membership rules (a static group with 1 member(s)).", stillStatic);
+    }
+
+    // ── DYNAMIC-GROUPS-05: the clock's view of the same executor ─────────────
+
+    [Fact]
+    public async Task The_clocks_reads_and_rebuild_fail_closed_without_an_adapter_and_never_throw()
+    {
+        IDynamicGroupClockWork work = Build();
+        var tenant = System.Guid.NewGuid();
+
+        var (groups, error) = await work.ListDynamicGroupsAsync(tenant, CancellationToken.None);
+        Assert.Null(groups);
+        Assert.Equal("Active Directory connector is not available on this agent.", error);
+
+        Assert.Null(await work.AnyDirectoryChangeSinceAsync(tenant, System.DateTime.UtcNow.AddMinutes(-5), CancellationToken.None));
+
+        var (rebuild, refusal) = await work.RebuildOnClockAsync(tenant, System.Guid.Parse(GroupGuid), CancellationToken.None);
+        Assert.Null(rebuild);
+        Assert.Equal("Active Directory connector is not available on this agent.", refusal);
     }
 }

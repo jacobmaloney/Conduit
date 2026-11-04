@@ -109,6 +109,20 @@ public class SinkConnectionCredentialMapRepository : BaseRepository
         return rows.ToList();
     }
 
+    /// <summary>
+    /// The IdentityCenter connection names mapped to one tenant, newest mapping first (DYNAMIC-GROUPS-05: the name the
+    /// agent's clock reports a rebuild under). Empty when the connection has never synced.
+    /// </summary>
+    public async Task<List<string>> GetSourceConnectionNamesByTenantAsync(Guid conduitTenantId)
+    {
+        var rows = await QueryAsync<string>(@"
+            SELECT SourceConnectionName FROM SinkConnectionCredentialMap
+             WHERE ConduitTenantId = @TenantId AND SourceConnectionName IS NOT NULL AND LEN(SourceConnectionName) > 0
+             ORDER BY LastModified DESC",
+            new { TenantId = conduitTenantId });
+        return rows.ToList();
+    }
+
     /// <summary>Revocation: drop every mapping pointing at a tenant (e.g. tenant deleted).</summary>
     public Task DeleteByTenantAsync(Guid conduitTenantId) =>
         ExecuteAsync(@"

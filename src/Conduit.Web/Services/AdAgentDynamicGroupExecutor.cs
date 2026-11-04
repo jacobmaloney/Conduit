@@ -17,8 +17,10 @@ namespace Conduit.Web.Services;
 /// outcome reported. The payload's operation must match the command the poller is running.
 /// Same trust boundary as the other verbs: strict size-bounded parse, operation check, the tenant resolved from the
 /// server-trusted sourceConnectionName (never from a caller id), the group re-read by objectGUID. Never throws.
+/// DYNAMIC-GROUPS-05: the agent's clock (<see cref="DynamicGroupUpdaterJob"/>) rebuilds through the same evaluator and
+/// the same write guard, as <see cref="IDynamicGroupClockWork"/>.
 /// </summary>
-public sealed class AdAgentDynamicGroupExecutor
+public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
 {
     private const int MaxPayloadBytes = 64 * 1024;
     /// <summary>Cap on the names listed per list in the result (current, desired, adds, removes); the counts stay exact.</summary>
@@ -115,13 +117,9 @@ public sealed class AdAgentDynamicGroupExecutor
             if (tenant is null || !tenant.IsActive)
                 return Fail(verb, $"No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
 
-            var adapter = _adapters.FirstOrDefault(a =>
-                string.Equals(a.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase));
-            if (adapter is null)
-                return Fail(verb, "Active Directory connector is not available on this agent.");
-            var evaluator = adapter.CreateDynamicGroupEvaluator(resolvedTenantId.Value);
+            var (adapter, evaluator, unavailable) = ResolveEvaluator(resolvedTenantId.Value);
             if (evaluator is null)
-                return Fail(verb, "this connector does not evaluate dynamic groups.");
+                return Fail(verb, unavailable!);
 
             if (verb == OpEvaluate)
             {
@@ -132,15 +130,9 @@ public sealed class AdAgentDynamicGroupExecutor
             }
 
             // The writes: the group must be a group, and never one of the privileged groups ApplyObjectWrite refuses.
-            if (adapter.CreateSink(resolvedTenantId.Value) is not ActiveDirectorySink sink)
-                return Fail(verb, "could not create an AD sink for the requested connection.");
-            var target = await sink.ResolveByGuidAsync(groupGuid.ToString(), ct);
-            if (target is null)
-                return Fail(verb, $"objectGuid {groupGuid} resolved to no AD object.");
-            if (!target.IsClass("group"))
-                return Fail(verb, "the target is not a group object.");
-            if (AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why))
-                return Fail(verb, $"refusing to change a privileged group ({why}).");
+            var refusal = await RefuseWriteAsync(adapter!, resolvedTenantId.Value, groupGuid, ct);
+            if (refusal is not null)
+                return Fail(verb, refusal);
 
             var write = verb switch
             {
@@ -246,6 +238,87 @@ public sealed class AdAgentDynamicGroupExecutor
             listsTruncated = e.CurrentMembers.Count > MaxListed || e.DesiredMembers.Count > MaxListed || e.Adds.Count > MaxListed || e.Removes.Count > MaxListed,
             searchTruncated = e.Truncated,
         });
+    }
+
+    // ── The clock's view (IDynamicGroupClockWork): the same evaluator, the same guard, no payload ──────────────
+
+    public async Task<IReadOnlyList<DynamicGroupClockTenant>> ActiveDirectoryTenantsAsync()
+    {
+        var tenants = await _tenants.GetAllAsync();
+        return tenants
+            .Where(t => t.IsActive && string.Equals(t.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase))
+            .Select(t => new DynamicGroupClockTenant(t.Id, t.Name))
+            .ToList();
+    }
+
+    public async Task<string?> SourceConnectionNameAsync(Guid tenantId)
+    {
+        var names = await _credentialMap.GetSourceConnectionNamesByTenantAsync(tenantId);
+        return names.FirstOrDefault();
+    }
+
+    public async Task<(IReadOnlyList<DynamicGroupListing>? Groups, string? Error)> ListDynamicGroupsAsync(Guid tenantId, CancellationToken ct)
+    {
+        var (_, evaluator, unavailable) = ResolveEvaluator(tenantId);
+        if (evaluator is null) return (null, unavailable);
+        try { return (await evaluator.ListAsync(ct), null); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return (null, AdAgentCreateExecutor.SanitizeLdapError(ex.Message)); }
+    }
+
+    public async Task<bool?> AnyDirectoryChangeSinceAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct)
+    {
+        var (_, evaluator, _) = ResolveEvaluator(tenantId);
+        if (evaluator is null) return null;
+        try { return await evaluator.AnyChangeSinceAsync(sinceUtc, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "The change watch could not ask connection {TenantId}.", tenantId);
+            return null;
+        }
+    }
+
+    public async Task<(DynamicGroupRebuild? Rebuild, string? Refusal)> RebuildOnClockAsync(Guid tenantId, Guid groupGuid, CancellationToken ct)
+    {
+        var (adapter, evaluator, unavailable) = ResolveEvaluator(tenantId);
+        if (evaluator is null) return (null, unavailable);
+        try
+        {
+            var refusal = await RefuseWriteAsync(adapter!, tenantId, groupGuid, ct);
+            if (refusal is not null) return (null, refusal);
+            return (await evaluator.RebuildAsync(groupGuid.ToString(), ct), null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return (null, AdAgentCreateExecutor.SanitizeLdapError(ex.Message)); }
+    }
+
+    /// <summary>The Active Directory adapter's evaluator for a tenant, or why there is none.</summary>
+    private (IConnectorAdapter? Adapter, IConnectorDynamicGroupEvaluator? Evaluator, string? Error) ResolveEvaluator(Guid tenantId)
+    {
+        var adapter = _adapters.FirstOrDefault(a =>
+            string.Equals(a.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase));
+        if (adapter is null)
+            return (null, null, "Active Directory connector is not available on this agent.");
+        var evaluator = adapter.CreateDynamicGroupEvaluator(tenantId);
+        return evaluator is null
+            ? (adapter, null, "this connector does not evaluate dynamic groups.")
+            : (adapter, evaluator, null);
+    }
+
+    /// <summary>THE write guard of the dynamic-group verbs: the target must resolve, be a group, and never a privileged group (the ApplyObjectWrite rule). Null when the write may go.</summary>
+    private static async Task<string?> RefuseWriteAsync(IConnectorAdapter adapter, Guid tenantId, Guid groupGuid, CancellationToken ct)
+    {
+        if (adapter.CreateSink(tenantId) is not ActiveDirectorySink sink)
+            return "could not create an AD sink for the requested connection.";
+        var target = await sink.ResolveByGuidAsync(groupGuid.ToString(), ct);
+        if (target is null)
+            return $"objectGuid {groupGuid} resolved to no AD object.";
+        if (!target.IsClass("group"))
+            return "the target is not a group object.";
+        if (AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why))
+            return $"refusing to change a privileged group ({why}).";
+        return null;
     }
 
     private (bool, string, string?) Fail(string verb, string message)

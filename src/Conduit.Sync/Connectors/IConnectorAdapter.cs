@@ -171,10 +171,19 @@ public interface IConnectorDynamicGroupEvaluator
 
     /// <summary>DYNAMIC-GROUPS-04: removes the definition (the group is static again; its members stay as last computed) and the Notes the conversion stamped.</summary>
     Task<DynamicGroupRebuild> ConvertToStaticAsync(string groupObjectGuid, string? notesToClear, CancellationToken cancellationToken);
+
+    /// <summary>DYNAMIC-GROUPS-05: every group on the connection that carries a definition, with the service that originated it.</summary>
+    Task<IReadOnlyList<DynamicGroupListing>> ListAsync(CancellationToken cancellationToken);
+
+    /// <summary>DYNAMIC-GROUPS-05: whether any object in the directory changed since <paramref name="sinceUtc"/> (the change watch's one question).</summary>
+    Task<bool> AnyChangeSinceAsync(DateTime sinceUtc, CancellationToken cancellationToken);
 }
 
 /// <summary>A rule to write: the type number (1..6), the object it names, and for a query type the LDAP filter.</summary>
 public sealed record DynamicGroupRuleSpec(int TypeCode, string ObjectGuid, string? Filter);
+
+/// <summary>A dynamic group as listed: its address, its name, the service its definition names (null when none), or why its definition could not be read.</summary>
+public sealed record DynamicGroupListing(string ObjectGuid, string DistinguishedName, string Name, Guid? OriginatingService, string? Error);
 
 /// <summary>One member change of a rebuild: what was asked, which object, and what the directory said.</summary>
 public sealed class DynamicGroupChange

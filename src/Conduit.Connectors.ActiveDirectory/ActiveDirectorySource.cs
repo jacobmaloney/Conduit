@@ -300,8 +300,11 @@ public sealed class ActiveDirectorySource : IConnectorSource
         if (!DateTime.TryParse(isoUtc, null,
             System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
             out var dt)) dt = DateTime.UtcNow.AddDays(-30);
-        return dt.ToString("yyyyMMddHHmmss") + ".0Z";
+        return ToGeneralizedTime(dt);
     }
+
+    /// <summary>The LDAP generalized-time spelling of a UTC instant, as <c>whenChanged</c> compares it (DYNAMIC-GROUPS-05: shared with the evaluator's change watch).</summary>
+    internal static string ToGeneralizedTime(DateTime utc) => utc.ToUniversalTime().ToString("yyyyMMddHHmmss") + ".0Z";
 
     private async IAsyncEnumerable<ConnectorObject> EnumerateInternalAsync(
         string objectClass, SyncProjectScope scope, string? sinceIsoUtc, AdWatermark watermark,

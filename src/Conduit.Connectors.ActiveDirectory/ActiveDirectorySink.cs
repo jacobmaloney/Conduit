@@ -1353,39 +1353,38 @@ public sealed class ActiveDirectorySink : IConnectorSink
     {
         try
         {
-            var req = new SearchRequest(
-                distinguishedName: string.Empty,
-                ldapFilter: "(objectClass=*)",
-                searchScope: SearchScope.Base,
-                attributeList: new[] { "defaultNamingContext", "rootDomainNamingContext" });
-            var resp = (SearchResponse)conn.SendRequest(req);
-            if (resp.Entries.Count == 0) return null;
-            var attrs = resp.Entries[0].Attributes;
-            if (attrs.Contains("defaultNamingContext"))
-            {
-                var v = attrs["defaultNamingContext"][0]?.ToString();
-                if (!string.IsNullOrWhiteSpace(v))
-                {
-                    _logger.LogInformation("RootDSE defaultNamingContext resolved as default Base DN: {Dn}", v);
-                    return v;
-                }
-            }
-            if (attrs.Contains("rootDomainNamingContext"))
-            {
-                var v = attrs["rootDomainNamingContext"][0]?.ToString();
-                if (!string.IsNullOrWhiteSpace(v))
-                {
-                    _logger.LogInformation("RootDSE rootDomainNamingContext resolved as default Base DN: {Dn}", v);
-                    return v;
-                }
-            }
-            return null;
+            var (dn, attribute) = ReadNamingContext(conn);
+            if (dn is not null)
+                _logger.LogInformation("RootDSE {Attribute} resolved as default Base DN: {Dn}", attribute, dn);
+            return dn;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "RootDSE lookup failed; no default Base DN available.");
             return null;
         }
+    }
+
+    /// <summary>The domain's naming context off the RootDSE of an open connection (DYNAMIC-GROUPS-05: shared with the evaluator's clock reads); null when the RootDSE names none. Throws on a failed read.</summary>
+    internal static string? ReadDefaultNamingContext(LdapConnection conn) => ReadNamingContext(conn).Dn;
+
+    private static (string? Dn, string? Attribute) ReadNamingContext(LdapConnection conn)
+    {
+        var req = new SearchRequest(
+            distinguishedName: string.Empty,
+            ldapFilter: "(objectClass=*)",
+            searchScope: SearchScope.Base,
+            attributeList: new[] { "defaultNamingContext", "rootDomainNamingContext" });
+        var resp = (SearchResponse)conn.SendRequest(req);
+        if (resp.Entries.Count == 0) return (null, null);
+        var attrs = resp.Entries[0].Attributes;
+        foreach (var attribute in new[] { "defaultNamingContext", "rootDomainNamingContext" })
+        {
+            if (!attrs.Contains(attribute)) continue;
+            var v = attrs[attribute][0]?.ToString();
+            if (!string.IsNullOrWhiteSpace(v)) return (v, attribute);
+        }
+        return (null, null);
     }
 
     private static bool DnExists(LdapConnection conn, string dn)

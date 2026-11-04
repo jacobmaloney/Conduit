@@ -20,6 +20,7 @@ namespace Conduit.Connectors.ActiveDirectory;
 /// DYNAMIC-GROUPS-03: <see cref="RebuildAsync"/> is the one write: after the same evaluation it applies each add and
 /// remove as a delta change on 'member' through <see cref="ActiveDirectorySink.ModifyMember"/>, on the connection it
 /// evaluated on, and reports every change's outcome; a member that cannot be changed fails alone.
+/// DYNAMIC-GROUPS-05: <see cref="ListAsync"/> and <see cref="AnyChangeSinceAsync"/> are what the agent's clock asks.
 /// </summary>
 public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGroupEvaluator
 {
@@ -55,6 +56,61 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
             // The LDAP API is synchronous; keep the caller's thread free as the browser does.
             return await Task.Run(() => Evaluate(connection, groupGuid, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// DYNAMIC-GROUPS-05: every group under the domain's naming context whose <c>accountNameHistory</c> carries a
+    /// definition, paged; each definition parsed for the service it names so the clock rebuilds its own and leaves the
+    /// other service's alone. Throws when the connection cannot be opened or the search fails: the clock logs and retries.
+    /// </summary>
+    public async Task<IReadOnlyList<DynamicGroupListing>> ListAsync(CancellationToken cancellationToken)
+    {
+        using var connection = await _open().ConfigureAwait(false);
+        return await Task.Run(() => List(connection, cancellationToken), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>DYNAMIC-GROUPS-05: one page of one entry under the naming context with <c>whenChanged</c> at or past the instant; any entry answers yes.</summary>
+    public async Task<bool> AnyChangeSinceAsync(DateTime sinceUtc, CancellationToken cancellationToken)
+    {
+        using var connection = await _open().ConfigureAwait(false);
+        return await Task.Run(() =>
+        {
+            var baseDn = ActiveDirectorySink.ReadDefaultNamingContext(connection) ?? throw new InvalidOperationException("The directory's naming context could not be read.");
+            var request = new SearchRequest(baseDn, string.Concat("(whenChanged>=", ActiveDirectorySource.ToGeneralizedTime(sinceUtc), ")"), SearchScope.Subtree, new[] { "1.1" });
+            request.Controls.Add(new PageResultRequestControl(1));
+            var response = (SearchResponse)connection.SendRequest(request);
+            return response.Entries.Count > 0;
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static IReadOnlyList<DynamicGroupListing> List(LdapConnection connection, CancellationToken ct)
+    {
+        var baseDn = ActiveDirectorySink.ReadDefaultNamingContext(connection) ?? throw new InvalidOperationException("The directory's naming context could not be read.");
+        var listings = new List<DynamicGroupListing>();
+        var page = new PageResultRequestControl(PageSize);
+        var filter = string.Concat("(&(objectCategory=group)(", DynamicGroupRules.AttributeName, "=<DynamicGroupXML*))");
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var request = new SearchRequest(baseDn, filter, SearchScope.Subtree, new[] { "distinguishedName", "name", "objectGUID", DynamicGroupRules.AttributeName });
+            request.Controls.Add(page);
+            var response = (SearchResponse)connection.SendRequest(request);
+            foreach (SearchResultEntry entry in response.Entries)
+            {
+                var raw = entry.Attributes.Contains("objectGUID") ? entry.Attributes["objectGUID"].GetValues(typeof(byte[])) : Array.Empty<object>();
+                var guid = raw.Length > 0 && raw[0] is byte[] bytes && bytes.Length == 16 ? new Guid(bytes).ToString() : string.Empty;
+                var name = FirstString(entry, "name") ?? entry.DistinguishedName;
+                var blob = FirstString(entry, DynamicGroupRules.AttributeName);
+                if (!DynamicGroupRules.LooksLikeDefinition(blob)) continue;
+                listings.Add(DynamicGroupRules.TryParse(blob, out var definition, out var error)
+                    ? new DynamicGroupListing(guid, entry.DistinguishedName, name, definition!.OriginatingService, null)
+                    : new DynamicGroupListing(guid, entry.DistinguishedName, name, null, error));
+            }
+            var cookie = response.Controls.OfType<PageResultResponseControl>().FirstOrDefault()?.Cookie;
+            if (cookie is null || cookie.Length == 0) break;
+            page.Cookie = cookie;
+        }
+        return listings;
     }
 
     public async Task<DynamicGroupRebuild> RebuildAsync(string groupObjectGuid, CancellationToken cancellationToken)
