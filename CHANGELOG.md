@@ -15,6 +15,11 @@ All notable changes to Conduit. Format roughly follows [Keep a Changelog](https:
 - `ActiveDirectoryDynamicGroupEvaluator.RebuildAsync`: evaluates, then writes each add and remove through `ModifyMember` on the same connection, reading each member's objectGUID first; refuses the whole rebuild on a static group, an unevaluated rule or a capped search; reports every change's outcome.
 - `AdAgentDynamicGroupExecutor` runs `RebuildDynamicGroup` too: the payload's operation must match the command; the target must be a group and never a privileged group (`AdAgentWriteExecutor.IsPrivilegedGroup`, now internal). The poller dispatches it.
 
+### Added — dynamic groups, Convert and the rules write (DYNAMIC-GROUPS-04, IdentityCenter UC034)
+- `DynamicGroupRules.Serialize` writes the definition in the service's own spelling (the lab blob round-trips byte for byte) under IdentityCenter's own service GUID; `IsWritable` admits a group's six rule types with an object and a sound filter.
+- `ActiveDirectoryDynamicGroupEvaluator.SetRulesAsync`: on a conversion every member is removed first, one change each and reported; then one modify replaces `accountNameHistory` and stamps `info`. `ConvertToStaticAsync` deletes the definition and the stamped Notes; the members stay.
+- `AdAgentDynamicGroupExecutor` runs `SetDynamicGroupRules` (rules capped at 64, each checked before any LDAP call) and `ConvertDynamicGroupToStatic`, one result shape for the three writes. The poller dispatches both.
+
 ### Changed — agent attribute allow-list (ALLOW-LIST-02, IdentityCenter UC015-D06 / UC017-F06)
 - `AdAgentWriteExecutor` SetAttributes now also writes `employeeID`, `employeeType`, `employeeNumber`, `accountExpires`, `homeDirectory`, `homeDrive` and `extensionAttribute1`-`15` (22 -> 43 names). `userAccountControl` stays out: Enable/Disable are their own operations.
 - New `AdAttributeValueShaper`: the one place a sent value takes the shape AD stores. `accountExpires` accepts a date (`yyyy-MM-dd` = end of that day, DC-local, as ADUC stores it), an ISO 8601 date-time, a FILETIME, `0` or `never`; anything else refuses the whole command before any LDAP call. Used by SetAttributes and by the create executor's attribute bag.

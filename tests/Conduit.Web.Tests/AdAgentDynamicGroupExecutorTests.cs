@@ -188,7 +188,7 @@ public class AdAgentDynamicGroupExecutorTests
 
         var evaluator = Read("src/Conduit.Connectors.ActiveDirectory/ActiveDirectoryDynamicGroupEvaluator.cs");
         Assert.Contains("ActiveDirectorySink.ModifyMember(connection, groupDn, dn, add ? DirectoryAttributeOperation.Add : DirectoryAttributeOperation.Delete)", evaluator);
-        Assert.DoesNotContain("new ModifyRequest(", evaluator);   // no second member write
+        Assert.DoesNotContain("Name = \"member\"", evaluator);   // no second member write: the definition and the Notes are the only modifies it builds itself
         Assert.Contains("the rebuild was not run on a partial set", evaluator);
 
         var executor = Read("src/Conduit.Web/Services/AdAgentDynamicGroupExecutor.cs");
@@ -203,6 +203,80 @@ public class AdAgentDynamicGroupExecutorTests
     }
 
     private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;
+
+    // ── DYNAMIC-GROUPS-04: the rules write and the conversion back ───────────
+
+    private static Task<(bool Success, string Message, string? ResultJson)> RunSetRules(string? payload)
+        => Build().ExecuteAsync(System.Guid.NewGuid(), payload, CancellationToken.None, AdAgentDynamicGroupExecutor.OpSetRules);
+
+    private static string RulesPayload(string rulesJson, string operation = "SetDynamicGroupRules")
+        => "{\"schemaVersion\":1,\"operation\":\"" + operation + "\",\"sourceConnectionName\":\"" + Conn + "\",\"objectGuid\":\"" + GroupGuid + "\",\"rules\":" + rulesJson + ",\"clearMembers\":true,\"notes\":\"Managed by rules\"}";
+
+    [Theory]
+    [InlineData("[{\"type\":7,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}]", "six membership rule types")]
+    [InlineData("[{\"type\":3,\"objectGuid\":\"not-a-guid\"}]", "names no objectGUID")]
+    [InlineData("[{\"type\":1,\"objectGuid\":\"0786a4f0-5555-4555-8555-000000000005\"}]", "needs an LDAP filter")]
+    public async Task A_rule_that_cannot_be_written_is_refused_before_any_directory_call(string rules, string reason)
+    {
+        var (ok, msg, _) = await RunSetRules(RulesPayload(rules));
+        Assert.False(ok);
+        Assert.StartsWith("SetDynamicGroupRules:", msg);
+        Assert.Contains(reason, msg);
+    }
+
+    [Fact]
+    public async Task A_rules_write_without_a_rule_list_or_with_too_many_is_refused()
+    {
+        var (ok, msg, _) = await RunSetRules(Payload(operation: "SetDynamicGroupRules"));
+        Assert.False(ok);
+        Assert.Contains("rules are missing", msg);
+
+        var many = "[" + string.Join(",", Enumerable.Repeat("{\"type\":3,\"objectGuid\":\"" + GroupGuid + "\"}", AdAgentDynamicGroupExecutor.MaxRules + 1)) + "]";
+        var (ok2, msg2, _) = await RunSetRules(RulesPayload(many));
+        Assert.False(ok2);
+        Assert.Contains("too many rules", msg2);
+    }
+
+    [Fact]
+    public async Task A_sound_rules_write_without_a_mapping_fails_closed_and_the_convert_back_too()
+    {
+        var (ok, msg, json) = await RunSetRules(RulesPayload("[{\"type\":1,\"objectGuid\":\"" + GroupGuid + "\",\"filter\":\"(objectCategory=person)\"},{\"type\":3,\"objectGuid\":\"" + GroupGuid + "\"}]"));
+        Assert.False(ok);
+        Assert.StartsWith("SetDynamicGroupRules:", msg);   // the rules passed every gate; the unreachable mapping store is the refusal
+        Assert.NotNull(json);
+
+        var (ok2, msg2, _) = await Build().ExecuteAsync(System.Guid.NewGuid(), Payload(operation: "ConvertDynamicGroupToStatic"), CancellationToken.None, AdAgentDynamicGroupExecutor.OpConvertToStatic);
+        Assert.False(ok2);
+        Assert.StartsWith("ConvertDynamicGroupToStatic:", msg2);
+    }
+
+    [Fact]
+    public void The_write_result_and_message_say_what_a_conversion_did()
+    {
+        var write = new DynamicGroupRebuild
+        {
+            Evaluation = new DynamicGroupEvaluation { GroupName = "Sales", IsDynamic = true },
+            Changes = new[] { new DynamicGroupChange { Operation = "Remove", DistinguishedName = "CN=A,OU=X", ObjectGuid = GroupGuid, Outcome = "Applied" } },
+            AppliedRemoves = 1, RulesWritten = 2, Converted = true,
+        };
+        using var doc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildRebuildResultJson(write, AdAgentDynamicGroupExecutor.OpSetRules));
+        Assert.Equal("SetDynamicGroupRules", doc.RootElement.GetProperty("operation").GetString());
+        Assert.Equal(2, doc.RootElement.GetProperty("rulesWritten").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("converted").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("changes").GetArrayLength());
+        Assert.Equal("'Sales': 2 rule(s) written; converted to a dynamic group, 1 member(s) removed.", AdAgentDynamicGroupExecutor.DescribeWrite(AdAgentDynamicGroupExecutor.OpSetRules, write));
+        Assert.Equal("'Sales': converted to a static group; its members stay as last computed.", AdAgentDynamicGroupExecutor.DescribeWrite(AdAgentDynamicGroupExecutor.OpConvertToStatic, write));
+
+        var root = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", ".."));
+        var evaluator = File.ReadAllText(Path.Combine(root, "src", "Conduit.Connectors.ActiveDirectory", "ActiveDirectoryDynamicGroupEvaluator.cs"));
+        var members = evaluator.IndexOf("ActiveDirectorySink.ModifyMember(connection, groupDn, dn, DirectoryAttributeOperation.Delete)", StringComparison.Ordinal);
+        var definition = evaluator.IndexOf("definition.Add(DynamicGroupRules.Serialize(rules, DynamicGroupRules.IdentityCenterService));", StringComparison.Ordinal);
+        Assert.True(members > 0 && definition > members, "on a conversion the members go first, then the definition and the Notes");
+        Assert.Contains("Operation = DirectoryAttributeOperation.Delete", evaluator);   // the conversion back removes the attribute
+        var poller = File.ReadAllText(Path.Combine(root, "src", "Conduit.Web", "Services", "IcAgentCommandPollerService.cs"));
+        Assert.Contains("CommandSetDynamicGroupRules = \"SetDynamicGroupRules\"", poller);
+        Assert.Contains("CommandConvertDynamicGroupToStatic = \"ConvertDynamicGroupToStatic\"", poller);
+    }
 
     // ── The result shape, at the pure level ──────────────────────────────────
 

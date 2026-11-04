@@ -25,6 +25,11 @@ public sealed class AdAgentDynamicGroupExecutor
     public const int MaxListed = 2000;
     public const string OpEvaluate = "EvaluateDynamicGroup";
     public const string OpRebuild = "RebuildDynamicGroup";
+    public const string OpSetRules = "SetDynamicGroupRules";
+    public const string OpConvertToStatic = "ConvertDynamicGroupToStatic";
+    /// <summary>Cap on the rules one definition may carry through this verb.</summary>
+    public const int MaxRules = 64;
+    private static readonly HashSet<string> Operations = new(StringComparer.Ordinal) { OpEvaluate, OpRebuild, OpSetRules, OpConvertToStatic };
 
     private readonly IEnumerable<IConnectorAdapter> _adapters;
     private readonly SinkConnectionCredentialMapRepository _credentialMap;
@@ -46,7 +51,7 @@ public sealed class AdAgentDynamicGroupExecutor
     /// <param name="expectedOperation">The command the poller is running (<see cref="OpEvaluate"/> or <see cref="OpRebuild"/>); the payload must say the same.</param>
     public async Task<(bool Success, string Message, string? ResultJson)> ExecuteAsync(Guid commandId, string? payloadJson, CancellationToken ct, string expectedOperation = OpEvaluate)
     {
-        var verb = expectedOperation == OpRebuild ? OpRebuild : OpEvaluate;
+        var verb = Operations.Contains(expectedOperation) ? expectedOperation : OpEvaluate;
 
         // ── (1) Strict, size-bounded parse ───────────────────────────────────
         if (string.IsNullOrWhiteSpace(payloadJson))
@@ -79,7 +84,28 @@ public sealed class AdAgentDynamicGroupExecutor
         if (!Guid.TryParse(p.ObjectGuid, out var groupGuid) || groupGuid == Guid.Empty)
             return Fail(verb, "objectGuid is missing or not a GUID.");
 
-        // ── (3) Resolve the tenant and the evaluator; evaluate, or rebuild. Never throws to the caller. ──
+        // SetDynamicGroupRules: a bounded rule list, each rule checked before any LDAP call (the connector checks again).
+        List<DynamicGroupRuleSpec>? rules = null;
+        if (verb == OpSetRules)
+        {
+            if (p.Rules is null)
+                return Fail(verb, "rules are missing.");
+            if (p.Rules.Count > MaxRules)
+                return Fail(verb, $"too many rules (>{MaxRules}).");
+            rules = new List<DynamicGroupRuleSpec>(p.Rules.Count);
+            foreach (var r in p.Rules)
+            {
+                if (r is null || r.TypeCode is < 1 or > 6)
+                    return Fail(verb, "a rule's type is not one of the six membership rule types of a group.");
+                if (!Guid.TryParse(r.ObjectGuid, out var ruleObject) || ruleObject == Guid.Empty)
+                    return Fail(verb, "a rule names no objectGUID.");
+                if (r.TypeCode is 1 or 2 && string.IsNullOrWhiteSpace(r.Filter))
+                    return Fail(verb, "a query rule needs an LDAP filter.");
+                rules.Add(new DynamicGroupRuleSpec(r.TypeCode, ruleObject.ToString(), r.Filter));
+            }
+        }
+
+        // ── (3) Resolve the tenant and the evaluator; evaluate, rebuild, set the rules or convert back. Never throws to the caller. ──
         try
         {
             var resolvedTenantId = await _credentialMap.GetTenantIdByNameAsync(sourceConnectionName);
@@ -105,7 +131,7 @@ public sealed class AdAgentDynamicGroupExecutor
                 return (true, Describe(evaluation), BuildResultJson(evaluation));
             }
 
-            // The rebuild writes: the group must be a group, and never one of the privileged groups ApplyObjectWrite refuses.
+            // The writes: the group must be a group, and never one of the privileged groups ApplyObjectWrite refuses.
             if (adapter.CreateSink(resolvedTenantId.Value) is not ActiveDirectorySink sink)
                 return Fail(verb, "could not create an AD sink for the requested connection.");
             var target = await sink.ResolveByGuidAsync(groupGuid.ToString(), ct);
@@ -114,12 +140,17 @@ public sealed class AdAgentDynamicGroupExecutor
             if (!target.IsClass("group"))
                 return Fail(verb, "the target is not a group object.");
             if (AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why))
-                return Fail(verb, $"refusing to rebuild a privileged group ({why}).");
+                return Fail(verb, $"refusing to change a privileged group ({why}).");
 
-            var rebuild = await evaluator.RebuildAsync(groupGuid.ToString(), ct);
-            if (rebuild.ErrorMessage is not null)
-                return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(rebuild.ErrorMessage));
-            return (true, DescribeRebuild(rebuild), BuildRebuildResultJson(rebuild));
+            var write = verb switch
+            {
+                OpRebuild => await evaluator.RebuildAsync(groupGuid.ToString(), ct),
+                OpSetRules => await evaluator.SetRulesAsync(groupGuid.ToString(), rules!, p.ClearMembers, p.Notes, ct),
+                _ => await evaluator.ConvertToStaticAsync(groupGuid.ToString(), p.Notes, ct),
+            };
+            if (write.ErrorMessage is not null)
+                return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(write.ErrorMessage));
+            return (true, DescribeWrite(verb, write), BuildRebuildResultJson(write, verb));
         }
         catch (Exception ex)
         {
@@ -136,13 +167,23 @@ public sealed class AdAgentDynamicGroupExecutor
         return $"'{r.Evaluation.GroupName}' rebuilt: {r.AppliedAdds} added, {r.AppliedRemoves} removed of {r.Evaluation.DesiredMembers.Count} by the rules.{failed}{skipped}";
     }
 
-    /// <summary>The rebuild's ResultJson: every change with its outcome and the member's objectGUID (for the catalog's settlement), the counts, the evaluation's counts.</summary>
-    public static string BuildRebuildResultJson(DynamicGroupRebuild r)
+    /// <summary>One sentence for any of the three writes' completion message; counts, never names.</summary>
+    public static string DescribeWrite(string verb, DynamicGroupRebuild r) => verb switch
+    {
+        OpSetRules => $"'{r.Evaluation.GroupName}': {r.RulesWritten ?? 0} rule(s) written{(r.Converted ? $"; converted to a dynamic group, {r.AppliedRemoves} member(s) removed{(r.Failed > 0 ? $", {r.Failed} could not be removed" : "")}" : "")}.",
+        OpConvertToStatic => $"'{r.Evaluation.GroupName}': converted to a static group; its members stay as last computed.",
+        _ => DescribeRebuild(r),
+    };
+
+    /// <summary>The write's ResultJson: every change with its outcome and the member's objectGUID (for the catalog's settlement), the counts, the evaluation's counts; for a rules write, how many rules and whether it converted.</summary>
+    public static string BuildRebuildResultJson(DynamicGroupRebuild r, string operation = OpRebuild)
     {
         return JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
-            operation = OpRebuild,
+            operation,
+            rulesWritten = r.RulesWritten,
+            converted = r.Converted,
             groupDn = r.Evaluation.GroupDistinguishedName,
             groupName = r.Evaluation.GroupName,
             changes = r.Changes.Select(c => new
@@ -227,5 +268,18 @@ public sealed class AdAgentDynamicGroupExecutor
         [JsonPropertyName("operation")] public string? Operation { get; set; }
         [JsonPropertyName("sourceConnectionName")] public string? SourceConnectionName { get; set; }
         [JsonPropertyName("objectGuid")] public string? ObjectGuid { get; set; }
+        /// <summary>SetDynamicGroupRules: the rule list to write.</summary>
+        [JsonPropertyName("rules")] public List<RulePayload>? Rules { get; set; }
+        /// <summary>SetDynamicGroupRules: a conversion removes every current member first.</summary>
+        [JsonPropertyName("clearMembers")] public bool ClearMembers { get; set; }
+        /// <summary>The sentence for the group's Notes on a conversion; on a conversion back, the sentence to clear.</summary>
+        [JsonPropertyName("notes")] public string? Notes { get; set; }
+    }
+
+    public sealed class RulePayload
+    {
+        [JsonPropertyName("type")] public int TypeCode { get; set; }
+        [JsonPropertyName("objectGuid")] public string? ObjectGuid { get; set; }
+        [JsonPropertyName("filter")] public string? Filter { get; set; }
     }
 }

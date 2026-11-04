@@ -173,6 +173,60 @@ public class DynamicGroupRulesTests
         Assert.Same(desired, delta.Desired);
     }
 
+    // ── DYNAMIC-GROUPS-04: the serializer and the writability check ─────────
+
+    [Fact]
+    public void A_definition_round_trips_through_the_serializer_in_the_services_own_spelling()
+    {
+        Assert.True(DynamicGroupRules.TryParse(Dynamo2, out var definition, out var error), error);
+        var text = DynamicGroupRules.Serialize(definition!.Rules, definition.OriginatingService);
+
+        Assert.Equal(Dynamo2, text);   // byte for byte the lab's shape: hex types, raw '&', [DG], the service GUID
+        Assert.True(DynamicGroupRules.TryParse(text, out var again, out error), error);
+        Assert.Equal(definition.Rules, again!.Rules);
+        Assert.Equal(definition.OriginatingService, again.OriginatingService);
+    }
+
+    [Fact]
+    public void A_definition_written_without_a_service_names_IdentityCenters()
+    {
+        var text = DynamicGroupRules.Serialize(new[] { new DynamicGroupRule(DynamicGroupRuleType.IncludeExplicitly, Guid.Parse(Explicit1), null) });
+        Assert.Equal($"<DynamicGroupXML Conditions=\"[0x3;{Explicit1};][DG]\" OriginatingService=\"{DynamicGroupRules.IdentityCenterService}\" />", text);
+        Assert.NotEqual(Guid.Parse(Service), DynamicGroupRules.IdentityCenterService);   // the lab's Administration Service will not take it for its own
+    }
+
+    [Fact]
+    public void An_empty_rule_list_is_a_dynamic_group_with_nothing_to_include()
+    {
+        var text = DynamicGroupRules.Serialize(Array.Empty<DynamicGroupRule>());
+        Assert.True(DynamicGroupRules.TryParse(text, out var definition, out var error), error);
+        Assert.Empty(definition!.Rules);
+    }
+
+    [Theory]
+    [InlineData(DynamicGroupRuleType.IncludeByQuery, "(objectCategory=person)", true, null)]
+    [InlineData(DynamicGroupRuleType.ExcludeByQuery, "(&(objectCategory=person)(department=Finance))", true, null)]
+    [InlineData(DynamicGroupRuleType.IncludeExplicitly, null, true, null)]
+    [InlineData(DynamicGroupRuleType.ExcludeGroupMembers, null, true, null)]
+    [InlineData(DynamicGroupRuleType.RetainDeprovisioned, null, false, "six membership rule types")]
+    [InlineData(DynamicGroupRuleType.IncludeByQuery, null, false, "needs an LDAP filter")]
+    [InlineData(DynamicGroupRuleType.IncludeByQuery, "objectCategory=person", false, "needs an LDAP filter")]
+    [InlineData(DynamicGroupRuleType.IncludeByQuery, "(&(a=1)(b=2)", false, "needs an LDAP filter")]
+    [InlineData(DynamicGroupRuleType.IncludeByQuery, "(cn=a[1])", false, "needs an LDAP filter")]
+    public void Only_a_groups_six_types_with_a_sound_filter_are_writable(DynamicGroupRuleType type, string? filter, bool writable, string? reason)
+    {
+        var ok = DynamicGroupRules.IsWritable(new DynamicGroupRule(type, Guid.Parse(Explicit1), filter), out var why);
+        Assert.Equal(writable, ok);
+        if (reason is not null) Assert.Contains(reason, why);
+    }
+
+    [Fact]
+    public void A_rule_without_an_object_is_not_writable()
+    {
+        Assert.False(DynamicGroupRules.IsWritable(new DynamicGroupRule(DynamicGroupRuleType.IncludeExplicitly, Guid.Empty, null), out var why));
+        Assert.Contains("names no object", why);
+    }
+
     [Fact]
     public void The_wizards_names_are_the_report_vocabulary()
     {

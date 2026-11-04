@@ -50,6 +50,10 @@ public static class DynamicGroupRules
 {
     public const string AttributeName = "accountNameHistory";
     public const string Terminator = "DG";
+    /// <summary>The group's Notes attribute, stamped on conversion so an operator in ADUC learns why a hand change vanishes (UC034-D03).</summary>
+    public const string NotesAttributeName = "info";
+    /// <summary>The service GUID a definition written by IdentityCenter names, so an Active Roles service does not take it for its own on its daily rebuild.</summary>
+    public static readonly Guid IdentityCenterService = Guid.Parse("4ec0d7a1-1d3c-4c3e-9b2a-6f0c0a51c0de");
 
     private static readonly Regex ConditionsAttribute = new("Conditions\\s*=\\s*\"(?<v>[^\"]*)\"", RegexOptions.Compiled);
     private static readonly Regex OriginatingServiceAttribute = new("OriginatingService\\s*=\\s*\"(?<v>[^\"]*)\"", RegexOptions.Compiled);
@@ -78,6 +82,69 @@ public static class DynamicGroupRules
         DynamicGroupRuleType.RetainDeprovisioned => "Retain Deprovisioned",
         _ => type.ToString(),
     };
+
+    /// <summary>
+    /// The definition as the directory stores it, in the service's own spelling (DYNAMIC-GROUPS-04): <c>[0x&lt;type&gt;;guid;filter]</c>
+    /// per rule, <c>[DG]</c> last, the filter verbatim with its '&amp;' raw as the service writes it, the service GUID. What
+    /// <see cref="TryParse"/> reads back is the same list.
+    /// </summary>
+    public static string Serialize(IReadOnlyList<DynamicGroupRule> rules, Guid? originatingService = null)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+        var conditions = new System.Text.StringBuilder();
+        foreach (var rule in rules)
+        {
+            conditions.Append('[').Append("0x").Append(((int)rule.Type).ToString("x")).Append(';')
+                .Append(rule.ObjectGuid.ToString("D")).Append(';')
+                .Append(rule.IsQuery ? (rule.Filter ?? string.Empty).Trim() : string.Empty)
+                .Append(']');
+        }
+        conditions.Append('[').Append(Terminator).Append(']');
+        return string.Concat("<DynamicGroupXML Conditions=\"", conditions.ToString(), "\" OriginatingService=\"",
+            (originatingService ?? IdentityCenterService).ToString("D"), "\" />");
+    }
+
+    /// <summary>
+    /// A rule a group may carry, before it is written: one of the six group rule types (Retain Deprovisioned is a
+    /// unit's), an object, and for a query type a filter that is at least a parenthesised, balanced LDAP filter.
+    /// False with the reason otherwise.
+    /// </summary>
+    public static bool IsWritable(DynamicGroupRule rule, out string? reason)
+    {
+        reason = null;
+        if (rule.Type is < DynamicGroupRuleType.IncludeByQuery or > DynamicGroupRuleType.ExcludeGroupMembers)
+        {
+            reason = string.Concat("Rule type ", (int)rule.Type, " is not one of the six membership rule types of a group.");
+            return false;
+        }
+        if (rule.ObjectGuid == Guid.Empty)
+        {
+            reason = "A rule names no object.";
+            return false;
+        }
+        if (rule.IsQuery)
+        {
+            var filter = (rule.Filter ?? string.Empty).Trim();
+            if (filter.Length < 3 || filter[0] != '(' || filter[^1] != ')' || !Balanced(filter) || filter.Contains('[') || filter.Contains(']'))
+            {
+                reason = "A query rule needs an LDAP filter in parentheses, balanced, without square brackets.";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool Balanced(string filter)
+    {
+        var depth = 0;
+        for (var i = 0; i < filter.Length; i++)
+        {
+            if (filter[i] == '\\') { i++; continue; }
+            if (filter[i] == '(') depth++;
+            else if (filter[i] == ')' && --depth < 0) return false;
+        }
+        return depth == 0;
+    }
 
     /// <summary>True when the attribute value is a dynamic-group definition at all (the element name), whatever its rules.</summary>
     public static bool LooksLikeDefinition(string? accountNameHistory) =>

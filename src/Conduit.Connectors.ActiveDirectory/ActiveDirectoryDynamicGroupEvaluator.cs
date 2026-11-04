@@ -121,6 +121,149 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
         };
     }
 
+    public async Task<DynamicGroupRebuild> SetRulesAsync(string groupObjectGuid, IReadOnlyList<DynamicGroupRuleSpec> rules, bool clearMembers, string? notes, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(groupObjectGuid, out var groupGuid) || groupGuid == Guid.Empty)
+            return DynamicGroupRebuild.Fail("The group's objectGuid is missing or not a GUID.");
+        var parsed = new List<DynamicGroupRule>();
+        foreach (var spec in rules ?? Array.Empty<DynamicGroupRuleSpec>())
+        {
+            if (!Guid.TryParse(spec.ObjectGuid, out var objectGuid))
+                return DynamicGroupRebuild.Fail("A rule names no objectGUID.");
+            var rule = new DynamicGroupRule((DynamicGroupRuleType)spec.TypeCode, objectGuid, string.IsNullOrWhiteSpace(spec.Filter) ? null : spec.Filter.Trim());
+            if (!DynamicGroupRules.IsWritable(rule, out var reason))
+                return DynamicGroupRebuild.Fail(reason!);
+            parsed.Add(rule);
+        }
+
+        LdapConnection connection;
+        try { connection = await _open().ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dynamic group rules write: the connection could not be opened.");
+            return DynamicGroupRebuild.Fail("The directory connection could not be opened: " + ex.Message);
+        }
+        using (connection)
+        {
+            return await Task.Run(() => WriteDefinition(connection, groupGuid, parsed, clearMembers, notes, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<DynamicGroupRebuild> ConvertToStaticAsync(string groupObjectGuid, string? notesToClear, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(groupObjectGuid, out var groupGuid) || groupGuid == Guid.Empty)
+            return DynamicGroupRebuild.Fail("The group's objectGuid is missing or not a GUID.");
+        LdapConnection connection;
+        try { connection = await _open().ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dynamic group conversion: the connection could not be opened.");
+            return DynamicGroupRebuild.Fail("The directory connection could not be opened: " + ex.Message);
+        }
+        using (connection)
+        {
+            return await Task.Run(() => RemoveDefinition(connection, groupGuid, notesToClear, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The conversion and the rule change, as the console does them (UC034-D03): on a conversion every member goes first,
+    /// one delta change each so a member the directory will not release fails alone; then the definition replaces the
+    /// attribute and the Notes carry the sentence. A rule change on a group already dynamic touches the definition only.
+    /// </summary>
+    private DynamicGroupRebuild WriteDefinition(LdapConnection connection, Guid groupGuid, IReadOnlyList<DynamicGroupRule> rules, bool clearMembers, string? notes, CancellationToken ct)
+    {
+        try
+        {
+            var group = ReadByGuid(connection, groupGuid, new[] { "distinguishedName", "name", "objectClass", DynamicGroupRules.AttributeName });
+            if (group is null)
+                return DynamicGroupRebuild.Fail(string.Concat("objectGuid ", groupGuid, " resolved to no directory object."));
+            var groupDn = group.DistinguishedName;
+            var name = FirstString(group, "name") ?? groupDn;
+            if (!Classes(group).Contains("group", StringComparer.OrdinalIgnoreCase))
+                return DynamicGroupRebuild.Fail(string.Concat("'", name, "' is not a group."));
+            var wasDynamic = DynamicGroupRules.LooksLikeDefinition(FirstString(group, DynamicGroupRules.AttributeName));
+
+            var changes = new List<DynamicGroupChange>();
+            int removes = 0, skipped = 0, failed = 0;
+            if (clearMembers)
+            {
+                foreach (var dn in ReadMembers(connection, groupDn, ct))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var guid = ReadObjectGuid(connection, dn);
+                    var result = ActiveDirectorySink.ModifyMember(connection, groupDn, dn, DirectoryAttributeOperation.Delete);
+                    var outcome = result.Outcome switch { SinkWriteOutcome.Updated => "Applied", SinkWriteOutcome.Skipped => "Skipped", _ => "Failed" };
+                    switch (outcome) { case "Applied": removes++; break; case "Skipped": skipped++; break; default: failed++; break; }
+                    changes.Add(new DynamicGroupChange { Operation = "Remove", DistinguishedName = dn, ObjectGuid = guid, Outcome = outcome, Error = outcome == "Failed" ? result.ErrorMessage : null });
+                }
+            }
+
+            var definition = new DirectoryAttributeModification { Name = DynamicGroupRules.AttributeName, Operation = DirectoryAttributeOperation.Replace };
+            definition.Add(DynamicGroupRules.Serialize(rules, DynamicGroupRules.IdentityCenterService));
+            var modifications = new List<DirectoryAttributeModification> { definition };
+            if (clearMembers && !string.IsNullOrWhiteSpace(notes))
+            {
+                var info = new DirectoryAttributeModification { Name = DynamicGroupRules.NotesAttributeName, Operation = DirectoryAttributeOperation.Replace };
+                info.Add(notes.Trim());
+                modifications.Add(info);
+            }
+            connection.SendRequest(new ModifyRequest(groupDn, modifications.ToArray()));
+
+            return new DynamicGroupRebuild
+            {
+                Evaluation = new DynamicGroupEvaluation { GroupDistinguishedName = groupDn, GroupName = name, IsDynamic = true },
+                Changes = changes, AppliedRemoves = removes, Skipped = skipped, Failed = failed,
+                RulesWritten = rules.Count, Converted = clearMembers || !wasDynamic,
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Dynamic group rules write for {GroupGuid} threw.", groupGuid);
+            return DynamicGroupRebuild.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>Back to a static group (UC034-D06): the definition goes, the members stay as last computed, the Notes the conversion stamped are cleared when they still read that sentence.</summary>
+    private DynamicGroupRebuild RemoveDefinition(LdapConnection connection, Guid groupGuid, string? notesToClear, CancellationToken ct)
+    {
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            var group = ReadByGuid(connection, groupGuid, new[] { "distinguishedName", "name", "objectClass", DynamicGroupRules.AttributeName, DynamicGroupRules.NotesAttributeName });
+            if (group is null)
+                return DynamicGroupRebuild.Fail(string.Concat("objectGuid ", groupGuid, " resolved to no directory object."));
+            var groupDn = group.DistinguishedName;
+            var name = FirstString(group, "name") ?? groupDn;
+            if (!Classes(group).Contains("group", StringComparer.OrdinalIgnoreCase))
+                return DynamicGroupRebuild.Fail(string.Concat("'", name, "' is not a group."));
+            if (!DynamicGroupRules.LooksLikeDefinition(FirstString(group, DynamicGroupRules.AttributeName)))
+                return DynamicGroupRebuild.Fail(string.Concat("'", name, "' carries no membership rules; it is a static group already."));
+
+            var modifications = new List<DirectoryAttributeModification>
+            {
+                new() { Name = DynamicGroupRules.AttributeName, Operation = DirectoryAttributeOperation.Delete },
+            };
+            var info = FirstString(group, DynamicGroupRules.NotesAttributeName);
+            if (!string.IsNullOrWhiteSpace(notesToClear) && string.Equals(info?.Trim(), notesToClear.Trim(), StringComparison.Ordinal))
+                modifications.Add(new DirectoryAttributeModification { Name = DynamicGroupRules.NotesAttributeName, Operation = DirectoryAttributeOperation.Delete });
+            connection.SendRequest(new ModifyRequest(groupDn, modifications.ToArray()));
+
+            return new DynamicGroupRebuild
+            {
+                Evaluation = new DynamicGroupEvaluation { GroupDistinguishedName = groupDn, GroupName = name, IsDynamic = false },
+                RulesWritten = 0, Converted = true,
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Dynamic group conversion of {GroupGuid} threw.", groupGuid);
+            return DynamicGroupRebuild.Fail(ex.Message);
+        }
+    }
+
     /// <summary>The objectGUID of one object by DN, for the catalog's settlement; null when the read fails (the change still goes by DN).</summary>
     private static string? ReadObjectGuid(LdapConnection connection, string dn)
     {

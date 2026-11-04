@@ -158,10 +158,23 @@ public interface IConnectorDynamicGroupEvaluator
 
     /// <summary>
     /// DYNAMIC-GROUPS-03: evaluates, then writes the difference to the group's members, one delta change per object,
-    /// and reports each change's outcome. The only write the evaluator makes.
+    /// and reports each change's outcome.
     /// </summary>
     Task<DynamicGroupRebuild> RebuildAsync(string groupObjectGuid, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// DYNAMIC-GROUPS-04: writes the rule list onto the group as its definition. With <paramref name="clearMembers"/>
+    /// (a conversion) every current member is removed first, one delta change each, and the group's Notes are stamped
+    /// with <paramref name="notes"/>; the rules then decide the members on the next rebuild.
+    /// </summary>
+    Task<DynamicGroupRebuild> SetRulesAsync(string groupObjectGuid, IReadOnlyList<DynamicGroupRuleSpec> rules, bool clearMembers, string? notes, CancellationToken cancellationToken);
+
+    /// <summary>DYNAMIC-GROUPS-04: removes the definition (the group is static again; its members stay as last computed) and the Notes the conversion stamped.</summary>
+    Task<DynamicGroupRebuild> ConvertToStaticAsync(string groupObjectGuid, string? notesToClear, CancellationToken cancellationToken);
 }
+
+/// <summary>A rule to write: the type number (1..6), the object it names, and for a query type the LDAP filter.</summary>
+public sealed record DynamicGroupRuleSpec(int TypeCode, string ObjectGuid, string? Filter);
 
 /// <summary>One member change of a rebuild: what was asked, which object, and what the directory said.</summary>
 public sealed class DynamicGroupChange
@@ -185,7 +198,11 @@ public sealed class DynamicGroupRebuild
     public int AppliedRemoves { get; init; }
     public int Skipped { get; init; }
     public int Failed { get; init; }
-    /// <summary>Non-null when the rebuild could not start (no group, no connection, not a dynamic group, rules that do not parse).</summary>
+    /// <summary>DYNAMIC-GROUPS-04: how many rules a SetRules wrote; null for a rebuild.</summary>
+    public int? RulesWritten { get; init; }
+    /// <summary>DYNAMIC-GROUPS-04: true when the write converted the group (to dynamic with cleared members, or back to static).</summary>
+    public bool Converted { get; init; }
+    /// <summary>Non-null when the write could not start (no group, no connection, not a dynamic group, rules that do not parse).</summary>
     public string? ErrorMessage { get; init; }
 
     public static DynamicGroupRebuild Fail(string message) => new() { ErrorMessage = message };
