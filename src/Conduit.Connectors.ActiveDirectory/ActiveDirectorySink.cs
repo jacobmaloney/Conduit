@@ -776,31 +776,46 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var member = ResolveByGuid(conn, memberObjectGuid);
             if (member is null) return SinkWriteResult.Fail($"Member objectGUID '{memberObjectGuid}' resolved to no AD object.");
 
-            var mod = new DirectoryAttributeModification { Name = "member", Operation = op };
-            mod.Add(member.DistinguishedName);
-            try
-            {
-                conn.SendRequest(new ModifyRequest(group.DistinguishedName, mod));
-                return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
-            }
-            // Idempotency: Add of an existing member / Delete of an absent member.
-            catch (DirectoryOperationException dex) when (
-                dex.Response is { ResultCode: ResultCode.EntryAlreadyExists or ResultCode.AttributeOrValueExists }
-                && op == DirectoryAttributeOperation.Add)
-            {
-                return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
-            }
-            catch (DirectoryOperationException dex) when (
-                dex.Response is { ResultCode: ResultCode.NoSuchAttribute }
-                && op == DirectoryAttributeOperation.Delete)
-            {
-                return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
-            }
+            return ModifyMember(conn, group.DistinguishedName, member.DistinguishedName, op);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "AD ModifyMembership ({Op}) failed (tenant={TenantId})", op, _tenantId);
             return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// THE delta change of one member on one group, on an open connection (DYNAMIC-GROUPS-03): Add or Delete on
+    /// 'member', never a replace. Idempotent: an Add of a present member and a Delete of an absent one are Skipped.
+    /// The GUID verbs above resolve both objects and call this; the dynamic-group rebuild calls it per change on
+    /// the connection it evaluated on, so the two never drift on the result codes that mean "already so".
+    /// </summary>
+    public static SinkWriteResult ModifyMember(LdapConnection conn, string groupDn, string memberDn, DirectoryAttributeOperation op)
+    {
+        var mod = new DirectoryAttributeModification { Name = "member", Operation = op };
+        mod.Add(memberDn);
+        try
+        {
+            conn.SendRequest(new ModifyRequest(groupDn, mod));
+            return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
+        }
+        // Idempotency: Add of an existing member / Delete of an absent member.
+        catch (DirectoryOperationException dex) when (
+            dex.Response is { ResultCode: ResultCode.EntryAlreadyExists or ResultCode.AttributeOrValueExists }
+            && op == DirectoryAttributeOperation.Add)
+        {
+            return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
+        }
+        catch (DirectoryOperationException dex) when (
+            dex.Response is { ResultCode: ResultCode.NoSuchAttribute }
+            && op == DirectoryAttributeOperation.Delete)
+        {
+            return SinkWriteResult.Ok(SinkWriteOutcome.Skipped);
+        }
+        catch (DirectoryOperationException dex)
+        {
+            return SinkWriteResult.Fail(dex.Message);
         }
     }
 

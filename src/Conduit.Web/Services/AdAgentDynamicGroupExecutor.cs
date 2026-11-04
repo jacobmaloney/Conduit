@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Conduit.Connectors.ActiveDirectory;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Connectors;
 
@@ -10,7 +11,10 @@ namespace Conduit.Web.Services;
 /// DYNAMIC-GROUPS-01 (UC034-D12): executes an IdentityCenter "EvaluateDynamicGroup" agent command, READ-ONLY. The
 /// agent, which holds the LDAP bind, reads the group's Active Roles style membership rules off the group itself, runs
 /// them by LDAP search with the rule precedence, and reports what a rebuild would write: the rules as resolved, the
-/// current members, the desired members, the adds and the removes. Nothing is written; the rebuild is a later verb.
+/// current members, the desired members, the adds and the removes. Nothing is written by that command.
+/// DYNAMIC-GROUPS-03: "RebuildDynamicGroup" is the write: the same evaluation, then the difference written to 'member'
+/// one delta change per object, refused outright for a privileged group (the ApplyObjectWrite rule), each change's
+/// outcome reported. The payload's operation must match the command the poller is running.
 /// Same trust boundary as the other verbs: strict size-bounded parse, operation check, the tenant resolved from the
 /// server-trusted sourceConnectionName (never from a caller id), the group re-read by objectGUID. Never throws.
 /// </summary>
@@ -19,7 +23,8 @@ public sealed class AdAgentDynamicGroupExecutor
     private const int MaxPayloadBytes = 64 * 1024;
     /// <summary>Cap on the names listed per list in the result (current, desired, adds, removes); the counts stay exact.</summary>
     public const int MaxListed = 2000;
-    private const string ExpectedOperation = "EvaluateDynamicGroup";
+    public const string OpEvaluate = "EvaluateDynamicGroup";
+    public const string OpRebuild = "RebuildDynamicGroup";
 
     private readonly IEnumerable<IConnectorAdapter> _adapters;
     private readonly SinkConnectionCredentialMapRepository _credentialMap;
@@ -38,13 +43,16 @@ public sealed class AdAgentDynamicGroupExecutor
         _logger = logger;
     }
 
-    public async Task<(bool Success, string Message, string? ResultJson)> ExecuteAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    /// <param name="expectedOperation">The command the poller is running (<see cref="OpEvaluate"/> or <see cref="OpRebuild"/>); the payload must say the same.</param>
+    public async Task<(bool Success, string Message, string? ResultJson)> ExecuteAsync(Guid commandId, string? payloadJson, CancellationToken ct, string expectedOperation = OpEvaluate)
     {
+        var verb = expectedOperation == OpRebuild ? OpRebuild : OpEvaluate;
+
         // ── (1) Strict, size-bounded parse ───────────────────────────────────
         if (string.IsNullOrWhiteSpace(payloadJson))
-            return Fail("EvaluateDynamicGroup: empty payload.");
+            return Fail(verb, "empty payload.");
         if (Encoding.UTF8.GetByteCount(payloadJson) > MaxPayloadBytes)
-            return Fail($"EvaluateDynamicGroup: payload exceeds {MaxPayloadBytes / 1024} KB cap.");
+            return Fail(verb, $"payload exceeds {MaxPayloadBytes / 1024} KB cap.");
 
         EvaluateDynamicGroupPayload? p;
         try
@@ -53,53 +61,105 @@ public sealed class AdAgentDynamicGroupExecutor
         }
         catch (JsonException)
         {
-            return Fail("EvaluateDynamicGroup: malformed payload JSON.");
+            return Fail(verb, "malformed payload JSON.");
         }
         if (p is null)
-            return Fail("EvaluateDynamicGroup: payload deserialized to null.");
+            return Fail(verb, "payload deserialized to null.");
         if (p.SchemaVersion != 1)
-            return Fail($"EvaluateDynamicGroup: unsupported schemaVersion {p.SchemaVersion}.");
+            return Fail(verb, $"unsupported schemaVersion {p.SchemaVersion}.");
 
-        // ── (2) operation + required fields ───────────────────────────────────
-        if (!string.Equals(p.Operation?.Trim(), ExpectedOperation, StringComparison.Ordinal))
-            return Fail($"EvaluateDynamicGroup: operation '{p.Operation}' is not allowed.");
+        // ── (2) operation + required fields: the payload must name the command being run, and nothing else ──
+        if (!string.Equals(p.Operation?.Trim(), verb, StringComparison.Ordinal))
+            return Fail(verb, $"operation '{p.Operation}' is not allowed.");
 
         var sourceConnectionName = p.SourceConnectionName?.Trim();
         if (string.IsNullOrEmpty(sourceConnectionName))
-            return Fail("EvaluateDynamicGroup: sourceConnectionName is missing.");
+            return Fail(verb, "sourceConnectionName is missing.");
 
         if (!Guid.TryParse(p.ObjectGuid, out var groupGuid) || groupGuid == Guid.Empty)
-            return Fail("EvaluateDynamicGroup: objectGuid is missing or not a GUID.");
+            return Fail(verb, "objectGuid is missing or not a GUID.");
 
-        // ── (3) Resolve the tenant and the evaluator; evaluate (READ-ONLY). Never throws to the caller. ──
+        // ── (3) Resolve the tenant and the evaluator; evaluate, or rebuild. Never throws to the caller. ──
         try
         {
             var resolvedTenantId = await _credentialMap.GetTenantIdByNameAsync(sourceConnectionName);
             if (resolvedTenantId is null || resolvedTenantId.Value == Guid.Empty)
-                return Fail($"EvaluateDynamicGroup: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
+                return Fail(verb, $"No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
             var tenant = await _tenants.GetByIdAsync(resolvedTenantId.Value);
             if (tenant is null || !tenant.IsActive)
-                return Fail($"EvaluateDynamicGroup: No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
+                return Fail(verb, $"No Conduit credential mapping for source connection '{sourceConnectionName}'. Run a sync from this connection to register it.");
 
             var adapter = _adapters.FirstOrDefault(a =>
                 string.Equals(a.SystemType, "ActiveDirectory", StringComparison.OrdinalIgnoreCase));
             if (adapter is null)
-                return Fail("EvaluateDynamicGroup: Active Directory connector is not available on this agent.");
+                return Fail(verb, "Active Directory connector is not available on this agent.");
             var evaluator = adapter.CreateDynamicGroupEvaluator(resolvedTenantId.Value);
             if (evaluator is null)
-                return Fail("EvaluateDynamicGroup: this connector does not evaluate dynamic groups.");
+                return Fail(verb, "this connector does not evaluate dynamic groups.");
 
-            var evaluation = await evaluator.EvaluateAsync(groupGuid.ToString(), ct);
-            if (evaluation.ErrorMessage is not null)
-                return Fail("EvaluateDynamicGroup: " + AdAgentCreateExecutor.SanitizeLdapError(evaluation.ErrorMessage));
+            if (verb == OpEvaluate)
+            {
+                var evaluation = await evaluator.EvaluateAsync(groupGuid.ToString(), ct);
+                if (evaluation.ErrorMessage is not null)
+                    return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(evaluation.ErrorMessage));
+                return (true, Describe(evaluation), BuildResultJson(evaluation));
+            }
 
-            return (true, Describe(evaluation), BuildResultJson(evaluation));
+            // The rebuild writes: the group must be a group, and never one of the privileged groups ApplyObjectWrite refuses.
+            if (adapter.CreateSink(resolvedTenantId.Value) is not ActiveDirectorySink sink)
+                return Fail(verb, "could not create an AD sink for the requested connection.");
+            var target = await sink.ResolveByGuidAsync(groupGuid.ToString(), ct);
+            if (target is null)
+                return Fail(verb, $"objectGuid {groupGuid} resolved to no AD object.");
+            if (!target.IsClass("group"))
+                return Fail(verb, "the target is not a group object.");
+            if (AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why))
+                return Fail(verb, $"refusing to rebuild a privileged group ({why}).");
+
+            var rebuild = await evaluator.RebuildAsync(groupGuid.ToString(), ct);
+            if (rebuild.ErrorMessage is not null)
+                return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(rebuild.ErrorMessage));
+            return (true, DescribeRebuild(rebuild), BuildRebuildResultJson(rebuild));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "EvaluateDynamicGroup {CommandId} threw.", commandId);
-            return Fail("EvaluateDynamicGroup: " + AdAgentCreateExecutor.SanitizeLdapError(ex.Message));
+            _logger.LogError(ex, "{Verb} {CommandId} threw.", verb, commandId);
+            return Fail(verb, AdAgentCreateExecutor.SanitizeLdapError(ex.Message));
         }
+    }
+
+    /// <summary>One sentence for a rebuild's completion message; counts, never names.</summary>
+    public static string DescribeRebuild(DynamicGroupRebuild r)
+    {
+        var failed = r.Failed > 0 ? $" {r.Failed} change(s) failed." : "";
+        var skipped = r.Skipped > 0 ? $" {r.Skipped} already so." : "";
+        return $"'{r.Evaluation.GroupName}' rebuilt: {r.AppliedAdds} added, {r.AppliedRemoves} removed of {r.Evaluation.DesiredMembers.Count} by the rules.{failed}{skipped}";
+    }
+
+    /// <summary>The rebuild's ResultJson: every change with its outcome and the member's objectGUID (for the catalog's settlement), the counts, the evaluation's counts.</summary>
+    public static string BuildRebuildResultJson(DynamicGroupRebuild r)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            operation = OpRebuild,
+            groupDn = r.Evaluation.GroupDistinguishedName,
+            groupName = r.Evaluation.GroupName,
+            changes = r.Changes.Select(c => new
+            {
+                operation = c.Operation,
+                dn = c.DistinguishedName,
+                objectGuid = c.ObjectGuid,
+                outcome = c.Outcome,
+                error = c.Error,
+            }).ToList(),
+            appliedAdds = r.AppliedAdds,
+            appliedRemoves = r.AppliedRemoves,
+            skipped = r.Skipped,
+            failed = r.Failed,
+            currentCount = r.Evaluation.CurrentMembers.Count,
+            desiredCount = r.Evaluation.DesiredMembers.Count,
+        });
     }
 
     /// <summary>One sentence for the command's completion message; counts, never names.</summary>
@@ -147,9 +207,9 @@ public sealed class AdAgentDynamicGroupExecutor
         });
     }
 
-    private (bool, string, string?) Fail(string message)
+    private (bool, string, string?) Fail(string verb, string message)
     {
-        var sanitized = AdAgentCreateExecutor.SanitizeLdapError(message);
+        var sanitized = AdAgentCreateExecutor.SanitizeLdapError(string.Concat(verb, ": ", message));
         return (false, sanitized, JsonSerializer.Serialize(new { schemaVersion = 1, ldapError = sanitized }));
     }
 

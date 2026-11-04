@@ -558,8 +558,9 @@ public sealed class AdAgentWriteExecutor
         return ResultToTuple(r, $"{verb} {SafeDn(groupTarget)}.");
     }
 
-    // ── (7) privileged-group identity check, against the AD-read object ───────
-    private static bool IsPrivilegedGroup(AdResolvedObject group, out string reason)
+    // ── (7) privileged-group identity check, against the AD-read object. Internal: the dynamic-group rebuild
+    //        (AdAgentDynamicGroupExecutor) refuses the same groups by the same rule, not by a copy of it. ──
+    internal static bool IsPrivilegedGroup(AdResolvedObject group, out string reason)
     {
         var rid = group.Rid;
         if (rid is not null && PrivilegedRids.Contains(rid.Value))

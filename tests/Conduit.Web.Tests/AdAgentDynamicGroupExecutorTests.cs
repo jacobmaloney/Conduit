@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using Conduit.DataAccess;
 using Conduit.DataAccess.Repositories;
@@ -42,6 +43,9 @@ public class AdAgentDynamicGroupExecutorTests
 
     private static Task<(bool Success, string Message, string? ResultJson)> Run(string? payload)
         => Build().ExecuteAsync(System.Guid.NewGuid(), payload, CancellationToken.None);
+
+    private static Task<(bool Success, string Message, string? ResultJson)> RunRebuild(string? payload)
+        => Build().ExecuteAsync(System.Guid.NewGuid(), payload, CancellationToken.None, AdAgentDynamicGroupExecutor.OpRebuild);
 
     [Theory]
     [InlineData(null)]
@@ -111,6 +115,94 @@ public class AdAgentDynamicGroupExecutorTests
         Assert.StartsWith("EvaluateDynamicGroup:", msg);
         Assert.NotNull(json);
     }
+
+    // ── DYNAMIC-GROUPS-03: the rebuild on the same executor ─────────────────
+
+    [Fact]
+    public async Task A_rebuild_payload_on_an_evaluate_command_is_refused_and_the_reverse()
+    {
+        var (ok, msg, _) = await Run(Payload(operation: "RebuildDynamicGroup"));
+        Assert.False(ok);
+        Assert.StartsWith("EvaluateDynamicGroup:", msg);
+        Assert.Contains("not allowed", msg);
+
+        var (ok2, msg2, _) = await RunRebuild(Payload(operation: "EvaluateDynamicGroup"));
+        Assert.False(ok2);
+        Assert.StartsWith("RebuildDynamicGroup:", msg2);
+        Assert.Contains("not allowed", msg2);
+    }
+
+    [Fact]
+    public async Task A_well_formed_rebuild_without_a_mapping_fails_closed_and_never_throws()
+    {
+        var (ok, msg, json) = await RunRebuild(Payload(operation: "RebuildDynamicGroup"));
+        Assert.False(ok);
+        Assert.StartsWith("RebuildDynamicGroup:", msg);
+        Assert.NotNull(json);
+    }
+
+    [Fact]
+    public void The_rebuild_result_carries_every_change_with_its_outcome_and_guid()
+    {
+        var rebuild = new DynamicGroupRebuild
+        {
+            Evaluation = Evaluation(),
+            Changes = new[]
+            {
+                new DynamicGroupChange { Operation = "Add", DistinguishedName = "CN=A,OU=X", ObjectGuid = GroupGuid, Outcome = "Applied" },
+                new DynamicGroupChange { Operation = "Remove", DistinguishedName = "CN=Native,OU=X", ObjectGuid = null, Outcome = "Failed", Error = "The object does not exist." },
+                new DynamicGroupChange { Operation = "Add", DistinguishedName = "CN=B,OU=X", ObjectGuid = GroupGuid, Outcome = "Skipped" },
+            },
+            AppliedAdds = 1, AppliedRemoves = 0, Skipped = 1, Failed = 1,
+        };
+
+        using var doc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildRebuildResultJson(rebuild));
+        var root = doc.RootElement;
+        Assert.Equal("RebuildDynamicGroup", root.GetProperty("operation").GetString());
+        Assert.Equal("dynamo", root.GetProperty("groupName").GetString());
+        var changes = root.GetProperty("changes");
+        Assert.Equal(3, changes.GetArrayLength());
+        Assert.Equal("Add", changes[0].GetProperty("operation").GetString());
+        Assert.Equal(GroupGuid, changes[0].GetProperty("objectGuid").GetString());
+        Assert.Equal("Applied", changes[0].GetProperty("outcome").GetString());
+        Assert.Equal(JsonValueKind.Null, changes[1].GetProperty("objectGuid").ValueKind);
+        Assert.Equal("The object does not exist.", changes[1].GetProperty("error").GetString());
+        Assert.Equal(1, root.GetProperty("appliedAdds").GetInt32());
+        Assert.Equal(1, root.GetProperty("failed").GetInt32());
+        Assert.Equal(3, root.GetProperty("desiredCount").GetInt32());
+
+        Assert.Equal("'dynamo' rebuilt: 1 added, 0 removed of 3 by the rules. 1 change(s) failed. 1 already so.", AdAgentDynamicGroupExecutor.DescribeRebuild(rebuild));
+    }
+
+    [Fact]
+    public void The_rebuild_writes_through_the_sinks_one_member_modify_and_refuses_the_privileged_groups_by_the_write_rule()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", ".."));
+        string Read(string relative) => File.ReadAllText(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+
+        var sink = Read("src/Conduit.Connectors.ActiveDirectory/ActiveDirectorySink.cs");
+        Assert.Contains("public static SinkWriteResult ModifyMember(LdapConnection conn, string groupDn, string memberDn, DirectoryAttributeOperation op)", sink);
+        Assert.Contains("return ModifyMember(conn, group.DistinguishedName, member.DistinguishedName, op);", sink);   // the GUID verbs on it
+        Assert.Contains("conn.SendRequest(new ModifyRequest(groupDn, mod));", sink);                           // the one member modify
+        Assert.DoesNotContain("conn.SendRequest(new ModifyRequest(group.DistinguishedName, mod));", sink);    // the GUID path's own copy is gone
+
+        var evaluator = Read("src/Conduit.Connectors.ActiveDirectory/ActiveDirectoryDynamicGroupEvaluator.cs");
+        Assert.Contains("ActiveDirectorySink.ModifyMember(connection, groupDn, dn, add ? DirectoryAttributeOperation.Add : DirectoryAttributeOperation.Delete)", evaluator);
+        Assert.DoesNotContain("new ModifyRequest(", evaluator);   // no second member write
+        Assert.Contains("the rebuild was not run on a partial set", evaluator);
+
+        var executor = Read("src/Conduit.Web/Services/AdAgentDynamicGroupExecutor.cs");
+        var guard = executor.IndexOf("AdAgentWriteExecutor.IsPrivilegedGroup(target, out var why)", StringComparison.Ordinal);
+        var rebuild = executor.IndexOf("await evaluator.RebuildAsync(groupGuid.ToString(), ct)", StringComparison.Ordinal);
+        Assert.True(guard > 0 && rebuild > guard, "the privileged-group guard runs before the rebuild");
+        Assert.Contains("internal static bool IsPrivilegedGroup(AdResolvedObject group, out string reason)", Read("src/Conduit.Web/Services/AdAgentWriteExecutor.cs"));
+
+        var poller = Read("src/Conduit.Web/Services/IcAgentCommandPollerService.cs");
+        Assert.Contains("CommandRebuildDynamicGroup = \"RebuildDynamicGroup\"", poller);
+        Assert.Contains("DynamicGroupAsync(command.Id, command.PayloadJson, CommandRebuildDynamicGroup, ct)", poller);
+    }
+
+    private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;
 
     // ── The result shape, at the pure level ──────────────────────────────────
 

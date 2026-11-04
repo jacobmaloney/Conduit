@@ -155,6 +155,40 @@ public sealed class DirectoryBrowseResult
 public interface IConnectorDynamicGroupEvaluator
 {
     Task<DynamicGroupEvaluation> EvaluateAsync(string groupObjectGuid, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// DYNAMIC-GROUPS-03: evaluates, then writes the difference to the group's members, one delta change per object,
+    /// and reports each change's outcome. The only write the evaluator makes.
+    /// </summary>
+    Task<DynamicGroupRebuild> RebuildAsync(string groupObjectGuid, CancellationToken cancellationToken);
+}
+
+/// <summary>One member change of a rebuild: what was asked, which object, and what the directory said.</summary>
+public sealed class DynamicGroupChange
+{
+    /// <summary>"Add" or "Remove".</summary>
+    public string Operation { get; init; } = string.Empty;
+    public string DistinguishedName { get; init; } = string.Empty;
+    /// <summary>The member's objectGUID as read before the change, so the catalog can settle the edge; null when it could not be read.</summary>
+    public string? ObjectGuid { get; init; }
+    /// <summary>"Applied", "Skipped" (already so) or "Failed".</summary>
+    public string Outcome { get; init; } = string.Empty;
+    public string? Error { get; init; }
+}
+
+/// <summary>What a rebuild did: the evaluation it ran and the change it wrote, per member.</summary>
+public sealed class DynamicGroupRebuild
+{
+    public DynamicGroupEvaluation Evaluation { get; init; } = new();
+    public IReadOnlyList<DynamicGroupChange> Changes { get; init; } = Array.Empty<DynamicGroupChange>();
+    public int AppliedAdds { get; init; }
+    public int AppliedRemoves { get; init; }
+    public int Skipped { get; init; }
+    public int Failed { get; init; }
+    /// <summary>Non-null when the rebuild could not start (no group, no connection, not a dynamic group, rules that do not parse).</summary>
+    public string? ErrorMessage { get; init; }
+
+    public static DynamicGroupRebuild Fail(string message) => new() { ErrorMessage = message };
 }
 
 /// <summary>One rule of a dynamic group as evaluated: its type, the object it names, its filter, and what it matched.</summary>

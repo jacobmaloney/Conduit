@@ -17,6 +17,9 @@ namespace Conduit.Connectors.ActiveDirectory;
 /// container with the rule's filter verbatim; an explicit rule is the object; a group-members rule is that group's
 /// direct <c>member</c> list. The decision and the difference are <see cref="DynamicGroupRules.Decide"/> and
 /// <see cref="DynamicGroupRules.Diff"/>. Cross-domain membership stays off (UC034-D05): searches do not chase referrals.
+/// DYNAMIC-GROUPS-03: <see cref="RebuildAsync"/> is the one write: after the same evaluation it applies each add and
+/// remove as a delta change on 'member' through <see cref="ActiveDirectorySink.ModifyMember"/>, on the connection it
+/// evaluated on, and reports every change's outcome; a member that cannot be changed fails alone.
 /// </summary>
 public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGroupEvaluator
 {
@@ -52,6 +55,83 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
             // The LDAP API is synchronous; keep the caller's thread free as the browser does.
             return await Task.Run(() => Evaluate(connection, groupGuid, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    public async Task<DynamicGroupRebuild> RebuildAsync(string groupObjectGuid, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(groupObjectGuid, out var groupGuid) || groupGuid == Guid.Empty)
+            return DynamicGroupRebuild.Fail("The group's objectGuid is missing or not a GUID.");
+
+        LdapConnection connection;
+        try { connection = await _open().ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dynamic group rebuild: the connection could not be opened.");
+            return DynamicGroupRebuild.Fail("The directory connection could not be opened: " + ex.Message);
+        }
+
+        using (connection)
+        {
+            return await Task.Run(() => Rebuild(connection, groupGuid, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private DynamicGroupRebuild Rebuild(LdapConnection connection, Guid groupGuid, CancellationToken ct)
+    {
+        var evaluation = Evaluate(connection, groupGuid, ct);
+        if (evaluation.ErrorMessage is not null)
+            return DynamicGroupRebuild.Fail(evaluation.ErrorMessage);
+        if (!evaluation.IsDynamic)
+            return DynamicGroupRebuild.Fail(string.Concat("'", evaluation.GroupName, "' carries no membership rules; a static group is not rebuilt."));
+        if (evaluation.Truncated)
+            return DynamicGroupRebuild.Fail(string.Concat("A rule of '", evaluation.GroupName, "' matched more objects than the evaluator reads in one pass; the rebuild was not run on a partial set."));
+        if (evaluation.Rules.Any(r => r.Error is not null && r.TypeCode != (int)DynamicGroupRuleType.RetainDeprovisioned))
+            return DynamicGroupRebuild.Fail(string.Concat("A rule of '", evaluation.GroupName, "' could not be evaluated; the rebuild was not run on a partial set."));
+
+        var groupDn = evaluation.GroupDistinguishedName!;
+        var changes = new List<DynamicGroupChange>();
+        int adds = 0, removes = 0, skipped = 0, failed = 0;
+        foreach (var (dn, add) in evaluation.Adds.Select(d => (d, true)).Concat(evaluation.Removes.Select(d => (d, false))))
+        {
+            ct.ThrowIfCancellationRequested();
+            var guid = ReadObjectGuid(connection, dn);
+            var result = ActiveDirectorySink.ModifyMember(connection, groupDn, dn, add ? DirectoryAttributeOperation.Add : DirectoryAttributeOperation.Delete);
+            var outcome = result.Outcome switch
+            {
+                SinkWriteOutcome.Updated => "Applied",
+                SinkWriteOutcome.Skipped => "Skipped",
+                _ => "Failed",
+            };
+            switch (outcome)
+            {
+                case "Applied": if (add) adds++; else removes++; break;
+                case "Skipped": skipped++; break;
+                default: failed++; break;
+            }
+            changes.Add(new DynamicGroupChange
+            {
+                Operation = add ? "Add" : "Remove", DistinguishedName = dn, ObjectGuid = guid, Outcome = outcome,
+                Error = outcome == "Failed" ? result.ErrorMessage : null,
+            });
+        }
+
+        return new DynamicGroupRebuild
+        {
+            Evaluation = evaluation, Changes = changes, AppliedAdds = adds, AppliedRemoves = removes, Skipped = skipped, Failed = failed,
+        };
+    }
+
+    /// <summary>The objectGUID of one object by DN, for the catalog's settlement; null when the read fails (the change still goes by DN).</summary>
+    private static string? ReadObjectGuid(LdapConnection connection, string dn)
+    {
+        try
+        {
+            var response = (SearchResponse)connection.SendRequest(new SearchRequest(dn, "(objectClass=*)", SearchScope.Base, new[] { "objectGUID" }));
+            if (response.Entries.Count == 0 || !response.Entries[0].Attributes.Contains("objectGUID")) return null;
+            var raw = response.Entries[0].Attributes["objectGUID"].GetValues(typeof(byte[]));
+            return raw.Length > 0 && raw[0] is byte[] bytes && bytes.Length == 16 ? new Guid(bytes).ToString() : null;
+        }
+        catch (DirectoryOperationException) { return null; }
     }
 
     private DynamicGroupEvaluation Evaluate(LdapConnection connection, Guid groupGuid, CancellationToken ct)

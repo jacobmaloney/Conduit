@@ -48,6 +48,7 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     private const string CommandCreateAdAccount = "CreateAdAccount";
     private const string CommandBrowseContainers = "BrowseContainers";
     private const string CommandEvaluateDynamicGroup = "EvaluateDynamicGroup";
+    private const string CommandRebuildDynamicGroup = "RebuildDynamicGroup";
     private const string SqlDiscoverySystemType = "SqlDiscovery";
 
     private static readonly string[] DefaultCapabilities = { "AdIdentitySync", "SqlDiscovery", "AdDynamicGroups" };
@@ -448,7 +449,11 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         }
         else if (string.Equals(command.CommandType, CommandEvaluateDynamicGroup, StringComparison.OrdinalIgnoreCase))
         {
-            (success, message, resultJson) = await EvaluateDynamicGroupAsync(command.Id, command.PayloadJson, ct);
+            (success, message, resultJson) = await DynamicGroupAsync(command.Id, command.PayloadJson, CommandEvaluateDynamicGroup, ct);
+        }
+        else if (string.Equals(command.CommandType, CommandRebuildDynamicGroup, StringComparison.OrdinalIgnoreCase))
+        {
+            (success, message, resultJson) = await DynamicGroupAsync(command.Id, command.PayloadJson, CommandRebuildDynamicGroup, ct);
         }
         else
         {
@@ -468,14 +473,15 @@ public sealed class IcAgentCommandPollerService : BackgroundService
     }
 
     /// <summary>
-    /// DYNAMIC-GROUPS-01 (UC034): thin shim; the parse, the tenant resolution and the read-only evaluation live in
-    /// AdAgentDynamicGroupExecutor, resolved from a per-command DI scope.
+    /// DYNAMIC-GROUPS-01/-03 (UC034): thin shim; the parse, the tenant resolution, the read-only evaluation and the
+    /// rebuild live in AdAgentDynamicGroupExecutor, resolved from a per-command DI scope. The command type names the
+    /// operation the payload must carry.
     /// </summary>
-    private async Task<(bool Success, string Message, string? ResultJson)> EvaluateDynamicGroupAsync(Guid commandId, string? payloadJson, CancellationToken ct)
+    private async Task<(bool Success, string Message, string? ResultJson)> DynamicGroupAsync(Guid commandId, string? payloadJson, string operation, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentDynamicGroupExecutor>();
-        return await executor.ExecuteAsync(commandId, payloadJson, ct);
+        return await executor.ExecuteAsync(commandId, payloadJson, ct, operation);
     }
 
     /// <summary>

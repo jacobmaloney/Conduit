@@ -10,6 +10,11 @@ All notable changes to Conduit. Format roughly follows [Keep a Changelog](https:
 - `AdAgentDynamicGroupExecutor`: the `EvaluateDynamicGroup` agent command, read-only, same gates as BrowseContainers; the poller dispatches it; the agent advertises `AdDynamicGroups`.
 - Tests: `DynamicGroupRulesTests`, `AdAgentDynamicGroupExecutorTests`.
 
+### Added — dynamic groups, the rebuild (DYNAMIC-GROUPS-03, IdentityCenter UC034)
+- `ActiveDirectorySink.ModifyMember`: the one delta change of a member on a group on an open connection (Add/Delete on `member`, idempotent on "already so"); `AddGroupMemberAsync`/`RemoveGroupMemberAsync` resolve by GUID and call it.
+- `ActiveDirectoryDynamicGroupEvaluator.RebuildAsync`: evaluates, then writes each add and remove through `ModifyMember` on the same connection, reading each member's objectGUID first; refuses the whole rebuild on a static group, an unevaluated rule or a capped search; reports every change's outcome.
+- `AdAgentDynamicGroupExecutor` runs `RebuildDynamicGroup` too: the payload's operation must match the command; the target must be a group and never a privileged group (`AdAgentWriteExecutor.IsPrivilegedGroup`, now internal). The poller dispatches it.
+
 ### Changed — agent attribute allow-list (ALLOW-LIST-02, IdentityCenter UC015-D06 / UC017-F06)
 - `AdAgentWriteExecutor` SetAttributes now also writes `employeeID`, `employeeType`, `employeeNumber`, `accountExpires`, `homeDirectory`, `homeDrive` and `extensionAttribute1`-`15` (22 -> 43 names). `userAccountControl` stays out: Enable/Disable are their own operations.
 - New `AdAttributeValueShaper`: the one place a sent value takes the shape AD stores. `accountExpires` accepts a date (`yyyy-MM-dd` = end of that day, DC-local, as ADUC stores it), an ISO 8601 date-time, a FILETIME, `0` or `never`; anything else refuses the whole command before any LDAP call. Used by SetAttributes and by the create executor's attribute bag.
