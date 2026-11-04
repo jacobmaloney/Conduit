@@ -25,6 +25,8 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
     private const int MaxPayloadBytes = 64 * 1024;
     /// <summary>Cap on the names listed per list in the result (current, desired, adds, removes); the counts stay exact.</summary>
     public const int MaxListed = 2000;
+    /// <summary>The largest ResultJson the agent sends, in UTF-8 bytes. IdentityCenter refuses a completion whose structured result exceeds 64 KB (HTTP 400) and nothing re-offers the command, so every list is shrunk by halves until the whole result fits under this with room for the envelope; the counts beside the lists stay exact.</summary>
+    public const int MaxResultBytes = 56 * 1024;
     public const string OpEvaluate = "EvaluateDynamicGroup";
     public const string OpRebuild = "RebuildDynamicGroup";
     public const string OpSetRules = "SetDynamicGroupRules";
@@ -167,10 +169,9 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
         _ => DescribeRebuild(r),
     };
 
-    /// <summary>The write's ResultJson: every change with its outcome and the member's objectGUID (for the catalog's settlement), the counts, the evaluation's counts; for a rules write, how many rules and whether it converted.</summary>
-    public static string BuildRebuildResultJson(DynamicGroupRebuild r, string operation = OpRebuild)
-    {
-        return JsonSerializer.Serialize(new
+    /// <summary>The write's ResultJson: every change with its outcome and the member's objectGUID (for the catalog's settlement), the counts, the evaluation's counts; for a rules write, how many rules and whether it converted. The change list is shrunk under <see cref="MaxResultBytes"/> and says so (<c>changesTruncated</c>, with <c>changeCount</c> exact).</summary>
+    public static string BuildRebuildResultJson(DynamicGroupRebuild r, string operation = OpRebuild) =>
+        FitUnderWireCap(listed => JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
             operation,
@@ -178,7 +179,7 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             converted = r.Converted,
             groupDn = r.Evaluation.GroupDistinguishedName,
             groupName = r.Evaluation.GroupName,
-            changes = r.Changes.Select(c => new
+            changes = r.Changes.Take(listed).Select(c => new
             {
                 operation = c.Operation,
                 dn = c.DistinguishedName,
@@ -192,8 +193,9 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             failed = r.Failed,
             currentCount = r.Evaluation.CurrentMembers.Count,
             desiredCount = r.Evaluation.DesiredMembers.Count,
-        });
-    }
+            changeCount = r.Changes.Count,
+            changesTruncated = r.Changes.Count > listed,
+        }));
 
     /// <summary>One sentence for the command's completion message; counts, never names.</summary>
     public static string Describe(DynamicGroupEvaluation e)
@@ -206,10 +208,9 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
         return $"'{e.GroupName}': {e.Rules.Count} rule(s); {e.CurrentMembers.Count} current, {e.DesiredMembers.Count} desired; +{e.Adds.Count} / -{e.Removes.Count}.{errors}{note}";
     }
 
-    /// <summary>The ResultJson: the rules as resolved and the four name lists, each capped at <see cref="MaxListed"/> with its exact count beside it.</summary>
-    public static string BuildResultJson(DynamicGroupEvaluation e)
-    {
-        return JsonSerializer.Serialize(new
+    /// <summary>The ResultJson: the rules as resolved and the four name lists, each capped at <see cref="MaxListed"/> and shrunk until the whole result is under <see cref="MaxResultBytes"/>, with its exact count beside it.</summary>
+    public static string BuildResultJson(DynamicGroupEvaluation e) =>
+        FitUnderWireCap(listed => JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
             groupDn = e.GroupDistinguishedName,
@@ -231,13 +232,24 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             desiredCount = e.DesiredMembers.Count,
             addCount = e.Adds.Count,
             removeCount = e.Removes.Count,
-            current = e.CurrentMembers.Take(MaxListed).ToList(),
-            desired = e.DesiredMembers.Take(MaxListed).ToList(),
-            adds = e.Adds.Take(MaxListed).ToList(),
-            removes = e.Removes.Take(MaxListed).ToList(),
-            listsTruncated = e.CurrentMembers.Count > MaxListed || e.DesiredMembers.Count > MaxListed || e.Adds.Count > MaxListed || e.Removes.Count > MaxListed,
+            current = e.CurrentMembers.Take(listed).ToList(),
+            desired = e.DesiredMembers.Take(listed).ToList(),
+            adds = e.Adds.Take(listed).ToList(),
+            removes = e.Removes.Take(listed).ToList(),
+            listsTruncated = e.CurrentMembers.Count > listed || e.DesiredMembers.Count > listed || e.Adds.Count > listed || e.Removes.Count > listed,
             searchTruncated = e.Truncated,
-        });
+        }));
+
+    /// <summary>Serialize through <paramref name="build"/> with <see cref="MaxListed"/> entries per list, halving that count until the UTF-8 size is at most <see cref="MaxResultBytes"/>; an empty list always fits, so this always returns.</summary>
+    public static string FitUnderWireCap(Func<int, string> build)
+    {
+        var listed = MaxListed;
+        while (true)
+        {
+            var json = build(listed);
+            if (listed == 0 || Encoding.UTF8.GetByteCount(json) <= MaxResultBytes) return json;
+            listed /= 2;
+        }
     }
 
     // ── The clock's view (IDynamicGroupClockWork): the same evaluator, the same guard, no payload ──────────────

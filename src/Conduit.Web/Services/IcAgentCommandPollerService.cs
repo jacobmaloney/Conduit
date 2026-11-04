@@ -476,10 +476,28 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         var completeBody = resultJson is null
             ? JsonSerializer.Serialize(new { success, message })
             : JsonSerializer.Serialize(new { success, message, resultJson });
-        if (!await PostAsync(client, $"{baseUrl}/api/agent/commands/{command.Id}/complete", completeBody, ct))
-            _logger.LogDebug("IC agent command {Id}: complete callback failed (run outcome: {Success} — {Message}).", command.Id, success, message);
-        else
+        var completeUrl = $"{baseUrl}/api/agent/commands/{command.Id}/complete";
+        var (status, reason) = await PostForStatusAsync(client, completeUrl, completeBody, ct);
+        if (status is >= 200 and < 300)
+        {
             _logger.LogInformation("IC agent command {Id} ({Type}) completed: {Success} — {Message}", command.Id, command.CommandType, success, message);
+            return;
+        }
+
+        // A refused completion leaves the command Acked in IdentityCenter for good: nothing re-offers a claimed
+        // command and the portal waits on it until its own timeout. Say so at Warning with the server's reason.
+        // When the refusal is about the structured result (HTTP 400: the server bounds it), report the outcome
+        // once more without it, so the command at least reaches Completed or Failed with its message.
+        _logger.LogWarning("IC agent command {Id} ({Type}): complete callback refused (HTTP {Status}: {Reason}); run outcome {Success} — {Message}",
+            command.Id, command.CommandType, status, reason, success, message);
+        if (status == 400 && resultJson is not null)
+        {
+            var (retryStatus, retryReason) = await PostForStatusAsync(client, completeUrl, JsonSerializer.Serialize(new { success, message }), ct);
+            if (retryStatus is >= 200 and < 300)
+                _logger.LogWarning("IC agent command {Id}: completed without its structured result; the portal shows the message only.", command.Id);
+            else
+                _logger.LogWarning("IC agent command {Id}: the retry without the structured result was refused too (HTTP {Status}: {Reason}).", command.Id, retryStatus, retryReason);
+        }
     }
 
     /// <summary>
@@ -614,6 +632,25 @@ public sealed class IcAgentCommandPollerService : BackgroundService
         var executor = scope.ServiceProvider.GetRequiredService<Conduit.Web.Services.AdAgentBrowseExecutor>();
         return await executor.ExecuteAsync(commandId, payloadJson, ct);
     }
+
+    /// <summary>Like <see cref="PostAsync"/> but says why: the status code (0 when no answer came back) and up to 300 characters of the response body, or the exception's message. The body is the server's reason, never the command's payload.</summary>
+    private async Task<(int Status, string Reason)> PostForStatusAsync(HttpClient client, string url, string jsonBody, CancellationToken ct)
+    {
+        try
+        {
+            using var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            using var resp = await client.PostAsync(url, content, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return ((int)resp.StatusCode, Clip(body));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return (0, Clip(ex.Message));
+        }
+    }
+
+    private static string Clip(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? "" : text.Length <= 300 ? text.Trim() : text[..300].Trim() + "…";
 
     private async Task<bool> PostAsync(HttpClient client, string url, string? jsonBody, CancellationToken ct)
     {

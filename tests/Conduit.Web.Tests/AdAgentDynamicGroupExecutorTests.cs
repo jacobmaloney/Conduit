@@ -331,9 +331,63 @@ public class AdAgentDynamicGroupExecutorTests
         using var doc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildResultJson(Evaluation(AdAgentDynamicGroupExecutor.MaxListed + 5)));
         var root = doc.RootElement;
         Assert.Equal(AdAgentDynamicGroupExecutor.MaxListed + 5, root.GetProperty("currentCount").GetInt32());
-        Assert.Equal(AdAgentDynamicGroupExecutor.MaxListed, root.GetProperty("current").GetArrayLength());
+        Assert.InRange(root.GetProperty("current").GetArrayLength(), 1, AdAgentDynamicGroupExecutor.MaxListed);   // at most MaxListed, and fewer when the bytes say so (DYNAMIC-GROUPS-08)
         Assert.True(root.GetProperty("listsTruncated").GetBoolean());
     }
+
+    // DYNAMIC-GROUPS-08: IdentityCenter refuses a structured result over 64 KB, and a refused completion left the
+    // command Acked for good (the lab's 217-member group, 2026-11-04). The result is sized by bytes, not entries.
+    [Fact]
+    public void The_result_fits_under_the_wire_cap_by_bytes_and_the_counts_stay_exact()
+    {
+        var e = Evaluation(AdAgentDynamicGroupExecutor.MaxListed);   // four lists of 2,000 names: well over the cap at MaxListed
+        var json = AdAgentDynamicGroupExecutor.BuildResultJson(e);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(json) <= AdAgentDynamicGroupExecutor.MaxResultBytes, "the result exceeds the wire cap");
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(AdAgentDynamicGroupExecutor.MaxListed, root.GetProperty("currentCount").GetInt32());
+        Assert.Equal(AdAgentDynamicGroupExecutor.MaxListed, root.GetProperty("desiredCount").GetInt32());
+        Assert.InRange(root.GetProperty("current").GetArrayLength(), 1, AdAgentDynamicGroupExecutor.MaxListed - 1);
+        Assert.True(root.GetProperty("listsTruncated").GetBoolean());
+    }
+
+    [Fact]
+    public void A_large_rebuilds_change_list_fits_under_the_wire_cap_and_says_so()
+    {
+        var changes = Enumerable.Range(0, 3000).Select(i => new DynamicGroupChange
+        {
+            Operation = "Add",
+            DistinguishedName = $"CN=Member {i} with a long common name,OU=Somewhere,OU=Organization,DC=Domain,DC=Local",
+            ObjectGuid = System.Guid.NewGuid().ToString(),
+            Outcome = "Applied",
+        }).ToList();
+        var big = new DynamicGroupRebuild { Evaluation = Evaluation(), Changes = changes, AppliedAdds = changes.Count };
+        var json = AdAgentDynamicGroupExecutor.BuildRebuildResultJson(big);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(json) <= AdAgentDynamicGroupExecutor.MaxResultBytes, "the rebuild result exceeds the wire cap");
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(3000, root.GetProperty("changeCount").GetInt32());
+        Assert.Equal(3000, root.GetProperty("appliedAdds").GetInt32());
+        Assert.InRange(root.GetProperty("changes").GetArrayLength(), 1, 2999);
+        Assert.True(root.GetProperty("changesTruncated").GetBoolean());
+
+        var small = new DynamicGroupRebuild { Evaluation = Evaluation(), Changes = changes.Take(3).ToList(), AppliedAdds = 3 };
+        using var smallDoc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildRebuildResultJson(small));
+        Assert.Equal(3, smallDoc.RootElement.GetProperty("changes").GetArrayLength());
+        Assert.False(smallDoc.RootElement.GetProperty("changesTruncated").GetBoolean());
+    }
+
+    [Fact]
+    public void A_refused_completion_is_said_at_warning_and_reported_again_without_the_structured_result()
+    {
+        var poller = File.ReadAllText(Path.Combine(TestsDirectory(), "..", "..", "src", "Conduit.Web", "Services", "IcAgentCommandPollerService.cs"));
+        Assert.Contains("complete callback refused (HTTP {Status}: {Reason})", poller);
+        Assert.Contains("if (status == 400 && resultJson is not null)", poller);
+        Assert.Contains("JsonSerializer.Serialize(new { success, message }), ct);", poller);
+        Assert.DoesNotContain("complete callback failed (run outcome", poller);
+    }
+
+    private static string TestsDirectory([System.Runtime.CompilerServices.CallerFilePath] string file = "") => Path.GetDirectoryName(file)!;
 
     [Fact]
     public void The_message_counts_and_never_names()
