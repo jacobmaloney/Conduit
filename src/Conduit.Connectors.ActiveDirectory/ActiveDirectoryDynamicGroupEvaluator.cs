@@ -403,7 +403,7 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
     {
         try
         {
-            var group = ReadByGuid(connection, groupGuid, new[] { "distinguishedName", "name", "objectClass", DynamicGroupRules.AttributeName });
+            var group = ReadByGuid(connection, groupGuid, new[] { "distinguishedName", "name", "objectClass", "groupType", DynamicGroupRules.AttributeName });
             if (group is null)
                 return DynamicGroupEvaluation.Fail(string.Concat("objectGuid ", groupGuid, " resolved to no directory object."));
             var groupDn = group.DistinguishedName;
@@ -484,13 +484,29 @@ public sealed class ActiveDirectoryDynamicGroupEvaluator : IConnectorDynamicGrou
             }
 
             var desired = DynamicGroupRules.Decide(evaluations, groupDn);
+            // MEMBERSHIP-RULES-01 (UC034-F12): the directory refuses a universal or domain-local group as a member of a
+            // global group, and a domain-local one in a universal group; the console's preview leaves them out and so
+            // does this decision, rather than a rebuild failing them one by one (63 of them on the lab's dynamo_#2).
+            var ineligibleCount = 0;
+            var groupType = int.TryParse(FirstString(group, "groupType"), out var parsedType) ? parsedType : 0;
+            if (desired.Count > 0 && DynamicGroupRules.IneligibleMembersFilter(groupType) is { } ineligibleFilter)
+            {
+                var (ineligible, _) = Search(connection, ActiveDirectorySink.ReadDefaultNamingContext(connection) ?? groupDn, ineligibleFilter, ct);
+                if (ineligible.Count > 0)
+                {
+                    var refused = new HashSet<string>(ineligible, StringComparer.OrdinalIgnoreCase);
+                    var kept = desired.Where(dn => !refused.Contains(dn)).ToList();
+                    ineligibleCount = desired.Count - kept.Count;
+                    desired = kept;
+                }
+            }
             var delta = DynamicGroupRules.Diff(desired, current, retained);
             return new DynamicGroupEvaluation
             {
                 GroupDistinguishedName = groupDn, GroupName = name, IsDynamic = true,
                 OriginatingService = definition.OriginatingService?.ToString(),
                 Rules = reports, CurrentMembers = current, DesiredMembers = delta.Desired, Adds = delta.Adds, Removes = delta.Removes,
-                Truncated = truncated,
+                Truncated = truncated, Ineligible = ineligibleCount,
             };
         }
         catch (OperationCanceledException) { throw; }

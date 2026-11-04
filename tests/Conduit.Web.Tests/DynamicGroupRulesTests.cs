@@ -221,6 +221,18 @@ public class DynamicGroupRulesTests
         if (reason is not null) Assert.Contains(reason, why);
     }
 
+    // MEMBERSHIP-RULES-01 (UC034-F12): the members a group of each scope cannot hold.
+    [Theory]
+    [InlineData(-2147483646, "(&(objectClass=group)(|(groupType:1.2.840.113556.1.4.803:=4)(groupType:1.2.840.113556.1.4.803:=8)))")]   // global security
+    [InlineData(2, "(&(objectClass=group)(|(groupType:1.2.840.113556.1.4.803:=4)(groupType:1.2.840.113556.1.4.803:=8)))")]              // global distribution
+    [InlineData(-2147483640, "(&(objectClass=group)(groupType:1.2.840.113556.1.4.803:=4))")]                                            // universal security
+    [InlineData(-2147483644, null)]                                                                                                       // domain local security holds any
+    [InlineData(0, null)]
+    public void A_global_group_cannot_hold_a_universal_or_domain_local_group_and_a_universal_one_no_domain_local(int groupType, string? filter)
+    {
+        Assert.Equal(filter, DynamicGroupRules.IneligibleMembersFilter(groupType));
+    }
+
     // MEMBERSHIP-RULES-01 (UC034-F13): Retain Deprovisioned keeps a current member in place, whatever the other rules say.
     [Fact]
     public void Retain_keeps_a_deprovisioned_current_member_and_never_adds_one_that_is_not_a_member()

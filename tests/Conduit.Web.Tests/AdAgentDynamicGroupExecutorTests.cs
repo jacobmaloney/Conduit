@@ -162,11 +162,14 @@ public class AdAgentDynamicGroupExecutorTests
         Assert.Equal("dynamo", root.GetProperty("groupName").GetString());
         var changes = root.GetProperty("changes");
         Assert.Equal(3, changes.GetArrayLength());
-        Assert.Equal("Add", changes[0].GetProperty("operation").GetString());
-        Assert.Equal(GroupGuid, changes[0].GetProperty("objectGuid").GetString());
-        Assert.Equal("Applied", changes[0].GetProperty("outcome").GetString());
-        Assert.Equal(JsonValueKind.Null, changes[1].GetProperty("objectGuid").ValueKind);
-        Assert.Equal("The object does not exist.", changes[1].GetProperty("error").GetString());
+        // The changes that did not apply come first (MEMBERSHIP-RULES-01), the applied ones after, each with its outcome and guid.
+        Assert.Equal("Failed", changes[0].GetProperty("outcome").GetString());
+        Assert.Equal(JsonValueKind.Null, changes[0].GetProperty("objectGuid").ValueKind);
+        Assert.Equal("The object does not exist.", changes[0].GetProperty("error").GetString());
+        Assert.Equal("Skipped", changes[1].GetProperty("outcome").GetString());
+        Assert.Equal("Add", changes[2].GetProperty("operation").GetString());
+        Assert.Equal(GroupGuid, changes[2].GetProperty("objectGuid").GetString());
+        Assert.Equal("Applied", changes[2].GetProperty("outcome").GetString());
         Assert.Equal(1, root.GetProperty("appliedAdds").GetInt32());
         Assert.Equal(1, root.GetProperty("failed").GetInt32());
         Assert.Equal(3, root.GetProperty("desiredCount").GetInt32());
@@ -323,6 +326,13 @@ public class AdAgentDynamicGroupExecutorTests
         Assert.Equal(3, root.GetProperty("removes").GetArrayLength());
         Assert.False(root.GetProperty("listsTruncated").GetBoolean());
         Assert.False(root.GetProperty("searchTruncated").GetBoolean());
+        Assert.Equal(0, root.GetProperty("ineligibleCount").GetInt32());
+
+        // MEMBERSHIP-RULES-01 (UC034-F12): what the group cannot hold is counted and said.
+        var left = new DynamicGroupEvaluation { GroupName = "dynamo", IsDynamic = true, Ineligible = 63, Rules = Evaluation().Rules, CurrentMembers = Evaluation().CurrentMembers, DesiredMembers = Evaluation().DesiredMembers };
+        Assert.EndsWith(" 63 object(s) the group cannot hold were left out.", AdAgentDynamicGroupExecutor.Describe(left));
+        using var leftDoc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildResultJson(left));
+        Assert.Equal(63, leftDoc.RootElement.GetProperty("ineligibleCount").GetInt32());
     }
 
     [Fact]
@@ -370,6 +380,14 @@ public class AdAgentDynamicGroupExecutorTests
         Assert.Equal(3000, root.GetProperty("appliedAdds").GetInt32());
         Assert.InRange(root.GetProperty("changes").GetArrayLength(), 1, 2999);
         Assert.True(root.GetProperty("changesTruncated").GetBoolean());
+
+        // The failures come first, so a shrunk list still carries every reason (the lab's rebuild lost 63 of them to the cap).
+        var mixed = changes.Take(2990).Concat(Enumerable.Range(0, 10).Select(i => new DynamicGroupChange { Operation = "Add", DistinguishedName = $"CN=Universal {i},OU=Groups,DC=Domain,DC=Local", Outcome = "Failed", Error = "A global group cannot have a universal group as a member." })).ToList();
+        using var mixedDoc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildRebuildResultJson(new DynamicGroupRebuild { Evaluation = Evaluation(), Changes = mixed, AppliedAdds = 2990, Failed = 10 }));
+        var listed = mixedDoc.RootElement.GetProperty("changes").EnumerateArray().ToList();
+        Assert.True(listed.Count < 3000);
+        Assert.Equal(10, listed.Count(c => c.GetProperty("outcome").GetString() == "Failed"));
+        Assert.All(listed.Take(10), c => Assert.Equal("Failed", c.GetProperty("outcome").GetString()));
 
         var small = new DynamicGroupRebuild { Evaluation = Evaluation(), Changes = changes.Take(3).ToList(), AppliedAdds = 3 };
         using var smallDoc = JsonDocument.Parse(AdAgentDynamicGroupExecutor.BuildRebuildResultJson(small));

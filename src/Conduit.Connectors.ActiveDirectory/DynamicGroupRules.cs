@@ -75,6 +75,23 @@ public static class DynamicGroupRules
         _ => 0,
     };
 
+    /// <summary>
+    /// MEMBERSHIP-RULES-01 (UC034-F12): the group objects the directory refuses as members of a group of this
+    /// <paramref name="groupType"/>, as an LDAP filter: a global group holds no universal and no domain-local group, a
+    /// universal group no domain-local group; a domain-local group holds any. Null when nothing is refused by scope.
+    /// The console's preview leaves these out; so does the decision, rather than failing them one by one on a rebuild.
+    /// </summary>
+    public static string? IneligibleMembersFilter(int groupType)
+    {
+        const int global = 2, domainLocal = 4, universal = 8;
+        if ((groupType & global) != 0)
+            return "(&(objectClass=group)(|(groupType:1.2.840.113556.1.4.803:=4)(groupType:1.2.840.113556.1.4.803:=8)))";
+        if ((groupType & universal) != 0)
+            return "(&(objectClass=group)(groupType:1.2.840.113556.1.4.803:=4))";
+        _ = domainLocal;
+        return null;
+    }
+
     /// <summary>The wizard's name for a type ("Include by Query"), for a report.</summary>
     public static string Describe(DynamicGroupRuleType type) => type switch
     {

@@ -275,6 +275,8 @@ public sealed class DynamicGroupEvaluation
     public IReadOnlyList<string> Removes { get; init; } = Array.Empty<string>();
     /// <summary>True when a rule's search was capped; the difference is then a lower bound.</summary>
     public bool Truncated { get; init; }
+    /// <summary>MEMBERSHIP-RULES-01 (UC034-F12): how many objects the rules matched that this group cannot hold (a universal group in a global one); left out of the desired set.</summary>
+    public int Ineligible { get; init; }
     /// <summary>Non-null when the evaluation failed (no group, no connection, rules that do not parse).</summary>
     public string? ErrorMessage { get; init; }
 

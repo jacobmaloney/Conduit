@@ -240,7 +240,8 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             converted = r.Converted,
             groupDn = r.Evaluation.GroupDistinguishedName,
             groupName = r.Evaluation.GroupName,
-            changes = r.Changes.Take(listed).Select(c => new
+            // The changes that did not apply come first: when the list is shrunk to fit the wire, the failures are what the catalog and a person need.
+            changes = r.Changes.OrderBy(c => string.Equals(c.Outcome, "Applied", StringComparison.OrdinalIgnoreCase) ? 1 : 0).Take(listed).Select(c => new
             {
                 operation = c.Operation,
                 dn = c.DistinguishedName,
@@ -265,8 +266,9 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             return $"'{e.GroupName}' carries no membership rules (a static group with {e.CurrentMembers.Count} member(s)).";
         var failed = e.Rules.Count(r => r.Error is not null);
         var note = e.Truncated ? " A rule's search was capped; the difference is a lower bound." : "";
+        var left = e.Ineligible > 0 ? string.Concat(" ", e.Ineligible.ToString("N0"), " object(s) the group cannot hold were left out.") : "";
         var errors = failed > 0 ? $" {failed} rule(s) could not be evaluated." : "";
-        return $"'{e.GroupName}': {e.Rules.Count} rule(s); {e.CurrentMembers.Count} current, {e.DesiredMembers.Count} desired; +{e.Adds.Count} / -{e.Removes.Count}.{errors}{note}";
+        return $"'{e.GroupName}': {e.Rules.Count} rule(s); {e.CurrentMembers.Count} current, {e.DesiredMembers.Count} desired; +{e.Adds.Count} / -{e.Removes.Count}.{errors}{note}{left}";
     }
 
     /// <summary>The ResultJson: the rules as resolved and the four name lists, each capped at <see cref="MaxListed"/> and shrunk until the whole result is under <see cref="MaxResultBytes"/>, with its exact count beside it.</summary>
@@ -299,6 +301,7 @@ public sealed class AdAgentDynamicGroupExecutor : IDynamicGroupClockWork
             removes = e.Removes.Take(listed).ToList(),
             listsTruncated = e.CurrentMembers.Count > listed || e.DesiredMembers.Count > listed || e.Adds.Count > listed || e.Removes.Count > listed,
             searchTruncated = e.Truncated,
+            ineligibleCount = e.Ineligible,
         }));
 
     /// <summary>Serialize through <paramref name="build"/> with <see cref="MaxListed"/> entries per list, halving that count until the UTF-8 size is at most <see cref="MaxResultBytes"/>; an empty list always fits, so this always returns.</summary>
