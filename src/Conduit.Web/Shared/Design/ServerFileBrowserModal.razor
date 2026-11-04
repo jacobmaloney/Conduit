@@ -1,0 +1,91 @@
+@*
+    ServerFileBrowserModal — Conduit's product adapter over the shared BrandFileBrowserDialog.
+
+    CSV-FILE-PICKER-01 (Jacob, 2026-11-04: "needed a way to browse the file system and choose the csv file").
+    A connector field that names a file the job server reads (CredentialFieldSpec.BrowseServerFileExtensions)
+    gets a Browse button; this lists the CONDUIT HOST's own disk through ServerFileBrowser, because that is the
+    machine that opens the file, not the browser's PC. Only a signed-in Admin is listed anything. The shared
+    dialog owns the shell, the path box, Up and Drives, the rows, the states and the pick.
+
+    Usage:
+      <ServerFileBrowserModal @ref="fileBrowser" />
+      await fileBrowser.ShowAsync(field.Label, field.BrowseServerFileExtensions, currentValue, path => Set(path));
+*@
+
+@using IdentityCenter.Brand.Models
+@using IdentityCenter.Brand.Components.Modals
+@inject Conduit.Web.Services.ServerFileBrowser Browser
+@inject AuthenticationStateProvider AuthState
+
+<BrandFileBrowserDialog Visible="@isVisible"
+                        Id="server-file-browser"
+                        StackLevel="1"
+                        Title="@title"
+                        Hint="@hint"
+                        TopLabel="Drives on the job server"
+                        EmptyText="No sub-folders or matching files here."
+                        StartPath="@startPath"
+                        SelectedPath="@selectedPath"
+                        Load="LoadAsync"
+                        OnPick="PickAsync"
+                        OnClose="Close" />
+
+@code {
+    private bool isVisible;
+    private string title = "Pick a file on the job server";
+    private string? hint;
+    private string? startPath;
+    private string? selectedPath;
+    private IReadOnlyList<string> extensions = Array.Empty<string>();
+    private Func<string, Task>? onPicked;
+
+    /// <summary>Opens the dialog for one field: its label, the extensions it accepts, its current value, and where a pick goes.</summary>
+    public Task ShowAsync(string fieldLabel, IReadOnlyList<string> acceptedExtensions, string? currentValue, Func<string, Task> picked)
+    {
+        extensions = acceptedExtensions;
+        onPicked = picked;
+        title = string.Concat("Pick the ", string.IsNullOrWhiteSpace(fieldLabel) ? "file" : fieldLabel.ToLowerInvariant(), " on the job server");
+        hint = string.Concat("This is the disk of the machine Conduit runs on (", Environment.MachineName, "), which reads the file. Showing folders and ",
+            acceptedExtensions.Count == 0 ? "every file" : string.Join(", ", acceptedExtensions) + " files", ".");
+        selectedPath = string.IsNullOrWhiteSpace(currentValue) ? null : currentValue.Trim();
+        startPath = Conduit.Web.Services.ServerFileBrowser.StartFolderFor(currentValue);
+        isVisible = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task<BrandFileFolder> LoadAsync(string? path)
+    {
+        var user = (await AuthState.GetAuthenticationStateAsync()).User;
+        if (user.Identity?.IsAuthenticated != true || !user.IsInRole("Admin"))
+            return new BrandFileFolder(path, null, Array.Empty<BrandFileEntry>(), false, "Only a signed-in Conduit administrator can browse the job server's disk.");
+
+        var listing = await Task.Run(() => Browser.List(path, extensions));
+        var rows = listing.Entries
+            .Select(e => new BrandFileEntry(e.Name, e.FullPath, e.IsFolder, e.IsFolder ? null : Describe(e), e.NoAccess))
+            .ToList();
+        return new BrandFileFolder(listing.Path, listing.Parent, rows, listing.Capped, listing.Error);
+    }
+
+    /// <summary>A file row's second line: its size and when it last changed (job server time).</summary>
+    private static string? Describe(Conduit.Web.Services.ServerFileEntry entry)
+    {
+        if (entry.NoAccess) return null;
+        var size = entry.Size is long bytes
+            ? bytes >= 1024 * 1024 ? (bytes / (1024d * 1024d)).ToString("0.0") + " MB" : bytes >= 1024 ? (bytes / 1024d).ToString("0.0") + " KB" : bytes + " bytes"
+            : null;
+        var when = entry.ModifiedUtc is DateTime utc ? utc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : null;
+        return string.Join(" · ", new[] { size, when }.Where(s => !string.IsNullOrEmpty(s)));
+    }
+
+    private async Task PickAsync(string path)
+    {
+        if (onPicked is not null) await onPicked(path);
+    }
+
+    private void Close()
+    {
+        isVisible = false;
+        onPicked = null;
+    }
+}

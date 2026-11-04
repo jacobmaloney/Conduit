@@ -795,6 +795,26 @@
                                             }
                                         </select>
                                     }
+                                    else if (field.BrowseServerFileExtensions.Count > 0)
+                                    {
+                                        @* CSV-FILE-PICKER-01: the file is on the job server, so Browse lists ITS disk. *@
+                                        var browseTypeName = ctype.Name;
+                                        var browseField = field;
+                                        var browseDefault = textDefault;
+                                        <div class="icb-form-input-group">
+                                            <input id="@fieldId" class="icb-form-input"
+                                                   type="text"
+                                                   autocomplete="off"
+                                                   placeholder="@field.Placeholder"
+                                                   @bind:get="GetCreateString(ctype.Name, field.Key, textDefault)"
+                                                   @bind:set="@(value => SetCreateString(ctype.Name, field.Key, value ?? string.Empty))"
+                                                   @bind:event="oninput" />
+                                            <button class="ic-btn ic-btn-ghost" type="button" title="Browse the job server's disk"
+                                                    @onclick="() => BrowseCreateFileAsync(browseTypeName, browseField, browseDefault)">
+                                                <i class="fas fa-folder-open me-1" aria-hidden="true"></i>Browse
+                                            </button>
+                                        </div>
+                                    }
                                     else
                                     {
                                         <input id="@fieldId" class="icb-form-input"
@@ -1374,6 +1394,25 @@
                                     }
                                 </select>
                             }
+                            else if (field.BrowseServerFileExtensions.Count > 0 && !field.IsSecret)
+                            {
+                                @* CSV-FILE-PICKER-01: the file is on the job server, so Browse lists ITS disk. *@
+                                var browseGenericField = field;
+                                var browseGenericDefault = genericTextDefault;
+                                <div class="icb-form-input-group">
+                                    <input id="@genericFieldId" class="icb-form-input"
+                                           type="text"
+                                           autocomplete="off"
+                                           placeholder="@field.Placeholder"
+                                           @bind:get="GetGenericString(field.Key, genericTextDefault)"
+                                           @bind:set="@(value => SetGenericString(field.Key, value ?? string.Empty))"
+                                           @bind:event="oninput" />
+                                    <button class="ic-btn ic-btn-ghost" type="button" title="Browse the job server's disk"
+                                            @onclick="() => BrowseGenericFileAsync(browseGenericField, browseGenericDefault)">
+                                        <i class="fas fa-folder-open me-1" aria-hidden="true"></i>Browse
+                                    </button>
+                                </div>
+                            }
                             else
                             {
                                 <input id="@genericFieldId" class="icb-form-input"
@@ -1748,8 +1787,25 @@
     <Conduit.Web.Shared.Design.SourceDataBrowser Selection="@sourceBrowse" OnClose="() => sourceBrowse = null" />
 }
 
+<ServerFileBrowserModal @ref="serverFileBrowser" />
+
 @code {
     private Conduit.SourceBrowsing.SourceBrowseSelection? sourceBrowse;
+
+    // CSV-FILE-PICKER-01 (Jacob, 2026-11-04: "needed a way to browse the file system and choose the csv file"):
+    // a field whose spec names BrowseServerFileExtensions opens the job server's disk; a pick writes the path
+    // through the field's own setter, so it invalidates a prior green test exactly as typing would.
+    private ServerFileBrowserModal? serverFileBrowser;
+
+    private Task BrowseCreateFileAsync(string credTypeName, CredentialFieldSpec field, string fallback) =>
+        serverFileBrowser is null ? Task.CompletedTask : serverFileBrowser.ShowAsync(field.Label, field.BrowseServerFileExtensions,
+            GetCreateString(credTypeName, field.Key, fallback),
+            path => { SetCreateString(credTypeName, field.Key, path); StateHasChanged(); return Task.CompletedTask; });
+
+    private Task BrowseGenericFileAsync(CredentialFieldSpec field, string fallback) =>
+        serverFileBrowser is null ? Task.CompletedTask : serverFileBrowser.ShowAsync(field.Label, field.BrowseServerFileExtensions,
+            GetGenericString(field.Key, fallback),
+            path => { SetGenericString(field.Key, path); StateHasChanged(); return Task.CompletedTask; });
     // No-arg nav helper so the History button's onclick carries no string
     // literal inside the Razor attribute (avoids the nested-quote SG gotcha).
     private void GoToSyncHistory() => Navigation.NavigateTo("/sync-history");

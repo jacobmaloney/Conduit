@@ -897,6 +897,15 @@ public sealed class CredentialFieldSpec
     /// /<see cref="IsMultiline"/> is set.
     /// </summary>
     public IReadOnlyList<string> AllowedValues { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// CSV-FILE-PICKER-01 (Jacob, 2026-11-04: "needed a way to browse the file system and choose the csv file"):
+    /// when non-empty, a Browse button beside this text field opens a dialog over the Conduit host's own disk,
+    /// where the job server reads the file, listing folders and only files with these extensions (".csv").
+    /// Picking a file writes its full path into the field. Empty = a plain text field. Any connector field
+    /// that names a file on the job server can opt in.
+    /// </summary>
+    public IReadOnlyList<string> BrowseServerFileExtensions { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>

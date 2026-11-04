@@ -35,7 +35,7 @@ public sealed class CsvAdapter : IConnectorAdapter
             Description = "Flat-file source. Path + delimiter + header flag + which column is the object id.",
             Fields = new[]
             {
-                new CredentialFieldSpec { Key = "FilePath", Label = "File Path", IsRequired = true, Placeholder = @"C:\path\to\users.csv" },
+                new CredentialFieldSpec { Key = "FilePath", Label = "File Path", IsRequired = true, Placeholder = @"C:\path\to\users.csv", BrowseServerFileExtensions = new[] { ".csv", ".txt" } },
                 new CredentialFieldSpec { Key = "Delimiter", Label = "Delimiter", Placeholder = ",", DefaultValue = "," },
                 new CredentialFieldSpec { Key = "HasHeader", Label = "First row is header", IsBoolean = true, DefaultValue = "true" },
                 new CredentialFieldSpec { Key = "IdColumn", Label = "ID Column (column to use as objectGuid)", Placeholder = "EmployeeId" },
