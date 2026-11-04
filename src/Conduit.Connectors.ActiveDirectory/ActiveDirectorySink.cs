@@ -589,6 +589,20 @@ public sealed class ActiveDirectorySink : IConnectorSink
     }
 
     /// <summary>
+    /// DYNAMIC-GROUPS-01 (UC034): a bound connection for a read-only reader that lives beside the sink (the dynamic
+    /// group evaluator), so that reader carries no fourth copy of the tenant, credential and bind path. The caller
+    /// disposes it.
+    /// </summary>
+    public async Task<LdapConnection> OpenConnectionAsync()
+    {
+        var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+            ?? throw new InvalidOperationException("Tenant not found.");
+        var creds = await ReadCredsAsync()
+            ?? throw new InvalidOperationException("No 'ldap' credential.");
+        return Bind(tenant.Domain, creds, out _);
+    }
+
+    /// <summary>
     /// Post-create read-back: read the objectGUID of a freshly-created object by its DN. Returns null
     /// on any failure — a failed read-back must NOT fail the create (the account already exists; the
     /// caller reports a degraded result and IC reconciles on the next sync). Never throws.

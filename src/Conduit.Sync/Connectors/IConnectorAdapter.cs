@@ -77,6 +77,12 @@ public interface IConnectorAdapter
     /// stored credentials and enumerates one level of containers at a time.
     /// </summary>
     IConnectorContainerBrowser? CreateContainerBrowser(Guid tenantId) => null;
+
+    /// <summary>
+    /// DYNAMIC-GROUPS-01 (UC034-D12): a read-only evaluator of a dynamic group's membership rules, for a connector
+    /// whose groups carry an Active Roles style rule list. Null when the connector has no such concept.
+    /// </summary>
+    IConnectorDynamicGroupEvaluator? CreateDynamicGroupEvaluator(Guid tenantId) => null;
 }
 
 /// <summary>
@@ -140,6 +146,58 @@ public sealed class DirectoryBrowseResult
         new() { Nodes = nodes, ResolvedBaseDn = resolvedBaseDn };
     public static DirectoryBrowseResult Fail(string message) =>
         new() { ErrorMessage = message };
+}
+
+/// <summary>
+/// DYNAMIC-GROUPS-01 (UC034): evaluates a dynamic group's rules on the live directory and reports what a rebuild would
+/// write. Read-only by contract: an implementation never changes the group's members.
+/// </summary>
+public interface IConnectorDynamicGroupEvaluator
+{
+    Task<DynamicGroupEvaluation> EvaluateAsync(string groupObjectGuid, CancellationToken cancellationToken);
+}
+
+/// <summary>One rule of a dynamic group as evaluated: its type, the object it names, its filter, and what it matched.</summary>
+public sealed class DynamicGroupRuleReport
+{
+    /// <summary>The Active Roles rule type number (1 Include by Query ... 7 Retain Deprovisioned).</summary>
+    public int TypeCode { get; init; }
+    /// <summary>The wizard's name for the type.</summary>
+    public string Type { get; init; } = string.Empty;
+    /// <summary>The objectGUID the rule names: a base container, the object itself, or a group.</summary>
+    public string ObjectGuid { get; init; } = string.Empty;
+    /// <summary>That object's distinguished name as the directory resolved it; null when it was not found.</summary>
+    public string? ObjectDistinguishedName { get; set; }
+    /// <summary>The LDAP filter of a query rule, verbatim.</summary>
+    public string? Filter { get; init; }
+    /// <summary>How many objects the rule matched (before precedence).</summary>
+    public int MatchCount { get; set; }
+    /// <summary>True when the rule matched more than the evaluator reads; the decision is then partial.</summary>
+    public bool Truncated { get; set; }
+    /// <summary>Why the rule could not be evaluated, when it could not.</summary>
+    public string? Error { get; set; }
+}
+
+/// <summary>What the rules want against what the group holds. Distinguished names throughout.</summary>
+public sealed class DynamicGroupEvaluation
+{
+    public string? GroupDistinguishedName { get; init; }
+    public string? GroupName { get; init; }
+    /// <summary>True when the group carries a membership rule definition.</summary>
+    public bool IsDynamic { get; init; }
+    /// <summary>The Administration Service GUID the definition names, for the record.</summary>
+    public string? OriginatingService { get; init; }
+    public IReadOnlyList<DynamicGroupRuleReport> Rules { get; init; } = Array.Empty<DynamicGroupRuleReport>();
+    public IReadOnlyList<string> CurrentMembers { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> DesiredMembers { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> Adds { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> Removes { get; init; } = Array.Empty<string>();
+    /// <summary>True when a rule's search was capped; the difference is then a lower bound.</summary>
+    public bool Truncated { get; init; }
+    /// <summary>Non-null when the evaluation failed (no group, no connection, rules that do not parse).</summary>
+    public string? ErrorMessage { get; init; }
+
+    public static DynamicGroupEvaluation Fail(string message) => new() { ErrorMessage = message };
 }
 
 /// <summary>

@@ -136,4 +136,11 @@ public sealed class ActiveDirectoryAdapter : IConnectorAdapter
             _tenantRepo,
             _protector,
             _loggerFactory.CreateLogger<ActiveDirectoryContainerBrowser>());
+
+    /// <summary>DYNAMIC-GROUPS-01 (UC034-D12): the read-only rule evaluator, on the sink's bind.</summary>
+    public IConnectorDynamicGroupEvaluator? CreateDynamicGroupEvaluator(Guid tenantId)
+    {
+        var sink = new ActiveDirectorySink(tenantId, _tenantRepo, _protector, _loggerFactory.CreateLogger<ActiveDirectorySink>());
+        return new ActiveDirectoryDynamicGroupEvaluator(sink.OpenConnectionAsync, _loggerFactory.CreateLogger<ActiveDirectoryDynamicGroupEvaluator>());
+    }
 }

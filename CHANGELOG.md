@@ -4,6 +4,12 @@ All notable changes to Conduit. Format roughly follows [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Added — dynamic groups, the agent's evaluator (DYNAMIC-GROUPS-01, IdentityCenter UC034)
+- `DynamicGroupRules` (Conduit.Connectors.ActiveDirectory): reads the Active Roles dynamic-group definition a group carries in `accountNameHistory` (`<DynamicGroupXML Conditions="[type;objectGUID;filter]...[DG]" .../>`), the managed-unit grammar; the seven rule types; the precedence for conflicting rules; `Decide` and `Diff`. A blob that does not parse is refused with the reason.
+- `ActiveDirectoryDynamicGroupEvaluator` (`IConnectorDynamicGroupEvaluator`): re-reads the group by objectGUID, runs each rule by LDAP search (explicit object, a group's direct members, a paged subtree search with the filter verbatim), reads `member` whole by ranged retrieval, and reports current, desired, adds and removes. Read-only. Opened on the sink's new `OpenConnectionAsync` (one bind path).
+- `AdAgentDynamicGroupExecutor`: the `EvaluateDynamicGroup` agent command, read-only, same gates as BrowseContainers; the poller dispatches it; the agent advertises `AdDynamicGroups`.
+- Tests: `DynamicGroupRulesTests`, `AdAgentDynamicGroupExecutorTests`.
+
 ### Changed — agent attribute allow-list (ALLOW-LIST-02, IdentityCenter UC015-D06 / UC017-F06)
 - `AdAgentWriteExecutor` SetAttributes now also writes `employeeID`, `employeeType`, `employeeNumber`, `accountExpires`, `homeDirectory`, `homeDrive` and `extensionAttribute1`-`15` (22 -> 43 names). `userAccountControl` stays out: Enable/Disable are their own operations.
 - New `AdAttributeValueShaper`: the one place a sent value takes the shape AD stores. `accountExpires` accepts a date (`yyyy-MM-dd` = end of that day, DC-local, as ADUC stores it), an ISO 8601 date-time, a FILETIME, `0` or `never`; anything else refuses the whole command before any LDAP call. Used by SetAttributes and by the create executor's attribute bag.
