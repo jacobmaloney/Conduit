@@ -225,7 +225,9 @@ $roArgs += $xdPaths
 # block to .60 on 2026-08-23 and took the off-host UI down (Kestrel endpoint config
 # overrides ASPNETCORE_URLS). Same /XF pattern as deploy-webportal.ps1 / deploy-api.ps1.
 $roArgs += "/XF"
-$roArgs += @("appsettings.json", "appsettings.Production.json", "appsettings.Development.json")
+# setup.complete is the setup wizard's sentinel (SetupService anchors it to ContentRoot = the publish root);
+# a bare /MIR deleted it once (2026-06-14) and the wizard came back. Server-owned, never mirrored over.
+$roArgs += @("appsettings.json", "appsettings.Production.json", "appsettings.Development.json", "setup.complete")
 if ($DryRun) { $roArgs += "/L" }
 
 Write-Host "    robocopy $($roArgs -join ' ')" -ForegroundColor DarkGray
