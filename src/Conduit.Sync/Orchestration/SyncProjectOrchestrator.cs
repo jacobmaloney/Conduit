@@ -805,6 +805,9 @@ public sealed class SyncProjectOrchestrator
     ///   success). Group owner is stored as-is by IC (no resolution gate). Non-IC sinks
     ///   that advertise the capability run their own real resolution with honest counts.
     /// </summary>
+    /// <summary>The IC Identities column an HR source names a manager in (its employee ID).</summary>
+    private const string IcManagerEmployeeIdKey = "ManagerEmployeeId";
+
     private async Task<StepResult> ExecuteLookupStepAsync(
         RunContext ctx, WorkflowStep step,
         List<ConnectorObject>? lastBatch, CancellationToken ct)
@@ -893,10 +896,25 @@ public sealed class SyncProjectOrchestrator
             };
         }
 
-        int resolved = 0, skipped = 0, failed = 0;
+        // HR-MANAGER-01 (the Granite walk, 2026-11-04: an HR file's 42 managers, resolved=0): an IC
+        // Identities-table sink links a manager named by EMPLOYEE ID itself, after each bulk batch
+        // (ManagerEmployeeId -> the person carrying that EmployeeId), so a manager later in the file
+        // than their report still resolves. Per-object calls for those rows would only race that and
+        // spend the IC API's rate budget; they are counted as delegated, like the Objects marker above.
+        var sinkTableIsIdentities = sinkIsIdentityCenter
+            && string.Equals(ctx.Project.SinkTable, "Identities", StringComparison.OrdinalIgnoreCase);
+        int resolved = 0, skipped = 0, failed = 0, delegatedToIc = 0;
         foreach (var obj in lastBatch)
         {
             ct.ThrowIfCancellationRequested();
+
+            if (sinkTableIsIdentities && !isGroupClass
+                && obj.Attributes.TryGetValue(IcManagerEmployeeIdKey, out var hrManager)
+                && hrManager is not null && !string.IsNullOrWhiteSpace(hrManager.ToString()))
+            {
+                delegatedToIc++;
+                continue;
+            }
 
             string? reference = null;
             foreach (var key in refKeys)
@@ -957,7 +975,8 @@ public sealed class SyncProjectOrchestrator
         }
 
         await Log(ctx.RunId, "Info",
-            $"    Lookup ({(isGroupClass ? "group owner" : "manager")} resolution): resolved={resolved} skipped={skipped} failed={failed}.");
+            $"    Lookup ({(isGroupClass ? "group owner" : "manager")} resolution): resolved={resolved} skipped={skipped} failed={failed}"
+            + (delegatedToIc > 0 ? $"; {delegatedToIc} named by manager employee ID, linked by IdentityCenter after each batch." : "."));
 
         // Updated = links actually resolved on IC. Skipped covers both "no reference"
         // and "IC could not resolve" — the log line above disambiguates. EmittedBatch
