@@ -52,6 +52,47 @@ public class CsvSourceTests : IDisposable
         Assert.Equal(expected, (await Rows(Source(idColumn: configured).Source))[0].SourceId);
     }
 
+    // CSV-COMPLETE-READ-01: delete detection runs only on a read the source proves complete.
+    private static async Task<(int Rows, bool Complete)> Enumerate(CsvSource source, int? limit = null)
+    {
+        var result = await source.EnumerateAsync("User", new SyncProjectScope { MaxObjects = limit }, null, default);
+        var rows = 0;
+        await foreach (var _ in result.Objects) rows++;
+        return (rows, result.WasCompleteRead());
+    }
+
+    [Fact]
+    public async Task A_file_read_to_its_end_with_every_row_keyed_is_complete()
+    {
+        await File.WriteAllTextAsync(_file, "EmployeeId,Name\nE1,Ada\nE2,Grace");
+        Assert.Equal((2, true), await Enumerate(Source(idColumn: "EmployeeId").Source));
+    }
+
+    [Theory]
+    [InlineData(1)]   // capped below the file
+    [InlineData(2)]   // capped exactly at the file: the cap, not the end of the file, stopped it
+    public async Task A_capped_read_is_never_complete(int limit)
+    {
+        await File.WriteAllTextAsync(_file, "EmployeeId,Name\nE1,Ada\nE2,Grace");
+        Assert.False((await Enumerate(Source(idColumn: "EmployeeId").Source, limit)).Complete);
+    }
+
+    [Fact]
+    public async Task A_row_without_an_id_makes_the_read_incomplete_because_its_row_number_id_shifts()
+    {
+        await File.WriteAllTextAsync(_file, "Name\nAda\nGrace");
+        Assert.Equal((2, false), await Enumerate(Source().Source));
+    }
+
+    [Fact]
+    public async Task An_unfinished_enumeration_is_not_complete()
+    {
+        await File.WriteAllTextAsync(_file, "EmployeeId,Name\nE1,Ada\nE2,Grace");
+        var result = await Source(idColumn: "EmployeeId").Source.EnumerateAsync("User", new SyncProjectScope(), null, default);
+        await foreach (var _ in result.Objects) break;
+        Assert.False(result.WasCompleteRead());
+    }
+
     [Fact]
     public async Task HeaderlessSourceIncludesFirstRecordAndConfiguredId()
     {

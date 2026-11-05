@@ -105,9 +105,44 @@ public sealed class CsvSource : IConnectorSource
         _logger = logger;
     }
 
-    public async IAsyncEnumerable<ConnectorObject> ReadAsync(
+    public IAsyncEnumerable<ConnectorObject> ReadAsync(
         string objectClass,
         SyncProjectScope scope,
+        CancellationToken cancellationToken)
+        => ReadCoreAsync(objectClass, scope, new ReadCompletion(), cancellationToken);
+
+    /// <summary>
+    /// CSV-COMPLETE-READ-01 (the Granite walk, 2026-11-05): a CSV is always a full read, but it never said so,
+    /// so every run logged the delete-detection gate as "source read was NOT complete" and a person dropped
+    /// from the HR file was never noticed. The read is complete only when the file was drained to its end,
+    /// no MaxObjects cap stopped it, and every row carried a real ID: a synthetic row-N id shifts when a row
+    /// above it is removed, so diffing on it would retire the wrong people.
+    /// </summary>
+    public Task<SyncEnumerationResult> EnumerateAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        SyncCursor? cursor,
+        CancellationToken cancellationToken)
+    {
+        var completion = new ReadCompletion();
+        return Task.FromResult(new SyncEnumerationResult
+        {
+            Objects = ReadCoreAsync(objectClass, scope, completion, cancellationToken),
+            ResolveNewCursor = () => null,
+            IsIncremental = false,
+            WasCompleteRead = () => completion.IsComplete
+        });
+    }
+
+    private sealed class ReadCompletion
+    {
+        public bool IsComplete { get; set; }
+    }
+
+    private async IAsyncEnumerable<ConnectorObject> ReadCoreAsync(
+        string objectClass,
+        SyncProjectScope scope,
+        ReadCompletion completion,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -122,11 +157,17 @@ public sealed class CsvSource : IConnectorSource
         var idCol = creds.IdColumn;
         var emitted = 0;
         var rowIndex = 0;
+        var everyRowHadAnId = true;
         // MaxObjects bounds the selected population; do not parse an extra record
         // beyond that scope. IC preview separately needs a lookahead for truncation.
-        while ((!scope.MaxObjects.HasValue || emitted < scope.MaxObjects.Value) &&
-               await csv.ReadAsync() is { } row)
+        while (true)
         {
+            if (scope.MaxObjects.HasValue && emitted >= scope.MaxObjects.Value) yield break; // capped: never complete
+            if (await csv.ReadAsync() is not { } row)
+            {
+                completion.IsComplete = everyRowHadAnId;
+                yield break;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             rowIndex++;
             var attrs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
@@ -142,6 +183,7 @@ public sealed class CsvSource : IConnectorSource
                      : attrs.TryGetValue("id", out var idv) ? idv?.ToString() ?? string.Empty
                      : attrs.TryGetValue("EmployeeId", out var eid) ? eid?.ToString() ?? string.Empty
                      : $"row-{rowIndex}";
+            if (string.IsNullOrWhiteSpace(sourceId) || sourceId == $"row-{rowIndex}") everyRowHadAnId = false;
 
             attrs["objectGuid"] = sourceId;
             attrs["id"] = sourceId;

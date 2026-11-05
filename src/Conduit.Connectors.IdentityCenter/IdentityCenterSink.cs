@@ -153,22 +153,13 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Sink)
                 ?? throw new InvalidOperationException($"No 'identitycenter' credential for tenant {_tenantId}.");
 
-            // Tombstone soft-delete is only implemented for the Objects table
-            // (/api/objects/tombstones). When this sink targets the Identities table
-            // there is no people-table tombstone endpoint, so emit nothing rather
-            // than mis-route disappeared ids to the Objects endpoint (which would
-            // resolve the wrong connection and could soft-delete unrelated accounts).
-            // Safe no-op: the orchestrator simply doesn't prune, and Identities rows
-            // are never destructively touched by a table-to-table sync.
-            if (creds.Table == IcTable.Identities)
-            {
-                _logger.LogInformation(
-                    "IC tombstone emission skipped: sink table=Identities has no tombstone endpoint (tenant={TenantId}, ids={Count}).",
-                    _tenantId, distinct.Count);
-                return TombstoneEmitResult.Nothing();
-            }
-
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
+
+            // HR-GONE-01 (the Granite walk, 2026-11-05): a person a complete read no longer contains goes to the
+            // people table's own endpoint, keyed the way the people bulk upsert keys them (employeeId). IC disables
+            // or deprovisions per its policy, never deletes, and refuses more than half unless overridden. The
+            // Objects endpoint is never used for people: it would resolve the wrong connection.
+            var endpoint = creds.Table == IcTable.Identities ? "/api/identities/gone-from-source" : "/api/objects/tombstones";
 
             const int icHardCap = 1000;
             int totalRequested = 0, totalMatched = 0, totalSoftDeleted = 0;
@@ -188,18 +179,26 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 var count = Math.Min(icHardCap, distinct.Count - offset);
                 var slice = distinct.GetRange(offset, count);
 
-                var body = new
-                {
-                    BatchId = Guid.NewGuid(),
-                    Source = SanitizeSource(source),
-                    SourceJobServerId = ConduitInstanceIdentity.InstanceId,
-                    SourceJobServerName = ConduitInstanceIdentity.Name,
-                    SourceUniqueIds = slice,
-                    Override = false   // never override the IC 50% cap from Conduit
-                };
+                object body = creds.Table == IcTable.Identities
+                    ? new
+                    {
+                        BatchId = Guid.NewGuid(),
+                        KeyField = "employeeId",
+                        KeyValues = slice,
+                        Override = false   // never override the IC 50% cap from Conduit
+                    }
+                    : new
+                    {
+                        BatchId = Guid.NewGuid(),
+                        Source = SanitizeSource(source),
+                        SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                        SourceJobServerName = ConduitInstanceIdentity.Name,
+                        SourceUniqueIds = slice,
+                        Override = false   // never override the IC 50% cap from Conduit
+                    };
 
                 using var resp = await PostJsonWithRetryAsync(
-                    client, $"{creds.BaseUrl}/api/objects/tombstones", body, cancellationToken);
+                    client, $"{creds.BaseUrl}{endpoint}", body, cancellationToken);
 
                 if (!resp.IsSuccessStatusCode)
                 {
