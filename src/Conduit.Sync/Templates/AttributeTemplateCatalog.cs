@@ -110,6 +110,9 @@ public static class AttributeTemplateCatalog
             E("sAMAccountName", "Username", true),
             E("userPrincipalName", "UserPrincipalName"),
             E("displayName", "DisplayName"),
+            // ATTRIBUTE-CLEAR-01 (the Granite walk, 2026-11-05): without it IdentityCenter never knows an account's
+            // description, so an admin cannot see it, nor clear it (an emptied field matches the empty catalog).
+            E("description", "Description"),
             E("givenName", "FirstName"),
             E("sn", "LastName"),
             E("mail", "Email"),
@@ -321,6 +324,9 @@ public static class AttributeTemplateCatalog
             E("sAMAccountName", "Username", true),
             E("userPrincipalName", "UserPrincipalName"),
             E("displayName", "DisplayName"),
+            // ATTRIBUTE-CLEAR-01 (the Granite walk, 2026-11-05): without it IdentityCenter never knows an account's
+            // description, so an admin cannot see it, nor clear it (an emptied field matches the empty catalog).
+            E("description", "Description"),
             E("givenName", "FirstName"),
             E("sn", "LastName"),
             E("mail", "Email"),
@@ -422,6 +428,7 @@ public static class AttributeTemplateCatalog
             E("userName", "Username", true),
             E("userPrincipalName", "UserPrincipalName"),
             E("displayName", "DisplayName"),
+            E("description", "Description"),   // ATTRIBUTE-CLEAR-01: Objects.Description is an allow-listed column
             E("firstName", "FirstName"),
             E("lastName", "LastName"),
             E("email", "Email"),

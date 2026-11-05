@@ -25,8 +25,8 @@ public class AttributeMapResolverTests
     [Fact]
     public void AdUserAndIcUserTemplates_HaveTheExpectedSize()
     {
-        Assert.Equal(25, AttributeTemplateCatalog.Get(Ad, "User")!.Count);
-        Assert.Equal(33, AttributeTemplateCatalog.Get(Ic, "User")!.Count);
+        Assert.Equal(26, AttributeTemplateCatalog.Get(Ad, "User")!.Count);   // +description (ATTRIBUTE-CLEAR-01)
+        Assert.Equal(34, AttributeTemplateCatalog.Get(Ic, "User")!.Count);   // +description (ATTRIBUTE-CLEAR-01)
     }
 
     [Theory]
@@ -53,7 +53,22 @@ public class AttributeMapResolverTests
         var mappings = AttributeMapResolver.Resolve(Ad, Ic, "User", out var dropped);
 
         Assert.Empty(dropped);
-        Assert.Equal(25, mappings.Count);
+        Assert.Equal(26, mappings.Count);
+    }
+
+    // ATTRIBUTE-CLEAR-01 (the Granite walk, 2026-11-05): an AD user's description reaches IC's Description column, so
+    // IC knows it, shows it and can clear it; Active Roles users carry it the same way.
+    [Theory]
+    [InlineData(AttributeTemplateCatalog.Systems.ActiveDirectory)]
+    [InlineData(AttributeTemplateCatalog.Systems.ActiveRoles)]
+    public void A_users_description_reaches_the_IdentityCenter_Description_column(string source)
+    {
+        var mappings = AttributeMapResolver.Resolve(source, Ic, "User", out var dropped);
+
+        Assert.DoesNotContain(dropped, d => d.SourceAttribute == "description");
+        var m = Assert.Single(mappings, x => x.SourceAttribute == "description");
+        // IC's /api/objects/bulk matches its column allow-list case-insensitively, as for department and jobTitle.
+        Assert.Equal("Description", m.SinkAttribute, ignoreCase: true);
     }
 
     [Theory]
