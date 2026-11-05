@@ -39,7 +39,7 @@
             and action buttons (Run Now / Schedule / History / Manage / Delete),
         Auto-Generate-from-connection modal (User + Group project, source→sink),
         Run-now confirmation modal (Conduit projects have a single flow, not a
-            multi-workflow tree, so this is a "Run All" + "Cancel" pair),
+            multi-workflow tree, so this is a "Run Now" + "Cancel" pair; it runs this one project),
         Delete-confirmation modal with typed-DELETE guard,
         Schedule modal (cron presets, preview, manual clear),
         Edit / Create modal (Setup + Scope + Mappings — Schedule sits inline
@@ -652,7 +652,7 @@
                         {
                             <i class="fas fa-play me-1"></i>
                         }
-                        Run All
+                        Run Now
                     </button>
                 </div>
             </div>
@@ -1903,7 +1903,7 @@
                                                                     @if (isMappingStep && StepScopeDiscardPending(stepRef))
                                                                     {
                                                                         <span class="step-tag-chip stale ms-2"
-                                                                              title="Inherit is on and this step still owns a scope — Save deletes it and the step falls back to the project Scope tab.">
+                                                                              title="Inherit is on and this step still owns a scope — Save deletes it and the step falls back to the project's scope.">
                                                                             <i class="fas fa-triangle-exclamation"></i>
                                                                             <span class="step-tag-chip-label">Scope</span>
                                                                         </span>
@@ -2105,6 +2105,14 @@
     var mmInherit = !stepMappingsInherit.TryGetValue(mmStepId, out var mmInh) || mmInh;
     var mmRows = GetStepMappings(mmStepId);
     var mmClassLabel = string.IsNullOrWhiteSpace(mmStep.ObjectClass) ? "user" : mmStep.ObjectClass;
+    @* INHERIT-HONEST-01 (the Granite walk, 2026-11-05: "user upsert Contractor" said "0 rules", warned "No mappings
+       configured" and pointed at a project Mappings tab the edit dialog no longer has, while every run logged "uses 26
+       template mapping(s)"). An inheriting step is described by the resolver the run uses, so the dialog says what
+       the sync will actually map. *@
+    var mmEffective = mmInherit && mmRows.Count == 0
+        ? EffectiveMappingResolver.Resolve(Array.Empty<AttributeMapping>(), mappingForm,
+            TenantType(form.SourceTenantId), TenantType(form.SinkTenantId), mmClassLabel)
+        : null;
     <div class="modal show d-block sync-form-modal icb-modal-stacked" tabindex="-1">
         <div class="modal-dialog modal-xl modal-dialog-centered">
             <div class="modal-content">
@@ -2142,7 +2150,7 @@
                     <div class="alert @(mmInherit ? "alert-secondary" : "alert-primary") d-flex align-items-start mb-3">
                         <i class="fas fa-key fa-lg me-3 mt-1"></i>
                         <div class="flex-grow-1">
-                            <strong>@(mmInherit ? "Inheriting project-level Mappings" : "This step owns its Mappings")</strong>
+                            <strong>@(mmInherit ? (mmEffective?.Origin == EffectiveMappingOrigin.Template ? "Using the default mapping" : "Using the project's mappings") : "This step owns its Mappings")</strong>
                             @* The heading already follows the state; so must the instruction. The old copy was written
                                for the inheriting case only and was rendered in both, so a step that ALREADY owned its map
                                was still being told to "turn the toggle off" to get one. Both branches are true of the
@@ -2151,8 +2159,17 @@
                                 @if (mmInherit)
                                 {
                                     <text>
-                                        This step is running the rules from the project <strong>Mappings</strong> tab. Turn the
-                                        toggle off, or add a rule below, to give it its own attribute map for the
+                                        @if (mmEffective?.Origin == EffectiveMappingOrigin.Template)
+                                        {
+                                            <text>Neither this step nor the project has rules of its own, so each run uses the default
+                                            <strong>@mmClassLabel</strong> mapping for @TenantType(form.SourceTenantId) → @TenantType(form.SinkTenantId):
+                                            <strong>@mmEffective.Mappings.Count rule@(mmEffective.Mappings.Count == 1 ? "" : "s")</strong>.</text>
+                                        }
+                                        else
+                                        {
+                                            <text>This step runs the project's <strong>@mappingForm.Count</strong> rule@(mappingForm.Count == 1 ? "" : "s").</text>
+                                        }
+                                        Turn the toggle off, or add a rule below, to give it its own attribute map for the
                                         <strong>@mmClassLabel</strong> class.
                                     </text>
                                 }
@@ -2160,8 +2177,8 @@
                                 {
                                     <text>
                                         This step has its own attribute map for the <strong>@mmClassLabel</strong> class, so the
-                                        project <strong>Mappings</strong> tab is ignored here. Turn the toggle back on to follow
-                                        the project rules again; the @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") below
+                                        project's mappings and the default mapping are ignored here. Turn the toggle back on to
+                                        follow them again; the @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") below
                                         @(mmRows.Count == 1 ? "is" : "are") kept either way.
                                     </text>
                                 }
@@ -2173,7 +2190,7 @@
                                 <input class="icb-form-switch" type="checkbox" id="@($"mmInherit_{mmStepId}")"
                                        @bind:get="mmInherit"
                                        @bind:set="@(v => SetStepMappingsInherit(mmStepId, v))" />
-                                <label class="icb-form-check-label small" for="@($"mmInherit_{mmStepId}")">Inherit from project Mappings tab</label>
+                                <label class="icb-form-check-label small" for="@($"mmInherit_{mmStepId}")">Use the project's mappings (the default mapping when it has none)</label>
                             </div>
                         </div>
                     </div>
@@ -2187,7 +2204,13 @@
                         </button>
                     </div>
 
-                    @if (mmRows.Count == 0)
+                    @if (mmRows.Count == 0 && mmEffective is not null)
+                    {
+                        <p class="small text-muted mb-0">
+                            No rules of this step's own. Add Mapping or Auto-Fill Mappings gives it its own map, starting here.
+                        </p>
+                    }
+                    else if (mmRows.Count == 0)
                     {
                         <div class="alert alert-warning mb-0">
                             <i class="fas fa-exclamation-triangle me-2"></i>No mappings configured. Click "Auto-Fill Mappings" or "Add Mapping" to start.
@@ -2619,15 +2642,15 @@
                                 @if (scopeDraftInherit)
                                 {
                                     <text>
-                                        This step reads whatever the project <strong>Scope</strong> tab reads. Turn the
+                                        This step reads whatever the project's <strong>scope</strong> reads. Turn the
                                         toggle off to bound it to its own containers and filter.
                                     </text>
                                 }
                                 else
                                 {
                                     <text>
-                                        This step is bounded by its own containers and filter, so the project
-                                        <strong>Scope</strong> tab does not apply here. Turn the toggle back on to follow
+                                        This step is bounded by its own containers and filter, so the project's
+                                        <strong>scope</strong> does not apply here. Turn the toggle back on to follow
                                         the project scope again; the containers below are kept either way.
                                     </text>
                                 }
@@ -2636,7 +2659,7 @@
                                 <input class="icb-form-switch" type="checkbox" id="@($"scopeInherit_{scStepId}")"
                                        @bind:get="scopeDraftInherit"
                                        @bind:set="SetScopeDraftInherit" />
-                                <label class="icb-form-check-label small" for="@($"scopeInherit_{scStepId}")">Inherit from project Scope tab</label>
+                                <label class="icb-form-check-label small" for="@($"scopeInherit_{scStepId}")">Use the project's scope</label>
                             </div>
                         </div>
                     </div>
@@ -2653,7 +2676,7 @@
                                 <div>
                                     <strong>Save changes</strong> deletes the scope stored against this step — its included
                                     and blocked paths, LDAP filter, page size and max objects are not kept anywhere. The
-                                    step then reads whatever the project Scope tab reads. Untick Inherit to keep the
+                                    step then reads whatever the project's scope reads. Turn off <strong>Use the project's scope</strong> to keep the
                                     step's own scope.
                                 </div>
                             </div>
@@ -2664,7 +2687,7 @@
                         <div class="step-scope-section-head">
                             <label class="icb-form-label fw-semibold mb-0">
                                 Included paths
-                                <BrandHelpHint Text="Each included container becomes a subtree LDAP base for this step's read. With Inherit off and no included path, this step reads the ENTIRE directory from the source's root (RootDSE defaultNamingContext) — the project Scope tab is not consulted." />
+                                <BrandHelpHint Text="Each included container becomes a subtree LDAP base for this step's read. With Inherit off and no included path, this step reads the ENTIRE directory from the source's root (RootDSE defaultNamingContext) — the project's scope is not consulted." />
                             </label>
                             <button type="button" class="ic-btn ic-btn-sm icb-btn-accent"
                                     @onclick="OpenScopeDraftBrowser"
@@ -2686,7 +2709,7 @@
                         {
                             @if (!scOwnsScope)
                             {
-                                <p class="text-muted small mb-2">No included path on this step — the project Scope tab applies.</p>
+                                <p class="text-muted small mb-2">No included path on this step — the project's scope applies.</p>
                             }
                         }
                         else if (scopeDraftIncluded.Count == 0)
@@ -2697,9 +2720,9 @@
                                     <strong>No included path — this step will read the ENTIRE directory.</strong>
                                     <div>
                                         With Inherit off and nothing included, the read starts at the source's root
-                                        (RootDSE <code>defaultNamingContext</code>) and walks the whole subtree. The project
-                                        Scope tab is <strong>not</strong> consulted. Add a path above, or tick Inherit to use
-                                        the project Scope.
+                                        (RootDSE <code>defaultNamingContext</code>) and walks the whole subtree. The project's
+                                        scope is <strong>not</strong> consulted. Add a path above, or turn on <strong>Use the project's scope</strong>
+                                        to follow it.
                                     </div>
                                 </div>
                             </div>
@@ -2840,7 +2863,7 @@
                     <p class="mb-2">
                         Saving deletes the scope stored against
                         <strong>@scopeDiscardList.Count step@(scopeDiscardList.Count == 1 ? "" : "s")</strong>
-                        left on <strong>Inherit from project Scope tab</strong>:
+                        left on <strong>Use the project's scope</strong>:
                     </p>
                     <ul class="mb-3 ps-4">
                         @foreach (var discard in scopeDiscardList)
@@ -2858,7 +2881,7 @@
                             <div>
                                 Each step's own included and blocked paths, LDAP filter, page size and max
                                 objects are deleted and are not kept anywhere. The step then reads whatever
-                                the project Scope tab reads. Cancel to go back with nothing saved.
+                                the project's scope reads. Cancel to go back with nothing saved.
                             </div>
                         </div>
                     </div>

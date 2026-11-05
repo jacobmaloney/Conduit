@@ -107,7 +107,9 @@ public class SyncProjectModalStackTests
 
         // The old copy was written for the inheriting case and rendered in both, so a step that
         // already owned its map was still told to "turn the toggle off" to get one.
-        Assert.Contains("This step is running the rules from the project", page);
+        // INHERIT-HONEST-01: the inheriting case names what the run maps - the project's rules or the default mapping.
+        Assert.Contains("This step runs the project's <strong>@mappingForm.Count</strong> rule", page);
+        Assert.Contains("so each run uses the default", page);
         Assert.Contains("This step has its own attribute map for the", page);
 
         // Turning inherit back on does NOT discard the rows (SetStepMappingsInherit only sets the
