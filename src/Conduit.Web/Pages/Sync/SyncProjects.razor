@@ -2018,100 +2018,18 @@
                 </div>
             </BrandNotice>
 
-            <div class="mapping-editor-toolbar mb-2">
-                <span class="small text-muted">
-                    @mmRows.Count rule@(mmRows.Count == 1 ? "" : "s") — set Value mode per row: Direct maps from the source (blank Transform = passthrough), Constant always writes a fixed value, Default fills the fixed value only when the source is empty.
-                </span>
-                <button type="button" class="ic-btn icb-btn-accent ic-btn-sm" @onclick="() => AddStepMappingRow(mmStepId)">
-                    <i class="fas fa-plus me-1"></i>Add Mapping
-                </button>
-            </div>
-
-            @if (mmRows.Count == 0 && mmEffective is not null)
-            {
-                <p class="small text-muted mb-0">
-                    No rules of this step's own. Add Mapping or Auto-Fill Mappings gives it its own map, starting here.
-                </p>
-            }
-            else if (mmRows.Count == 0)
-            {
-                <BrandNotice Tone="BrandNoticeTone.Warning" Icon="fas fa-exclamation-triangle" Class="mb-0">No mappings configured. Click "Auto-Fill Mappings" or "Add Mapping" to start.</BrandNotice>
-            }
-            else
-            {
-                <div class="table-responsive">
-                    <table class="table table-sm mapping-modal-table">
-                        <thead>
-                            <tr>
-                                <th class="mm-col-val">Value</th>
-                                <th class="mm-col-src">Source Attribute</th>
-                                <th class="mm-col-arrow text-center">→</th>
-                                <th class="mm-col-tgt">Target Attribute</th>
-                                <th class="mm-col-xform">Transform / Value <BrandHelpHint Text="Direct copies the source value (optionally through a transform chain like trim|lower). Constant (const:) writes a fixed value to every object, ignoring the source. Default (default:) writes a fixed value only when the source is empty." /></th>
-                                <th class="mm-col-req text-center">Req</th>
-                                <th class="mm-col-act"></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @for (int i = 0; i < mmRows.Count; i++)
-                            {
-                                var idx = i;
-                                var rule = mmRows[idx];
-                                var rowMode = MappingMode(rule);
-                                <tr>
-                                    <td>
-                                        <select class="icb-form-select icb-form-select-sm" value="@rowMode"
-                                                @onchange="@(e => SetMappingMode(rule, e.Value?.ToString() ?? "direct"))">
-                                            <option value="direct">Direct</option>
-                                            <option value="const">Constant</option>
-                                            <option value="default">Default</option>
-                                        </select>
-                                    </td>
-                                    <td>
-                                        @if (rowMode == "const")
-                                        {
-                                            <input class="icb-form-input icb-form-input-sm" placeholder="(ignored)" disabled />
-                                        }
-                                        else
-                                        {
-                                            <input class="icb-form-input icb-form-input-sm" @bind="rule.SourceAttribute" placeholder="sAMAccountName" />
-                                        }
-                                    </td>
-                                    <td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>
-                                    <td><input class="icb-form-input icb-form-input-sm" @bind="rule.SinkAttribute" placeholder="userName" /></td>
-                                    <td>
-                                        @if (rowMode == "direct")
-                                        {
-                                            <input class="icb-form-input icb-form-input-sm" placeholder="trim | lower"
-                                                   @bind:get="DirectTransform(rule)" @bind:set="@(v => SetDirectTransform(rule, v))" />
-                                        }
-                                        else
-                                        {
-                                            <input class="icb-form-input icb-form-input-sm" placeholder="fixed value"
-                                                   @bind:get="MappingLiteral(rule)" @bind:set="@(v => SetMappingLiteral(rule, v))" />
-                                        }
-                                    </td>
-                                    <td class="text-center">
-                                        <div class="icb-form-check d-inline-block">
-                                            <input class="icb-form-switch" type="checkbox" @bind="rule.IsRequired" />
-                                        </div>
-                                    </td>
-                                    <td class="text-end">
-                                        <button type="button" class="ic-btn ic-btn-sm ic-btn-danger" @onclick="() => RemoveStepMappingRow(mmStepId, idx)" title="Remove">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-                <div class="mapping-transform-hint">
-                    Transforms: <code>upper</code>, <code>lower</code>, <code>trim</code>, <code>prefix:X</code>, <code>suffix:X</code>,
-                    <code>substring:N</code>, <code>substring:N:M</code>, <code>replace:OLD:NEW</code>, <code>default:VAL</code>.
-                    Chain with <code>|</code>.
-                </div>
-            }
+            @* MAP-EDITOR-CONDUIT-01: the shared mapping editor. A row is "target attribute <- {source} | step | step", the
+               saved source + transform chain written as one expression (MappingRowExpression), so what it shows is what runs. *@
+            <BrandAttributeMapEditor Id="@($"mm-editor-{mmStepId}")" Rows="@MappingEditorRows(mmStepId)"
+                                     RowsChanged="@(rows => OnMappingRowsChanged(mmStepId, rows))"
+                                     AttributeHeading="Target attribute" ValueHeading="Source and steps"
+                                     AttributePlaceholder="Target, e.g. userName" ExpressionPlaceholder="{sAMAccountName} | trim | lower"
+                                     AttributeSuggestions="@MappingTargetSuggestions(mmStepId)" TokenSuggestions="@MappingSourceSuggestions(mmStepId)"
+                                     ExpressionProblem="Conduit.Mapping.MappingRowExpression.Problem"
+                                     ShowRequired="true" RequiredHeading="Always write"
+                                     RequiredHelp="Write this attribute on every object, even when the value comes out empty."
+                                     AddLabel="Add mapping" EmptyText="@MappingEditorEmptyText(mmEffective is not null)"
+                                     Hint="Write the source attribute in { }, then any steps after |: upper, lower, trim, prefix:X, suffix:X, substring:N, substring:N:M, replace:OLD:NEW, default:X (used when the source is empty). const:X writes a fixed value with no source." />
         </ChildContent>
         <FooterContent>
             <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseMappingModal">
@@ -4234,81 +4152,98 @@
         workflowsDirty = true;
     }
 
-    private void RemoveStepMappingRow(Guid stepId, int index)
-    {
-        var list = GetStepMappings(stepId);
-        if (index < 0 || index >= list.Count) return;
-        list.RemoveAt(index);
-        workflowsDirty = true;
-    }
+    // ── MAP-EDITOR-CONDUIT-01: the step's mappings in the shared BrandAttributeMapEditor ──
+    // The editor owns a list of BrandAttributeMapRow; each stands for one AttributeMapping (kept by reference so a
+    // row keeps its Id, which the save condition hashes). An edit writes straight back to the step's mappings.
+    private readonly Dictionary<Guid, List<BrandAttributeMapRow>> mappingEditorRows = new();
+    private readonly Dictionary<BrandAttributeMapRow, AttributeMapping> mappingEditorSource = new();
+    /// <summary>Rows Auto-Fill seeded from the class template; the editor chips them until the operator edits one.</summary>
+    private readonly HashSet<Guid> templateMappingIds = new();
 
-    // ── Value-generation mode (encoded in TransformExpr; no model/DB field) ──
-    // const:VAL → Constant (source ignored), default:VAL → Default (fallback when
-    // source empty), anything else → Direct (source drives it, expr = transform chain).
-    private const string mappingConstPrefix = "const:";
-    private const string mappingDefaultPrefix = "default:";
-
-    private string MappingMode(AttributeMapping r)
+    private List<BrandAttributeMapRow> MappingEditorRows(Guid stepId)
     {
-        var s = r.TransformExpr ?? string.Empty;
-        if (s.StartsWith(mappingConstPrefix, StringComparison.OrdinalIgnoreCase)) return "const";
-        if (s.StartsWith(mappingDefaultPrefix, StringComparison.OrdinalIgnoreCase)) return "default";
-        return "direct";
-    }
-
-    private void SetMappingMode(AttributeMapping r, string mode)
-    {
-        var literal = MappingLiteral(r);
-        var direct = DirectTransform(r);
-        switch (mode)
+        var saved = GetStepMappings(stepId);
+        if (mappingEditorRows.TryGetValue(stepId, out var rows) && rows.Count == saved.Count
+            && rows.Select(r => mappingEditorSource.GetValueOrDefault(r)).SequenceEqual(saved))
+            return rows;
+        rows = saved.Select(m =>
         {
-            case "const":
-                r.TransformExpr = mappingConstPrefix + literal;
-                break;
-            case "default":
-                r.TransformExpr = mappingDefaultPrefix + literal;
-                break;
-            default:
-                r.TransformExpr = direct;
-                break;
+            var row = new BrandAttributeMapRow
+            {
+                Attribute = m.SinkAttribute,
+                Expression = Conduit.Mapping.MappingRowExpression.Format(m.SourceAttribute, m.TransformExpr),
+                Required = m.IsRequired,
+                Provenance = templateMappingIds.Contains(m.Id) ? BrandAttributeMapProvenance.Template : BrandAttributeMapProvenance.Manual
+            };
+            mappingEditorSource[row] = m;
+            return row;
+        }).ToList();
+        mappingEditorRows[stepId] = rows;
+        return rows;
+    }
+
+    private void OnMappingRowsChanged(Guid stepId, List<BrandAttributeMapRow> rows)
+    {
+        var saved = GetStepMappings(stepId);
+        var next = new List<AttributeMapping>(rows.Count);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (!mappingEditorSource.TryGetValue(row, out var m))
+            {
+                m = new AttributeMapping { Id = Guid.NewGuid() };
+                mappingEditorSource[row] = m;
+            }
+            // Only an edited expression is re-parsed, so an untouched row keeps its saved text exactly.
+            if (!string.Equals(Conduit.Mapping.MappingRowExpression.Format(m.SourceAttribute, m.TransformExpr), row.Expression, StringComparison.Ordinal))
+            {
+                var (source, transform) = Conduit.Mapping.MappingRowExpression.Parse(row.Expression);
+                m.SourceAttribute = source;
+                m.TransformExpr = transform;
+            }
+            m.SinkAttribute = row.Attribute;
+            m.IsRequired = row.Required;
+            m.SortOrder = i;
+            if (row.Provenance == BrandAttributeMapProvenance.Manual) templateMappingIds.Remove(m.Id);
+            next.Add(m);
         }
+        saved.Clear();
+        saved.AddRange(next);
+        mappingEditorRows[stepId] = rows;
         workflowsDirty = true;
     }
 
-    // The literal carried by const:/default: (empty for Direct). Falls back to the
-    // current Direct chain so a value typed in one mode survives a switch.
-    private string MappingLiteral(AttributeMapping r)
-    {
-        var s = r.TransformExpr ?? string.Empty;
-        if (s.StartsWith(mappingConstPrefix, StringComparison.OrdinalIgnoreCase))
-            return s.Substring(mappingConstPrefix.Length);
-        if (s.StartsWith(mappingDefaultPrefix, StringComparison.OrdinalIgnoreCase))
-            return s.Substring(mappingDefaultPrefix.Length);
-        return s;
-    }
+    private static string MappingEditorEmptyText(bool inheritsSomething) => inheritsSomething
+        ? "No rules of this step's own. Add mapping or Auto-Fill Mappings gives it its own map, starting here."
+        : "No mappings configured. Auto-Fill Mappings or Add mapping to start.";
 
-    private void SetMappingLiteral(AttributeMapping r, string? val)
-    {
-        var v = val ?? string.Empty;
-        r.TransformExpr = MappingMode(r) == "const"
-            ? mappingConstPrefix + v
-            : mappingDefaultPrefix + v;
-        workflowsDirty = true;
-    }
+    /// <summary>Target names the class template knows, for the attribute suggestions.</summary>
+    private IReadOnlyList<string> MappingTargetSuggestions(Guid stepId) =>
+        StepTemplateMappings(stepId).Select(m => m.SinkAttribute).Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
-    // The transform chain shown in Direct mode (empty when a prefix mode is active).
-    private string DirectTransform(AttributeMapping r)
-    {
-        var s = r.TransformExpr ?? string.Empty;
-        if (s.StartsWith(mappingConstPrefix, StringComparison.OrdinalIgnoreCase)) return string.Empty;
-        if (s.StartsWith(mappingDefaultPrefix, StringComparison.OrdinalIgnoreCase)) return string.Empty;
-        return s;
-    }
+    /// <summary>"{source}" tokens for the value suggestions: the template's sources and the ones already mapped.</summary>
+    private IReadOnlyList<string> MappingSourceSuggestions(Guid stepId) =>
+        StepTemplateMappings(stepId).Concat(GetStepMappings(stepId)).Select(m => m.SourceAttribute)
+            .Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).Select(n => "{" + n + "}").ToList();
 
-    private void SetDirectTransform(AttributeMapping r, string? v)
+    private readonly Dictionary<(string, string, string), List<AttributeMapping>> templateMappingCache = new();
+
+    private List<AttributeMapping> StepTemplateMappings(Guid stepId)
     {
-        r.TransformExpr = v ?? string.Empty;
-        workflowsDirty = true;
+        var step = StepById(stepId);
+        var sourceType = tenantById.TryGetValue(form.SourceTenantId, out var src) ? src.SystemType : string.Empty;
+        var sinkType = tenantById.TryGetValue(form.SinkTenantId, out var snk) ? snk.SystemType : string.Empty;
+        if (step is null || string.IsNullOrWhiteSpace(sourceType)) return new();
+        var key = (sourceType, sinkType, string.IsNullOrWhiteSpace(step.ObjectClass) ? "User" : step.ObjectClass!);
+        if (!templateMappingCache.TryGetValue(key, out var list))
+        {
+            try { list = AttributeMapper.BuildMappings(key.Item1, key.Item2, key.Item3); }
+            catch (Exception) { list = new(); }   // suggestions only; the editor works without them
+            templateMappingCache[key] = list;
+        }
+        return list;
     }
 
     /// <summary>
@@ -4357,6 +4292,7 @@
         // Re-stamp SortOrder so the seeded rows persist in template order.
         for (int i = 0; i < suggested.Count; i++) suggested[i].SortOrder = i;
         stepMappings[stepId] = suggested;
+        templateMappingIds.UnionWith(suggested.Select(m => m.Id));   // MAP-EDITOR-CONDUIT-01: chipped as Template
         stepMappingsLoaded.Add(stepId);
         stepMappingsInherit[stepId] = false; // step now OWNS its class-specific mappings
         workflowsDirty = true;

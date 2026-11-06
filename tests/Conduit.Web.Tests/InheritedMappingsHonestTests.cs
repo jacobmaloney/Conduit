@@ -34,7 +34,9 @@ public class InheritedMappingsHonestTests
 
         Assert.Contains("EffectiveMappingResolver.Resolve(Array.Empty<AttributeMapping>(), mappingForm,", page);
         Assert.Contains("\"Using the default mapping\"", page);
-        Assert.Contains("@if (mmRows.Count == 0 && mmEffective is not null)", page);
+        // MAP-EDITOR-CONDUIT-01: the shared editor's empty text says the inheriting step has no rules of its own.
+        Assert.Contains("EmptyText=\"@MappingEditorEmptyText(mmEffective is not null)\"", page);
+        Assert.Contains("No rules of this step's own.", page);
         Assert.DoesNotContain("Inherit from project Mappings tab", page);
         // The edit dialog has Setup / Workflows / Schedule only; neither inherit dialog may send the admin to a tab it lacks.
         Assert.DoesNotContain("Scope tab", page);
