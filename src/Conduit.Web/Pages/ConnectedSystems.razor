@@ -208,6 +208,13 @@
     @* Destructive confirmations. Both are typed-slug gated: ConfirmDisabled carries the same
        equality check the buttons carried before, and the impact table plus the typed input
        live in the shared dialog's BodyContent. *@
+    @* One confirm for the page's simple yes/no questions; each call names its own title, intent and button. *@
+    <BrandConfirmationModal @ref="confirmModal" />
+    @if (pageNotice != null)
+    {
+        <BrandNotice Tone="@pageNoticeTone" Docked="true" OnDismiss="() => pageNotice = null">@pageNotice</BrandNotice>
+    }
+
     <BrandConfirmationModal @ref="deleteConfirmModal" ConfirmLabel="Delete forever" Intent="BrandConfirmationModal.ConfirmIntent.Danger"
                             ConfirmDisabled="@(deletingFor is null || !string.Equals(deleteConfirmText, deletingFor.Slug, StringComparison.Ordinal))">
         <BodyContent>
@@ -1775,6 +1782,11 @@
 <ServerFileBrowserModal @ref="serverFileBrowser" />
 
 @code {
+    private BrandConfirmationModal? confirmModal;
+    // Outcomes the operator should see after a confirm closes (cleared, nothing to clear, hold failed): a docked notice.
+    private string? pageNotice;
+    private BrandNoticeTone pageNoticeTone = BrandNoticeTone.Info;
+    private void ShowPageNotice(BrandNoticeTone tone, string message) { pageNoticeTone = tone; pageNotice = message; }
     private Conduit.SourceBrowsing.SourceBrowseSelection? sourceBrowse;
 
     // CSV-FILE-PICKER-01 (Jacob, 2026-11-04: "needed a way to browse the file system and choose the csv file"):
@@ -2438,8 +2450,9 @@
 
     private async Task SeedDemo()
     {
-        var ok = await JS.InvokeAsync<bool>("confirm",
-            "Seed demo data? This creates three connections (IT Helpdesk Portal, Finance Suite, HR Connect), 25 users + 5 groups in IT Helpdesk with the SOD trap pair, and five fixed-value API tokens. The operation is idempotent — re-running is safe.");
+        var ok = await confirmModal!.ShowAsync("Seed demo data?",
+            "This creates three connections (IT Helpdesk Portal, Finance Suite, HR Connect), 25 users and 5 groups in IT Helpdesk with the SOD trap pair, and five fixed-value API tokens.",
+            "Running it again is safe: it only adds what is missing.", BrandConfirmationModal.ConfirmIntent.Primary, "Seed demo data");
         if (!ok) return;
         seeding = true;
         lastSeedResult = null;
@@ -2968,8 +2981,9 @@
 
     private async Task DeactivateSystem(TenantStats s)
     {
-        var confirmed = await JS.InvokeAsync<bool>("confirm",
-            $"Deactivate '{s.Name}'? Users and groups in this system stay in the database but it will be hidden from active lists.");
+        var confirmed = await confirmModal!.ShowAsync($"Deactivate {s.Name}?",
+            "Users and groups in this system stay in the database, but it is hidden from active lists.", "",
+            BrandConfirmationModal.ConfirmIntent.Caution, "Deactivate");
         if (!confirmed) return;
         await TenantRepo.DeactivateAsync(s.TenantId);
         await AuditDestructiveAsync("ConnectedSystem.Deactivate", s,
@@ -3025,10 +3039,11 @@
     private async Task ToggleLegalHold(TenantStats s)
     {
         var turningOn = !s.LegalHold;
-        var prompt = turningOn
-            ? $"Put '{s.Name}' on legal hold? Clear, Deactivate, and Delete will all be refused until the hold is released."
-            : $"Release legal hold on '{s.Name}'? Destructive actions will be possible again.";
-        var confirmed = await JS.InvokeAsync<bool>("confirm", prompt);
+        var confirmed = turningOn
+            ? await confirmModal!.ShowAsync($"Put {s.Name} on legal hold?", "Clear, Deactivate and Delete are all refused until the hold is released.", "",
+                BrandConfirmationModal.ConfirmIntent.Caution, "Put on hold")
+            : await confirmModal!.ShowAsync($"Release the legal hold on {s.Name}?", "Clear, Deactivate and Delete become possible again.", "",
+                BrandConfirmationModal.ConfirmIntent.Danger, "Release hold");
         if (!confirmed) return;
 
         try
@@ -3044,7 +3059,7 @@
         }
         catch (Exception ex)
         {
-            await JS.InvokeVoidAsync("alert", $"Could not change legal hold: {ex.Message}");
+            ShowPageNotice(BrandNoticeTone.Danger, $"Could not change the legal hold: {ex.Message}");
         }
     }
 
@@ -3066,7 +3081,7 @@
     {
         if (s.UserCount == 0 && s.GroupCount == 0)
         {
-            await JS.InvokeVoidAsync("alert", $"'{s.Name}' is already empty — nothing to clear.");
+            ShowPageNotice(BrandNoticeTone.Info, $"{s.Name} is already empty. There is nothing to clear.");
             return;
         }
         clearingFor = s;
@@ -3141,7 +3156,7 @@
             try
             {
                 await Load();
-                await JS.InvokeVoidAsync("alert", $"Removed {removed} rows from '{name}'.");
+                ShowPageNotice(BrandNoticeTone.Success, $"Removed {removed:N0} rows from {name}.");
             }
             catch (Exception refreshEx)
             {

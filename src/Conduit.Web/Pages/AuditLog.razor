@@ -18,11 +18,23 @@
             <button type="button" class="icb-list-action" @onclick="ToggleFilters">
                 <i class="oi oi-filter"></i> @(showFilters ? "Hide" : "Show") Filters
             </button>
-            <button type="button" class="icb-list-action" @onclick="ExportLogs">
-                <i class="oi oi-data-transfer-download"></i> Export
+            <button type="button" class="icb-list-action" disabled="@exporting" @onclick="ExportLogs">
+                <i class="oi oi-data-transfer-download"></i> Export CSV
             </button>
         </PrimaryAction>
     </Template1>
+
+    @if (exportHref != null)
+    {
+        <BrandNotice Tone="BrandNoticeTone.Success" Title="Export ready" OnDismiss="() => exportHref = null">
+            <ChildContent>@exportNote</ChildContent>
+            <Actions><a class="icb-list-action" href="@exportHref" download="@exportName"><i class="oi oi-data-transfer-download" aria-hidden="true"></i> Download @exportName</a></Actions>
+        </BrandNotice>
+    }
+    else if (exportError != null)
+    {
+        <BrandNotice Tone="BrandNoticeTone.Danger" Title="Export failed" OnDismiss="() => exportError = null">@exportError</BrandNotice>
+    }
 
     @if (statistics != null)
     {
@@ -245,10 +257,41 @@
         await LoadStatistics();
     }
 
+    // The export is the current filters, newest first, as CSV (Conduit.Readers.Csv.CsvText) behind a data: link, so no
+    // script runs and nothing is written on the server. Capped so the link stays a reasonable size for the browser.
+    private const int ExportLimit = 5000;
+    private bool exporting;
+    private string? exportHref, exportName, exportNote, exportError;
+
     private async Task ExportLogs()
     {
-        // In a real app, this would export to CSV or JSON
-        await JSRuntime.InvokeVoidAsync("alert", "Export functionality would be implemented here");
+        exporting = true; exportHref = null; exportError = null;
+        try
+        {
+            var (rows, total) = await AuditLogService.GetLogsAsync(startDate, endDate,
+                string.IsNullOrEmpty(selectedAction) ? null : selectedAction,
+                string.IsNullOrEmpty(selectedResourceType) ? null : selectedResourceType,
+                string.IsNullOrEmpty(userId) ? null : userId, page: 1, pageSize: ExportLimit);
+            var csv = Conduit.Readers.Csv.CsvText.Document(
+                ["Timestamp (UTC)", "Action", "Resource type", "Resource", "User", "User ID", "IP address", "Status", "Duration (ms)", "Details", "Old value", "New value"],
+                rows.Select(l => new string?[] { l.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"), l.Action, l.ResourceType, l.ResourceId, l.UserName, l.UserId, l.IpAddress,
+                    l.StatusCode?.ToString(), l.Duration?.TotalMilliseconds.ToString("0"), l.Details, l.OldValue, l.NewValue }));
+            // A byte-order mark so spreadsheets read the file as UTF-8.
+            var bytes = System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(csv)).ToArray();
+            exportHref = "data:text/csv;charset=utf-8;base64," + Convert.ToBase64String(bytes);
+            exportName = $"conduit-audit-{DateTime.UtcNow:yyyyMMdd-HHmm}.csv";
+            exportNote = total > rows.Count
+                ? $"{rows.Count:N0} of {total:N0} events match these filters; the export holds the newest {rows.Count:N0}. Narrow the dates to export the rest."
+                : $"{rows.Count:N0} events matching the current filters.";
+        }
+        catch (Exception ex)
+        {
+            exportError = "The audit events could not be read. " + ex.Message;
+        }
+        finally
+        {
+            exporting = false;
+        }
     }
 
     private BrandBadgeTone GetActionBadgeClass(string action)

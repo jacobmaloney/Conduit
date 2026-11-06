@@ -388,6 +388,10 @@
                                     <i class="oi oi-wrench" aria-hidden="true"></i> Re-run Setup
                                 </a>
                             </div>
+                            @if (exportMessage != null)
+                            {
+                                <BrandNotice Tone="@exportTone" Class="mt-3" OnDismiss="() => exportMessage = null">@exportMessage</BrandNotice>
+                            }
                         </div>
                     </div>
 
@@ -559,6 +563,9 @@
         }
     }
 
+    private string? exportMessage;
+    private BrandNoticeTone exportTone = BrandNoticeTone.Success;
+
     private async Task ExportConfiguration()
     {
         // Create configuration export
@@ -604,9 +611,17 @@
             WriteIndented = true
         });
 
-        // In a real app, you would download this as a file
-        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", json);
-        await JSRuntime.InvokeVoidAsync("alert", "Configuration exported to clipboard!");
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", json);
+            exportTone = BrandNoticeTone.Success;
+            exportMessage = "The configuration is on the clipboard as JSON. Secrets in it are masked.";
+        }
+        catch (JSException)
+        {
+            exportTone = BrandNoticeTone.Warning;
+            exportMessage = "The browser did not allow copying to the clipboard. Use this page over HTTPS or from localhost, then try again.";
+        }
     }
 
     [Inject]

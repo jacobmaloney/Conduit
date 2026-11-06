@@ -2617,7 +2617,12 @@
     <Conduit.Web.Shared.Design.SourceDataBrowser Selection="@sourceBrowse" OnClose="() => sourceBrowse = null" />
 }
 
+@* Confirms open from stacked dialogs (the Mappings dialog is StackLevel 1); Brand's confirm plane sits above them. *@
+<BrandConfirmationModal @ref="confirmModal" />
+<BrandConfirmationModal @ref="replaceOrAddModal" ConfirmLabel="Replace all" CancelLabel="Add new rows only" Intent="BrandConfirmationModal.ConfirmIntent.Caution" />
+
 @code {
+    private BrandConfirmationModal? confirmModal, replaceOrAddModal;
     // BRAND-MODAL-01: the Edit dialog's hero header, handed to BrandModal.Header (the wizard keeps the plain title).
     private RenderFragment EditHero => @<text>
         @* IC-parity GREEN hero header (exact IdentityCenter SyncProjectWizard markup):
@@ -4034,8 +4039,9 @@
                 !string.IsNullOrWhiteSpace(m.SourceAttribute) || !string.IsNullOrWhiteSpace(m.SinkAttribute)));
         if (anyEdits)
         {
-            var ok = await JS.InvokeAsync<bool>("confirm",
-                "Re-map every Mapping step from its object-class template? This replaces any per-step mappings you've edited. Choose Cancel to keep them.");
+            var ok = await confirmModal!.ShowAsync("Re-map every Mapping step?",
+                "Each Mapping step is mapped again from its object-class template. This replaces mappings you have edited on any step.",
+                "Cancel keeps them.", BrandConfirmationModal.ConfirmIntent.Caution, "Re-map all steps");
             if (!ok) return;
         }
 
@@ -4284,8 +4290,9 @@
         var replace = true;
         if (hasEdits)
         {
-            replace = await JS.InvokeAsync<bool>("confirm",
-                "Replace this step's mappings with the auto-mapped set for its object class? Choose Cancel to keep what's there.");
+            replace = await confirmModal!.ShowAsync("Replace this step's mappings?",
+                "Auto-Fill replaces them with the mapped set for the step's object class.",
+                "Cancel keeps what is there.", BrandConfirmationModal.ConfirmIntent.Caution, "Replace mappings");
             if (!replace) return;
         }
 
@@ -5646,8 +5653,8 @@
         var replace = !hasEdits;
         if (hasEdits)
         {
-            replace = await JS.InvokeAsync<bool>("confirm",
-                "Replace the existing mappings with the auto-mapped set? Choose Cancel to append only new (non-duplicate) rows instead.");
+            replace = await replaceOrAddModal!.ShowAsync("Replace the existing mappings?",
+                "Replace all swaps in the auto-mapped set. Add new rows only keeps your mappings and adds the ones that are not there yet.");
         }
 
         if (replace)
