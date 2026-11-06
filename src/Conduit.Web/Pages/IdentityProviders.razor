@@ -128,16 +128,14 @@
             <form>
                 <div class="icb-settings-grid">
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="idpName">Name *</label>
-                        <input id="idpName" type="text" class="icb-form-input" @bind="form.Name" placeholder="e.g., Contoso Azure AD" />
+                        <BrandTextField Label="Name *" Id="idpName" @bind-Value="form.Name" Placeholder="e.g., Contoso Azure AD" />
                         <span class="icb-form-help">Also the sign-in button label and scheme name.</span>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="idpType">Type *</label>
-                        <select id="idpType" class="icb-form-select" @bind="form.Type">
+                        <BrandSelectField Label="Type *" Id="idpType" @bind-Value="form.Type">
                             <option value="OIDC">Generic OIDC</option>
                             <option value="AzureAD">Azure AD</option>
-                        </select>
+                        </BrandSelectField>
                     </div>
                 </div>
 
@@ -148,21 +146,18 @@
                     @if (form.Type == "AzureAD")
                     {
                         <div class="icb-form-field icb-settings-grid-full">
-                            <label class="icb-form-label" for="idpTenant">Azure Tenant ID *</label>
-                            <input id="idpTenant" type="text" class="icb-form-input" @bind="form.TenantId" placeholder="specific tenant GUID (required)" />
+                            <BrandTextField Label="Azure Tenant ID *" Id="idpTenant" @bind-Value="form.TenantId" Placeholder="specific tenant GUID (required)" />
                             <span class="icb-form-help">Authority becomes https://login.microsoftonline.com/{tenant}/v2.0. Multi-tenant authorities (common, organizations, consumers) are not allowed — they would accept tokens from any Azure tenant.</span>
                         </div>
                     }
                     else
                     {
                         <div class="icb-form-field icb-settings-grid-full">
-                            <label class="icb-form-label" for="idpAuthority">Authority (issuer URL) *</label>
-                            <input id="idpAuthority" type="text" class="icb-form-input" @bind="form.Authority" placeholder="https://idp.example.com/" />
+                            <BrandTextField Label="Authority (issuer URL) *" Id="idpAuthority" @bind-Value="form.Authority" Placeholder="https://idp.example.com/" />
                         </div>
                     }
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="idpClientId">Client ID *</label>
-                        <input id="idpClientId" type="text" class="icb-form-input" @bind="form.ClientId" />
+                        <BrandTextField Label="Client ID *" Id="idpClientId" @bind-Value="form.ClientId" />
                     </div>
                     <div class="icb-form-field">
                         <label class="icb-form-label" for="idpSecret">Client Secret @(editingId != null ? "(leave blank to keep current)" : "*")</label>
@@ -176,19 +171,15 @@
                         <span class="icb-form-help">Encrypted at rest. Never displayed after saving.</span>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="idpClaim">Username/email claim (optional)</label>
-                        <input id="idpClaim" type="text" class="icb-form-input" @bind="form.UsernameClaim"
-                               placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
+                        <BrandTextField Label="Username/email claim (optional)" Id="idpClaim" @bind-Value="form.UsernameClaim" Placeholder="preferred_username (default prefers preferred_username, then upn; email only if verified)" />
                         <span class="icb-form-help">Which claim is matched against an existing admin's username.</span>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="idpCallback">Redirect / callback path</label>
-                        <input id="idpCallback" type="text" class="icb-form-input" @bind="form.CallbackPath" placeholder="/signin-oidc" />
+                        <BrandTextField Label="Redirect / callback path" Id="idpCallback" @bind-Value="form.CallbackPath" Placeholder="/signin-oidc" />
                         <span class="icb-form-help">The path your IdP redirects back to after login. Register this EXACT path as the redirect URI in your IdP app registration (e.g. https://&lt;host&gt;/signin-oidc). If you run more than one enabled provider, give each a unique path.</span>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="idpScopes">Extra scopes (space-separated, optional)</label>
-                        <input id="idpScopes" type="text" class="icb-form-input" @bind="form.ScopesRaw" placeholder="openid profile email are always requested" />
+                        <BrandTextField Label="Extra scopes (space-separated, optional)" Id="idpScopes" @bind-Value="form.ScopesRaw" Placeholder="openid profile email are always requested" />
                     </div>
                     <div class="icb-form-field icb-settings-grid-full">
                         <div class="icb-form-check mb-2">

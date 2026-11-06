@@ -73,13 +73,12 @@
                 </div>
                 <div class="ic-card-body">
                     <div class="icb-form-field mb-3">
-                        <label class="icb-form-label" for="dbType">Database Type</label>
-                        <select id="dbType" class="icb-form-select" @bind="databaseType">
+                        <BrandSelectField Label="Database Type" Id="dbType" @bind-Value="databaseType">
                             <option value="localdb">SQL Server LocalDB (Development)</option>
                             <option value="sqlexpress">SQL Server Express</option>
                             <option value="sqlserver">SQL Server</option>
                             <option value="custom">Custom Connection String</option>
-                        </select>
+                        </BrandSelectField>
                     </div>
 
                     @if (databaseType == "sqlexpress" || databaseType == "sqlserver")
@@ -92,28 +91,24 @@
                             </div>
 
                             <div class="icb-form-field">
-                                <label class="icb-form-label" for="dbName">Database Name</label>
-                                <input id="dbName" type="text" class="icb-form-input" @bind="databaseName" />
+                                <BrandTextField Label="Database Name" Id="dbName" @bind-Value="databaseName" />
                                 <span class="icb-form-help">Type a name that does not exist yet to create a new database.</span>
                             </div>
 
                             <div class="icb-form-field">
-                                <label class="icb-form-label" for="dbAuth">Authentication</label>
-                                <select id="dbAuth" class="icb-form-select" @bind="authType">
+                                <BrandSelectField Label="Authentication" Id="dbAuth" @bind-Value="authType">
                                     <option value="windows">Windows Authentication</option>
                                     <option value="sql">SQL Server Authentication</option>
-                                </select>
+                                </BrandSelectField>
                             </div>
 
                             @if (authType == "sql")
                             {
                                 <div class="icb-form-field">
-                                    <label class="icb-form-label" for="dbUser">Username</label>
-                                    <input id="dbUser" type="text" class="icb-form-input" @bind="dbUsername" />
+                                    <BrandTextField Label="Username" Id="dbUser" @bind-Value="dbUsername" />
                                 </div>
                                 <div class="icb-form-field">
-                                    <label class="icb-form-label" for="dbPass">Password</label>
-                                    <input id="dbPass" type="password" class="icb-form-input" @bind="dbPassword" />
+                                    <BrandTextField Label="Password" Type="password" Id="dbPass" @bind-Value="dbPassword" />
                                 </div>
                             }
                         </div>
@@ -130,16 +125,13 @@
                     else if (databaseType == "localdb")
                     {
                         <div class="icb-form-field mb-3">
-                            <label class="icb-form-label" for="dbNameLocal">Database Name</label>
-                            <input id="dbNameLocal" type="text" class="icb-form-input" @bind="databaseName" />
+                            <BrandTextField Label="Database Name" Id="dbNameLocal" @bind-Value="databaseName" />
                         </div>
                     }
                     else if (databaseType == "custom")
                     {
                         <div class="icb-form-field mb-3">
-                            <label class="icb-form-label" for="dbCustom">Connection String</label>
-                            <textarea id="dbCustom" class="icb-form-textarea" rows="3" @bind="customConnectionString"
-                                      placeholder="Server=localhost;Database=Conduit;..."></textarea>
+                            <BrandTextField Label="Connection String" Id="dbCustom" Rows="3" @bind-Value="customConnectionString" Placeholder="Server=localhost;Database=Conduit;..." />
                         </div>
                     }
 
@@ -166,12 +158,10 @@
                         {
                             <div class="icb-settings-grid mt-2">
                                 <div class="icb-form-field">
-                                    <label class="icb-form-label" for="newAdminUser">Username</label>
-                                    <input id="newAdminUser" type="text" class="icb-form-input" placeholder="Username" @bind="newAdminUserName" />
+                                    <BrandTextField Label="Username" Id="newAdminUser" Placeholder="Username" @bind-Value="newAdminUserName" />
                                 </div>
                                 <div class="icb-form-field">
-                                    <label class="icb-form-label" for="newAdminPass">Password</label>
-                                    <input id="newAdminPass" type="password" class="icb-form-input" placeholder="Password (min 8 characters)" @bind="newAdminPassword" />
+                                    <BrandTextField Label="Password" Type="password" Id="newAdminPass" Placeholder="Password (min 8 characters)" @bind-Value="newAdminPassword" />
                                 </div>
                             </div>
                         }

@@ -68,14 +68,13 @@
     <div class="row flex-grow-1 mt-3">
         <div class="col-md-4 d-flex flex-column gap-2">
             <div class="icb-form-field">
-                <label class="icb-form-label" for="sh-project">Project filter</label>
-                <select id="sh-project" class="icb-form-select" @bind="selectedProjectIdRaw" @bind:after="ReloadList">
+                <BrandSelectField Label="Project filter" Id="sh-project" @bind-Value="selectedProjectIdRaw" @bind-Value:after="ReloadList">
                     <option value="">All projects</option>
                     @foreach (var p in allProjects)
                     {
                         <option value="@p.Id">@p.Name</option>
                     }
-                </select>
+                </BrandSelectField>
             </div>
             <BrandListPanel TItem="Conduit.Core.SyncModels.SyncRun"
                             Width="BrandListWidth.Fill"

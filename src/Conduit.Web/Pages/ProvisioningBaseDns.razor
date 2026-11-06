@@ -49,14 +49,13 @@
             <div class="row g-2 align-items-start">
                 <div class="col-md-4">
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="pbd-conn">Connection name</label>
-                        <select id="pbd-conn" class="icb-form-select" @bind="newConnectionName">
+                        <BrandSelectField Label="Connection name" Id="pbd-conn" @bind-Value="newConnectionName">
                             <option value="">-- select a connection --</option>
                             @foreach (var name in connectionOptions)
                             {
                                 <option value="@name">@name</option>
                             }
-                        </select>
+                        </BrandSelectField>
                         <span class="icb-form-help">
                             @if (connectionOptions.Count == 0)
                             {
@@ -71,8 +70,7 @@
                 </div>
                 <div class="col-md-6">
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="pbd-dn">Permitted base DN</label>
-                        <input id="pbd-dn" class="icb-form-input icb-form-input-mono" @bind="newBaseDn" @bind:event="oninput" placeholder="OU=Staff,OU=Users,DC=corp,DC=local" />
+                        <BrandTextField Label="Permitted base DN" Id="pbd-dn" @bind-Value="newBaseDn" Immediate="true" Placeholder="OU=Staff,OU=Users,DC=corp,DC=local" Monospace="true" />
                     </div>
                 </div>
                 <div class="col-md-2">

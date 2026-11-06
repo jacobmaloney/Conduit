@@ -128,18 +128,15 @@
                             <span class="icb-form-help">Or email — SSO matches on this value.</span>
                         </div>
                         <div class="icb-form-field">
-                            <label class="icb-form-label" for="adminDisplayName">Display name</label>
-                            <input id="adminDisplayName" type="text" class="icb-form-input" @bind="formDisplayName" placeholder="e.g., Jane Doe" />
+                            <BrandTextField Label="Display name" Id="adminDisplayName" @bind-Value="formDisplayName" Placeholder="e.g., Jane Doe" />
                         </div>
                     }
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="adminPassword">Password *</label>
-                        <input id="adminPassword" type="password" class="icb-form-input" @bind="formPassword" autocomplete="new-password" />
+                        <BrandTextField Label="Password *" Type="password" Id="adminPassword" @bind-Value="formPassword" AutoComplete="new-password" />
                         <span class="icb-form-help">Minimum 8 characters.</span>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="adminPasswordConfirm">Confirm password *</label>
-                        <input id="adminPasswordConfirm" type="password" class="icb-form-input" @bind="formPasswordConfirm" autocomplete="new-password" />
+                        <BrandTextField Label="Confirm password *" Type="password" Id="adminPasswordConfirm" @bind-Value="formPasswordConfirm" AutoComplete="new-password" />
                     </div>
                 </div>
             </form>

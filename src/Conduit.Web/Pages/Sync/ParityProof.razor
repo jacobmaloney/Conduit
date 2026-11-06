@@ -103,8 +103,7 @@
             </p>
 
             <div class="icb-form-field mb-2">
-                <label class="icb-form-label" for="pp-ic-cs">IdentityCenter connection string (read-only)</label>
-                <input id="pp-ic-cs" class="icb-form-input icb-form-input-mono" @bind="icConnString" placeholder="Data Source=...;Initial Catalog=IdentityCenter15;..." />
+                <BrandTextField Label="IdentityCenter connection string (read-only)" Id="pp-ic-cs" @bind-Value="icConnString" Placeholder="Data Source=...;Initial Catalog=IdentityCenter15;..." Monospace="true" />
                 <span class="icb-form-help">
                     Defaulted from <code>ConnectionStrings:IdentityCenterSource</code> if configured. Never written to.
                 </span>

@@ -25,14 +25,13 @@
             <div class="row g-3 align-items-end">
                 <div class="col-md-4">
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="ax-tenant">Target tenant</label>
-                        <select id="ax-tenant" class="icb-form-select" @bind="selectedSlug" @bind:after="OnTenantChanged">
+                        <BrandSelectField Label="Target tenant" Id="ax-tenant" @bind-Value="selectedSlug" @bind-Value:after="OnTenantChanged">
                             <option value="">-- pick a tenant --</option>
                             @foreach (var t in tenants)
                             {
                                 <option value="@t.Slug">@t.Name (@t.Slug)</option>
                             }
-                        </select>
+                        </BrandSelectField>
                     </div>
                 </div>
                 <div class="col-md-8">
@@ -51,9 +50,7 @@
             <div class="row g-3 mt-1">
                 <div class="col-md-9">
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="ax-token">API Token (full mint string, including <code>scim_</code> prefix)</label>
-                        <input id="ax-token" type="text" class="icb-form-input icb-form-input-mono" @bind="apiToken"
-                               placeholder="scim_xxxxxxxxxxxxxxxxxx" />
+                        <BrandTextField Id="ax-token" @bind-Value="apiToken" Placeholder="scim_xxxxxxxxxxxxxxxxxx" Monospace="true"><LabelContent>API Token (full mint string, including <code>scim_</code> prefix)</LabelContent></BrandTextField>
                     </div>
                 </div>
                 <div class="col-md-3 d-flex align-items-end">

@@ -95,20 +95,18 @@
                             {
                                 <!-- Step 1: Database Configuration -->
                                 <div class="icb-form-field mb-3">
-                                    <label class="icb-form-label" for="setupDbType">Database Type</label>
-                                    <select id="setupDbType" class="icb-form-select" @bind="databaseType">
+                                    <BrandSelectField Label="Database Type" Id="setupDbType" @bind-Value="databaseType">
                                         <option value="localdb">SQL Server LocalDB (Development)</option>
                                         <option value="sqlexpress">SQL Server Express</option>
                                         <option value="sqlserver">SQL Server</option>
                                         <option value="custom">Custom Connection String</option>
-                                    </select>
+                                    </BrandSelectField>
                                 </div>
 
                                 @if (databaseType == "localdb")
                                 {
                                     <div class="icb-form-field mb-3">
-                                        <label class="icb-form-label" for="setupDbNameLocal">Database Name</label>
-                                        <input id="setupDbNameLocal" type="text" class="icb-form-input" @bind="databaseName" placeholder="Conduit" />
+                                        <BrandTextField Label="Database Name" Id="setupDbNameLocal" @bind-Value="databaseName" Placeholder="Conduit" />
                                         <span class="icb-form-help">
                                             Defaults to <code>Conduit</code>. Use suffixes like <code>ConduitUSA1</code> to run multiple instances side-by-side.
                                         </span>
@@ -124,26 +122,23 @@
                                     </div>
 
                                     <div class="icb-form-field mb-3">
-                                        <label class="icb-form-label" for="setupDbName">Database Name</label>
-                                        <input id="setupDbName" type="text" class="icb-form-input" @bind="databaseName" placeholder="Conduit" />
+                                        <BrandTextField Label="Database Name" Id="setupDbName" @bind-Value="databaseName" Placeholder="Conduit" />
                                         <span class="icb-form-help">
                                             Defaults to <code>Conduit</code>. Use suffixes like <code>ConduitUSA1</code>, <code>ConduitUSA2</code> to run multiple instances side-by-side on one server.
                                         </span>
                                     </div>
 
                                     <div class="icb-form-field mb-3">
-                                        <label class="icb-form-label" for="setupAuthType">Authentication</label>
-                                        <select id="setupAuthType" class="icb-form-select" @bind="authType">
+                                        <BrandSelectField Label="Authentication" Id="setupAuthType" @bind-Value="authType">
                                             <option value="windows">Windows Authentication</option>
                                             <option value="sql">SQL Server Authentication</option>
-                                        </select>
+                                        </BrandSelectField>
                                     </div>
 
                                     @if (authType == "sql")
                                     {
                                         <div class="icb-form-field mb-3">
-                                            <label class="icb-form-label" for="setupDbUser">Username</label>
-                                            <input id="setupDbUser" type="text" class="icb-form-input" @bind="dbUsername" />
+                                            <BrandTextField Label="Username" Id="setupDbUser" @bind-Value="dbUsername" />
                                             @if (prefill.HasConnection && !prefill.IntegratedSecurity)
                                             {
                                                 <span class="icb-form-help">
@@ -153,8 +148,7 @@
                                         </div>
 
                                         <div class="icb-form-field mb-3">
-                                            <label class="icb-form-label" for="setupDbPassword">Password</label>
-                                            <input id="setupDbPassword" type="password" class="icb-form-input" @bind="dbPassword" />
+                                            <BrandTextField Label="Password" Type="password" Id="setupDbPassword" @bind-Value="dbPassword" />
                                         </div>
                                     }
 
@@ -177,9 +171,7 @@
                                 else if (databaseType == "custom")
                                 {
                                     <div class="icb-form-field mb-3">
-                                        <label class="icb-form-label" for="setupConnectionString">Connection String</label>
-                                        <textarea id="setupConnectionString" class="icb-form-textarea" rows="3" @bind="config.ConnectionString"
-                                                  placeholder="Server=localhost;Database=Conduit;..."></textarea>
+                                        <BrandTextField Label="Connection String" Id="setupConnectionString" Rows="3" @bind-Value="config.ConnectionString" Placeholder="Server=localhost;Database=Conduit;..." />
                                     </div>
                                 }
 
@@ -258,8 +250,7 @@
                                 </div>
 
                                 <div class="icb-form-field mb-3">
-                                    <label class="icb-form-label" for="setupConfirmPassword">Confirm Password</label>
-                                    <input id="setupConfirmPassword" type="password" class="icb-form-input" @bind="confirmPassword" />
+                                    <BrandTextField Label="Confirm Password" Type="password" Id="setupConfirmPassword" @bind-Value="confirmPassword" />
                                     @if (!string.IsNullOrEmpty(confirmPassword) && confirmPassword != config.AdminPassword)
                                     {
                                         <span class="icb-form-error">Passwords do not match</span>

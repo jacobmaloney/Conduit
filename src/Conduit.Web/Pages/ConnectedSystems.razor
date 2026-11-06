@@ -244,13 +244,7 @@
                 </div>
 
                 <div class="icb-form-field">
-                    <label class="icb-form-label" for="deleteConfirmSlug">Type the system's slug (<code>@deletingFor.Slug</code>) to enable the delete button</label>
-                    <input id="deleteConfirmSlug" class="icb-form-input icb-form-input-mono"
-                           @bind="deleteConfirmText"
-                           @bind:event="oninput"
-                           placeholder="@deletingFor.Slug"
-                           disabled="@deleteInProgress"
-                           autocomplete="off" />
+                    <BrandTextField Id="deleteConfirmSlug" @bind-Value="deleteConfirmText" Immediate="true" Placeholder="@deletingFor.Slug" Disabled="@deleteInProgress" AutoComplete="off" Monospace="true"><LabelContent>Type the system's slug (<code>@deletingFor.Slug</code>) to enable the delete button</LabelContent></BrandTextField>
                 </div>
             }
             @* Outside the target guard on purpose: a re-shown dialog must never be empty. The
@@ -287,13 +281,7 @@
                 </div>
 
                 <div class="icb-form-field">
-                    <label class="icb-form-label" for="clearConfirmSlug">Type the system's slug (<code>@clearingFor.Slug</code>) to enable the clear button</label>
-                    <input id="clearConfirmSlug" class="icb-form-input icb-form-input-mono"
-                           @bind="clearConfirmText"
-                           @bind:event="oninput"
-                           placeholder="@clearingFor.Slug"
-                           disabled="@clearInProgress"
-                           autocomplete="off" />
+                    <BrandTextField Id="clearConfirmSlug" @bind-Value="clearConfirmText" Immediate="true" Placeholder="@clearingFor.Slug" Disabled="@clearInProgress" AutoComplete="off" Monospace="true"><LabelContent>Type the system's slug (<code>@clearingFor.Slug</code>) to enable the clear button</LabelContent></BrandTextField>
                 </div>
             }
             @* Outside the target guard on purpose — see the delete dialog above. *@
@@ -332,10 +320,7 @@
                     </div>
                 </div>
                 <div class="icb-form-field">
-                    <label class="icb-form-label" for="renameNewName">New name *</label>
-                    <input id="renameNewName" class="icb-form-input" maxlength="100" autocomplete="off"
-                           @bind="renameNewName" @bind:event="oninput" placeholder="@renameTarget.Name"
-                           disabled="@renameBusy" />
+                    <BrandTextField Label="New name *" Id="renameNewName" MaxLength="100" AutoComplete="off" @bind-Value="renameNewName" Immediate="true" Placeholder="@renameTarget.Name" Disabled="@renameBusy" />
                     <span class="icb-form-help">Credential-map key will become: <code>@renameSanitizedPreview</code></span>
                 </div>
             }
@@ -423,12 +408,10 @@
             {
             <div class="icb-settings-grid">
                 <div class="icb-form-field icb-settings-grid-full">
-                    <label class="icb-form-label" for="connName">Name *</label>
-                    <input id="connName" class="icb-form-input" @bind="form.Name" @bind:event="oninput" @bind:after="OnNameChanged" placeholder="e.g. IT Helpdesk Portal" />
+                    <BrandTextField Label="Name *" Id="connName" @bind-Value="form.Name" Immediate="true" @bind-Value:after="OnNameChanged" Placeholder="e.g. IT Helpdesk Portal" />
                 </div>
                 <div class="icb-form-field icb-settings-grid-full">
-                    <label class="icb-form-label" for="connSlug">Slug</label>
-                    <input id="connSlug" class="icb-form-input" @bind="form.Slug" placeholder="it-helpdesk" />
+                    <BrandTextField Label="Slug" Id="connSlug" @bind-Value="form.Slug" Placeholder="it-helpdesk" />
                     @* The consequence, not the mechanism: the slug is the /scim/v2/t/{slug}/ path
                        segment, so changing it is an integration-breaking act, not a cosmetic one.
                        OnNameChanged also stops deriving it once editingId is set. *@
@@ -513,8 +496,7 @@
                     }
                 </div>
                 <div class="icb-form-field icb-settings-grid-full">
-                    <label class="icb-form-label" for="connDescription">Description</label>
-                    <textarea id="connDescription" class="icb-form-textarea" rows="3" @bind="form.Description"></textarea>
+                    <BrandTextField Label="Description" Id="connDescription" Rows="3" @bind-Value="form.Description" />
                 </div>
             </div>
             }
@@ -545,8 +527,7 @@
                 {
                     <div class="icb-settings-grid">
                         <div class="icb-form-field">
-                            <label class="icb-form-label" for="connDomain">Domain@(domainRequired ? " *" : string.Empty)</label>
-                            <input id="connDomain" class="icb-form-input" @bind="form.Domain" @bind:after="InvalidateFormTest" placeholder="@domainPlaceholder" />
+                            <BrandTextField Id="connDomain" @bind-Value="form.Domain" @bind-Value:after="InvalidateFormTest" Placeholder="@domainPlaceholder"><LabelContent>Domain@(domainRequired ? " *" : string.Empty)</LabelContent></BrandTextField>
                             @if (!string.IsNullOrEmpty(domainHelp))
                             {
                                 <span class="icb-form-help">@domainHelp</span>
@@ -862,12 +843,11 @@
                 {
                     <div class="icb-settings-grid">
                         <div class="icb-form-field icb-settings-grid-full">
-                            <label class="icb-form-label" for="connBringing">What are you bringing in? *</label>
-                            <select id="connBringing" class="icb-form-select" @bind="form.TargetTable" @bind:after="InvalidateFormTest">
+                            <BrandSelectField Label="What are you bringing in? *" Id="connBringing" @bind-Value="form.TargetTable" @bind-Value:after="InvalidateFormTest">
                                 <option value="">— choose one —</option>
                                 <option value="Identities">People to review &amp; certify</option>
                                 <option value="Objects">Systems &amp; accounts to inventory</option>
-                            </select>
+                            </BrandSelectField>
                             <span class="icb-form-help">
                                 Pick <strong>People</strong> if you're bringing in the folks whose access gets
                                 reviewed. Pick <strong>Systems &amp; accounts</strong> if you're bringing in the
@@ -1449,37 +1429,30 @@
                 case "ActiveDirectory":
                 case "Real":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credUsername">Username</label>
-                        <input id="credUsername" class="icb-form-input" @bind="credForm.Username" placeholder="DEMO\sync-svc" autocomplete="off" />
+                        <BrandTextField Label="Username" Id="credUsername" @bind-Value="credForm.Username" Placeholder="DEMO\sync-svc" AutoComplete="off" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credPassword">Password</label>
-                        <input id="credPassword" class="icb-form-input" type="password" @bind="credForm.Password" autocomplete="new-password" />
+                        <BrandTextField Label="Password" Type="password" Id="credPassword" @bind-Value="credForm.Password" AutoComplete="new-password" />
                     </div>
                     break;
                 case "EntraID":
                 case "SharePoint":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credTenantId">Tenant ID</label>
-                        <input id="credTenantId" class="icb-form-input" @bind="credForm.TenantId" placeholder="00000000-0000-0000-0000-000000000000" />
+                        <BrandTextField Label="Tenant ID" Id="credTenantId" @bind-Value="credForm.TenantId" Placeholder="00000000-0000-0000-0000-000000000000" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credClientId">Client ID (Application ID)</label>
-                        <input id="credClientId" class="icb-form-input" @bind="credForm.ClientId" />
+                        <BrandTextField Label="Client ID (Application ID)" Id="credClientId" @bind-Value="credForm.ClientId" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credClientSecret">Client Secret</label>
-                        <input id="credClientSecret" class="icb-form-input" type="password" @bind="credForm.ClientSecret" autocomplete="new-password" />
+                        <BrandTextField Label="Client Secret" Type="password" Id="credClientSecret" @bind-Value="credForm.ClientSecret" AutoComplete="new-password" />
                     </div>
                     break;
                 case "Okta":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credOrgUrl">Org URL</label>
-                        <input id="credOrgUrl" class="icb-form-input" @bind="credForm.OrgUrl" placeholder="https://your-org.okta.com" />
+                        <BrandTextField Label="Org URL" Id="credOrgUrl" @bind-Value="credForm.OrgUrl" Placeholder="https://your-org.okta.com" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credApiToken">API Token (SSWS)</label>
-                        <input id="credApiToken" class="icb-form-input" type="password" @bind="credForm.ApiToken" autocomplete="new-password" />
+                        <BrandTextField Label="API Token (SSWS)" Type="password" Id="credApiToken" @bind-Value="credForm.ApiToken" AutoComplete="new-password" />
                     </div>
                     break;
                 case "GoogleWorkspace":
@@ -1492,22 +1465,18 @@
                         <input id="credAdminEmail" class="icb-form-input" @bind="credForm.AdminEmail" placeholder="admin@your-domain.com" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credGwsDomain">Domain (optional, leave blank for my_customer)</label>
-                        <input id="credGwsDomain" class="icb-form-input" @bind="credForm.Domain" />
+                        <BrandTextField Label="Domain (optional, leave blank for my_customer)" Id="credGwsDomain" @bind-Value="credForm.Domain" />
                     </div>
                     break;
                 case "GenericLdap":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credServerUrl">Server URL</label>
-                        <input id="credServerUrl" class="icb-form-input" @bind="credForm.ServerUrl" placeholder="ldap://host:389 or ldaps://host:636" />
+                        <BrandTextField Label="Server URL" Id="credServerUrl" @bind-Value="credForm.ServerUrl" Placeholder="ldap://host:389 or ldaps://host:636" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credBindDn">Bind DN</label>
-                        <input id="credBindDn" class="icb-form-input" @bind="credForm.BindDN" placeholder="cn=admin,dc=example,dc=org" />
+                        <BrandTextField Label="Bind DN" Id="credBindDn" @bind-Value="credForm.BindDN" Placeholder="cn=admin,dc=example,dc=org" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credBindPassword">Bind Password</label>
-                        <input id="credBindPassword" class="icb-form-input" type="password" @bind="credForm.BindPassword" autocomplete="new-password" />
+                        <BrandTextField Label="Bind Password" Type="password" Id="credBindPassword" @bind-Value="credForm.BindPassword" AutoComplete="new-password" />
                     </div>
                     <div class="icb-form-field">
                         <div class="icb-form-check">
@@ -1518,34 +1487,27 @@
                     break;
                 case "Scim":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credBaseUrl">Base URL</label>
-                        <input id="credBaseUrl" class="icb-form-input" @bind="credForm.BaseUrl" placeholder="https://target.example.com/scim/v2" />
+                        <BrandTextField Label="Base URL" Id="credBaseUrl" @bind-Value="credForm.BaseUrl" Placeholder="https://target.example.com/scim/v2" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credBearerToken">Bearer Token</label>
-                        <input id="credBearerToken" class="icb-form-input" type="password" @bind="credForm.BearerToken" autocomplete="new-password" />
+                        <BrandTextField Label="Bearer Token" Type="password" Id="credBearerToken" @bind-Value="credForm.BearerToken" AutoComplete="new-password" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credUserEndpoint">User Endpoint (default <code>/Users</code>)</label>
-                        <input id="credUserEndpoint" class="icb-form-input" @bind="credForm.UserEndpoint" />
+                        <BrandTextField Id="credUserEndpoint" @bind-Value="credForm.UserEndpoint"><LabelContent>User Endpoint (default <code>/Users</code>)</LabelContent></BrandTextField>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credGroupEndpoint">Group Endpoint (default <code>/Groups</code>)</label>
-                        <input id="credGroupEndpoint" class="icb-form-input" @bind="credForm.GroupEndpoint" />
+                        <BrandTextField Id="credGroupEndpoint" @bind-Value="credForm.GroupEndpoint"><LabelContent>Group Endpoint (default <code>/Groups</code>)</LabelContent></BrandTextField>
                     </div>
                     break;
                 case "Database":
                     <div class="icb-form-field icb-settings-grid-full">
-                        <label class="icb-form-label" for="credConnectionString">Connection String</label>
-                        <input id="credConnectionString" class="icb-form-input" type="password" @bind="credForm.ConnectionString" autocomplete="new-password" placeholder="Server=...;Database=...;User Id=...;Password=...;Encrypt=true;" />
+                        <BrandTextField Label="Connection String" Type="password" Id="credConnectionString" @bind-Value="credForm.ConnectionString" AutoComplete="new-password" Placeholder="Server=...;Database=...;User Id=...;Password=...;Encrypt=true;" />
                     </div>
                     <div class="icb-form-field icb-settings-grid-full">
-                        <label class="icb-form-label" for="credUserQuery">User Query (SELECT, must yield objectGuid)</label>
-                        <textarea id="credUserQuery" class="icb-form-textarea" rows="3" @bind="credForm.UserQuery"></textarea>
+                        <BrandTextField Label="User Query (SELECT, must yield objectGuid)" Id="credUserQuery" Rows="3" @bind-Value="credForm.UserQuery" />
                     </div>
                     <div class="icb-form-field icb-settings-grid-full">
-                        <label class="icb-form-label" for="credGroupQuery">Group Query (optional)</label>
-                        <textarea id="credGroupQuery" class="icb-form-textarea" rows="2" @bind="credForm.GroupQuery"></textarea>
+                        <BrandTextField Label="Group Query (optional)" Id="credGroupQuery" Rows="2" @bind-Value="credForm.GroupQuery" />
                     </div>
                     <div class="icb-form-field icb-settings-grid-full">
                         <label class="icb-form-label" for="credUpsertUser">Upsert User Statement (optional — sink)</label>
@@ -1554,12 +1516,10 @@
                     break;
                 case "CSV":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credFilePath">File Path</label>
-                        <input id="credFilePath" class="icb-form-input" @bind="credForm.FilePath" placeholder="C:\path\to\users.csv" />
+                        <BrandTextField Label="File Path" Id="credFilePath" @bind-Value="credForm.FilePath" Placeholder="C:\path\to\users.csv" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credDelimiter">Delimiter</label>
-                        <input id="credDelimiter" class="icb-form-input" @bind="credForm.Delimiter" placeholder="," />
+                        <BrandTextField Label="Delimiter" Id="credDelimiter" @bind-Value="credForm.Delimiter" Placeholder="," />
                     </div>
                     <div class="icb-form-field">
                         <div class="icb-form-check">
@@ -1568,44 +1528,35 @@
                         </div>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credIdColumn">ID Column (column to use as objectGuid)</label>
-                        <input id="credIdColumn" class="icb-form-input" @bind="credForm.IdColumn" placeholder="EmployeeId" />
+                        <BrandTextField Label="ID Column (column to use as objectGuid)" Id="credIdColumn" @bind-Value="credForm.IdColumn" Placeholder="EmployeeId" />
                     </div>
                     break;
                 case "AWS":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credAwsKeyId">Access Key ID</label>
-                        <input id="credAwsKeyId" class="icb-form-input" @bind="credForm.AccessKeyId" />
+                        <BrandTextField Label="Access Key ID" Id="credAwsKeyId" @bind-Value="credForm.AccessKeyId" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credAwsSecret">Secret Access Key</label>
-                        <input id="credAwsSecret" class="icb-form-input" type="password" @bind="credForm.SecretAccessKey" autocomplete="new-password" />
+                        <BrandTextField Label="Secret Access Key" Type="password" Id="credAwsSecret" @bind-Value="credForm.SecretAccessKey" AutoComplete="new-password" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credAwsRegion">Region</label>
-                        <input id="credAwsRegion" class="icb-form-input" @bind="credForm.Region" placeholder="us-east-1" />
+                        <BrandTextField Label="Region" Id="credAwsRegion" @bind-Value="credForm.Region" Placeholder="us-east-1" />
                     </div>
                     break;
                 case "AWSIdentityCenter":
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credSsoKeyId">Access Key ID</label>
-                        <input id="credSsoKeyId" class="icb-form-input" @bind="credForm.AccessKeyId" />
+                        <BrandTextField Label="Access Key ID" Id="credSsoKeyId" @bind-Value="credForm.AccessKeyId" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credSsoSecret">Secret Access Key</label>
-                        <input id="credSsoSecret" class="icb-form-input" type="password" @bind="credForm.SecretAccessKey" autocomplete="new-password" />
+                        <BrandTextField Label="Secret Access Key" Type="password" Id="credSsoSecret" @bind-Value="credForm.SecretAccessKey" AutoComplete="new-password" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credSsoRegion">Region</label>
-                        <input id="credSsoRegion" class="icb-form-input" @bind="credForm.Region" placeholder="us-east-1" />
+                        <BrandTextField Label="Region" Id="credSsoRegion" @bind-Value="credForm.Region" Placeholder="us-east-1" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credIdentityStoreId">Identity Store ID <span class="text-muted">(auto-discover if blank)</span></label>
-                        <input id="credIdentityStoreId" class="icb-form-input" @bind="credForm.IdentityStoreId" placeholder="d-xxxxxxxxxx" />
+                        <BrandTextField Id="credIdentityStoreId" @bind-Value="credForm.IdentityStoreId" Placeholder="d-xxxxxxxxxx"><LabelContent>Identity Store ID <span class="text-muted">(auto-discover if blank)</span></LabelContent></BrandTextField>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credSsoInstanceArn">SSO Instance ARN <span class="text-muted">(auto-discover if blank)</span></label>
-                        <input id="credSsoInstanceArn" class="icb-form-input" @bind="credForm.SSOInstanceArn" placeholder="arn:aws:sso:::instance/ssoins-..." />
+                        <BrandTextField Id="credSsoInstanceArn" @bind-Value="credForm.SSOInstanceArn" Placeholder="arn:aws:sso:::instance/ssoins-..."><LabelContent>SSO Instance ARN <span class="text-muted">(auto-discover if blank)</span></LabelContent></BrandTextField>
                     </div>
                     break;
                 case "IdentityCenter":
@@ -1633,12 +1584,10 @@
                         </div>
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credIcBaseUrl">Base URL</label>
-                        <input id="credIcBaseUrl" class="icb-form-input" @bind="credForm.BaseUrl" placeholder="https://identitycenter.local:7048" />
+                        <BrandTextField Label="Base URL" Id="credIcBaseUrl" @bind-Value="credForm.BaseUrl" Placeholder="https://identitycenter.local:7048" />
                     </div>
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="credIcApiKey">API Key (X-API-Key, admin scope)</label>
-                        <input id="credIcApiKey" class="icb-form-input" type="password" @bind="credForm.ApiKey" autocomplete="new-password" />
+                        <BrandTextField Label="API Key (X-API-Key, admin scope)" Type="password" Id="credIcApiKey" @bind-Value="credForm.ApiKey" AutoComplete="new-password" />
                     </div>
                     break;
                 default:
@@ -1736,13 +1685,12 @@
                 <div class="section-eyebrow">Credential</div>
                 <div class="icb-settings-grid">
                     <div class="icb-form-field icb-settings-grid-full">
-                        <label class="icb-form-label" for="qsCredName">Pick a stored credential</label>
-                        <select id="qsCredName" class="icb-form-select" @bind="quickSyncSelectedCredName">
+                        <BrandSelectField Label="Pick a stored credential" Id="qsCredName" @bind-Value="quickSyncSelectedCredName">
                             @foreach (var n in quickSyncAvailableCredNames)
                             {
                                 <option value="@n">@n</option>
                             }
-                        </select>
+                        </BrandSelectField>
                         <span class="icb-form-help">This tenant has more than one stored credential. The picked one will be set as the source credential on the new sync projects.</span>
                     </div>
                 </div>

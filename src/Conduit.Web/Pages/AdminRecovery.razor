@@ -94,27 +94,19 @@
             }
 
             <div class="icb-form-field">
-                <label class="icb-form-label" for="rt">Recovery token</label>
-                <input id="rt" type="password" class="icb-form-input" autocomplete="off"
-                       @bind="_token" @bind:event="oninput" placeholder="Paste the token" />
+                <BrandTextField Label="Recovery token" Type="password" Id="rt" AutoComplete="off" @bind-Value="_token" Immediate="true" Placeholder="Paste the token" />
             </div>
 
             <div class="icb-form-field mt-2">
-                <label class="icb-form-label" for="ru">New administrator username</label>
-                <input id="ru" type="text" class="icb-form-input" autocomplete="off"
-                       @bind="_userName" @bind:event="oninput" placeholder="Choose a name" />
+                <BrandTextField Label="New administrator username" Id="ru" AutoComplete="off" @bind-Value="_userName" Immediate="true" Placeholder="Choose a name" />
             </div>
 
             <div class="icb-form-field mt-2">
-                <label class="icb-form-label" for="rp">Password</label>
-                <input id="rp" type="password" class="icb-form-input" autocomplete="new-password"
-                       @bind="_password" @bind:event="oninput" placeholder="At least 8 characters" />
+                <BrandTextField Label="Password" Type="password" Id="rp" AutoComplete="new-password" @bind-Value="_password" Immediate="true" Placeholder="At least 8 characters" />
             </div>
 
             <div class="icb-form-field mt-2">
-                <label class="icb-form-label" for="rc">Confirm password</label>
-                <input id="rc" type="password" class="icb-form-input" autocomplete="new-password"
-                       @bind="_confirm" @bind:event="oninput" placeholder="Repeat it" />
+                <BrandTextField Label="Confirm password" Type="password" Id="rc" AutoComplete="new-password" @bind-Value="_confirm" Immediate="true" Placeholder="Repeat it" />
                 @if (_password.Length > 0 && _confirm.Length > 0 && _password != _confirm)
                 {
                     <span class="icb-form-error">The passwords do not match.</span>

@@ -32,32 +32,29 @@
             <div class="row g-3">
                 <div class="col-md-3">
                     <div class="icb-form-field">
-                    <label class="icb-form-label" for="lg-level">Log Level</label>
-                    <select id="lg-level" class="icb-form-select" @bind="selectedLevel" @bind:after="RefreshLogs">
+                    <BrandSelectField Label="Log Level" Id="lg-level" @bind-Value="selectedLevel" @bind-Value:after="RefreshLogs">
                         <option value="">All Levels</option>
                         <option value="Debug">Debug</option>
                         <option value="Info">Info</option>
                         <option value="Warning">Warning</option>
                         <option value="Error">Error</option>
                         <option value="Critical">Critical</option>
-                    </select>
+                    </BrandSelectField>
                     </div>
                 </div>
                 <div class="col-md-3">
                     <div class="icb-form-field">
-                        <label class="icb-form-label" for="lg-category">Category</label>
-                        <input id="lg-category" type="text" class="icb-form-input" @bind="categoryFilter" @bind:after="RefreshLogs" placeholder="e.g., GroupGeneration" />
+                        <BrandTextField Label="Category" Id="lg-category" @bind-Value="categoryFilter" @bind-Value:after="RefreshLogs" Placeholder="e.g., GroupGeneration" />
                     </div>
                 </div>
                 <div class="col-md-3">
                     <div class="icb-form-field">
-                    <label class="icb-form-label" for="lg-max">Max Results</label>
-                    <select id="lg-max" class="icb-form-select" @bind="maxResults" @bind:after="RefreshLogs">
+                    <BrandSelectField Label="Max Results" Id="lg-max" @bind-Value="maxResults" @bind-Value:after="RefreshLogs">
                         <option value="50">50</option>
                         <option value="100">100</option>
                         <option value="200">200</option>
                         <option value="500">500</option>
-                    </select>
+                    </BrandSelectField>
                     </div>
                 </div>
                 <div class="col-md-3 d-flex align-items-end">

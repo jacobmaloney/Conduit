@@ -243,14 +243,13 @@
                 @* ── The two connections, side by side with a flow arrow ── *@
                 <div class="autogen-flow-row">
                     <div class="autogen-flow-col">
-                        <label class="icb-form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source</label>
-                        <select class="icb-form-select" @bind="autoGenSourceId" @bind:after="OnAutoGenSourceChanged">
+                        <BrandSelectField @bind-Value="autoGenSourceId" @bind-Value:after="OnAutoGenSourceChanged"><LabelContent><i class="fas fa-arrow-up-from-bracket me-1"></i>Source</LabelContent><ChildContent>
                             <option value="@Guid.Empty">-- Read from --</option>
                             @foreach (var t in AutoGenSourceTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
-                        </select>
+                        </ChildContent></BrandSelectField>
                         @if (AutoGenSourceIsIdentityCenter)
                         {
                             <select class="icb-form-select icb-form-select-sm mt-2" @bind="autoGenSourceTable">
@@ -261,14 +260,13 @@
                     </div>
                     <div class="autogen-flow-arrow"><i class="fas fa-arrow-right-long"></i></div>
                     <div class="autogen-flow-col">
-                        <label class="icb-form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target</label>
-                        <select class="icb-form-select" @bind="autoGenSinkId" @bind:after="OnAutoGenSinkChanged">
+                        <BrandSelectField @bind-Value="autoGenSinkId" @bind-Value:after="OnAutoGenSinkChanged"><LabelContent><i class="fas fa-arrow-down-to-bracket me-1"></i>Target</LabelContent><ChildContent>
                             <option value="@Guid.Empty">-- Write to --</option>
                             @foreach (var t in AutoGenSinkTenants)
                             {
                                 <option value="@t.Id">@t.Name (@t.SystemType)</option>
                             }
-                        </select>
+                        </ChildContent></BrandSelectField>
                         @if (AutoGenSinkIsIdentityCenter)
                         {
                             <select class="icb-form-select icb-form-select-sm mt-2" @bind="autoGenSinkTable">
@@ -333,8 +331,7 @@
                 }
 
                 <div class="mb-3 mt-3">
-                    <label class="icb-form-label fw-bold">Project Name</label>
-                    <input class="icb-form-input" maxlength="200" @bind="autoGenProjectName" @bind:after="OnAutoGenNameEdited" />
+                    <BrandTextField Label="Project Name" MaxLength="200" @bind-Value="autoGenProjectName" @bind-Value:after="OnAutoGenNameEdited" />
                     <small class="icb-form-help text-muted">Auto-filled from source → target. Edit to override.</small>
                 </div>
                 <div class="mb-3">
@@ -500,14 +497,13 @@
                 }
 
                 <div class="mb-3">
-                    <label class="icb-form-label fw-bold"><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(@bp.SourceSystemType)</span></label>
-                    <select class="icb-form-select" @bind="blueprintSourceId">
+                    <BrandSelectField @bind-Value="blueprintSourceId"><LabelContent><i class="fas fa-arrow-up-from-bracket me-1"></i>Source <span class="text-muted">(@bp.SourceSystemType)</span></LabelContent><ChildContent>
                         <option value="@Guid.Empty">-- Pick a source --</option>
                         @foreach (var t in BlueprintSourceTenants)
                         {
                             <option value="@t.Id">@t.Name (@t.SystemType)</option>
                         }
-                    </select>
+                    </ChildContent></BrandSelectField>
                     <small class="icb-form-help text-muted">Only @bp.SourceSystemType connections are listed.</small>
                 </div>
 
@@ -516,14 +512,13 @@
                 </div>
 
                 <div class="mb-3">
-                    <label class="icb-form-label fw-bold"><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(IdentityCenter)</span></label>
-                    <select class="icb-form-select" @bind="blueprintSinkId">
+                    <BrandSelectField @bind-Value="blueprintSinkId"><LabelContent><i class="fas fa-arrow-down-to-bracket me-1"></i>Target <span class="text-muted">(IdentityCenter)</span></LabelContent><ChildContent>
                         <option value="@Guid.Empty">-- Pick an Identity Center target --</option>
                         @foreach (var t in BlueprintSinkTenants)
                         {
                             <option value="@t.Id">@t.Name (@t.SystemType)</option>
                         }
-                    </select>
+                    </ChildContent></BrandSelectField>
                     <small class="icb-form-help text-muted">Blueprints write into Identity Center.</small>
                 </div>
 
@@ -603,14 +598,13 @@
                 then rereads and rewrites that population from the source. It does not delete the
                 connection, project, or target objects.
             </BrandNotice>
-            <label class="icb-form-label fw-semibold">Object class</label>
-            <select class="icb-form-select" @bind="fullSyncObjectClass">
+            <BrandSelectField Label="Object class" @bind-Value="fullSyncObjectClass">
                 <option value="">All object classes</option>
                 @foreach (var objectClass in FullSyncObjectClasses)
                 {
                     <option value="@objectClass">@objectClass</option>
                 }
-            </select>
+            </BrandSelectField>
         </ChildContent>
         <FooterContent>
             <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseFullSyncConfirmModal" disabled="@fullSyncInProgress">Cancel</button>
@@ -891,9 +885,7 @@
                             }
                         </div>
                         <div class="mb-3">
-                            <label class="icb-form-label fw-semibold">Description</label>
-                            <textarea class="icb-form-input" rows="2" @bind="form.Description"
-                                      placeholder="Optional description of what this project synchronizes"></textarea>
+                            <BrandTextField Label="Description" Rows="2" @bind-Value="form.Description" Placeholder="Optional description of what this project synchronizes" />
                         </div>
                         @* Phase 8: workflow template picker. Only shown on edit's Setup tab —
                            the create wizard moves it to the Object Class step. On edit the
@@ -936,11 +928,10 @@
                                     @if (SourceIsIdentityCenter)
                                     {
                                         <div class="mt-2">
-                                            <label class="icb-form-label fw-semibold mb-1">Source Table</label>
-                                            <select class="icb-form-select" @bind="form.SourceTable" @bind:after="OnIcTableChanged">
+                                            <BrandSelectField Label="Source Table" @bind-Value="form.SourceTable" @bind-Value:after="OnIcTableChanged">
                                                 <option value="Objects">Objects (directory accounts)</option>
                                                 <option value="Identities">Identities (people)</option>
-                                            </select>
+                                            </BrandSelectField>
                                             <small class="icb-form-help text-muted">Which Identity Center table to read from.</small>
                                         </div>
                                     }
@@ -996,11 +987,10 @@
                                     @if (SinkIsIdentityCenter)
                                     {
                                         <div class="mt-2">
-                                            <label class="icb-form-label fw-semibold mb-1">Target Table</label>
-                                            <select class="icb-form-select" @bind="form.SinkTable" @bind:after="OnIcTableChanged">
+                                            <BrandSelectField Label="Target Table" @bind-Value="form.SinkTable" @bind-Value:after="OnIcTableChanged">
                                                 <option value="Objects">Objects (directory accounts)</option>
                                                 <option value="Identities">Identities (people)</option>
-                                            </select>
+                                            </BrandSelectField>
                                             <small class="icb-form-help text-muted">Which Identity Center table to write to.</small>
                                         </div>
                                     }
@@ -1058,25 +1048,23 @@
                         {
                             <div class="row g-3 mt-1">
                                 <div class="col-md-6">
-                                    <label class="icb-form-label fw-semibold">Source Credential <span class="text-muted">(optional)</span></label>
-                                    <select class="icb-form-select" @bind="form.SourceCredentialName">
+                                    <BrandSelectField @bind-Value="form.SourceCredentialName"><LabelContent>Source Credential <span class="text-muted">(optional)</span></LabelContent><ChildContent>
                                         <option value="">(default)</option>
                                         @foreach (var name in sourceCredentialNames)
                                         {
                                             <option value="@name">@name</option>
                                         }
-                                    </select>
+                                    </ChildContent></BrandSelectField>
                                     <small class="icb-form-help text-muted">Override when the source tenant holds multiple credentials.</small>
                                 </div>
                                 <div class="col-md-6">
-                                    <label class="icb-form-label fw-semibold">Target Credential <span class="text-muted">(optional)</span></label>
-                                    <select class="icb-form-select" @bind="form.SinkCredentialName">
+                                    <BrandSelectField @bind-Value="form.SinkCredentialName"><LabelContent>Target Credential <span class="text-muted">(optional)</span></LabelContent><ChildContent>
                                         <option value="">(default)</option>
                                         @foreach (var name in sinkCredentialNames)
                                         {
                                             <option value="@name">@name</option>
                                         }
-                                    </select>
+                                    </ChildContent></BrandSelectField>
                                     <small class="icb-form-help text-muted">Override when the target connection holds multiple credentials.</small>
                                 </div>
                             </div>
@@ -1085,8 +1073,7 @@
                         {
                             <div class="row g-3 mt-1">
                                 <div class="col-md-6">
-                                    <label class="icb-form-label fw-semibold">Object Class</label>
-                                    <select class="icb-form-select" @bind="form.ObjectClass">
+                                    <BrandSelectField Label="Object Class" @bind-Value="form.ObjectClass">
                                         <option value="User">User</option>
                                         <option value="Group">Group</option>
                                         @if (SinkIsAwsSso)
@@ -1099,7 +1086,7 @@
                                             <option value="GroupMemberships">Group Memberships</option>
                                             <option value="ManagerRefresh">Manager Refresh</option>
                                         }
-                                    </select>
+                                    </BrandSelectField>
                                 </div>
                             </div>
                         }
@@ -1257,19 +1244,16 @@
                             }
                         </div>
                         <div class="col-md-5">
-                            <label class="icb-form-label fw-semibold">Page size <span class="text-danger">*</span></label>
-                            <input class="icb-form-input" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                            <BrandNumberField Label="Page size" Min="1" Max="10000" @bind-Value="scopeForm.PageSize" Required="true" />
                         </div>
                     </div>
                     <div class="row g-3 mt-1">
                         <div class="col-md-9">
-                            <label class="icb-form-label fw-semibold">LDAP filter override <BrandHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></label>
-                            <input class="icb-form-input" @bind="scopeForm.LdapFilter" placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default" />
+                            <BrandTextField @bind-Value="scopeForm.LdapFilter" Placeholder="(&amp;(objectClass=user)(objectCategory=person)) — blank for default"><LabelContent>LDAP filter override <BrandHelpHint Text="An RFC 4515 filter that narrows which objects are read (e.g. only enabled users). Blank uses the sensible default for each object class." /></LabelContent></BrandTextField>
                             <small class="icb-form-help text-muted">RFC 4515 LDAP filter. Blank = the per-object-class default.</small>
                         </div>
                         <div class="col-md-3">
-                            <label class="icb-form-label fw-semibold">Max objects</label>
-                            <input class="icb-form-input" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                            <BrandNumberField Label="Max objects" Min="0" @bind-Value="scopeForm.MaxObjects" />
                             <small class="icb-form-help text-muted">0 = no cap.</small>
                         </div>
                     </div>
@@ -1282,19 +1266,16 @@
                     </p>
                     <div class="row g-3">
                         <div class="col-md-12">
-                            <label class="icb-form-label fw-semibold">OData filter</label>
-                            <input class="icb-form-input" @bind="scopeForm.QueryExpression" placeholder="startswith(displayName,'Sales') — blank for all" />
+                            <BrandTextField Label="OData filter" @bind-Value="scopeForm.QueryExpression" Placeholder="startswith(displayName,'Sales') — blank for all" />
                             <small class="icb-form-help text-muted">Graph OData <code>$filter</code>. Blank = all objects of this class.</small>
                         </div>
                     </div>
                     <div class="row g-3 mt-1">
                         <div class="col-md-6">
-                            <label class="icb-form-label fw-semibold">Page size <span class="text-danger">*</span></label>
-                            <input class="icb-form-input" type="number" min="1" max="999" @bind="scopeForm.PageSize" />
+                            <BrandNumberField Label="Page size" Min="1" Max="999" @bind-Value="scopeForm.PageSize" Required="true" />
                         </div>
                         <div class="col-md-6">
-                            <label class="icb-form-label fw-semibold">Max objects</label>
-                            <input class="icb-form-input" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                            <BrandNumberField Label="Max objects" Min="0" @bind-Value="scopeForm.MaxObjects" />
                             <small class="icb-form-help text-muted">0 = no cap.</small>
                         </div>
                     </div>
@@ -1307,19 +1288,16 @@
                     </p>
                     <div class="row g-3">
                         <div class="col-md-12">
-                            <label class="icb-form-label fw-semibold">Query expression</label>
-                            <input class="icb-form-input" @bind="scopeForm.QueryExpression" placeholder="Connector-specific query — blank to read all" />
+                            <BrandTextField Label="Query expression" @bind-Value="scopeForm.QueryExpression" Placeholder="Connector-specific query — blank to read all" />
                             <small class="icb-form-help text-muted">Interpreted by the source connector. Blank = read all.</small>
                         </div>
                     </div>
                     <div class="row g-3 mt-1">
                         <div class="col-md-6">
-                            <label class="icb-form-label fw-semibold">Page size <span class="text-danger">*</span></label>
-                            <input class="icb-form-input" type="number" min="1" max="10000" @bind="scopeForm.PageSize" />
+                            <BrandNumberField Label="Page size" Min="1" Max="10000" @bind-Value="scopeForm.PageSize" Required="true" />
                         </div>
                         <div class="col-md-6">
-                            <label class="icb-form-label fw-semibold">Max objects</label>
-                            <input class="icb-form-input" type="number" min="0" @bind="scopeForm.MaxObjects" />
+                            <BrandNumberField Label="Max objects" Min="0" @bind-Value="scopeForm.MaxObjects" />
                             <small class="icb-form-help text-muted">0 = no cap.</small>
                         </div>
                     </div>
@@ -1338,9 +1316,7 @@
                         This is separate from the read scope above. It is used only when this project creates
                         missing objects in the target Active Directory.
                     </p>
-                    <label class="icb-form-label fw-semibold">Target container (OU DN)</label>
-                    <input class="icb-form-input" @bind="form.TargetContainer"
-                           placeholder="OU=Employees,OU=Users,DC=domain,DC=local" />
+                    <BrandTextField Label="Target container (OU DN)" @bind-Value="form.TargetContainer" Placeholder="OU=Employees,OU=Users,DC=domain,DC=local" />
                     <small class="icb-form-help text-muted">Leave blank for update-only projects or to use the directory connector's root default.</small>
                 }
             }
@@ -1376,24 +1352,19 @@
                         {
                             <div class="assignment-template-fields">
                                 <div>
-                                    <label class="icb-form-label fw-semibold">Account id <span class="text-danger">*</span></label>
-                                    <input class="icb-form-input" @bind="assignAccountId" placeholder="123456789012" />
+                                    <BrandTextField Label="Account id" @bind-Value="assignAccountId" Placeholder="123456789012" Required="true" />
                                 </div>
                                 <div>
-                                    <label class="icb-form-label fw-semibold">Permission set ARN <span class="text-danger">*</span></label>
-                                    <input class="icb-form-input" @bind="assignPermissionSetArn" placeholder="arn:aws:sso:::permissionSet/ssoins-xxxx/ps-xxxx" />
+                                    <BrandTextField Label="Permission set ARN" @bind-Value="assignPermissionSetArn" Placeholder="arn:aws:sso:::permissionSet/ssoins-xxxx/ps-xxxx" Required="true" />
                                 </div>
                                 <div>
-                                    <label class="icb-form-label fw-semibold">Principal type</label>
-                                    <select class="icb-form-select" @bind="assignPrincipalType">
+                                    <BrandSelectField Label="Principal type" @bind-Value="assignPrincipalType">
                                         <option value="USER">USER</option>
                                         <option value="GROUP">GROUP</option>
-                                    </select>
+                                    </BrandSelectField>
                                 </div>
                                 <div>
-                                    <label class="icb-form-label fw-semibold">Principal id (source attribute)</label>
-                                    <input class="icb-form-input" @bind="assignPrincipalIdSource"
-                                           placeholder="e.g. id, externalId, sAMAccountName" />
+                                    <BrandTextField Label="Principal id (source attribute)" @bind-Value="assignPrincipalIdSource" Placeholder="e.g. id, externalId, sAMAccountName" />
                                     <small class="icb-form-help text-muted">
                                         Source attribute holding the IdentityStore UserId / GroupId — required because it varies per row.
                                     </small>
@@ -1613,8 +1584,7 @@
                                 <div class="workflow-settings-strip">
                                     <div class="row g-3">
                                         <div class="col-md-6">
-                                            <label class="icb-form-label fw-semibold">Name</label>
-                                            <input class="icb-form-input icb-form-input-sm" @bind="wfRef.Name" @bind:after="MarkWorkflowsDirty" />
+                                            <BrandTextField Label="Name" @bind-Value="wfRef.Name" @bind-Value:after="MarkWorkflowsDirty" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small" />
                                         </div>
                                         <div class="col-md-6 d-flex align-items-end">
                                             <div class="icb-form-check">
@@ -1623,8 +1593,7 @@
                                             </div>
                                         </div>
                                         <div class="col-md-12">
-                                            <label class="icb-form-label fw-semibold">Description</label>
-                                            <textarea class="icb-form-input icb-form-input-sm" rows="2" @bind="wfRef.Description" @bind:after="MarkWorkflowsDirty"></textarea>
+                                            <BrandTextField Label="Description" Rows="2" @bind-Value="wfRef.Description" @bind-Value:after="MarkWorkflowsDirty" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small" />
                                         </div>
                                     </div>
                                 </div>
@@ -2064,12 +2033,10 @@
         <ChildContent>
             <div class="row g-3">
                 <div class="col-md-7">
-                    <label class="icb-form-label fw-semibold">Name</label>
-                    <input class="icb-form-input icb-form-input-sm" @bind="smStep.Name" @bind:after="MarkWorkflowsDirty" />
+                    <BrandTextField Label="Name" @bind-Value="smStep.Name" @bind-Value:after="MarkWorkflowsDirty" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small" />
                 </div>
                 <div class="col-md-5">
-                    <label class="icb-form-label fw-semibold">Type</label>
-                    <select class="icb-form-select icb-form-select-sm" @bind="smStep.StepType" @bind:after="MarkWorkflowsDirty">
+                    <BrandSelectField Label="Type" @bind-Value="smStep.StepType" @bind-Value:after="MarkWorkflowsDirty" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small">
                         <option value="Mapping">Mapping (source → target)</option>
                         <option value="PersonMatch">PersonMatch</option>
                         <option value="PersonCreate">PersonCreate</option>
@@ -2082,18 +2049,17 @@
                         <option value="AppRoleSync">AppRoleSync - App Role Assignments</option>
                         <option value="GroupMembership">GroupMembership - Group Memberships</option>
                         <option value="Custom">Custom (no-op)</option>
-                    </select>
+                    </BrandSelectField>
                 </div>
                 @if (smIsMapping)
                 {
                     <div class="col-md-7">
-                        <label class="icb-form-label fw-semibold">Object Class</label>
-                        <select class="icb-form-select icb-form-select-sm" @bind="smStep.ObjectClass" @bind:after="MarkWorkflowsDirty">
+                        <BrandSelectField Label="Object Class" @bind-Value="smStep.ObjectClass" @bind-Value:after="MarkWorkflowsDirty" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small">
                             @foreach (var opt in StepObjectClassOptionsFor(smStep.ObjectClass))
                             {
                                 <option value="@opt.Value">@opt.Label</option>
                             }
-                        </select>
+                        </BrandSelectField>
                         <small class="icb-form-help text-muted">Each step in a project can target a different class.</small>
                     </div>
                     <div class="col-md-5 d-flex flex-column">
@@ -2532,19 +2498,13 @@
 
             <div class="row g-3 @(scopeDraftInherit ? "step-scope-inert" : "")">
                 <div class="col-md-12">
-                    <label class="icb-form-label fw-semibold">LDAP filter</label>
-                    <input class="icb-form-input icb-form-input-sm" disabled="@scopeDraftInherit"
-                           @bind="scopeDraftLdapFilter" placeholder="(&amp;(objectClass=user)…) — blank for the object-class default" />
+                    <BrandTextField Label="LDAP filter" Disabled="@scopeDraftInherit" @bind-Value="scopeDraftLdapFilter" Placeholder="(&amp;(objectClass=user)…) — blank for the object-class default" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small" />
                 </div>
                 <div class="col-md-6">
-                    <label class="icb-form-label fw-semibold">Page size</label>
-                    <input class="icb-form-input icb-form-input-sm" type="number" min="1" max="10000"
-                           disabled="@scopeDraftInherit" @bind="scopeDraftPageSize" />
+                    <BrandNumberField Label="Page size" Min="1" Max="10000" Disabled="@scopeDraftInherit" @bind-Value="scopeDraftPageSize" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small" />
                 </div>
                 <div class="col-md-6">
-                    <label class="icb-form-label fw-semibold">Max objects</label>
-                    <input class="icb-form-input icb-form-input-sm" type="number" min="0"
-                           disabled="@scopeDraftInherit" @bind="scopeDraftMaxObjects" />
+                    <BrandNumberField Label="Max objects" Min="0" Disabled="@scopeDraftInherit" @bind-Value="scopeDraftMaxObjects" Size="IdentityCenter.Brand.Models.BrandFieldSize.Small" />
                 </div>
             </div>
         </ChildContent>

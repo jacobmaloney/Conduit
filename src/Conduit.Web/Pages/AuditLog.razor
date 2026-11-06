@@ -153,8 +153,7 @@
         </div>
         <div class="col-md-2">
             <div class="icb-form-field">
-            <label class="icb-form-label" for="al-action">Action</label>
-            <select id="al-action" class="icb-form-select" @bind="selectedAction">
+            <BrandSelectField Label="Action" Id="al-action" @bind-Value="selectedAction">
                 <option value="">All Actions</option>
                 <optgroup label="User Actions">
                     <option value="@AuditActions.UserCreated">User Created</option>
@@ -171,25 +170,23 @@
                     <option value="@AuditActions.LoginFailed">Login Failed</option>
                     <option value="@AuditActions.TokenCreated">Token Created</option>
                 </optgroup>
-            </select>
+            </BrandSelectField>
             </div>
         </div>
         <div class="col-md-2">
             <div class="icb-form-field">
-            <label class="icb-form-label" for="al-type">Resource Type</label>
-            <select id="al-type" class="icb-form-select" @bind="selectedResourceType">
+            <BrandSelectField Label="Resource Type" Id="al-type" @bind-Value="selectedResourceType">
                 <option value="">All Types</option>
                 <option value="User">User</option>
                 <option value="Group">Group</option>
                 <option value="Token">Token</option>
                 <option value="System">System</option>
-            </select>
+            </BrandSelectField>
             </div>
         </div>
         <div class="col-md-3">
             <div class="icb-form-field">
-                <label class="icb-form-label" for="al-user">User ID</label>
-                <input id="al-user" type="text" class="icb-form-input" @bind="userId" placeholder="Filter by user ID" />
+                <BrandTextField Label="User ID" Id="al-user" @bind-Value="userId" Placeholder="Filter by user ID" />
             </div>
         </div>
         <div class="col-md-2 d-flex align-items-end">
