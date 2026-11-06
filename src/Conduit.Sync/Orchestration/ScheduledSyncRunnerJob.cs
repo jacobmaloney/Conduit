@@ -187,6 +187,9 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
         return next <= now;
     }
 
+    /// <summary>What the operator reads when a schedule cannot be run (SCHEDULE-SHARED-01: never the expression).</summary>
+    public const string UnrunnableSchedule = "This schedule cannot be run; choose a frequency.";
+
     /// <summary>
     /// True if the expression parses (NCrontab or legacy shorthand). Used by the
     /// UI to validate the operator's input before save.
@@ -202,7 +205,7 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
             var rest = s["@every:".Length..];
             if (rest.EndsWith("m", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(rest[..^1], out var minutes) && minutes > 0) return true;
-            error = "Invalid @every shorthand. Use @every:Nm where N is minutes.";
+            error = UnrunnableSchedule;
             return false;
         }
         try
@@ -210,9 +213,9 @@ public sealed class ScheduledSyncRunnerJob : IScheduledJob
             CrontabSchedule.Parse(s);
             return true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            error = $"Invalid cron expression: {ex.Message}";
+            error = UnrunnableSchedule;   // SCHEDULE-SHARED-01: shown to operators; never the expression or the parser text
             return false;
         }
     }

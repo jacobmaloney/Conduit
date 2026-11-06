@@ -8,6 +8,7 @@
 @using Conduit.Web.Services
 @using IdentityCenter.Brand.Components.Layout
 @using IdentityCenter.Brand.Components.Modals
+@using IdentityCenter.Brand.Components.Inputs
 @using IdentityCenter.Brand.Models
 @inject TenantRepository TenantRepo
 @inject ApiTokenService Tokens
@@ -1751,24 +1752,8 @@
             }
 
             <div class="section-eyebrow">Schedule</div>
-            <div class="icb-settings-grid">
-                <div class="icb-form-field icb-settings-grid-full">
-                    <label class="icb-form-label" for="qsCronPreset">Cron preset</label>
-                    <select id="qsCronPreset" class="icb-form-select" @bind="quickSyncCronPreset" @bind:after="ApplyQuickSyncPreset">
-                        <option value="">Manual only (run on demand)</option>
-                        <option value="@("@hourly")">Hourly</option>
-                        <option value="0 */4 * * *">Every 4 hours</option>
-                        <option value="0 2 * * *">Daily at 02:00 UTC</option>
-                        <option value="*/15 * * * *">Every 15 minutes</option>
-                    </select>
-                </div>
-                <div class="icb-form-field icb-settings-grid-full">
-                    <label class="icb-form-label" for="qsCron">Cron expression</label>
-                    <input id="qsCron" class="icb-form-input" @bind="quickSyncCronSchedule"
-                           placeholder="Leave blank for manual-only" />
-                    <span class="icb-form-help">5-field cron or <code>@@hourly</code> / <code>@@every:Nm</code>.</span>
-                </div>
-            </div>
+            @* SCHEDULE-SHARED-01 (Jacob 2026-11-05: "not cron expressions"): the shared schedule editor; Manual = run on demand. *@
+            <BrandScheduleEditor @bind-Value="quickSyncCronSchedule" />
 
             @if (!string.IsNullOrEmpty(quickSyncError))
             {
@@ -2071,8 +2056,7 @@
     private TenantStats? quickSyncFor;
     private bool quickSyncIncludeUser = true;
     private bool quickSyncIncludeGroup = true;
-    private string quickSyncCronSchedule = string.Empty;
-    private string quickSyncCronPreset = string.Empty;
+    private string? quickSyncCronSchedule;
     private bool quickSyncInProgress;
     private string quickSyncError = string.Empty;
     private string quickSyncStatus = string.Empty;
@@ -2133,7 +2117,6 @@
         quickSyncIncludeUser = true;
         quickSyncIncludeGroup = QuickSyncSupportsGroup(s.SystemType);
         quickSyncCronSchedule = string.Empty;
-        quickSyncCronPreset = string.Empty;
         quickSyncError = string.Empty;
         quickSyncStatus = string.Empty;
         quickSyncInProgress = false;
@@ -2174,14 +2157,6 @@
     {
         if (quickSyncInProgress) return;
         quickSyncFor = null;
-    }
-
-    private void ApplyQuickSyncPreset()
-    {
-        if (!string.IsNullOrEmpty(quickSyncCronPreset))
-        {
-            quickSyncCronSchedule = quickSyncCronPreset;
-        }
     }
 
     private async Task ConfirmQuickSync()

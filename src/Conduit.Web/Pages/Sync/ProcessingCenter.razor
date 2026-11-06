@@ -169,7 +169,7 @@
             </HeaderTemplate>
             <RowTemplate Context="p">
                 <td class="nm-cell">@p.Name</td>
-                <td><span class="mono">@p.CronSchedule</span></td>
+                <td>@IdentityCenter.Brand.Models.BrandCronConverter.Describe(p.CronSchedule)</td>
                 <td>@(p.LastRunAt.HasValue ? FormatTime(p.LastRunAt.Value) : "—")</td>
                 <td>
                     @if (p.IsRunning)

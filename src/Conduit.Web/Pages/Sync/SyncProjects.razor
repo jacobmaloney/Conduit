@@ -134,7 +134,7 @@
                 }
                 @if (!string.IsNullOrEmpty(project.CronSchedule))
                 {
-                    <BrandBadge Text="Scheduled" Icon="fas fa-clock" Description="@project.CronSchedule" Soft="true" />
+                    <BrandBadge Text="Scheduled" Icon="fas fa-clock" Description="@BrandCronConverter.Describe(project.CronSchedule)" Soft="true" />
                 }
             </td>
             <td>
@@ -166,7 +166,7 @@
                     }
                     @if (!string.IsNullOrEmpty(project.CronSchedule))
                     {
-                        <button type="button" class="icb-list-action" title="@project.CronSchedule" @onclick="() => SelectThenSchedule(project)"><i class="fas fa-clock"></i> Schedule</button>
+                        <button type="button" class="icb-list-action" title="@BrandCronConverter.Describe(project.CronSchedule)" @onclick="() => SelectThenSchedule(project)"><i class="fas fa-clock"></i> Schedule</button>
                     }
                     <button type="button" class="icb-list-action" disabled="@(browseReason is not null)" aria-describedby="@(browseReason is not null ? $"browse-reason-{project.Id}" : null)" @onclick="() => sourceBrowse = new(project.SourceTenantId, project.Id)">Browse source</button>
                 </div>
@@ -366,13 +366,8 @@
                         </div>
                         <div class="mb-3">
                             <label class="icb-form-label fw-bold">Schedule</label>
-                            <select class="icb-form-select" @bind="autoGenCronSchedule">
-                                <option value="">No schedule (manual only)</option>
-                                <option value="0 * * * *">Every hour</option>
-                                <option value="0 */6 * * *">Every 6 hours</option>
-                                <option value="0 2 * * *">Daily at 02:00</option>
-                                <option value="0 2 * * 0">Weekly Sunday 02:00</option>
-                            </select>
+                            @* SCHEDULE-SHARED-01: the shared schedule editor, not a list of cron values. *@
+                            <BrandScheduleEditor @bind-Value="autoGenCronSchedule" />
                         </div>
                         <div class="icb-form-check">
                             <input class="icb-form-checkbox" type="checkbox" id="autoGenEnabled" @bind="autoGenEnable" />
@@ -580,13 +575,7 @@
 
                         <div class="mb-3">
                             <label class="icb-form-label fw-bold">Schedule</label>
-                            <select class="icb-form-select" @bind="blueprintCronSchedule">
-                                <option value="">No schedule (manual only)</option>
-                                <option value="0 * * * *">Every hour</option>
-                                <option value="0 */6 * * *">Every 6 hours</option>
-                                <option value="0 2 * * *">Daily at 02:00</option>
-                                <option value="0 2 * * 0">Weekly Sunday 02:00</option>
-                            </select>
+                            <BrandScheduleEditor @bind-Value="blueprintCronSchedule" />
                             <small class="icb-form-help text-muted">Defaulted from the blueprint. Change it if you like.</small>
                         </div>
                     }
@@ -2019,7 +2008,7 @@
                             <dt>Mappings</dt>
                             <dd>@MappingSummary</dd>
                             <dt>Schedule</dt>
-                            <dd>@(string.IsNullOrWhiteSpace(form.CronSchedule) ? "Manual only" : form.CronSchedule)</dd>
+                            <dd>@BrandCronConverter.Describe(form.CronSchedule)</dd>
                             <dt>Skip unchanged</dt>
                             <dd>@(form.SkipUnchanged ? "Yes" : "No")</dd>
                             <dt>Status</dt>
@@ -2912,11 +2901,6 @@
 
 @code {
     private Conduit.SourceBrowsing.SourceBrowseSelection? sourceBrowse;
-    // Literal @hourly / @every:Nm shown to the user — the Razor parser would otherwise
-    // try to treat @ as a transition, so we hold them in fields with the bare characters.
-    private const string cronPlaceholder = "@hourly  or  @every:15m  (blank = manual only)";
-    private const string hourlyToken = "@hourly";
-    private const string everyToken = "@every:Nm";
 
     private List<SyncProject> allProjects = new();
     private List<SyncProject> filteredProjects = new();
@@ -5073,7 +5057,7 @@
     private Conduit.Sync.Templates.GenerationMode autoGenMode = Conduit.Sync.Templates.GenerationMode.Core;
     private Guid autoGenSourceId = Guid.Empty;
     private Guid autoGenSinkId = Guid.Empty;
-    private string autoGenCronSchedule = string.Empty;
+    private string? autoGenCronSchedule;
     private bool autoGenEnable = true;
     private bool autoGenInProgress;
     private string autoGenError = string.Empty;
@@ -5095,7 +5079,7 @@
     private string blueprintSourceType = string.Empty;
     private Guid blueprintSourceId = Guid.Empty;
     private Guid blueprintSinkId = Guid.Empty;
-    private string blueprintCronSchedule = string.Empty;
+    private string? blueprintCronSchedule;
     private bool blueprintInProgress;
     private string blueprintError = string.Empty;
 
@@ -6952,7 +6936,7 @@
             // capable non-IC sink also gets manager/membership steps and an IC sink gets
             // its full set — all driven by the adapter, never a name heuristic.
             var sinkCaps = Connectors.Get(sink.SystemType)?.Capabilities;
-            var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule, existingNames, sinkCaps);
+            var generated = ProjectGenerator.Generate(src, sink, autoGenMode, autoGenCronSchedule ?? string.Empty, existingNames, sinkCaps);
             if (generated.Count == 0)
             {
                 autoGenError = "This source connector + mode produced no object classes.";
@@ -7127,7 +7111,7 @@
             // Phase 8: pass the sink adapter's declared Capabilities so governance-step
             // emission is capability-driven (not IC-sink-name driven).
             var blueprintSinkCaps = Connectors.Get(sink.SystemType)?.Capabilities;
-            var generated = bp.Expand(ProjectGenerator, src, sink, blueprintCronSchedule, existingNames, blueprintSinkCaps);
+            var generated = bp.Expand(ProjectGenerator, src, sink, blueprintCronSchedule ?? string.Empty, existingNames, blueprintSinkCaps);   // blank = manual; null would mean "the blueprint's default"
             if (generated.Count == 0)
             {
                 blueprintError = "This blueprint produced no object classes for the chosen source.";
