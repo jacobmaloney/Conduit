@@ -64,6 +64,8 @@ public class BrandFieldsTests
         Assert.Matches("<textarea[^>]*aria-label=\"Notes for the run\"[^>]*spellcheck=\"false\"[^>]*class=\"icb-form-input icb-form-textarea\"[^>]*rows=\"4\"", html);
     }
 
+    // The binding tests drive a field instance directly, as SourceBrowserPresentationTests does.
+#pragma warning disable BL0005
     [Fact]
     public async Task A_text_field_binds_on_change_unless_immediate()
     {
@@ -110,6 +112,7 @@ public class BrandFieldsTests
         await Invoke(required, "OnChange", "");
         Assert.Equal(3, required.Value);   // an int cannot be empty
     }
+#pragma warning restore BL0005
 
     private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
 
