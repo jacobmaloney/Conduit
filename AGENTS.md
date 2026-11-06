@@ -6,3 +6,7 @@ For login work, resume ../IdentityCenter.Brand/docs/login-consistency-plan.md. F
 The use-case register (../UseCases/README.md: every-session protocol, function inventory, duplicate decisions) applies to this repository as it does to IdentityCenter. Respect current session scope and concurrent edits. These instructions do not authorize starting servers, tests, credential changes, commits, deployments or changes to security protections.
 
 For navigation work, resume ../IdentityCenter.Brand/docs/navigation-consistency-plan.md. MainLayout/NavMenu are product adapters; shared presentation is in IdentityCenter.Brand/Components/Navigation.
+
+## Before a push
+
+Run `deploy/local-gate.ps1`. It is CI's build gate run locally: a restore that re-evaluates floating versions, a Release build with warnings as errors (`/warnaserror`), and every test project. A Debug or test-only build is not this gate: a Blazor analyzer warning passed every local run and failed CI on 2026-11-06.
