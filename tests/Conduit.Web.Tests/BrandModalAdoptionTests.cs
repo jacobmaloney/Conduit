@@ -28,6 +28,26 @@ public class BrandModalAdoptionTests
         Assert.True(offenders.Count == 0, "Use <BrandModal> (IdentityCenter.Brand.Components.Modals): " + string.Join(", ", offenders));
     }
 
+    /// <summary>
+    /// BRAND-NOTICE-01: notices are BrandNotice, badges BrandBadge, and no page carries an inline style. The Bootstrap
+    /// alerts, badges and the one toast (with its inline z-index) were the last hand-built presentation on the Sync pages.
+    /// </summary>
+    [Theory]
+    [InlineData(@"class=""alert[\s""]", "<BrandNotice>")]
+    [InlineData(@"class=""badge[\s""]", "<BrandBadge>")]
+    [InlineData(@"class=""toast[\s""]", "<BrandNotice Docked=\"true\">")]
+    [InlineData(@"\sstyle=""", "a class in the shared Brand stylesheet")]
+    public void No_Conduit_page_hand_builds_shared_presentation(string pattern, string use)
+    {
+        var rx = new Regex(pattern);
+        var razor = Directory.EnumerateFiles(WebRoot(), "*.razor", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            .ToList();
+        Assert.True(razor.Count > 20, "the scan must see Conduit's pages");
+        var offenders = razor.Where(f => rx.IsMatch(File.ReadAllText(f))).Select(f => Path.GetRelativePath(WebRoot(), f)).ToList();
+        Assert.True(offenders.Count == 0, $"Use {use}: " + string.Join(", ", offenders));
+    }
+
     [Fact]
     public void The_sync_pages_render_their_dialogs_through_BrandModal()
     {

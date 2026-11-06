@@ -150,7 +150,7 @@
                             }
                             @if (!string.IsNullOrEmpty(runActionMessage))
                             {
-                                <div class="alert @(runActionIsError ? "alert-warning" : "alert-success") py-2 mb-2" role="status">@runActionMessage</div>
+                                <BrandNotice Tone="@(runActionIsError ? BrandNoticeTone.Warning : BrandNoticeTone.Success)" Class="mb-2">@runActionMessage</BrandNotice>
                             }
                             <div class="icb-detail-subtitle">
                                 Run started @selectedRun.StartedAt.ToString("yyyy-MM-dd HH:mm:ss 'UTC'")

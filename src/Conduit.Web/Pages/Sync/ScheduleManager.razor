@@ -173,20 +173,16 @@
 
 @if (!string.IsNullOrEmpty(toast))
 {
-    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080;">
-        <div class="toast show align-items-center @toastClass border-0">
-            <div class="d-flex">
-                <div class="toast-body">
-                    @toast
-                    @if (lastRunId is not null)
-                    {
-                        <a class="text-white text-decoration-underline ms-2" href="/sync-history/@lastRunId">View run</a>
-                    }
-                </div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" @onclick="DismissToast"></button>
-            </div>
-        </div>
-    </div>
+    @* BRAND-NOTICE-01: the shared notice, docked as a toast (was a Bootstrap toast with an inline z-index). *@
+    <BrandNotice Tone="@toastTone" Docked="true" OnDismiss="DismissToast">
+        <ChildContent>@toast</ChildContent>
+        <Actions>
+            @if (lastRunId is not null)
+            {
+                <a class="icb-list-action" href="/sync-history/@lastRunId">View run</a>
+            }
+        </Actions>
+    </BrandNotice>
 }
 
 @* The shared component, like every other Conduit page. Intent replaces the raw CSS string:
@@ -249,11 +245,11 @@
     private bool editSaving;
 
     // Run-now state. runningRowId marks the row whose run is being STARTED (the
-    // brief window between Confirm and the navigate-away). toastClass + lastRunId
+    // brief window between Confirm and the navigate-away). toastTone + lastRunId
     // are retained for the enable/disable/save toasts on this page.
     private BrandConfirmationModal? runConfirm;
     private Guid? runningRowId;
-    private string toastClass = "text-bg-success";
+    private BrandNoticeTone toastTone = BrandNoticeTone.Success;
     private Guid? lastRunId;
 
     protected override async Task OnInitializedAsync() => await Reload();
@@ -306,7 +302,7 @@
         {
             runningRowId = null;
             busyId = null;
-            toastClass = "text-bg-danger";
+            toastTone = BrandNoticeTone.Danger;
             toast = $"Could not start '{projectName}': {ex.Message}";
             await Reload();
             return;
@@ -317,9 +313,9 @@
             busyId = null;
             // A deactivated Connected System is a configuration problem the operator must fix, not
             // the transient "come back later" that a warning implies.
-            toastClass = admission == SyncAdmissionOutcome.RefusedAlreadyRunning
-                ? "text-bg-warning"
-                : "text-bg-danger";
+            toastTone = admission == SyncAdmissionOutcome.RefusedAlreadyRunning
+                ? BrandNoticeTone.Warning
+                : BrandNoticeTone.Danger;
             toast = SyncAdmissionRefusal.Describe(admission, projectName);
             await Reload();
             return;
@@ -450,7 +446,7 @@
             project.IsEnabled = assignEnable;
             await ProjectRepo.UpdateAsync(project);
             assignOpen = false;
-            toastClass = "text-bg-success";
+            toastTone = BrandNoticeTone.Success;
             toast = $"Schedule assigned to '{project.Name}'.";
             await Reload();
         }
@@ -471,7 +467,7 @@
     private async Task ToggleEnabled(SyncProject row)
     {
         busyId = row.Id;
-        toastClass = "text-bg-success";
+        toastTone = BrandNoticeTone.Success;
         lastRunId = null;
         try
         {
@@ -523,7 +519,7 @@
         }
         editSaving = true;
         editError = null;
-        toastClass = "text-bg-success";
+        toastTone = BrandNoticeTone.Success;
         lastRunId = null;
         try
         {
