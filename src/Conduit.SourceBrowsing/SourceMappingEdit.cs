@@ -29,15 +29,18 @@ public static class SourceMappingEdit
                 throw new SourceBrowseException("InvalidDefault", $"Default for {target.Name}: {error}");
         }
         foreach (var target in schema.Targets.Where(t => t.Required))
-            if (!snapshot.Any(r => r.Target == target.Name && r.TargetType == target.Kind))
+            if (!snapshot.Any(r => r.Target.Equals(target.Name, StringComparison.OrdinalIgnoreCase) && r.TargetType == target.Kind))
                 throw new SourceBrowseException("RequiredTarget", $"Include the required target field {target.Name}.");
         if (snapshot.Select(r => FindTarget(schema, r)!).GroupBy(t => t.Kind + ":" + (t.AliasOf ?? t.Name), StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
             throw new SourceBrowseException("DuplicateTarget", "Two mappings address the same destination field through aliases. Keep one mapping for that field.");
         return snapshot;
     }
 
+    // Field names match regardless of case, as every writer reads them (IC ingest columns, IC object fields, LDAP
+    // attributes): a saved "email" is the Email field. An exact spelling wins when a schema has both.
     public static SourceMappingTarget? FindTarget(SourceMappingSchema schema, SourceMappingRule rule) =>
         schema.Targets.SingleOrDefault(t => t.Name == rule.Target && t.Kind == rule.TargetType) ??
+        (schema.Targets.Where(t => t.Name.Equals(rule.Target, StringComparison.OrdinalIgnoreCase) && t.Kind == rule.TargetType).ToArray() is [var single] ? single : null) ??
         (schema.AdditionalKind == rule.TargetType && !string.IsNullOrWhiteSpace(rule.Target) && rule.Target.Length <= 200 &&
          !rule.Target.StartsWith('_') && rule.Target.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_') &&
          !schema.Targets.Any(t => t.Name.Equals(rule.Target, StringComparison.OrdinalIgnoreCase))

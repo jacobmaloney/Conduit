@@ -46,6 +46,17 @@ public class SourceMappingEditTests
         foreach (var target in new[] { "email", "_system", "bad/name" })
             Assert.Equal("UnknownTarget", Assert.Throws<SourceBrowseException>(() => SourceMappingEdit.Validate([new("name", target, TargetType: "Extra")], schema)).Code);
     }
+    [Fact] public void A_saved_lowercase_target_is_the_field_every_writer_reads()
+    {
+        // MAP-EDITOR-SOURCE-01: IC ingest columns, IC object fields and LDAP attributes all ignore case, so a step saved
+        // with "email" writes Email; the preview must not refuse it. An exact spelling wins; two case-twins stay ambiguous.
+        var schema = new SourceMappingSchema("Fixture", [new("Email"), new("DN", Required: true)], "", "");
+        Assert.Equal(2, SourceMappingEdit.Validate([new("mail", "email"), new("distinguishedName", "dn")], schema).Count);
+        Assert.Equal("Email", SourceMappingEdit.FindTarget(schema, new("mail", "EMAIL"))!.Name);
+        var twins = new SourceMappingSchema("Fixture", [new("phone"), new("Phone")], "");
+        Assert.Equal("Phone", SourceMappingEdit.FindTarget(twins, new("x", "Phone"))!.Name);
+        Assert.Null(SourceMappingEdit.FindTarget(twins, new("x", "PHONE")));
+    }
     [Fact] public void DuplicateIdsCannotReplaceDifferentRows()
     {
         var id = Guid.NewGuid(); var schema = new SourceMappingSchema("Fixture", [new("a"), new("b")], "");
