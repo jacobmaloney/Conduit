@@ -138,45 +138,37 @@
 
 @if (assignOpen)
 {
-    <div class="modal show d-block" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title"><i class="fas fa-calendar-plus me-2"></i>Assign schedule</h5>
-                    <button type="button" class="btn-close" @onclick="CloseAssign" disabled="@assignSaving"></button>
-                </div>
-                <div class="modal-body">
-                    <p class="text-muted small">Choose the sync project that runs on this cadence. Each execution is recorded in Sync History against that project.</p>
-                    <div class="mb-3">
-                        <label class="icb-form-label" for="assignProjectSelect">Sync project</label>
-                        <select id="assignProjectSelect" class="icb-form-select" @bind="assignProjectId">
-                            <option value="">Select a sync project</option>
-                            @foreach (var project in projects.OrderBy(p => p.Name))
-                            {
-                                <option value="@project.Id">@project.Name@(HasSchedule(project) ? " (scheduled)" : "")</option>
-                            }
-                        </select>
-                    </div>
-                    <BrandScheduleEditor @bind-Value="assignCron" Error="@assignError" />
-                    <div class="icb-form-check mt-3">
-                        <input type="checkbox" id="enableAssignedProject" @bind="assignEnable" />
-                        <label class="icb-form-check-label" for="enableAssignedProject">Enable this sync project</label>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseAssign" disabled="@assignSaving">Cancel</button>
-                    <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveAssignment" disabled="@assignSaving">
-                        @if (assignSaving)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
-                        }
-                        Assign schedule
-                    </button>
-                </div>
+    <BrandModal OnClose="CloseAssign" Busy="@assignSaving">
+        <TitleContent><i class="fas fa-calendar-plus me-2"></i>Assign schedule</TitleContent>
+        <ChildContent>
+            <p class="text-muted small">Choose the sync project that runs on this cadence. Each execution is recorded in Sync History against that project.</p>
+            <div class="mb-3">
+                <label class="icb-form-label" for="assignProjectSelect">Sync project</label>
+                <select id="assignProjectSelect" class="icb-form-select" @bind="assignProjectId">
+                    <option value="">Select a sync project</option>
+                    @foreach (var project in projects.OrderBy(p => p.Name))
+                    {
+                        <option value="@project.Id">@project.Name@(HasSchedule(project) ? " (scheduled)" : "")</option>
+                    }
+                </select>
             </div>
-        </div>
-    </div>
-    <div class="modal-backdrop fade show"></div>
+            <BrandScheduleEditor @bind-Value="assignCron" Error="@assignError" />
+            <div class="icb-form-check mt-3">
+                <input type="checkbox" id="enableAssignedProject" @bind="assignEnable" />
+                <label class="icb-form-check-label" for="enableAssignedProject">Enable this sync project</label>
+            </div>
+        </ChildContent>
+        <FooterContent>
+            <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseAssign" disabled="@assignSaving">Cancel</button>
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveAssignment" disabled="@assignSaving">
+                @if (assignSaving)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Assign schedule
+            </button>
+        </FooterContent>
+    </BrandModal>
 }
 
 @if (!string.IsNullOrEmpty(toast))
@@ -206,32 +198,22 @@
 @* ───────── Edit Schedule Modal (reuses shared BrandScheduleEditor) ───────── *@
 @if (editProject is not null)
 {
-    <div class="modal show d-block" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">
-                        <i class="fas fa-clock me-2"></i>Schedule: @editProject.Name
-                    </h5>
-                    <button type="button" class="btn-close" @onclick="CloseEdit" disabled="@editSaving"></button>
-                </div>
-                <div class="modal-body">
-                    <BrandScheduleEditor @bind-Value="editCron" Error="@editError" />
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseEdit" disabled="@editSaving">Cancel</button>
-                    <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveSchedule" disabled="@editSaving">
-                        @if (editSaving)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
-                        }
-                        Save Schedule
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="modal-backdrop fade show"></div>
+    <BrandModal OnClose="CloseEdit" Busy="@editSaving">
+        <TitleContent><i class="fas fa-clock me-2"></i>Schedule: @editProject.Name</TitleContent>
+        <ChildContent>
+            <BrandScheduleEditor @bind-Value="editCron" Error="@editError" />
+        </ChildContent>
+        <FooterContent>
+            <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseEdit" disabled="@editSaving">Cancel</button>
+            <button type="button" class="ic-btn ic-btn-primary" @onclick="SaveSchedule" disabled="@editSaving">
+                @if (editSaving)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Save Schedule
+            </button>
+        </FooterContent>
+    </BrandModal>
 }
 
 @code {

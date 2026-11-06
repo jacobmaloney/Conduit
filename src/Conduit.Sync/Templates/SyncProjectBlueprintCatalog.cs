@@ -94,8 +94,10 @@ public sealed class SyncProjectBlueprint
 /// </summary>
 public static class SyncProjectBlueprintCatalog
 {
-    // Daily at 02:00. Matches the cron style used elsewhere in the sync UI.
-    private const string DailyCron = "0 0 2 * * ?";
+    // Daily at 02:00, in the 5-field form the runner (NCrontab) and the shared schedule picker read.
+    // SCHEDULE-SHARED-02: it was the 6-field "0 0 2 * * ?", which NCrontab refuses, so a project created with the
+    // blueprint default was silently never scheduled and the picker showed it as unreadable.
+    public const string DailyCron = "0 2 * * *";
 
     private const string DisplayConcealedNamesPrereq =
         "Microsoft 365 usage data requires an admin to PATCH "
@@ -116,7 +118,7 @@ public static class SyncProjectBlueprintCatalog
                 "Inventories the whole Entra ID directory — users, groups, service principals, "
                 + "directory roles, applications, devices, administrative units, conditional access "
                 + "policies, OAuth2 permission grants, domains, and Microsoft 365 usage — into "
-                + "IdentityCenter for governance.",
+                + "Identity Center for governance.",
             SourceSystemType = "EntraID",
             Mode = GenerationMode.Full,
             DefaultCronSchedule = DailyCron,
@@ -165,7 +167,7 @@ public static class SyncProjectBlueprintCatalog
             Description =
                 "Inventories the M365 collaboration surface — the SharePoint site tree, Teams "
                 + "(with member edges), team channels, a bounded set of top-level channel files, "
-                + "document drives, and lists — into IdentityCenter for governance.",
+                + "document drives, and lists — into Identity Center for governance.",
             SourceSystemType = "SharePoint",
             Mode = GenerationMode.SharePointCollaboration,
             DefaultCronSchedule = DailyCron,
@@ -212,7 +214,7 @@ public static class SyncProjectBlueprintCatalog
             Description =
                 "Inventories the AWS estate — IAM users, groups, roles, customer-managed "
                 + "policies, the account alias, and EC2 instances (as computer assets) — "
-                + "into IdentityCenter.",
+                + "into Identity Center.",
             SourceSystemType = "AWS",
             ExplicitClasses = new[] { "user", "group", "role", "policy", "account", "computer" },
             DefaultCronSchedule = DailyCron,
@@ -237,7 +239,7 @@ public static class SyncProjectBlueprintCatalog
             Name = "AWS Identity Center Governance",
             Description =
                 "Inventories AWS IAM Identity Center (formerly AWS SSO) — users, groups, "
-                + "permission sets, and assigned applications — into IdentityCenter.",
+                + "permission sets, and assigned applications — into Identity Center.",
             SourceSystemType = "AWSIdentityCenter",
             ExplicitClasses = new[] { "user", "group", "permissionSet", "application" },
             DefaultCronSchedule = DailyCron,
@@ -262,7 +264,7 @@ public static class SyncProjectBlueprintCatalog
             Description =
                 "Inventories the full Google Workspace estate — users, groups, organizational "
                 + "units, admin roles, domains, mobile devices, ChromeOS devices, admin role "
-                + "assignments, and calendar resources — into IdentityCenter for governance.",
+                + "assignments, and calendar resources — into Identity Center for governance.",
             SourceSystemType = "GoogleWorkspace",
             ExplicitClasses = new[]
             {
@@ -296,7 +298,7 @@ public static class SyncProjectBlueprintCatalog
             Description =
                 "Inventories the on-prem Active Directory core — users, groups (with "
                 + "membership), computers, contacts, and organizational units — into "
-                + "IdentityCenter for governance.",
+                + "Identity Center for governance.",
             SourceSystemType = "ActiveDirectory",
             ExplicitClasses = new[] { "user", "group", "computer", "contact", "organizationalUnit" },
             DefaultCronSchedule = DailyCron,
@@ -318,7 +320,7 @@ public static class SyncProjectBlueprintCatalog
                 + "GPOs, managed service accounts (gMSA/MSA), trusts, sites, subnets, "
                 + "site links, PKI certificate templates, CAs, BitLocker recovery info, "
                 + "DNS zones and nodes, print queues, SCPs, and the schema — one Enterprise-"
-                + "Reporter-style inventory in IdentityCenter.",
+                + "Reporter-style inventory in Identity Center.",
             SourceSystemType = "ActiveDirectory",
             Mode = GenerationMode.Full,
             DefaultCronSchedule = DailyCron,
@@ -343,7 +345,7 @@ public static class SyncProjectBlueprintCatalog
             Description =
                 "Inventories One Identity Active Roles — users and groups read over raw AD "
                 + "LDAP, plus the Active Roles virtual attributes (RBAC role flags) joined "
-                + "from CVSAValues — into IdentityCenter for role and SoD governance.",
+                + "from CVSAValues — into Identity Center for role and SoD governance.",
             SourceSystemType = "ActiveRoles",
             ExplicitClasses = new[] { "user", "group" },
             DefaultCronSchedule = DailyCron,
@@ -362,7 +364,7 @@ public static class SyncProjectBlueprintCatalog
             Name = "Okta Directory Governance",
             Description =
                 "Inventories the Okta universal directory — users, groups, and application "
-                + "assignments — into IdentityCenter for governance.",
+                + "assignments — into Identity Center for governance.",
             SourceSystemType = "Okta",
             ExplicitClasses = new[] { "user", "group", "application" },
             DefaultCronSchedule = DailyCron,
@@ -380,7 +382,7 @@ public static class SyncProjectBlueprintCatalog
             Name = "Generic LDAP Directory",
             Description =
                 "Inventories a standards-based LDAP directory (OpenLDAP, 389-DS, etc.) — "
-                + "users, groups, and organizational units — into IdentityCenter for governance.",
+                + "users, groups, and organizational units — into Identity Center for governance.",
             SourceSystemType = "GenericLdap",
             ExplicitClasses = new[] { "user", "group", "organizationalUnit" },
             DefaultCronSchedule = DailyCron,
@@ -416,7 +418,7 @@ public static class SyncProjectBlueprintCatalog
             Name = "Database Directory Governance",
             Description =
                 "Inventories an identity store backed by a SQL database — users and groups "
-                + "read from configured queries — into IdentityCenter for governance.",
+                + "read from configured queries — into Identity Center for governance.",
             SourceSystemType = "Database",
             ExplicitClasses = new[] { "user", "group" },
             DefaultCronSchedule = DailyCron,
@@ -435,7 +437,7 @@ public static class SyncProjectBlueprintCatalog
             Description =
                 "Scans the network for SQL Server hosts and inventories each as a computer "
                 + "asset — edition, version, instance, databases, logins, and principals — "
-                + "into IdentityCenter for SQL estate and license governance.",
+                + "into Identity Center for SQL estate and license governance.",
             SourceSystemType = "SqlDiscovery",
             ExplicitClasses = new[] { "computer" },
             DefaultCronSchedule = DailyCron,

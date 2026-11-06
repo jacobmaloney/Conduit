@@ -21,10 +21,10 @@ public class SyncProjectModalStackTests
     /// a second level, not a first.</summary>
     private static readonly (string Guard, string Level)[] Nested =
     {
-        ("mappingModalStepId is { } mmStepId",  "icb-modal-stacked"),
-        ("settingsModalStepId is { } smStepId", "icb-modal-stacked"),
-        ("scopeModalStepId is { } scStepId",    "icb-modal-stacked"),
-        ("showScopeDiscardConfirm",             "icb-modal-stacked-2"),
+        ("mappingModalStepId is { } mmStepId",  "1"),
+        ("settingsModalStepId is { } smStepId", "1"),
+        ("scopeModalStepId is { } scStepId",    "1"),
+        ("showScopeDiscardConfirm",             "2"),
     };
 
     [Fact]
@@ -37,17 +37,12 @@ public class SyncProjectModalStackTests
             var start = page.IndexOf(guard, StringComparison.Ordinal);
             Assert.True(start >= 0, $"Render guard not found: {guard}");
 
-            // The opener is the first modal element after the guard.
-            var opener = page.IndexOf("class=\"modal show", start, StringComparison.Ordinal);
+            // The opener is the first BrandModal after the guard (BRAND-MODAL-01). BrandModal puts the same
+            // stack class on its modal and its backdrop, so the level declared here covers both.
+            var opener = page.IndexOf("<BrandModal", start, StringComparison.Ordinal);
             Assert.True(opener > start, $"No modal opener after guard {guard}");
             var openerLine = page[opener..page.IndexOf('>', opener)];
-            Assert.Contains(level, openerLine);
-
-            // Its backdrop carries the SAME level, or the backdrop sinks below its own modal.
-            var backdrop = page.IndexOf("modal-backdrop fade show", opener, StringComparison.Ordinal);
-            Assert.True(backdrop > opener, $"No backdrop after the modal for {guard}");
-            var backdropLine = page[backdrop..page.IndexOf('>', backdrop)];
-            Assert.Contains(level, backdropLine);
+            Assert.Contains($"StackLevel=\"{level}\"", openerLine);
         }
     }
 
