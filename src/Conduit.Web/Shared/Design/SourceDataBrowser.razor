@@ -44,6 +44,11 @@
             c.Mapping.SavedRules.Select(m => new BrandMappingRule(m.Source, m.Target, m.Transformation, m.DefaultValue, m.Required, m.Id, m.TargetType)).ToArray(), c.Mapping.Notice,
             c.Mapping.Edit == null ? null : new(c.Mapping.Edit.Revision, c.Mapping.Edit.Schema.Name,
                 c.Mapping.Edit.Schema.Targets.Select(t => new BrandMappingTarget(t.Name, t.Kind, t.DataType, t.Required, t.MaxLength)).ToArray(),
-                c.Mapping.Edit.Schema.Note, c.Mapping.Edit.CanSave, c.Mapping.Edit.Reason, c.Mapping.Edit.Schema.AdditionalKind)));
+                c.Mapping.Edit.Schema.Note, c.Mapping.Edit.CanSave, c.Mapping.Edit.Reason, c.Mapping.Edit.Schema.AdditionalKind), Grammar(c.Mapping)));
+    // MAP-EDITOR-SOURCE-01: the shared editor shows each row in this host's own grammar (SourceMappingRowExpression).
+    private static BrandMappingRowGrammar Grammar(SourceMappingContext m) => new(
+        r => SourceMappingRowExpression.Format(m, r.Source, r.Transformation, r.DefaultValue),
+        e => SourceMappingRowExpression.Parse(m, e) is var (source, transformation, value) ? new BrandMappingRowParts(source, transformation, value) : default,
+        e => SourceMappingRowExpression.Problem(m, e), SourceMappingRowExpression.Hint(m), SourceMappingRowExpression.Placeholder(m));
 }
 

@@ -2029,7 +2029,7 @@
                                      ShowRequired="true" RequiredHeading="Always write"
                                      RequiredHelp="Write this attribute on every object, even when the value comes out empty."
                                      AddLabel="Add mapping" EmptyText="@MappingEditorEmptyText(mmEffective is not null)"
-                                     Hint="Write the source attribute in { }, then any steps after |: upper, lower, trim, prefix:X, suffix:X, substring:N, substring:N:M, replace:OLD:NEW, default:X (used when the source is empty). const:X writes a fixed value with no source." />
+                                     Hint="@Conduit.Mapping.MappingRowExpression.Hint" />
         </ChildContent>
         <FooterContent>
             <button type="button" class="ic-btn ic-btn-ghost" @onclick="CloseMappingModal">

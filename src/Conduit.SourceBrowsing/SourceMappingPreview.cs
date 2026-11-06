@@ -4,7 +4,8 @@ namespace Conduit.SourceBrowsing;
 
 public sealed record SourceMappingRule(string Source, string Target, string Transformation = "", string? DefaultValue = null, bool Required = false, Guid? Id = null, string TargetType = "");
 public sealed record SourceMappingContext(string Profile, string Help, bool Expression, bool Defaults, bool Required,
-    IReadOnlyList<string> Transformations, IReadOnlyList<SourceMappingRule> SavedRules, string? Notice = null, SourceMappingEditContext? Edit = null);
+    IReadOnlyList<string> Transformations, IReadOnlyList<SourceMappingRule> SavedRules, string? Notice = null, SourceMappingEditContext? Edit = null,
+    bool DefaultBeforeTransform = false);
 public sealed record SourceMappedField(string Source, string Target, string Input, string Output, string Outcome);
 
 /// <summary>Bounded preview policy; host callbacks execute the existing runtime mapping dialect on raw source values.</summary>

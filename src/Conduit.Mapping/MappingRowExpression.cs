@@ -9,6 +9,9 @@ namespace Conduit.Mapping;
 /// </summary>
 public static class MappingRowExpression
 {
+    /// <summary>The grammar in one line, for the editor's hint.</summary>
+    public const string Hint = "Write the source attribute in { }, then any steps after |: upper, lower, trim, prefix:X, suffix:X, substring:N, substring:N:M, replace:OLD:NEW, default:X (used when the source is empty). const:X writes a fixed value with no source.";
+
     /// <summary>The expression for a saved row.</summary>
     public static string Format(string? sourceAttribute, string? transform)
     {
@@ -35,6 +38,22 @@ public static class MappingRowExpression
     {
         var text = expression?.Trim() ?? string.Empty;
         if (text.Length == 0) return null;
+        if (ShapeProblem(text) is { } shape) return shape;
+        var (source, chain) = Parse(text);
+        if (AttributeTransformExpression.ValidationError(chain) is { } error) return error;
+        if (source.Length == 0 && !AttributeTransformExpression.ProducesValueWhenSourceMissing(chain))
+            return "Start with the source attribute in { }, or write a fixed value with const:.";
+        return null;
+    }
+
+    /// <summary>
+    /// MAP-EDITOR-SOURCE-01. What is wrong with the expression's shape (the braces, the one source, the | separators),
+    /// whatever the steps mean; a host with its own steps judges those itself.
+    /// </summary>
+    public static string? ShapeProblem(string? expression)
+    {
+        var text = expression?.Trim() ?? string.Empty;
+        if (text.Length == 0) return null;
         if (text.StartsWith('{'))
         {
             var close = text.IndexOf('}');
@@ -43,11 +62,7 @@ public static class MappingRowExpression
             var after = text[(close + 1)..].Trim();
             if (after.Length > 0 && !after.StartsWith('|')) return "Separate the source attribute from each step with |, for example {mail} | lower.";
         }
-        var (source, chain) = Parse(text);
-        if (chain.IndexOfAny(new[] { '{', '}' }) >= 0) return "Each row reads one source attribute, at the start: {name} | step | step.";
-        if (AttributeTransformExpression.ValidationError(chain) is { } error) return error;
-        if (source.Length == 0 && !AttributeTransformExpression.ProducesValueWhenSourceMissing(chain))
-            return "Start with the source attribute in { }, or write a fixed value with const:.";
-        return null;
+        var (_, chain) = Parse(text);
+        return chain.IndexOfAny(new[] { '{', '}' }) >= 0 ? "Each row reads one source attribute, at the start: {name} | step | step." : null;
     }
 }
