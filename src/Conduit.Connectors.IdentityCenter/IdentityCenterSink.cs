@@ -686,7 +686,13 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             foreach (var (k, v) in o.Attributes)
             {
                 if (k.StartsWith("_", StringComparison.Ordinal)) continue;  // _source, _tags etc.
-                Put(attrs, k, v?.ToString());
+                // BLANK-CLEARS-01 (Granite day 4, 2026-11-06): a rehire's HR row came with EndDate emptied and IC kept the
+                // old end date, so the nightly job kept her disabled. A field the record carries EMPTY is sent empty so
+                // IdentityCenter clears it; a field the record does not carry is not sent (an LDAP source omits absent
+                // attributes, so nothing it does not hold is cleared). IdentityCenter treats empty and NULL as equal, so
+                // an unchanged blank starts no workflow.
+                if (string.IsNullOrEmpty(v?.ToString())) { if (!attrs.ContainsKey(k)) attrs[k] = ""; }
+                else Put(attrs, k, v!.ToString());
             }
 
             keyOf.Add(key);
