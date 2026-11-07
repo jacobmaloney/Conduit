@@ -266,7 +266,20 @@ public sealed class ActiveDirectorySink : IConnectorSink
         var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
         addRequest.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
 
-        conn.SendRequest(addRequest);
+        // NAME-COLLISION-01: as CreateAsync - a same-named different account gets "Name (sam)"; nothing is ever linked here
+        // (the sAMAccountName and UPN look-ups above found no account for this user).
+        var added = TryAddUser(conn, addRequest, sam!);
+        if (added == AddOutcome.OtherAccountExists)
+        {
+            var takenDn = newDn;
+            newDn = $"CN={EscapeDnComponent(CollisionCn(cn, sam!))},{baseDn}";
+            addRequest.DistinguishedName = newDn;
+            added = TryAddUser(conn, addRequest, sam!);
+            if (added == AddOutcome.OtherAccountExists)
+                return SinkWriteResult.Fail($"Cannot create {sam}: the names {takenDn} and {newDn} both belong to other accounts.");
+        }
+        if (added == AddOutcome.SameAccountExists)
+            return SinkWriteResult.Fail($"Cannot create {sam}: an account with this sAMAccountName appeared at {newDn} during the create; the next run updates it.");
 
         // Password write — HARD-required LDAPS. If a password was supplied on a
         // plaintext-bound connection we throw rather than create a permanently
@@ -1013,19 +1026,27 @@ public sealed class ActiveDirectorySink : IConnectorSink
             if (!string.IsNullOrEmpty(password))
                 RequireSecureForPasswordWrite(isSecure);
 
-            try
+            // NAME-COLLISION-01. An entry already at the DN is this account only when it carries this sAMAccountName (the
+            // pre-search missed it: replication lag) - then link. Otherwise it is another person with the same name (Granite
+            // day 4: a second Maria Zamora was linked to the first one's account): never link it. Create under
+            // "Name (sam)" instead, and fail if that name is taken by someone else too.
+            var firstTry = TryAddUser(conn, add, sam!);
+            if (firstTry == AddOutcome.SameAccountExists)
             {
-                conn.SendRequest(add);
-            }
-            catch (DirectoryOperationException dex) when (
-                dex.Response?.ResultCode == ResultCode.EntryAlreadyExists ||
-                (dex.Message?.IndexOf("ENTRY_EXISTS", StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
-            {
-                // The pre-search can miss (replication lag), but AD reports the DN already exists →
-                // LINK to the existing account rather than fail. Same create-else-link outcome as the
-                // pre-check above; reported as Linked so the caller never mistakes it for a create.
-                _logger.LogInformation("AD create hit an existing entry at {Dn} — linking (not creating).", newDn);
+                _logger.LogInformation("AD create hit this account at {Dn} (the pre-search missed it) — linking (not creating).", newDn);
                 return ProvisionResult.LinkedExisting(newDn);
+            }
+            if (firstTry == AddOutcome.OtherAccountExists)
+            {
+                var takenDn = newDn;
+                newDn = $"CN={EscapeDnComponent(CollisionCn(cn, sam!))},{baseDn}";
+                add.DistinguishedName = newDn;
+                _logger.LogInformation("AD name {Dn} belongs to another account — creating {Sam} as {NewDn}.", takenDn, sam, newDn);
+                var secondTry = TryAddUser(conn, add, sam!);
+                if (secondTry == AddOutcome.SameAccountExists)
+                    return ProvisionResult.LinkedExisting(newDn);
+                if (secondTry == AddOutcome.OtherAccountExists)
+                    return ProvisionResult.Failed($"Cannot create {sam}: the names {takenDn} and {newDn} both belong to other accounts.");
             }
 
             // Password → must-change flag → enable, each reported truthfully. The account exists from
@@ -1385,6 +1406,44 @@ public sealed class ActiveDirectorySink : IConnectorSink
             if (!string.IsNullOrWhiteSpace(v)) return (v, attribute);
         }
         return (null, null);
+    }
+
+    private enum AddOutcome { Added, SameAccountExists, OtherAccountExists }
+
+    /// <summary>The name a user is created under when its display name is taken in the OU by another account: "Name (sam)".</summary>
+    public static string CollisionCn(string cn, string sam) => $"{cn} ({sam})";
+
+    /// <summary>Whether the entry already at a DN is the account being created (same sAMAccountName) or someone else.</summary>
+    public static bool IsSameAccount(string? existingSam, string sam) =>
+        !string.IsNullOrWhiteSpace(existingSam) && string.Equals(existingSam.Trim(), sam.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static AddOutcome TryAddUser(LdapConnection conn, AddRequest add, string sam)
+    {
+        try
+        {
+            conn.SendRequest(add);
+            return AddOutcome.Added;
+        }
+        catch (DirectoryOperationException dex) when (
+            dex.Response?.ResultCode == ResultCode.EntryAlreadyExists ||
+            (dex.Message?.IndexOf("ENTRY_EXISTS", StringComparison.OrdinalIgnoreCase) ?? -1) >= 0)
+        {
+            return IsSameAccount(ReadSamAtDn(conn, add.DistinguishedName), sam) ? AddOutcome.SameAccountExists : AddOutcome.OtherAccountExists;
+        }
+    }
+
+    private static string? ReadSamAtDn(LdapConnection conn, string dn)
+    {
+        try
+        {
+            var resp = (SearchResponse)conn.SendRequest(new SearchRequest(dn, "(objectClass=*)", SearchScope.Base, new[] { "sAMAccountName" }));
+            var entry = resp.Entries.Count > 0 ? resp.Entries[0] : null;
+            return entry is not null && entry.Attributes.Contains("sAMAccountName") ? entry.Attributes["sAMAccountName"][0]?.ToString() : null;
+        }
+        catch (DirectoryOperationException ex) when (ex.Response is { ResultCode: ResultCode.NoSuchObject })
+        {
+            return null;
+        }
     }
 
     private static bool DnExists(LdapConnection conn, string dn)
