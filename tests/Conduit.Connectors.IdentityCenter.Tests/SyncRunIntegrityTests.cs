@@ -21,6 +21,19 @@ public class SyncRunIntegrityTests
         Assert.Equal(1, progress.FailedSteps);
     }
 
+    // PARTIAL-RUN-01: 192 of 195 rows applied, 3 refused by name, is a partial run, not a failed one; a step where every
+    // object failed still fails the run.
+    [Theory]
+    [InlineData(195, 0, 192, 3, "PartialSuccess")]
+    [InlineData(3, 0, 0, 3, "Failed")]
+    [InlineData(195, 0, 195, 0, "Succeeded")]
+    public void A_step_with_some_objects_refused_is_partial(int read, int created, int updated, int failed, string expected)
+    {
+        var progress = new SyncRunProgress();
+        progress.Add(new(read, created, updated, 0, failed, 0), true, false, failed > 0 ? "Step 'user upsert' [Mapping] reported 3 failure(s)." : null);
+        Assert.Equal(expected, progress.Complete().Status);
+    }
+
     [Theory]
     [InlineData(false, "Failed")]
     [InlineData(true, "Succeeded")]

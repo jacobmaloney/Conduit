@@ -17,6 +17,11 @@ public sealed class SyncRunProgress
     public int Failed { get; private set; }
     public int FailedSteps { get; private set; }
     public int SucceededSteps { get; private set; }
+    /// <summary>
+    /// PARTIAL-RUN-01 (Granite day 4, 2026-11-06: IdentityCenter refused 3 of 195 rows by name and the run said Failed):
+    /// steps where some objects failed and others were written or kept.
+    /// </summary>
+    public int PartialSteps { get; private set; }
     private bool _anyMapping, _anyStep, _incremental;
     private string? _firstError;
 
@@ -30,7 +35,12 @@ public sealed class SyncRunProgress
         _anyStep = true;
         _anyMapping |= isMapping;
         _incremental |= wasIncremental;
-        if (delta.Failed > 0)
+        if (delta.Failed > 0 && delta.Created + delta.Updated + delta.Skipped > 0)
+        {
+            PartialSteps++;
+            _firstError ??= failureReason;
+        }
+        else if (delta.Failed > 0)
         {
             FailedSteps++;
             _firstError ??= failureReason;
@@ -42,7 +52,9 @@ public sealed class SyncRunProgress
     public SyncRunCompletion Complete()
     {
         if (FailedSteps > 0)
-            return new(SucceededSteps > 0 ? "PartialSuccess" : "Failed", _firstError);
+            return new(SucceededSteps + PartialSteps > 0 ? "PartialSuccess" : "Failed", _firstError);
+        if (PartialSteps > 0)
+            return new("PartialSuccess", _firstError);
         if (_anyMapping && Read == 0 && !_incremental)
             return new("Failed", "Source enumeration returned 0 objects. Check the connection credential, BaseDN, and LDAP filter — a truthful 0-record run is treated as a failure to avoid a silent green success.");
         if (!_anyStep)
