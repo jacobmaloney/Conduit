@@ -34,7 +34,9 @@ public class CsvSourceTests : IDisposable
         var rows = await Rows(source);
         Assert.Equal(new[] { "E1", "E2" }, rows.Select(r => r.SourceId));
         Assert.Equal("  Ada  ", rows[0].Attributes["NAME"]);
-        Assert.False(rows[0].Attributes.ContainsKey("blank"));
+        // BLANK-CLEARS-01: a blank cell is carried EMPTY (it used to be omitted, so an HR file could never clear a field:
+        // a rehire's emptied EndDate stayed set). The id is still taken from non-empty values only.
+        Assert.Equal("", rows[0].Attributes["blank"]);
         Assert.Equal("User", rows[0].ObjectClass);
         Assert.Equal("user", rows[0].Attributes["objectClass"]);
         Assert.Equal("E1", rows[0].Attributes["objectGuid"]);
@@ -46,6 +48,7 @@ public class CsvSourceTests : IDisposable
     [InlineData("objectGuid,id,EmployeeId\nG,I,E", null, "G")]
     [InlineData("id,EmployeeId\nI,E", null, "I")]
     [InlineData("Name\nAda", null, "row-1")]
+    [InlineData("chosen,EmployeeId\n,E", "chosen", "E")]   // a blank chosen id falls through, as when blanks were dropped
     public async Task IdPrecedenceIsPreserved(string csv, string? configured, string expected)
     {
         await File.WriteAllTextAsync(_file, csv);

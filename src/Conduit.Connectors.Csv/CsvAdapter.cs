@@ -174,15 +174,15 @@ public sealed class CsvSource : IConnectorSource
             {
                 ["objectClass"] = objectClass.ToLowerInvariant()
             };
+            // BLANK-CLEARS-01 (Granite day 4, 2026-11-06): a blank cell is a field the file carries with no value, so it is
+            // emitted empty and the mapping can clear the target (a rehire's emptied EndDate stayed set when blanks were
+            // dropped here). The record's id is read from non-empty values only, as before.
             foreach (var field in row)
-                if (!string.IsNullOrEmpty(field.Value)) attrs[field.Key] = field.Value;
-            string sourceId = null!;
-            if (!string.IsNullOrEmpty(idCol) && attrs.TryGetValue(idCol, out var idVal))
-                sourceId = idVal?.ToString() ?? string.Empty;
-            sourceId ??= attrs.TryGetValue("objectGuid", out var og) ? og?.ToString() ?? string.Empty
-                     : attrs.TryGetValue("id", out var idv) ? idv?.ToString() ?? string.Empty
-                     : attrs.TryGetValue("EmployeeId", out var eid) ? eid?.ToString() ?? string.Empty
-                     : $"row-{rowIndex}";
+                attrs[field.Key] = field.Value ?? string.Empty;
+            string? NonEmpty(string key) =>
+                attrs.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v?.ToString()) ? v!.ToString() : null;
+            string sourceId = (string.IsNullOrEmpty(idCol) ? null : NonEmpty(idCol))
+                ?? NonEmpty("objectGuid") ?? NonEmpty("id") ?? NonEmpty("EmployeeId") ?? $"row-{rowIndex}";
             if (string.IsNullOrWhiteSpace(sourceId) || sourceId == $"row-{rowIndex}") everyRowHadAnId = false;
 
             attrs["objectGuid"] = sourceId;
