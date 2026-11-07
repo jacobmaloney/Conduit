@@ -61,6 +61,9 @@ public sealed class IcSyncJobChannel
     /// <summary>The one job type this executor claims. IdentityCenter's SyncSubmissionService stamps the same string.</summary>
     public const string SyncProjectJobType = "SyncProject";
 
+    /// <summary>JOB-PLACEMENT-03: IdentityCenter's mail drain job, claimed only when it is placed on this server.</summary>
+    public const string MailJobType = "EmailQueueProcessing";
+
     /// <summary>IC's JobTypeSupport.Any — an agent row listing "*" supports every job type.</summary>
     public const string AnyJobType = "*";
 
@@ -70,11 +73,11 @@ public sealed class IcSyncJobChannel
 
     // ── Request bodies (the wire contract) ──────────────────────────────────
 
-    public static string BuildClaimRequestJson(Guid agentId) =>
+    public static string BuildClaimRequestJson(Guid agentId, IReadOnlyList<string>? jobTypes = null) =>
         JsonSerializer.Serialize(new
         {
             agentId,
-            supportedJobTypes = new[] { SyncProjectJobType },
+            supportedJobTypes = jobTypes is { Count: > 0 } ? jobTypes.ToArray() : new[] { SyncProjectJobType },
             maxJobs = 1
         });
 
@@ -188,11 +191,11 @@ public sealed class IcSyncJobChannel
 
     // ── Calls ───────────────────────────────────────────────────────────────
 
-    public async Task<IcClaimOutcome> ClaimAsync(string baseUrl, Guid agentId, CancellationToken ct)
+    public async Task<IcClaimOutcome> ClaimAsync(string baseUrl, Guid agentId, CancellationToken ct, IReadOnlyList<string>? jobTypes = null)
     {
         try
         {
-            using var content = Json(BuildClaimRequestJson(agentId));
+            using var content = Json(BuildClaimRequestJson(agentId, jobTypes));
             using var resp = await _client.PostAsync($"{baseUrl}/api/jobs/claim", content, ct);
             var status = (int)resp.StatusCode;
 
@@ -261,6 +264,35 @@ public sealed class IcSyncJobChannel
             return null;
         }
     }
+
+    // ── Mail (JOB-PLACEMENT-03: IdentityCenter.API/Controllers/JobMailController.cs) ──
+
+    private static readonly JsonSerializerOptions MailJson = new() { PropertyNameCaseInsensitive = true };
+
+    /// <summary>
+    /// POST /api/jobs/{id}/mail/claim — a batch of messages and the relay to send them through. Null means the answer
+    /// could not be read; nothing is assumed claimed or not claimed from an unreadable answer.
+    /// </summary>
+    public async Task<IcMailBatch?> ClaimMailAsync(string baseUrl, Guid jobId, int max, bool canSignIn, CancellationToken ct)
+    {
+        try
+        {
+            using var content = Json(JsonSerializer.Serialize(new { max, canSignIn }));
+            using var resp = await _client.PostAsync($"{baseUrl}/api/jobs/{jobId}/mail/claim", content, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+            var batch = JsonSerializer.Deserialize<IcMailBatch>(await resp.Content.ReadAsStringAsync(ct), MailJson);
+            return batch is null ? null : batch with { Items = batch.Items ?? Array.Empty<IcMailItem>() };
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>POST /api/jobs/{id}/mail/settle — each message's outcome. False = IdentityCenter did not accept it.</summary>
+    public Task<bool> SettleMailAsync(string baseUrl, Guid jobId, IReadOnlyList<IcMailResult> results, CancellationToken ct) =>
+        PostAsync($"{baseUrl}/api/jobs/{jobId}/mail/settle",
+            JsonSerializer.Serialize(new { results = results.Select(r => new { id = r.Id, success = r.Success, error = r.Error }) }), ct);
 
     private async Task<bool> PostAsync(string url, string body, CancellationToken ct)
     {

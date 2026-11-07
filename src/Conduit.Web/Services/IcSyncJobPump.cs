@@ -76,6 +76,7 @@ public sealed class IcSyncJobPump
     private static readonly TimeSpan CapabilityRecheckInterval = TimeSpan.FromMinutes(30);
 
     private readonly IIcSyncProjectJobRunner _runner;
+    private readonly IcMailJobRunner? _mail;
     private readonly IcAgentStatusService _status;
     private readonly ILogger<IcSyncJobPump> _logger;
 
@@ -115,9 +116,11 @@ public sealed class IcSyncJobPump
         }
     }
 
-    public IcSyncJobPump(IIcSyncProjectJobRunner runner, IcAgentStatusService status, ILogger<IcSyncJobPump> logger)
+    public IcSyncJobPump(IIcSyncProjectJobRunner runner, IcAgentStatusService status, ILogger<IcSyncJobPump> logger,
+        IcMailJobRunner? mail = null)
     {
         _runner = runner;
+        _mail = mail;
         _status = status;
         _logger = logger;
     }
@@ -126,7 +129,9 @@ public sealed class IcSyncJobPump
     {
         await CheckSyncProjectSupportAsync(channel, baseUrl, agentId, ct);
 
-        var claim = await channel.ClaimAsync(baseUrl, agentId, ct);
+        // JOB-PLACEMENT-03: with a mail sender this server also asks for the mail drain. IdentityCenter hands a
+        // worker only work TARGETED at it, so this takes mail only when the mail job is placed here.
+        var claim = await channel.ClaimAsync(baseUrl, agentId, ct, ClaimJobTypes);
         // IdentityCenter's message is remote text: it reaches a log template and the status
         // object, so it is stripped and capped before either sees it.
         var claimMessage = Clean(claim.Message);
@@ -203,6 +208,9 @@ public sealed class IcSyncJobPump
         if (job.TargetServerId is Guid target && target != Guid.Empty && target != agentId)
             return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.PinnedElsewhere(job.Id, target, agentId), ct);
 
+        if (_mail is not null && string.Equals(job.JobType, IcSyncJobChannel.MailJobType, StringComparison.Ordinal))
+            return await SendMailAsync(channel, baseUrl, agentId, job, ct);
+
         if (!string.Equals(job.JobType, IcSyncJobChannel.SyncProjectJobType, StringComparison.OrdinalIgnoreCase))
             return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.WrongJobType(job.Id, Clean(job.JobType, 50)), ct);
 
@@ -230,6 +238,22 @@ public sealed class IcSyncJobPump
             return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.AlreadyRunning(job.Id, project), ct);
 
         return await ExecuteAsync(channel, baseUrl, agentId, job, project, ct);
+    }
+
+    /// <summary>The job types this installation claims with.</summary>
+    public IReadOnlyList<string> ClaimJobTypes => _mail is null
+        ? new[] { IcSyncJobChannel.SyncProjectJobType }
+        : new[] { IcSyncJobChannel.SyncProjectJobType, IcSyncJobChannel.MailJobType };
+
+    private async Task<IcSyncJobTickResult> SendMailAsync(IcSyncJobChannel channel, string baseUrl, Guid agentId, IcJobQueueEntry job, CancellationToken ct)
+    {
+        var outcome = await _mail!.RunAsync(channel, baseUrl, agentId, job.Id, ct);
+        _logger.LogInformation("IdentityCenter mail job {JobId}: {Summary}", job.Id, outcome.Message);
+        await CompleteAsync(channel, baseUrl, agentId, job, outcome.Success, outcome.Processed, outcome.Sent, outcome.Failed,
+            outcome.Success ? null : outcome.Message,
+            JsonSerializer.Serialize(new { sent = outcome.Sent, failed = outcome.Failed, summary = outcome.Message }),
+            CancellationToken.None);
+        return IcSyncJobTickResult.Executed;
     }
 
     private async Task<IcSyncJobTickResult> ExecuteAsync(

@@ -611,6 +611,12 @@ builder.Services.AddHttpClient("IcSyncJobExecutor")
     .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 1024 * 1024)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<Conduit.Web.Services.IIcSyncProjectJobRunner, Conduit.Web.Services.IcSyncProjectJobRunner>();
+// JOB-PLACEMENT-03: the mail drain, when IdentityCenter places it here (IcMail:Enabled=false turns it off).
+if (builder.Configuration.GetValue("IcMail:Enabled", true))
+{
+    builder.Services.AddSingleton<Conduit.Web.Services.IMailRelaySender, Conduit.Web.Services.SmtpMailRelaySender>();
+    builder.Services.AddSingleton<Conduit.Web.Services.IcMailJobRunner>();
+}
 builder.Services.AddSingleton<Conduit.Web.Services.IcSyncJobPump>();
 builder.Services.AddHostedService<Conduit.Web.Services.IcSyncJobExecutorService>();
 // Near-real-time SQL spin-up detection via AD SPN diffing (SqlSpnWatch:Enabled / :IntervalSeconds).
