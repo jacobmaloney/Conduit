@@ -90,6 +90,9 @@ public sealed class IcSyncJobPump
     /// <summary>Endpoints whose job channel refused this key / is not deployed — logged once each.</summary>
     private readonly HashSet<string> _channelLogged = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Endpoints whose claim answered a server error — logged once until a claim is answered again.</summary>
+    private readonly HashSet<string> _unavailableLogged = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Endpoints whose agent row does not list SyncProject — logged once each.</summary>
     private readonly HashSet<string> _capabilityWarned = new(StringComparer.OrdinalIgnoreCase);
 
@@ -158,14 +161,21 @@ public sealed class IcSyncJobPump
                 return IcSyncJobTickResult.ChannelUnavailable;
 
             case IcClaimResult.Unavailable:
-                _logger.LogDebug("IdentityCenter job claim at {BaseUrl}: {Message}; retrying next tick.", baseUrl, claimMessage);
+                // CLAIM-SQL-01: IdentityCenter's claim answered 500 on every call for months and this said so only at
+                // Debug. A server error is logged once per run of them; a transport blip stays at Debug.
+                if (claimMessage.StartsWith("HTTP 5", StringComparison.Ordinal) && FirstTimeSaying(_unavailableLogged, baseUrl))
+                    _logger.LogWarning("IdentityCenter job claim at {BaseUrl} answered {Message}; no job pinned here can be claimed until IdentityCenter answers. Retrying every tick.", baseUrl, claimMessage);
+                else
+                    _logger.LogDebug("IdentityCenter job claim at {BaseUrl}: {Message}; retrying next tick.", baseUrl, claimMessage);
                 return IcSyncJobTickResult.ChannelUnavailable;
 
             case IcClaimResult.NoWork:
+                SaidNothingToSay(_unavailableLogged, baseUrl);
                 SaidNothingToSay(_channelLogged, baseUrl);
                 return IcSyncJobTickResult.NoWork;
 
             default:
+                SaidNothingToSay(_unavailableLogged, baseUrl);
                 SaidNothingToSay(_channelLogged, baseUrl);
                 return await HandleClaimedJobSafelyAsync(channel, baseUrl, agentId, claim.Job!, ct);
         }
