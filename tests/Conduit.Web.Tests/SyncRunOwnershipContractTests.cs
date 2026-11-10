@@ -100,7 +100,7 @@ public class SyncRunOwnershipContractTests
         var guard = execute.IndexOf("SyncRunOwnership.RequireCurrentOwner(project, runId)", StringComparison.Ordinal);
         Assert.True(guard > execute.IndexOf("_projectRepo.GetByIdAsync", StringComparison.Ordinal));
         Assert.True(guard < execute.IndexOf("_runRepo.CreateAsync", StringComparison.Ordinal));
-        Assert.True(guard < execute.IndexOf("RunCoreAsync(project, run, runToken)", StringComparison.Ordinal));
+        Assert.True(guard < execute.IndexOf("RunCoreAsync(project, run, runToken, partition)", StringComparison.Ordinal));   // SPLIT-ENUM-01: the partition rides along; the owner check still comes first
         Assert.Contains("Id = runId", execute);
         Assert.DoesNotContain("StampLastRunIdAsync", execute);
         Assert.Contains("_cancellation.Unregister(project.Id, run.Id)", execute);

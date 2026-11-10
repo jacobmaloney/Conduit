@@ -90,6 +90,15 @@ public sealed class SyncProjectOrchestrator
     /// Otherwise this method claims a new owner. A refused claim never executes connectors.
     /// </summary>
     public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken, Guid? claimedRunId = null)
+        => await ExecuteAsync(projectId, triggeredBy, cancellationToken, claimedRunId, partition: null);
+
+    /// <summary>
+    /// The same run reading ONE container of the project's scope (IdentityCenter SPLIT-ENUM-01): every Mapping step's
+    /// included bases are replaced by the partition's, cursors are not advanced (a partial read must not move a step's
+    /// watermark) and the deleted-objects pass runs only for the container that carries it. Admission, the run row and
+    /// the counts are the ordinary ones: a partition is a run of the project like any other in Sync History.
+    /// </summary>
+    public async Task<Guid> ExecuteAsync(Guid projectId, string triggeredBy, CancellationToken cancellationToken, Guid? claimedRunId, SyncRunPartition? partition)
     {
         // Worf HIGH-1: the IsRunning flag must be released on EVERY exit path,
         // including the early throws that happen before a SyncRun row exists
@@ -140,6 +149,9 @@ public sealed class SyncProjectOrchestrator
                 ownsFlag = true;
             }
             await Log(run.Id, "Info", $"Run started by {triggeredBy} for project '{project.Name}'.");
+            if (partition is not null)
+                await Log(run.Id, "Info", $"{partition.Describe()}: this run reads one container of the project's scope; step cursors are not advanced"
+                    + (partition.CarriesTombstones ? " and it carries the deleted-objects pass." : " and the deleted-objects pass is left to the partition that carries it."));
 
             // Register this run with the in-process cancellation registry so the
             // "Stop Sync" button can trip the SAME token the host-shutdown path
@@ -149,7 +161,7 @@ public sealed class SyncProjectOrchestrator
             var runToken = _cancellation.Register(project.Id, run.Id, cancellationToken);
             try
             {
-                return await RunCoreAsync(project, run, runToken);
+                return await RunCoreAsync(project, run, runToken, partition);
             }
             finally
             {
@@ -182,7 +194,7 @@ public sealed class SyncProjectOrchestrator
     /// place. Owns its own try/finally so IsRunning + run stats are stamped on
     /// EVERY outcome of the pass (success, cancel, mid-run throw).
     /// </summary>
-    private async Task<Guid> RunCoreAsync(SyncProject project, SyncRun run, CancellationToken cancellationToken)
+    private async Task<Guid> RunCoreAsync(SyncProject project, SyncRun run, CancellationToken cancellationToken, SyncRunPartition? partition = null)
     {
         var sw = Stopwatch.StartNew();
         var totals = new SyncRunProgress();
@@ -265,7 +277,7 @@ public sealed class SyncProjectOrchestrator
             if (workflows.Count == 0)
             {
                 await Log(run.Id, "Warning", "Project has no Workflows defined; falling back to legacy single-pass Mapping using project-level mappings + scope.");
-                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints);
+                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints, partition);
                 var legacyResult = await ExecuteLegacyMappingAsync(ctx, cancellationToken);
                 totals.Add(legacyResult.Delta, true, legacyResult.WasIncremental,
                     $"Mapping pass reported {legacyResult.Delta.Failed} failure(s). See run logs for the reason.");
@@ -274,7 +286,7 @@ public sealed class SyncProjectOrchestrator
             }
             else
             {
-                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints);
+                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints, partition);
 
                 foreach (var wf in workflows)
                 {
@@ -460,7 +472,8 @@ public sealed class SyncProjectOrchestrator
         IConnectorSink Sink,
         Core.Models.Tenant SourceTenant,
         Core.Models.Tenant SinkTenant,
-        SyncCheckpointBuffer Checkpoints);
+        SyncCheckpointBuffer Checkpoints,
+        SyncRunPartition? Partition = null);
 
     /// <summary>What a single step returns. Most steps populate only Delta.</summary>
     private sealed class StepResult
@@ -490,6 +503,11 @@ public sealed class SyncProjectOrchestrator
         var scope = await _workflowRepo.GetScopeByStepAsync(step.Id)
                  ?? await _projectRepo.GetProjectScopeAsync(ctx.Project.Id)
                  ?? new SyncProjectScope { SyncProjectId = ctx.Project.Id, PageSize = 1000 };
+        if (ctx.Partition is { } partition)
+        {
+            scope = partition.ApplyTo(scope);
+            await Log(ctx.RunId, "Info", $"    Step '{step.Name}' reads {partition.Describe()}.");
+        }
 
         // V23: per-step object class, falling back to the project's class for legacy
         // single-class steps whose ObjectClass was backfilled (or for any step that
@@ -512,7 +530,9 @@ public sealed class SyncProjectOrchestrator
 
         var pump = await PumpAsync(ctx, mappings, scope, objectClass, step, needEmitted, ct);
 
-        if (ctx.Checkpoints.Offer(step.Id, pump.NewCursor, pump.ReadWasComplete, pump.Delta.Failed, pump.PendingEffects))
+        if (ctx.Partition is not null)
+            await Log(ctx.RunId, "Info", $"    Step '{step.Name}' cursor not advanced: a partition reads part of the scope.");
+        else if (ctx.Checkpoints.Offer(step.Id, pump.NewCursor, pump.ReadWasComplete, pump.Delta.Failed, pump.PendingEffects))
             await Log(ctx.RunId, "Info", $"    Step '{step.Name}' cursor is pending successful completion of all workflow effects.");
         else if (pump.NewCursor is not null)
             await Log(ctx.RunId, "Warning", $"    Step '{step.Name}' cursor retained: readComplete={pump.ReadWasComplete}, failed={pump.Delta.Failed}, pendingEffects={pump.PendingEffects}.");
@@ -535,12 +555,17 @@ public sealed class SyncProjectOrchestrator
         var mappings = await _projectRepo.GetMappingsAsync(ctx.Project.Id);
         var scope = await _projectRepo.GetProjectScopeAsync(ctx.Project.Id)
                  ?? new SyncProjectScope { SyncProjectId = ctx.Project.Id, PageSize = 1000 };
+        if (ctx.Partition is { } partition)
+        {
+            scope = partition.ApplyTo(scope);
+            await Log(ctx.RunId, "Info", $"    Mapping pass reads {partition.Describe()}; the run cursor is not advanced.");
+        }
         // Legacy path (no Workflows): there are no steps, so the class is the project's
         // and the cursor falls back to the project-level last-run cursor (step = null).
         // No later steps exist to consume EmittedBatch → needEmitted: false.
         var pump = await PumpAsync(ctx, mappings, scope, ctx.Project.ObjectClass, null, needEmitted: false, ct);
         return new LegacyResult(pump.Delta,
-            SyncCheckpointBuffer.CanAdvance(pump.NewCursor, pump.ReadWasComplete, pump.Delta.Failed, pump.PendingEffects) ? pump.NewCursor : null,
+            ctx.Partition is null && SyncCheckpointBuffer.CanAdvance(pump.NewCursor, pump.ReadWasComplete, pump.Delta.Failed, pump.PendingEffects) ? pump.NewCursor : null,
             pump.WasIncremental);
     }
 

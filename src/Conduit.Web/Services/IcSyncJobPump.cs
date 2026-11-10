@@ -41,6 +41,16 @@ public static class IcSyncJobReasons
     public static string ExecutionFailed(Guid jobId, string detail) =>
         $"Conduit could not execute IdentityCenter job {jobId}: {detail}";
 
+    public static string SourceMissing(SyncProject project) =>
+        $"Conduit sync project '{project.Name}' ({project.Id}) has no source connection any more; nothing was planned.";
+    public static string NoContainers(SyncProject project, string systemType) =>
+        $"Conduit sync project '{project.Name}' ({project.Id}) reads a {systemType} source, which has no containers to read one at a time; set the IdentityCenter project's Split to Whole scope.";
+    public static string ContainerBrowseFailed(SyncProject project, string baseDn, string detail) =>
+        $"Conduit sync project '{project.Name}' ({project.Id}) could not list the containers under {baseDn}: {detail}";
+    public static string PlanNotAccepted(Guid jobId, string? detail) =>
+        $"IdentityCenter did not accept the partition plan for job {jobId}: {detail ?? "no reason given"}; nothing was read.";
+    public static string RanWhole(int containers) =>
+        $"The scope has {containers} container{(containers == 1 ? string.Empty : "s")}, so the project ran whole.";
     public static string NoSyncProjectSupport(string? supportedJobTypes) =>
         $"IdentityCenter's agent row for this installation declares SupportedJobTypes '{supportedJobTypes}', which does not include SyncProject — no sync job will EVER be handed to it until that row is changed.";
 }
@@ -247,7 +257,62 @@ public sealed class IcSyncJobPump
         if (project.IsRunning)
             return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.AlreadyRunning(job.Id, project), ct);
 
-        return await ExecuteAsync(channel, baseUrl, agentId, job, project, ct);
+        // SPLIT-ENUM-01: a plan item is planned here and its containers go back to IdentityCenter as one item each; a
+        // container item runs the project reading that container alone; anything else runs the project whole. A
+        // partition that does not parse is refused, never run as a whole read under a container's name.
+        var partition = IcPartitionPayload.ReadPartition(job.PayloadJson);
+        if (partition is null && IcPartitionPayload.HasPartition(job.PayloadJson))
+            return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.ExecutionFailed(job.Id, "the partition in the job payload could not be read"), ct);
+        if (partition is null && IcPartitionPayload.IsPlan(job.PayloadJson))
+            return await PlanAsync(channel, baseUrl, agentId, job, project, ct);
+        return await ExecuteAsync(channel, baseUrl, agentId, job, project, partition, ct);
+    }
+
+    /// <summary>
+    /// The plan item: list the containers, hand them to IdentityCenter, complete the item saying what was queued where.
+    /// A scope with fewer than two containers runs whole here and says so; a source without containers, a failed
+    /// browse or a plan IdentityCenter does not accept completes the item unsuccessfully with the reason.
+    /// </summary>
+    private async Task<IcSyncJobTickResult> PlanAsync(
+        IcSyncJobChannel channel, string baseUrl, Guid agentId, IcJobQueueEntry job, SyncProject project, CancellationToken ct)
+    {
+        IcPartitionPlan plan;
+        try
+        {
+            plan = await _runner.PlanPartitionsAsync(project, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.ContainerBrowseFailed(project, "its scope", Clean(ex.Message)), ct);
+        }
+        if (plan.Refusal is not null)
+            return await RefuseAsync(channel, baseUrl, agentId, job, plan.Refusal, ct);
+        if (plan.Partitions.Count < 2)
+        {
+            _logger.LogInformation("IdentityCenter job {JobId}: {Reason}", job.Id, IcSyncJobReasons.RanWhole(plan.Partitions.Count));
+            await channel.ReportProgressAsync(baseUrl, job.Id, agentId, 0, IcSyncJobReasons.RanWhole(plan.Partitions.Count), 0, 0, 0, ct);
+            return await ExecuteAsync(channel, baseUrl, agentId, job, project, null, ct);
+        }
+
+        var answer = await channel.PlanPartitionsAsync(baseUrl, job.Id, agentId, plan.Partitions, ct);
+        if (!answer.Accepted)
+            return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.PlanNotAccepted(job.Id, Clean(answer.Reason)), ct);
+
+        var perServer = answer.Children.GroupBy(c => c.ServerName).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(g => $"{g.Key} x{g.Count()}");
+        var summary = $"Split into {answer.Children.Count} containers: {string.Join(", ", perServer)}.";
+        _logger.LogInformation("IdentityCenter job {JobId}: {Summary}", job.Id, summary);
+        await channel.ReportProgressAsync(baseUrl, job.Id, agentId, 100, summary, 0, 0, 0, CancellationToken.None);
+        await CompleteAsync(channel, baseUrl, agentId, job, success: true, 0, 0, 0, null,
+            JsonSerializer.Serialize(new
+            {
+                resultMessage = summary,
+                executor = "Conduit",
+                conduitProjectId = project.Id,
+                partitions = answer.Children.Count,
+                children = answer.Children.Select(c => new { jobId = c.JobId, index = c.Index, label = c.Label, server = c.ServerName }).ToArray()
+            }), CancellationToken.None);
+        return IcSyncJobTickResult.Executed;
     }
 
     /// <summary>The job types this installation claims with.</summary>
@@ -267,7 +332,7 @@ public sealed class IcSyncJobPump
     }
 
     private async Task<IcSyncJobTickResult> ExecuteAsync(
-        IcSyncJobChannel channel, string baseUrl, Guid agentId, IcJobQueueEntry job, SyncProject project, CancellationToken ct)
+        IcSyncJobChannel channel, string baseUrl, Guid agentId, IcJobQueueEntry job, SyncProject project, SyncRunPartition? partition, CancellationToken ct)
     {
         using var runCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var cancelRequested = false;
@@ -275,7 +340,7 @@ public sealed class IcSyncJobPump
         IcSyncRunOutcome outcome;
         try
         {
-            outcome = await _runner.ExecuteAsync(project, TriggeredBy(job), async (progress, progressCt) =>
+            outcome = await _runner.ExecuteAsync(project, TriggeredBy(job, partition), async (progress, progressCt) =>
             {
                 // IdentityCenter's ProgressPercent stays 0: a sync enumerates an unbounded source, so
                 // a percentage would be invented. The counts and the message carry what is actually known.
@@ -289,7 +354,7 @@ public sealed class IcSyncJobPump
                     _logger.LogInformation("IdentityCenter requested cancellation of job {JobId}; cancelling Conduit run {RunId}.", job.Id, progress.RunId);
                     runCts.Cancel();
                 }
-            }, runCts.Token);
+            }, runCts.Token, partition);
         }
         catch (Exception ex)
         {
@@ -401,6 +466,10 @@ public sealed class IcSyncJobPump
             ? $"IdentityCenter job {job.Id}"
             : $"IdentityCenter:{label}";
     }
+
+    /// <summary>A container run's attribution names its container too, so Sync History tells the partitions of one plan apart.</summary>
+    public static string TriggeredBy(IcJobQueueEntry job, SyncRunPartition? partition) =>
+        partition is null ? TriggeredBy(job) : $"{TriggeredBy(job)} partition {partition.Index}/{partition.Count}";
 
     /// <summary>
     /// Reads a payload key case-INSENSITIVELY, matching IdentityCenter's own SyncProjectJobHandler:

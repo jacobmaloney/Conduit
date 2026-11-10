@@ -147,8 +147,10 @@ public sealed class ActiveDirectorySource : IConnectorSource
             yield return obj;
 
         // Tombstone enumeration only on incremental runs — full runs treat absence
-        // as "doesn't exist yet" and sinks reconcile separately.
-        if (!isIncremental || string.IsNullOrWhiteSpace(sinceIsoUtc))
+        // as "doesn't exist yet" and sinks reconcile separately. A partition run that does
+        // not carry the pass skips it too: the Deleted Objects container is one place, read
+        // once per plan, not once per container (UC037-D09).
+        if (!isIncremental || string.IsNullOrWhiteSpace(sinceIsoUtc) || scope.SuppressTombstones)
             yield break;
 
         await foreach (var tomb in EnumerateTombstonesAsync(objectClass, sinceIsoUtc!, cancellationToken))
@@ -323,7 +325,7 @@ public sealed class ActiveDirectorySource : IConnectorSource
         if (!string.IsNullOrWhiteSpace(sinceIsoUtc)) filter = $"(&{filter}(whenChanged>={ToGeneralizedTime(sinceIsoUtc)}))";
         var query = new AdQuery
         {
-            IncludedBases = scope.GetIncludedBaseList(), ExcludedBases = scope.GetExcludedBaseList(), Filter = filter,
+            IncludedBases = scope.GetIncludedBaseList(), ExcludedBases = scope.GetExcludedBaseList(), Filter = filter, Depth = DepthFor(scope),
             PageSize = Math.Clamp(scope.PageSize > 0 ? scope.PageSize : 1000, 1, 1000), MaximumRows = scope.MaxObjects,
             Attributes = scope.RequestedAttributes is { Count: > 0 }
                 ? scope.RequestedAttributes.Where(a => !string.IsNullOrWhiteSpace(a)).Concat(StructuralAttributes).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : []
@@ -347,6 +349,13 @@ public sealed class ActiveDirectorySource : IConnectorSource
             _logger.LogInformation("AD read for tenant {TenantId} skipped {Count} subordinate partition(s) the directory referred to: {Partitions}",
                 _tenantId, state.SubordinatePartitions.Count, string.Join("; ", state.SubordinatePartitions));
     }
+    /// <summary>
+    /// The LDAP search depth a scope asks for: a subtree, as every read was, or one level when the scope is a
+    /// partition's base read on its own (<see cref="SyncProjectScope.ContainerOnly"/>): the base's own objects, with
+    /// its child containers read by their own partitions.
+    /// </summary>
+    public static SearchScope DepthFor(SyncProjectScope scope) => scope.ContainerOnly ? SearchScope.OneLevel : SearchScope.Subtree;
+
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
     {
         string? probeHost = null; var probePort = 0;

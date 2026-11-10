@@ -45,6 +45,10 @@ public class IcSyncJobExecutorTests
 
         public int CompleteStatus { get; set; } = 200;
 
+        /// <summary>POST /api/jobs/{id}/partitions: the status and body IdentityCenter answers a plan with.</summary>
+        public int PlanStatus { get; set; } = 200;
+        public string? PlanBody { get; set; }
+
         private string? _lastJobRead;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -65,6 +69,8 @@ public class IcSyncJobExecutorTests
                 return _lastJobRead is null ? new HttpResponseMessage(HttpStatusCode.NotFound) : Ok(_lastJobRead);
             }
 
+            if (path.EndsWith("/partitions", StringComparison.Ordinal))
+                return new HttpResponseMessage((HttpStatusCode)PlanStatus) { Content = new StringContent(PlanBody ?? "{}") };
             if (path.EndsWith("/progress", StringComparison.Ordinal)) return Ok("{}");
             if (path.EndsWith("/complete", StringComparison.Ordinal))
                 return new HttpResponseMessage((HttpStatusCode)CompleteStatus) { Content = new StringContent("{}") };
@@ -105,12 +111,23 @@ public class IcSyncJobExecutorTests
             return Task.FromResult(Bound);
         }
 
+        public SyncRunPartition? LastPartition { get; private set; }
+        public int PlanCalls { get; private set; }
+        public IcPartitionPlan Plan { get; set; } = new(Array.Empty<SyncRunPartition>(), null);
+
+        public Task<IcPartitionPlan> PlanPartitionsAsync(SyncProject project, CancellationToken ct)
+        {
+            PlanCalls++;
+            return Task.FromResult(Plan);
+        }
+
         public async Task<IcSyncRunOutcome> ExecuteAsync(SyncProject project, string triggeredBy,
-            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct)
+            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct, SyncRunPartition? partition = null)
         {
             ExecuteCalls++;
             LastExecuted = project;
             LastTriggeredBy = triggeredBy;
+            LastPartition = partition;
 
             if (ReportProgress)
             {
@@ -425,12 +442,144 @@ public class IcSyncJobExecutorTests
         Assert.Contains("the connection pool is exhausted", complete.GetProperty("errorMessage").GetString());
     }
 
+    // ── SPLIT-ENUM-01: plan items and container items ───────────────────────
+
+    private const string PlanPayload = """{\"TriggerType\":\"Manual\",\"TriggeredBy\":\"nora.quint\",\"Split\":\"Container\"}""";
+    private const string ContainerPayload = """{\"TriggerType\":\"Manual\",\"TriggeredBy\":\"nora.quint\",\"Partition\":{\"Index\":3,\"Count\":12,\"Label\":\"OU=Sales,DC=example,DC=com\",\"IncludedBaseDNs\":[\"OU=Sales,DC=example,DC=com\"],\"OneLevel\":false,\"CarriesTombstones\":false,\"ParentJobId\":\"bbbbbbbb-0000-0000-0000-00000000000b\"}}""";
+
+    private static HttpResponseMessage Claimed(string payload) => new(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson(payload: payload)) };
+
+    private static IReadOnlyList<SyncRunPartition> ThreeContainers() => new[]
+    {
+        new SyncRunPartition(1, 3, "DC=example,DC=com (this level)", new[] { "DC=example,DC=com" }, true, true),
+        new SyncRunPartition(2, 3, "OU=Sales,DC=example,DC=com", new[] { "OU=Sales,DC=example,DC=com" }, false, false),
+        new SyncRunPartition(3, 3, "OU=Plant,DC=example,DC=com", new[] { "OU=Plant,DC=example,DC=com" }, false, false),
+    };
+
+    private static string QueuedAnswer(params string[] servers) => JsonSerializer.Serialize(new
+    {
+        outcome = "Queued",
+        children = servers.Select((s, i) => new { jobId = Guid.NewGuid(), index = i + 1, label = "c" + (i + 1), serverName = s }).ToArray()
+    });
+
+    [Fact]
+    public async Task A_plan_item_is_planned_here_and_its_containers_go_to_IdentityCenter_one_item_each()
+    {
+        var (result, ic, runner, _) = await RunAsync(
+            ic => { ic.Claims.Enqueue(() => Claimed(PlanPayload)); ic.PlanBody = QueuedAnswer("Conduit A", "Conduit B", "Conduit A"); },
+            r => { r.Bound = Project(); r.Plan = new IcPartitionPlan(ThreeContainers(), null); });
+
+        Assert.Equal(IcSyncJobTickResult.Executed, result);
+        Assert.Equal(1, runner.PlanCalls);
+        Assert.Equal(0, runner.ExecuteCalls);                     // the plan item reads nothing itself
+
+        var plan = BodyOf(ic.Last("POST", "/partitions"));
+        Assert.Equal(AgentId, plan.GetProperty("agentId").GetGuid());
+        var partitions = plan.GetProperty("partitions").EnumerateArray().ToList();
+        Assert.Equal(3, partitions.Count);
+        Assert.True(partitions[0].GetProperty("oneLevel").GetBoolean());
+        Assert.True(partitions[0].GetProperty("carriesTombstones").GetBoolean());
+        Assert.False(partitions[1].GetProperty("oneLevel").GetBoolean());
+        Assert.Equal("OU=Sales,DC=example,DC=com", partitions[1].GetProperty("includedBaseDNs")[0].GetString());
+
+        var complete = BodyOf(ic.Last("POST", "/complete"));
+        Assert.True(complete.GetProperty("success").GetBoolean());
+        var receipt = JsonDocument.Parse(complete.GetProperty("resultJson").GetString()!).RootElement;
+        Assert.Equal(3, receipt.GetProperty("partitions").GetInt32());
+        Assert.Contains("Split into 3 containers: Conduit A x2, Conduit B x1.", receipt.GetProperty("resultMessage").GetString());
+        var progress = BodyOf(ic.Last("POST", "/progress"));
+        Assert.Contains("Split into 3 containers", progress.GetProperty("progressMessage").GetString());
+    }
+
+    [Fact]
+    public async Task A_plan_whose_source_has_no_containers_is_completed_unsuccessfully_with_the_reason_and_nothing_is_read()
+    {
+        var reason = IcSyncJobReasons.NoContainers(Project(), "EntraID");
+        var (result, ic, runner, _) = await RunAsync(
+            ic => ic.Claims.Enqueue(() => Claimed(PlanPayload)),
+            r => { r.Bound = Project(); r.Plan = IcPartitionPlan.Refused(reason); });
+
+        Assert.Equal(IcSyncJobTickResult.Refused, result);
+        Assert.Equal(0, runner.ExecuteCalls);
+        Assert.Null(ic.Last("POST", "/partitions"));
+        var complete = BodyOf(ic.Last("POST", "/complete"));
+        Assert.False(complete.GetProperty("success").GetBoolean());
+        Assert.Equal(reason, complete.GetProperty("errorMessage").GetString());
+    }
+
+    [Fact]
+    public async Task A_scope_with_one_container_runs_whole_and_says_so()
+    {
+        var (result, ic, runner, _) = await RunAsync(
+            ic => ic.Claims.Enqueue(() => Claimed(PlanPayload)),
+            r => { r.Bound = Project(); r.Plan = new IcPartitionPlan(ThreeContainers().Take(1).ToList(), null); });
+
+        Assert.Equal(IcSyncJobTickResult.Executed, result);
+        Assert.Equal(1, runner.ExecuteCalls);
+        Assert.Null(runner.LastPartition);                        // the whole scope, not the one container one level deep
+        Assert.Null(ic.Last("POST", "/partitions"));
+        Assert.Contains("ran whole", BodyOf(ic.Requests.First(r => r.Path.EndsWith("/progress", StringComparison.Ordinal))).GetProperty("progressMessage").GetString());
+        Assert.True(BodyOf(ic.Last("POST", "/complete")).GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_plan_IdentityCenter_refuses_is_completed_unsuccessfully_with_its_reason_and_nothing_is_read()
+    {
+        var (result, ic, runner, _) = await RunAsync(
+            ic =>
+            {
+                ic.Claims.Enqueue(() => Claimed(PlanPayload));
+                ic.PlanStatus = 409;
+                ic.PlanBody = """{"outcome":"Refused","reason":"Partitions not queued: job is not claimed by this server.","children":[]}""";
+            },
+            r => { r.Bound = Project(); r.Plan = new IcPartitionPlan(ThreeContainers(), null); });
+
+        Assert.Equal(IcSyncJobTickResult.Refused, result);
+        Assert.Equal(0, runner.ExecuteCalls);
+        var complete = BodyOf(ic.Last("POST", "/complete"));
+        Assert.False(complete.GetProperty("success").GetBoolean());
+        Assert.Equal(IcSyncJobReasons.PlanNotAccepted(JobId, "Partitions not queued: job is not claimed by this server."), complete.GetProperty("errorMessage").GetString());
+    }
+
+    [Fact]
+    public async Task A_container_item_runs_the_project_reading_only_its_container()
+    {
+        var (result, ic, runner, _) = await RunAsync(
+            ic => ic.Claims.Enqueue(() => Claimed(ContainerPayload)),
+            r => r.Bound = Project());
+
+        Assert.Equal(IcSyncJobTickResult.Executed, result);
+        Assert.Equal(0, runner.PlanCalls);
+        Assert.Equal(1, runner.ExecuteCalls);
+        Assert.NotNull(runner.LastPartition);
+        Assert.Equal((3, 12, false, false), (runner.LastPartition!.Index, runner.LastPartition.Count, runner.LastPartition.OneLevel, runner.LastPartition.CarriesTombstones));
+        Assert.Equal(new[] { "OU=Sales,DC=example,DC=com" }, runner.LastPartition.IncludedBaseDNs);
+        Assert.Equal("IdentityCenter:nora.quint partition 3/12", runner.LastTriggeredBy);
+        Assert.Null(ic.Last("POST", "/partitions"));
+    }
+
+    [Fact]
+    public async Task A_container_item_whose_partition_cannot_be_read_is_refused_not_run_as_a_whole_read()
+    {
+        var (result, ic, runner, _) = await RunAsync(
+            ic => ic.Claims.Enqueue(() => Claimed("""{\"TriggerType\":\"Manual\",\"Partition\":{\"Index\":1}}""")),
+            r => r.Bound = Project());
+
+        Assert.Equal(IcSyncJobTickResult.Refused, result);
+        Assert.Equal(0, runner.ExecuteCalls);
+        var complete = BodyOf(ic.Last("POST", "/complete"));
+        Assert.False(complete.GetProperty("success").GetBoolean());
+        Assert.Contains("partition in the job payload could not be read", complete.GetProperty("errorMessage").GetString());
+    }
+
     private sealed class ThrowingResolver : IIcSyncProjectJobRunner
     {
         public Task<SyncProject?> ResolveAsync(Guid identityCenterProjectId) =>
             throw new InvalidOperationException("the connection pool is exhausted");
         public Task<IcSyncRunOutcome> ExecuteAsync(SyncProject project, string triggeredBy,
-            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct) =>
+            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct, SyncRunPartition? partition = null) =>
+            throw new InvalidOperationException("must never be reached");
+        public Task<IcPartitionPlan> PlanPartitionsAsync(SyncProject project, CancellationToken ct) =>
             throw new InvalidOperationException("must never be reached");
     }
 
@@ -516,7 +665,9 @@ public class IcSyncJobExecutorTests
         public SyncProject? Bound { get; set; }
         public Task<SyncProject?> ResolveAsync(Guid identityCenterProjectId) => Task.FromResult(Bound);
         public Task<IcSyncRunOutcome> ExecuteAsync(SyncProject project, string triggeredBy,
-            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct) =>
+            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct, SyncRunPartition? partition = null) =>
+            throw new InvalidOperationException("the database is unreachable");
+        public Task<IcPartitionPlan> PlanPartitionsAsync(SyncProject project, CancellationToken ct) =>
             throw new InvalidOperationException("the database is unreachable");
     }
 

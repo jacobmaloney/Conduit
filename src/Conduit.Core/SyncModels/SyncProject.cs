@@ -151,6 +151,18 @@ public class SyncProjectScope
     /// per run; never round-tripped to the DB.
     /// </summary>
     public List<string>? RequestedAttributes { get; set; }
+    /// <summary>
+    /// Run-local hint (NOT persisted): read the included bases one level deep, not as subtrees. Set by
+    /// <see cref="SyncRunPartition.ApplyTo"/> for the container that is the base itself; the AD source maps it to
+    /// the LDAP OneLevel scope. Never round-tripped to the DB.
+    /// </summary>
+    public bool ContainerOnly { get; set; }
+    /// <summary>
+    /// Run-local hint (NOT persisted): skip the deleted-objects pass an incremental read would run. Set by
+    /// <see cref="SyncRunPartition.ApplyTo"/> for every container of a plan but the one that carries tombstones,
+    /// so a plan of N containers runs that pass once (UC037-D09). Never round-tripped to the DB.
+    /// </summary>
+    public bool SuppressTombstones { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastModified { get; set; } = DateTime.UtcNow;
 

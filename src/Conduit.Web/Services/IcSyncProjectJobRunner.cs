@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Conduit.Core.SyncModels;
 using Conduit.DataAccess.Repositories;
+using Conduit.Sync.Connectors;
 using Conduit.Sync.Orchestration;
 
 namespace Conduit.Web.Services;
@@ -47,7 +48,21 @@ public interface IIcSyncProjectJobRunner
         SyncProject project,
         string triggeredBy,
         Func<IcSyncRunProgress, CancellationToken, Task> onProgress,
-        CancellationToken ct);
+        CancellationToken ct,
+        SyncRunPartition? partition = null);
+
+    /// <summary>
+    /// SPLIT-ENUM-01: the containers of the project's source scope, one level under each included base, as the
+    /// containers a split read runs one at a time; or the reason none can be listed (a source with no containers, a
+    /// browse that failed). Reads the directory, runs nothing.
+    /// </summary>
+    Task<IcPartitionPlan> PlanPartitionsAsync(SyncProject project, CancellationToken ct);
+}
+
+/// <summary>What the planner found: the containers, or why it could not list them.</summary>
+public sealed record IcPartitionPlan(IReadOnlyList<SyncRunPartition> Partitions, string? Refusal)
+{
+    public static IcPartitionPlan Refused(string reason) => new(Array.Empty<SyncRunPartition>(), reason);
 }
 
 /// <summary>
@@ -86,7 +101,8 @@ public sealed class IcSyncProjectJobRunner : IIcSyncProjectJobRunner
         SyncProject project,
         string triggeredBy,
         Func<IcSyncRunProgress, CancellationToken, Task> onProgress,
-        CancellationToken ct)
+        CancellationToken ct,
+        SyncRunPartition? partition = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var projects = scope.ServiceProvider.GetRequiredService<SyncProjectRepository>();
@@ -118,7 +134,7 @@ public sealed class IcSyncProjectJobRunner : IIcSyncProjectJobRunner
             // The orchestrator links this token into its own SyncCancellationRegistry
             // registration, so an IdentityCenter cancellation trips the SAME token the
             // local Stop Sync button does — there is no second cancellation path.
-            await orchestrator.ExecuteAsync(project.Id, triggeredBy, ct, claimedRunId: ownerRunId);
+            await orchestrator.ExecuteAsync(project.Id, triggeredBy, ct, ownerRunId, partition);
         }
         catch (Exception ex)
         {
@@ -140,6 +156,63 @@ public sealed class IcSyncProjectJobRunner : IIcSyncProjectJobRunner
 
         var run = await ReadRunAsync(runs, ownerRunId);
         return Build(project, ownerRunId, run, forcedFailure: null);
+    }
+
+    public async Task<IcPartitionPlan> PlanPartitionsAsync(SyncProject project, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var tenants = scope.ServiceProvider.GetRequiredService<TenantRepository>();
+        var connectors = scope.ServiceProvider.GetRequiredService<ConnectorRegistry>();
+        var workflows = scope.ServiceProvider.GetRequiredService<WorkflowRepository>();
+        var projects = scope.ServiceProvider.GetRequiredService<SyncProjectRepository>();
+
+        var tenant = await tenants.GetByIdAsync(project.SourceTenantId);
+        if (tenant is null)
+            return IcPartitionPlan.Refused(IcSyncJobReasons.SourceMissing(project));
+        var browser = connectors.Get(tenant.SystemType)?.CreateContainerBrowser(tenant.Id);
+        if (browser is null)
+            return IcPartitionPlan.Refused(IcSyncJobReasons.NoContainers(project, tenant.SystemType));
+
+        // The scope the first enabled Mapping step reads, else the project's; the run applies the same partition to
+        // every Mapping step, so the first one's bases are the plan's bases.
+        var readScope = await FirstMappingScopeAsync(project, workflows, projects);
+        var bases = readScope?.GetIncludedBaseList() ?? new List<string>();
+        var excluded = readScope?.GetExcludedBaseList() ?? new List<string>();
+
+        var browsed = new List<SyncPartitionBase>();
+        if (bases.Count == 0)
+        {
+            // No base chosen: the directory's own root, as the reader would use it.
+            var root = await browser.BrowseContainersAsync(null, ct);
+            if (root.ErrorMessage is not null || string.IsNullOrWhiteSpace(root.ResolvedBaseDn))
+                return IcPartitionPlan.Refused(IcSyncJobReasons.ContainerBrowseFailed(project, "the directory root", root.ErrorMessage ?? "its naming context could not be resolved"));
+            browsed.Add(new SyncPartitionBase(root.ResolvedBaseDn!, root.Nodes));
+        }
+        else
+        {
+            foreach (var baseDn in bases)
+            {
+                ct.ThrowIfCancellationRequested();
+                var result = await browser.BrowseContainersAsync(baseDn, ct);
+                if (result.ErrorMessage is not null)
+                    return IcPartitionPlan.Refused(IcSyncJobReasons.ContainerBrowseFailed(project, baseDn, result.ErrorMessage));
+                browsed.Add(new SyncPartitionBase(baseDn, result.Nodes));
+            }
+        }
+        return new IcPartitionPlan(SyncPartitionPlanner.Build(browsed, excluded), null);
+    }
+
+    private static async Task<SyncProjectScope?> FirstMappingScopeAsync(SyncProject project, WorkflowRepository workflows, SyncProjectRepository projects)
+    {
+        foreach (var workflow in (await workflows.GetByProjectAsync(project.Id)).Where(w => w.Enabled).OrderBy(w => w.Ordinal))
+        {
+            foreach (var step in (await workflows.GetStepsAsync(workflow.Id)).Where(s => s.Enabled && s.StepType == WorkflowStepTypes.Mapping).OrderBy(s => s.Ordinal))
+            {
+                var stepScope = await workflows.GetScopeByStepAsync(step.Id);
+                return stepScope ?? await projects.GetProjectScopeAsync(project.Id);
+            }
+        }
+        return await projects.GetProjectScopeAsync(project.Id);
     }
 
     private async Task PumpProgressAsync(

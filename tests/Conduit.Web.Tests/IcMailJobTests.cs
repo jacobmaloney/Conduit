@@ -63,7 +63,8 @@ public class IcMailJobTests
         public int Calls { get; private set; }
         public Task<SyncProject?> ResolveAsync(Guid identityCenterProjectId) { Calls++; return Task.FromResult<SyncProject?>(null); }
         public Task<IcSyncRunOutcome> ExecuteAsync(SyncProject project, string triggeredBy,
-            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct) { Calls++; throw new InvalidOperationException("no sync run here"); }
+            Func<IcSyncRunProgress, CancellationToken, Task> onProgress, CancellationToken ct, SyncRunPartition? partition = null) { Calls++; throw new InvalidOperationException("no sync run here"); }
+        public Task<IcPartitionPlan> PlanPartitionsAsync(SyncProject project, CancellationToken ct) { Calls++; throw new InvalidOperationException("no sync run here"); }
     }
 
     private const string Relay = """{"host":"192.168.1.60","port":25,"useSsl":false,"fromAddress":"noreply@identitycenter.local","fromName":"Identity Center","replyToAddress":null,"signInRequired":false}""";

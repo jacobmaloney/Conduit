@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Conduit.Core.SyncModels;
 
 namespace Conduit.Web.Services;
 
@@ -39,6 +40,12 @@ public enum IcClaimResult
 }
 
 public sealed record IcClaimOutcome(IcClaimResult Result, IcJobQueueEntry? Job, string Message);
+
+/// <summary>One container item IdentityCenter queued for a plan, and the server it was dealt to.</summary>
+public sealed record IcPlanChild(Guid JobId, int Index, string Label, string ServerName);
+
+/// <summary>IdentityCenter's answer to a partition plan: accepted with the queued containers, or not, with the reason.</summary>
+public sealed record IcPlanAnswer(bool Accepted, string Outcome, string? Reason, IReadOnlyList<IcPlanChild> Children);
 
 /// <summary>
 /// The IdentityCenter job-queue wire protocol, as one testable object: claim, progress,
@@ -263,6 +270,62 @@ public sealed class IcSyncJobChannel
         {
             return null;
         }
+    }
+
+    // ── Partitions (SPLIT-ENUM-01: POST /api/jobs/{id}/partitions, AgentJobsPolicy) ──
+
+    /// <summary>
+    /// Hands IdentityCenter the containers of a plan item this installation holds. IdentityCenter queues one item per
+    /// container over the project's partition servers and answers with them (200, Queued or AlreadyQueued); 409 is a
+    /// refusal with its reason; anything else is "not accepted" with what is known. Nothing is assumed queued from an
+    /// unreadable answer.
+    /// </summary>
+    public async Task<IcPlanAnswer> PlanPartitionsAsync(string baseUrl, Guid jobId, Guid agentId, IReadOnlyList<SyncRunPartition> partitions, CancellationToken ct)
+    {
+        try
+        {
+            using var content = Json(BuildPlanJson(agentId, partitions));
+            using var resp = await _client.PostAsync($"{baseUrl}/api/jobs/{jobId}/partitions", content, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            var parsed = ParsePlanAnswer(body);
+            if (resp.IsSuccessStatusCode && parsed is { Children.Count: > 0 })
+                return parsed with { Accepted = true };
+            var status = (int)resp.StatusCode;
+            return new IcPlanAnswer(false, parsed?.Outcome ?? $"HTTP {status}", parsed?.Reason ?? $"HTTP {status}: IdentityCenter did not accept the partition plan.", Array.Empty<IcPlanChild>());
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return new IcPlanAnswer(false, "Unreachable", $"unreachable ({ex.Message})", Array.Empty<IcPlanChild>());
+        }
+    }
+
+    public static string BuildPlanJson(Guid agentId, IReadOnlyList<SyncRunPartition> partitions) =>
+        JsonSerializer.Serialize(new
+        {
+            agentId,
+            partitions = partitions.Select(p => new { label = p.Label, includedBaseDNs = p.IncludedBaseDNs, oneLevel = p.OneLevel, carriesTombstones = p.CarriesTombstones }).ToArray()
+        });
+
+    public static IcPlanAnswer? ParsePlanAnswer(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            var children = new List<IcPlanChild>();
+            if (doc.RootElement.TryGetProperty("children", out var list) && list.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in list.EnumerateArray())
+                {
+                    var id = ReadGuid(child, "jobId");
+                    if (id is null) continue;
+                    var index = child.TryGetProperty("index", out var ix) && ix.ValueKind == JsonValueKind.Number ? ix.GetInt32() : 0;
+                    children.Add(new IcPlanChild(id.Value, index, ReadString(child, "label") ?? string.Empty, ReadString(child, "serverName") ?? string.Empty));
+                }
+            }
+            return new IcPlanAnswer(false, ReadString(doc.RootElement, "outcome") ?? string.Empty, ReadString(doc.RootElement, "reason"), children);
+        }
+        catch (JsonException) { return null; }
     }
 
     // ── Mail (JOB-PLACEMENT-03: IdentityCenter.API/Controllers/JobMailController.cs) ──
