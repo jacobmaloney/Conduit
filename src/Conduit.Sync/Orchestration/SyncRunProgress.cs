@@ -10,6 +10,13 @@ public sealed record SyncRunCompletion(string Status, string? ErrorMessage);
 
 public sealed class SyncRunProgress
 {
+    /// <summary>
+    /// SPLIT-ENUM-01 (the first walk, 2026-11-10: CN=Keys, CN=System and three more built-in containers failed the
+    /// run by the zero-record rule): a container read is one part of a directory, and an empty container is an ordinary
+    /// part, not a misread source. Set for a partition run; the zero-record rule then does not apply.
+    /// </summary>
+    public bool PartialRead { get; init; }
+
     public int Read { get; private set; }
     public int Created { get; private set; }
     public int Updated { get; private set; }
@@ -55,7 +62,7 @@ public sealed class SyncRunProgress
             return new(SucceededSteps + PartialSteps > 0 ? "PartialSuccess" : "Failed", _firstError);
         if (PartialSteps > 0)
             return new("PartialSuccess", _firstError);
-        if (_anyMapping && Read == 0 && !_incremental)
+        if (_anyMapping && Read == 0 && !_incremental && !PartialRead)
             return new("Failed", "Source enumeration returned 0 objects. Check the connection credential, BaseDN, and LDAP filter — a truthful 0-record run is treated as a failure to avoid a silent green success.");
         if (!_anyStep)
             return new("Failed", "No workflow steps executed — the project has no enabled Mapping step. Nothing was synced.");

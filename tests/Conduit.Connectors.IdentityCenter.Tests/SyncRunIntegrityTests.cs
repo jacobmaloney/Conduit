@@ -21,6 +21,20 @@ public class SyncRunIntegrityTests
         Assert.Equal(1, progress.FailedSteps);
     }
 
+    // SPLIT-ENUM-01: a whole read of 0 objects is a misread source; a container read of 0 objects is an empty container.
+    [Theory]
+    [InlineData(false, "Failed")]
+    [InlineData(true, "Succeeded")]
+    public void A_zero_record_read_fails_a_whole_run_and_passes_a_container_run(bool partialRead, string expected)
+    {
+        var progress = new SyncRunProgress { PartialRead = partialRead };
+        progress.Add(new(0, 0, 0, 0, 0, 0), true, false, null);
+        var result = progress.Complete();
+        Assert.Equal(expected, result.Status);
+        if (partialRead) Assert.Null(result.ErrorMessage);
+        else Assert.Contains("returned 0 objects", result.ErrorMessage);
+    }
+
     // PARTIAL-RUN-01: 192 of 195 rows applied, 3 refused by name, is a partial run, not a failed one; a step where every
     // object failed still fails the run.
     [Theory]

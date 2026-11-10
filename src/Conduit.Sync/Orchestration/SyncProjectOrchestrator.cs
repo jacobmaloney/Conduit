@@ -197,7 +197,7 @@ public sealed class SyncProjectOrchestrator
     private async Task<Guid> RunCoreAsync(SyncProject project, SyncRun run, CancellationToken cancellationToken, SyncRunPartition? partition = null)
     {
         var sw = Stopwatch.StartNew();
-        var totals = new SyncRunProgress();
+        var totals = new SyncRunProgress { PartialRead = partition is not null };
         var checkpoints = new SyncCheckpointBuffer();
         string status = "Succeeded";
         string? errorMessage = null;
