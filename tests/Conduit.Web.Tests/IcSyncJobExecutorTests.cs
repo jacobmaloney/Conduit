@@ -49,6 +49,11 @@ public class IcSyncJobExecutorTests
         public int PlanStatus { get; set; } = 200;
         public string? PlanBody { get; set; }
 
+        /// <summary>GET /api/jobs/{id}/project (ZERO-TOUCH-01): the status and body IdentityCenter answers a definition read with.</summary>
+        public int DefinitionStatus { get; set; } = 200;
+        public string? DefinitionBody { get; set; }
+        public int DefinitionReads { get; private set; }
+
         private string? _lastJobRead;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -62,6 +67,12 @@ public class IcSyncJobExecutorTests
 
             if (path == "/api/jobs/claim")
                 return Claims.Count > 0 ? Claims.Dequeue()() : Ok(NoWorkJson);
+
+            if (request.Method == HttpMethod.Get && path.EndsWith("/project", StringComparison.Ordinal))
+            {
+                DefinitionReads++;
+                return new HttpResponseMessage((HttpStatusCode)DefinitionStatus) { Content = new StringContent(DefinitionBody ?? "{}") };
+            }
 
             if (request.Method == HttpMethod.Get && path.StartsWith("/api/jobs/", StringComparison.Ordinal))
             {
@@ -138,6 +149,47 @@ public class IcSyncJobExecutorTests
             }
             return Outcome;
         }
+    }
+
+    private sealed class FakeMirror : IIcProjectMirror
+    {
+        public SyncProject? Produces { get; set; }
+        public string? Refusal { get; set; }
+        public string Action { get; set; } = IcProjectMirrorOutcome.Created;
+        public int Calls { get; private set; }
+        public IcProjectDefinition? LastDefinition { get; private set; }
+        public SyncProject? LastExisting { get; private set; }
+        public string? LastBaseUrl { get; private set; }
+
+        public Task<IcProjectMirrorOutcome> EnsureAsync(string baseUrl, IcProjectDefinition definition, SyncProject? existing, CancellationToken ct)
+        {
+            Calls++;
+            LastBaseUrl = baseUrl;
+            LastDefinition = definition;
+            LastExisting = existing;
+            return Task.FromResult(Refusal is not null ? IcProjectMirrorOutcome.Refused(Refusal) : new IcProjectMirrorOutcome(Produces ?? existing, null, Action));
+        }
+    }
+
+    private const string DefinitionJson = """
+        {"projectId":"33333333-3333-3333-3333-333333333333","name":"HR feed","projectType":"ObjectSync",
+         "sourceConnection":{"id":"1ee0c1a0-8ecb-4b7c-b4e5-3a3b76430453","name":"Domain.local","providerType":"ActiveDirectory","transport":"Conduit","agentId":"11111111-1111-1111-1111-111111111111"},
+         "workflows":[],"fingerprint":"f1"}
+        """;
+
+    private static async Task<(IcSyncJobTickResult Result, FakeIc Ic, FakeRunner Runner, FakeMirror Mirror)>
+        RunWithMirrorAsync(Action<FakeIc> script, Action<FakeRunner>? arrange, Action<FakeMirror>? mirror)
+    {
+        var ic = new FakeIc();
+        script(ic);
+        var runner = new FakeRunner();
+        arrange?.Invoke(runner);
+        var fake = new FakeMirror();
+        mirror?.Invoke(fake);
+        var pump = new IcSyncJobPump(runner, new IcAgentStatusService(), NullLogger<IcSyncJobPump>.Instance, mirror: fake);
+        var channel = new IcSyncJobChannel(new HttpClient(ic));
+        var result = await pump.RunOnceAsync(channel, BaseUrl, AgentId, CancellationToken.None);
+        return (result, ic, runner, fake);
     }
 
     // ── Wire fixtures ───────────────────────────────────────────────────────
@@ -295,6 +347,100 @@ public class IcSyncJobExecutorTests
             complete.GetProperty("errorMessage").GetString());
         Assert.Equal(0, complete.GetProperty("itemsProcessed").GetInt32());
         Assert.Contains("No Conduit sync project is bound to IdentityCenter project", Assert.Single(status.Snapshot()).LastJobOutcome!);
+    }
+
+    // ── ZERO-TOUCH-01: the IdentityCenter project is the one definition ─────
+
+    [Fact]
+    public async Task An_unbound_project_is_mirrored_from_its_definition_and_run_in_the_same_claim()
+    {
+        var mirrored = Project();
+        var (result, ic, runner, mirror) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson()) }); ic.DefinitionBody = DefinitionJson; },
+            r => r.Bound = null,
+            m => m.Produces = mirrored);
+
+        Assert.Equal(IcSyncJobTickResult.Executed, result);
+        Assert.Equal(1, ic.DefinitionReads);
+        Assert.Equal(1, mirror.Calls);
+        Assert.Equal(BaseUrl, mirror.LastBaseUrl);
+        Assert.Null(mirror.LastExisting);
+        Assert.Equal(IcProjectId, mirror.LastDefinition!.ProjectId);
+        Assert.Equal("Domain.local", mirror.LastDefinition.SourceConnection!.Name);
+        Assert.Same(mirrored, runner.LastExecuted);
+        Assert.True(BodyOf(ic.Last("POST", "/complete")).GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_bound_mirror_is_offered_its_definition_again_and_a_mirror_refusal_fails_the_job_by_name()
+    {
+        var existing = Project();
+        var (result, ic, runner, mirror) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson()) }); ic.DefinitionBody = DefinitionJson; },
+            r => r.Bound = existing,
+            m => m.Action = IcProjectMirrorOutcome.Refreshed);
+        Assert.Equal(IcSyncJobTickResult.Executed, result);
+        Assert.Same(existing, mirror.LastExisting);
+        Assert.Same(existing, runner.LastExecuted);
+
+        const string reason = "IdentityCenter project 'HR feed' reads connection 'Domain.local', and this Conduit has no active connected system of that name; add the connected system here (its directory and credentials) and the next run mirrors the project.";
+        var (refused, ic2, runner2, _) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson()) }); ic.DefinitionBody = DefinitionJson; },
+            r => r.Bound = null,
+            m => m.Refusal = reason);
+        Assert.Equal(IcSyncJobTickResult.Refused, refused);
+        Assert.Equal(0, runner2.ExecuteCalls);
+        var complete = BodyOf(ic2.Last("POST", "/complete"));
+        Assert.False(complete.GetProperty("success").GetBoolean());
+        Assert.Equal(reason, complete.GetProperty("errorMessage").GetString());
+    }
+
+    [Fact]
+    public async Task A_definition_that_cannot_be_read_refuses_an_unmirrored_project_by_name_but_runs_an_existing_mirror_as_it_is()
+    {
+        var (refused, ic, runner, mirror) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson()) }); ic.DefinitionStatus = 403; ic.DefinitionBody = """{"error":"Job is not held by server x."}"""; },
+            r => r.Bound = null,
+            null);
+        Assert.Equal(IcSyncJobTickResult.Refused, refused);
+        Assert.Equal(0, mirror.Calls);
+        Assert.Equal(0, runner.ExecuteCalls);
+        var reason = BodyOf(ic.Last("POST", "/complete")).GetProperty("errorMessage").GetString()!;
+        Assert.StartsWith($"IdentityCenter project {IcProjectId} has no mirror on this installation yet and its definition could not be read for job {JobId}", reason);
+        Assert.Contains("HTTP 403: Job is not held by server x.", reason);
+
+        var existing = Project();
+        var (ran, _, runner2, mirror2) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson()) }); ic.DefinitionStatus = 503; },
+            r => r.Bound = existing,
+            null);
+        Assert.Equal(IcSyncJobTickResult.Executed, ran);
+        Assert.Equal(0, mirror2.Calls);
+        Assert.Same(existing, runner2.LastExecuted);
+    }
+
+    [Fact]
+    public async Task A_container_item_of_a_split_run_does_not_read_the_definition_when_its_mirror_exists()
+    {
+        const string partitionPayload = """{\"TriggerType\":\"Manual\",\"TriggeredBy\":\"nora.quint\",\"Partition\":{\"Index\":2,\"Count\":3,\"Label\":\"OU=Sales,DC=example,DC=com\",\"IncludedBaseDNs\":[\"OU=Sales,DC=example,DC=com\"],\"OneLevel\":false,\"CarriesTombstones\":false,\"ParentJobId\":\"bbbbbbbb-0000-0000-0000-00000000000b\"}}""";
+        var existing = Project();
+        var (result, ic, runner, mirror) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson(payload: partitionPayload)) }); ic.DefinitionBody = DefinitionJson; },
+            r => r.Bound = existing,
+            null);
+        Assert.Equal(IcSyncJobTickResult.Executed, result);
+        Assert.Equal(0, ic.DefinitionReads);
+        Assert.Equal(0, mirror.Calls);
+        Assert.Equal(2, runner.LastPartition!.Index);
+
+        // Without a mirror the container item still reads the definition: the mirror is created from it before the read.
+        var (created, ic2, _, mirror2) = await RunWithMirrorAsync(
+            ic => { ic.Claims.Enqueue(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ClaimedJson(payload: partitionPayload)) }); ic.DefinitionBody = DefinitionJson; },
+            r => r.Bound = null,
+            m => m.Produces = Project());
+        Assert.Equal(IcSyncJobTickResult.Executed, created);
+        Assert.Equal(1, ic2.DefinitionReads);
+        Assert.Equal(1, mirror2.Calls);
     }
 
     [Fact]

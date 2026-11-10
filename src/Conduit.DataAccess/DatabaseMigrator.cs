@@ -1525,6 +1525,22 @@ END;
 "
             });
 
+            // Migration 37 (ZERO-TOUCH-01): a project the IdentityCenter mirror created carries the fingerprint of the
+            // definition it was built from, so the next claim can tell "unchanged" from "rebuild" with one comparison.
+            // NULL marks a project bound by hand, which the mirror never rewrites.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 37,
+                Name = "IdentityCenter definition fingerprint",
+                Description = "Adds SyncProjects.IdentityCenterDefinitionFingerprint (nullable, 64) for projects mirrored from an IdentityCenter definition.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.SyncProjects','IdentityCenterDefinitionFingerprint') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[SyncProjects] ADD [IdentityCenterDefinitionFingerprint] NVARCHAR(64) NULL;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Conduit.Connectors.IdentityCenter;
+using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Orchestration;
 
 namespace Conduit.Web.Services;
@@ -152,6 +153,22 @@ public sealed class IcAgentCommandPollerService : BackgroundService
 
     // ── Heartbeat ───────────────────────────────────────────────────────────
 
+    /// <summary>The connected systems announced on every heartbeat; an unreadable list announces nothing rather than failing the heartbeat.</summary>
+    private async Task<IReadOnlyList<IcHeartbeatBody.ConnectedSystem>> AnnounceableSystemsAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var tenants = await scope.ServiceProvider.GetRequiredService<TenantRepository>().GetAllAsync();
+            return IcHeartbeatBody.Announceable(tenants);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Connected systems could not be read for the heartbeat; announcing none this time.");
+            return Array.Empty<IcHeartbeatBody.ConnectedSystem>();
+        }
+    }
+
     private async Task HeartbeatIfDueAsync(string baseUrl, string apiKey, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
@@ -167,7 +184,9 @@ public sealed class IcAgentCommandPollerService : BackgroundService
 
         try
         {
-            var body = JsonSerializer.Serialize(new { version, capabilities });
+            // ZERO-TOUCH-01: the body names this installation and the connected systems it serves, so IdentityCenter can
+            // give a valid key its registration back and turn each connected system into a connection (never credentials).
+            var body = IcHeartbeatBody.Build(version, capabilities, ConduitInstanceIdentity.Name, Environment.MachineName, await AnnounceableSystemsAsync());
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
             using var resp = await client.PostAsync($"{baseUrl}/api/agent/heartbeat", content, ct);
 
@@ -202,6 +221,10 @@ public sealed class IcAgentCommandPollerService : BackgroundService
                     s.AgentName = name;
                     s.AgentLocation = location;
                 });
+                // The enrolled identity is what this installation IS to that IdentityCenter: objects pushed there carry
+                // it as their job server, so no second, inactive agent row is ever registered from a batch (ZERO-TOUCH-01).
+                if (agentId.HasValue)
+                    ConduitInstanceIdentity.RecordEnrolledAgent(baseUrl, agentId.Value);
                 _logger.LogDebug("IC agent heartbeat ok at {BaseUrl} — enrolled as '{Name}' ({AgentId}).", baseUrl, name, agentId);
 
                 // Drift check (advisory, non-blocking): the key driving this channel should
@@ -217,14 +240,16 @@ public sealed class IcAgentCommandPollerService : BackgroundService
             }
             else
             {
-                // 404/405: older IC server. 401/403: shared key without agent_id. 429: too chatty.
+                // 404/405: older IC server. 401/403: shared key without agent_id, or (ZERO-TOUCH-01) a registration an
+                // administrator deactivated, which IdentityCenter says in its own words. 429: too chatty.
+                var refusal = IcHeartbeatBody.DescribeRefusal((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
                 _status.Update(baseUrl, s =>
                 {
                     s.LastHeartbeatUtc = now;
                     s.LastHeartbeatOk = false;
-                    s.LastHeartbeatError = $"HTTP {(int)resp.StatusCode}";
+                    s.LastHeartbeatError = refusal;
                 });
-                _logger.LogDebug("IC agent heartbeat at {BaseUrl} returned HTTP {Status}.", baseUrl, (int)resp.StatusCode);
+                _logger.LogDebug("IC agent heartbeat at {BaseUrl} returned {Refusal}.", baseUrl, refusal);
             }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)

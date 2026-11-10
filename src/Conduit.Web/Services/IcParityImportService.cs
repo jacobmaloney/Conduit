@@ -497,30 +497,10 @@ namespace Conduit.Web.Services
             return Guid.Empty;
         }
 
-        /// <summary>
-        /// Maps IC StepType → Conduit StepType. IC and Conduit use the SAME canonical
-        /// names for the parity-relevant types (Upsert is IC's Mapping equivalent).
-        /// </summary>
-        private static string MapStepType(string? icStepType) => (icStepType ?? "Mapping") switch
-        {
-            "Upsert" => WorkflowStepTypes.Mapping,   // IC "Upsert" == Conduit "Mapping" (the source→sink loop)
-            "Mapping" => WorkflowStepTypes.Mapping,
-            "Lookup" => WorkflowStepTypes.Lookup,
-            "GroupMembership" => WorkflowStepTypes.GroupMembership,
-            "LicenseSync" => WorkflowStepTypes.LicenseSync,
-            "SignInLogSync" => WorkflowStepTypes.SignInLogSync,
-            "UsageReportSync" => WorkflowStepTypes.UsageReportSync,
-            "AppRoleSync" => WorkflowStepTypes.AppRoleSync,
-            var other => other   // preserve any IC type verbatim; the orchestrator run-skips unknowns
-        };
+        /// <summary>IC StepType → Conduit StepType: the one mapping, shared with the IdentityCenter mirror (ZERO-TOUCH-01).</summary>
+        private static string MapStepType(string? icStepType) => IcProjectGraph.MapStepType(icStepType);
 
-        private static string? ComposeTransform(string? type, string? expression)
-        {
-            if (!string.IsNullOrWhiteSpace(expression)) return expression;
-            if (string.IsNullOrWhiteSpace(type) || string.Equals(type, "Direct", StringComparison.OrdinalIgnoreCase))
-                return null;   // plain passthrough — no transform pill
-            return type;       // carry the named transform (e.g. "DNLookup")
-        }
+        private static string? ComposeTransform(string? type, string? expression) => IcProjectGraph.ComposeTransform(type, expression);
 
         // ── IC read DTOs (column-faithful to the IC schema) ──────────────────────
         private sealed class IcProjectRow

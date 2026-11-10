@@ -611,6 +611,9 @@ builder.Services.AddHttpClient("IcSyncJobExecutor")
     .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 1024 * 1024)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<Conduit.Web.Services.IIcSyncProjectJobRunner, Conduit.Web.Services.IcSyncProjectJobRunner>();
+// ZERO-TOUCH-01: the IdentityCenter project is the one definition; the pump mirrors it here on claim.
+builder.Services.AddSingleton<Conduit.Web.Services.IIcProjectMirrorStore, Conduit.Web.Services.IcProjectMirrorStore>();
+builder.Services.AddSingleton<Conduit.Web.Services.IIcProjectMirror, Conduit.Web.Services.IcProjectMirror>();
 // JOB-PLACEMENT-03: the mail drain, when IdentityCenter places it here (IcMail:Enabled=false turns it off).
 if (builder.Configuration.GetValue("IcMail:Enabled", true))
 {

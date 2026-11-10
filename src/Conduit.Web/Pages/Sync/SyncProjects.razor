@@ -8,6 +8,7 @@
 @using Conduit.Sync.Templates
 @using Conduit.Sync.Connectors
 @using Conduit.Connectors.IdentityCenter
+@using Conduit.Web.Services
 @using IdentityCenter.Brand.Components.Modals
 @using IdentityCenter.Brand.Components.Layout
 @using IdentityCenter.Brand.Components.Inputs
@@ -131,6 +132,10 @@
                 {
                     <BrandBadge Text="Scheduled" Icon="fas fa-clock" Description="@BrandCronConverter.Describe(project.CronSchedule)" Soft="true" />
                 }
+                @if (IsMirror(project))
+                {
+                    <BrandBadge Text="@IcProjectMirror.DefinedInIdentityCenter" Tone="BrandBadgeTone.Info" Icon="fas fa-link" Description="This project mirrors an IdentityCenter sync project and is edited there; the next run picks up the change." Soft="true" />
+                }
             </td>
             <td>
                 <div>@project.SuccessfulRuns of @project.TotalRuns succeeded</div>
@@ -150,14 +155,20 @@
                     {
                         <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => ToggleEnabled(project)"><i class="fas fa-power-off"></i> Enable</button>
                         <a href="/sync-history?project=@project.Id" class="icb-list-action">History</a>
-                        <button type="button" class="icb-list-action" title="Edit this project's setup, scope and mappings" @onclick="() => SelectThenEdit(project)"><i class="fas fa-pen-to-square"></i> Manage</button>
+                        @if (!IsMirror(project))
+                        {
+                            <button type="button" class="icb-list-action" title="Edit this project's setup, scope and mappings" @onclick="() => SelectThenEdit(project)"><i class="fas fa-pen-to-square"></i> Manage</button>
+                        }
                     }
                     else
                     {
                         <button type="button" class="icb-list-action icb-list-action-primary" @onclick="() => SelectThenRun(project)"><i class="fas fa-play"></i> Run Now</button>
                         <button type="button" class="icb-list-action" @onclick="() => SelectThenFullSync(project)" title="Clear saved cursor and hashes, then reread source objects"><i class="fas fa-arrows-rotate"></i> Full Sync</button>
                         <a href="/sync-history?project=@project.Id" class="icb-list-action">History</a>
-                        <button type="button" class="icb-list-action" title="Edit this project's setup, scope and mappings" @onclick="() => SelectThenEdit(project)"><i class="fas fa-pen-to-square"></i> Manage</button>
+                        @if (!IsMirror(project))
+                        {
+                            <button type="button" class="icb-list-action" title="Edit this project's setup, scope and mappings" @onclick="() => SelectThenEdit(project)"><i class="fas fa-pen-to-square"></i> Manage</button>
+                        }
                     }
                     @if (!string.IsNullOrEmpty(project.CronSchedule))
                     {
@@ -5158,6 +5169,9 @@
         await HandleSelect(p);
         ShowCopyTemplateModal();
     }
+
+    /// <summary>A project the IdentityCenter mirror created (ZERO-TOUCH-01): edited in IdentityCenter, shown here, never managed here.</summary>
+    private static bool IsMirror(SyncProject p) => p.IdentityCenterProjectId is not null && !string.IsNullOrEmpty(p.IdentityCenterDefinitionFingerprint);
 
     private async Task SelectThenEdit(SyncProject p)
     {

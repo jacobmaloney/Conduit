@@ -191,7 +191,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                     {
                         BatchId = Guid.NewGuid(),
                         Source = SanitizeSource(source),
-                        SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                        SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
                         SourceJobServerName = ConduitInstanceIdentity.Name,
                         SourceUniqueIds = slice,
                         Override = false   // never override the IC 50% cap from Conduit
@@ -323,7 +323,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             {
                 BatchId = Guid.NewGuid(),
                 Source = sanitizedSource,
-                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
                 SourceJobServerName = ConduitInstanceIdentity.Name,
                 Memberships = pending
             };
@@ -535,11 +535,11 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         var body = new
         {
             BatchId = batchId,
-            // This installation's durable job-server identity. IC resolves it to an
-            // Agents row (auto-registering on first sight) and stamps
-            // Objects.SourceJobServerId so every synced object carries the provenance
-            // of the box that pushed it. One job server per push, so batch-level.
-            SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+            // This installation's job-server identity for THIS IdentityCenter: the agent it is
+            // enrolled as there (ZERO-TOUCH-01), else its durable instance id. IC resolves it to an
+            // Agents row and stamps Objects.SourceJobServerId so every synced object carries the
+            // provenance of the box that pushed it. One job server per push, so batch-level.
+            SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
             SourceJobServerName = ConduitInstanceIdentity.Name,
             Items = items
         };
@@ -790,7 +790,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             {
                 BatchId = Guid.NewGuid(),
                 Source = source,
-                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
                 SourceJobServerName = ConduitInstanceIdentity.Name,
                 Events = events
             };
@@ -913,7 +913,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             {
                 BatchId = Guid.NewGuid(),
                 Source = source,
-                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
                 SourceJobServerName = ConduitInstanceIdentity.Name,
                 Rows = rows
             };
@@ -1049,7 +1049,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             {
                 BatchId = Guid.NewGuid(),
                 Source = source,
-                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
                 SourceJobServerName = ConduitInstanceIdentity.Name,
                 SyncStartedAt = _licenseSyncStartedUtc,
                 Rows = rows
@@ -1182,7 +1182,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             {
                 BatchId = Guid.NewGuid(),
                 Source = source,
-                SourceJobServerId = ConduitInstanceIdentity.InstanceId,
+                SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(creds.BaseUrl),
                 SourceJobServerName = ConduitInstanceIdentity.Name,
                 Rows = rows
             };

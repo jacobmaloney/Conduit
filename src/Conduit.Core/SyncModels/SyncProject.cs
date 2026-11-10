@@ -87,6 +87,13 @@ public class SyncProject
     /// </summary>
     public Guid? IdentityCenterProjectId { get; set; }
 
+    /// <summary>
+    /// ZERO-TOUCH-01: the fingerprint of the IdentityCenter definition this project mirrors (migration 37). Set only
+    /// on a project the mirror created from that definition; NULL on a project bound by hand, which the mirror never
+    /// rewrites. The mirror rebuilds the workflow tree when IdentityCenter's fingerprint differs from this one.
+    /// </summary>
+    public string? IdentityCenterDefinitionFingerprint { get; set; }
+
     public DateTime? LastRunAt { get; set; }
     public string? LastRunStatus { get; set; }
     public Guid? LastRunId { get; set; }

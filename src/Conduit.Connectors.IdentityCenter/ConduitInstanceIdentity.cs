@@ -36,6 +36,40 @@ public static class ConduitInstanceIdentity
     /// </summary>
     public static string Name => Current().Name;
 
+    // ── Enrolled identity per IdentityCenter (ZERO-TOUCH-01) ───────────────────────────────────────────────────
+    // The per-agent key names WHO this installation is to one IdentityCenter: the agent id IdentityCenter enrolled
+    // the key as, learned from the heartbeat response. Objects pushed to that IdentityCenter carry that id as their
+    // job server, not the local provenance id, so one installation is one agent row there and never a second,
+    // inactive twin that was auto-registered from a batch (Jacob 2026-11-09: "allow it to register automatically").
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Guid> _enrolled = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Remember the agent id IdentityCenter at <paramref name="baseUrl"/> enrolled this installation as.</summary>
+    public static void RecordEnrolledAgent(string? baseUrl, Guid agentId)
+    {
+        var key = OriginKey(baseUrl);
+        if (key is null || agentId == Guid.Empty) return;
+        _enrolled[key] = agentId;
+    }
+
+    /// <summary>The enrolled agent id for that IdentityCenter when known, else null.</summary>
+    public static Guid? EnrolledAgentFor(string? baseUrl)
+    {
+        var key = OriginKey(baseUrl);
+        return key is not null && _enrolled.TryGetValue(key, out var id) ? id : null;
+    }
+
+    /// <summary>The job-server id to stamp on objects pushed to that IdentityCenter: the enrolled agent, else this installation's own id.</summary>
+    public static Guid JobServerIdFor(string? baseUrl) => EnrolledAgentFor(baseUrl) ?? InstanceId;
+
+    /// <summary>Test seam: forget every enrolled identity.</summary>
+    public static void ForgetEnrolledAgents() => _enrolled.Clear();
+
+    /// <summary>scheme://host:port, lower case; null when the value is not an absolute http(s) URL.</summary>
+    public static string? OriginKey(string? baseUrl) =>
+        Uri.TryCreate(baseUrl?.Trim(), UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            ? uri.GetLeftPart(UriPartial.Authority).ToLowerInvariant()
+            : null;
+
     private static Identity Current()
     {
         var local = _cached;

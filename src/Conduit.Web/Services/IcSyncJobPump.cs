@@ -51,6 +51,8 @@ public static class IcSyncJobReasons
         $"IdentityCenter did not accept the partition plan for job {jobId}: {detail ?? "no reason given"}; nothing was read.";
     public static string RanWhole(int containers) =>
         $"The scope has {containers} container{(containers == 1 ? string.Empty : "s")}, so the project ran whole.";
+    public static string DefinitionUnavailable(Guid jobId, Guid identityCenterProjectId, string? detail) =>
+        $"IdentityCenter project {identityCenterProjectId} has no mirror on this installation yet and its definition could not be read for job {jobId} ({detail ?? "no reason given"}); nothing was executed.";
     public static string NoSyncProjectSupport(string? supportedJobTypes) =>
         $"IdentityCenter's agent row for this installation declares SupportedJobTypes '{supportedJobTypes}', which does not include SyncProject — no sync job will EVER be handed to it until that row is changed.";
 }
@@ -86,6 +88,7 @@ public sealed class IcSyncJobPump
     private static readonly TimeSpan CapabilityRecheckInterval = TimeSpan.FromMinutes(30);
 
     private readonly IIcSyncProjectJobRunner _runner;
+    private readonly IIcProjectMirror? _mirror;
     private readonly IcMailJobRunner? _mail;
     private readonly IcAgentStatusService _status;
     private readonly ILogger<IcSyncJobPump> _logger;
@@ -130,9 +133,10 @@ public sealed class IcSyncJobPump
     }
 
     public IcSyncJobPump(IIcSyncProjectJobRunner runner, IcAgentStatusService status, ILogger<IcSyncJobPump> logger,
-        IcMailJobRunner? mail = null)
+        IcMailJobRunner? mail = null, IIcProjectMirror? mirror = null)
     {
         _runner = runner;
+        _mirror = mirror;
         _mail = mail;
         _status = status;
         _logger = logger;
@@ -242,6 +246,31 @@ public sealed class IcSyncJobPump
             return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.WrongRelatedEntityType(job.Id, Clean(job.RelatedEntityType, 50)), ct);
 
         var project = await _runner.ResolveAsync(icProjectId);
+
+        // ZERO-TOUCH-01 (UC038-D01): the IdentityCenter project is the one definition. With no local project bound,
+        // its definition is read and mirrored here; with one the mirror created, the definition is read again and the
+        // mirror rebuilt when it changed. A container item of a split run skips the read when its mirror exists: the
+        // plan item already refreshed it. A definition that cannot be read leaves an existing mirror running as it is.
+        if (_mirror is not null && (project is null || !IcPartitionPayload.HasPartition(job.PayloadJson)))
+        {
+            var answer = await channel.ReadProjectDefinitionAsync(baseUrl, job.Id, ct);
+            if (answer.Definition is not null)
+            {
+                var mirrored = await _mirror.EnsureAsync(baseUrl, answer.Definition, project, ct);
+                if (mirrored.Refusal is not null)
+                    return await RefuseAsync(channel, baseUrl, agentId, job, mirrored.Refusal, ct);
+                project = mirrored.Project;
+                if (mirrored.Action is IcProjectMirrorOutcome.Created or IcProjectMirrorOutcome.Refreshed)
+                    _logger.LogInformation("IdentityCenter job {JobId}: mirror of project {ProjectId} {Action} as '{Name}' ({LocalId})",
+                        job.Id, icProjectId, mirrored.Action.ToLowerInvariant(), Clean(project?.Name, 100), project?.Id);
+            }
+            else if (project is null)
+                return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.DefinitionUnavailable(job.Id, icProjectId, Clean(answer.Reason)), ct);
+            else
+                _logger.LogWarning("IdentityCenter job {JobId}: the definition of project {ProjectId} could not be read ({Reason}); running the existing mirror '{Name}' as it is.",
+                    job.Id, icProjectId, Clean(answer.Reason), Clean(project.Name, 100));
+        }
+
         if (project is null)
             return await RefuseAsync(channel, baseUrl, agentId, job, IcSyncJobReasons.Unbound(icProjectId), ct);
 

@@ -682,6 +682,29 @@ public class SyncProjectRepository : BaseRepository
         return rows == 1;
     }
 
+    /// <summary>
+    /// ZERO-TOUCH-01: bind a project the mirror created to its IdentityCenter project and record the definition
+    /// fingerprint it was built from, under the same one-holder predicate as <see cref="SetIdentityCenterBindingAsync"/>.
+    /// True when the row changed; false when the project is missing or another project holds the id.
+    /// </summary>
+    public async Task<bool> SetIdentityCenterMirrorAsync(Guid projectId, Guid identityCenterProjectId, string fingerprint)
+    {
+        if (identityCenterProjectId == Guid.Empty)
+            throw new ArgumentException("An IdentityCenter project id must be a real GUID.", nameof(identityCenterProjectId));
+        if (string.IsNullOrWhiteSpace(fingerprint))
+            throw new ArgumentException("A mirrored project records the fingerprint it was built from.", nameof(fingerprint));
+        var rows = await ExecuteAsync(@"
+        UPDATE SyncProjects
+           SET IdentityCenterProjectId = @IdentityCenterProjectId,
+               IdentityCenterDefinitionFingerprint = @Fingerprint,
+               LastModified = @LastModified
+         WHERE Id = @Id
+           AND NOT EXISTS (SELECT 1 FROM SyncProjects o
+                            WHERE o.IdentityCenterProjectId = @IdentityCenterProjectId AND o.Id <> @Id);",
+            new { Id = projectId, IdentityCenterProjectId = identityCenterProjectId, Fingerprint = fingerprint, LastModified = DateTime.UtcNow });
+        return rows == 1;
+    }
+
     public static string BindingRefusedReason(Guid identityCenterProjectId, string holderName, Guid holderId) =>
         $"Binding refused: IdentityCenter project {identityCenterProjectId} is already bound to Conduit project '{holderName}' ({holderId}). Unbind it there first.";
 }

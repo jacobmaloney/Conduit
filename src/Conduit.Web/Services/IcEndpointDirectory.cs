@@ -61,12 +61,35 @@ public sealed class IcEndpointDirectory
     /// </summary>
     public async Task<List<IcEndpoint>> DiscoverAsync()
     {
+        var endpoints = new List<IcEndpoint>();
+        foreach (var (_, endpoint) in await ReadAllAsync())
+            Merge(endpoints, endpoint);
+        return endpoints;
+    }
+
+    /// <summary>
+    /// ZERO-TOUCH-01: the IdentityCenter connected system whose credential points at <paramref name="baseUrl"/> (same
+    /// origin), the sink a mirrored project writes to. Null when no connection points there.
+    /// </summary>
+    public async Task<Guid?> FindTenantIdAsync(string baseUrl)
+    {
+        var wanted = Conduit.Connectors.IdentityCenter.ConduitInstanceIdentity.OriginKey(baseUrl);
+        if (wanted is null) return null;
+        foreach (var (tenantId, endpoint) in await ReadAllAsync())
+            if (Conduit.Connectors.IdentityCenter.ConduitInstanceIdentity.OriginKey(endpoint.BaseUrl) == wanted)
+                return tenantId;
+        return null;
+    }
+
+    /// <summary>Every IdentityCenter connection with a readable credential, as (tenant id, endpoint); unreadable or malformed blobs are skipped.</summary>
+    private async Task<List<(Guid TenantId, IcEndpoint Endpoint)>> ReadAllAsync()
+    {
         // Fresh scope per call — the tenant repository and the credential protector are scoped.
         using var scope = _scopeFactory.CreateScope();
         var tenants = scope.ServiceProvider.GetRequiredService<TenantRepository>();
         var protector = scope.ServiceProvider.GetRequiredService<CredentialProtector>();
 
-        var endpoints = new List<IcEndpoint>();
+        var found = new List<(Guid, IcEndpoint)>();
         foreach (var tenant in await tenants.GetAllAsync())
         {
             if (!string.Equals(tenant.SystemType, IdentityCenterSystemType, StringComparison.OrdinalIgnoreCase))
@@ -78,9 +101,9 @@ public sealed class IcEndpointDirectory
             if (string.IsNullOrEmpty(raw)) continue;
 
             var candidate = Parse(raw);
-            if (candidate is not null) Merge(endpoints, candidate);
+            if (candidate is not null) found.Add((tenant.Id, candidate));
         }
-        return endpoints;
+        return found;
     }
 
     /// <summary>

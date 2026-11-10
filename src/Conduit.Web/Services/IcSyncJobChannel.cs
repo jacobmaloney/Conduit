@@ -280,6 +280,33 @@ public sealed class IcSyncJobChannel
     /// refusal with its reason; anything else is "not accepted" with what is known. Nothing is assumed queued from an
     /// unreadable answer.
     /// </summary>
+    /// <summary>
+    /// ZERO-TOUCH-01: GET api/jobs/{id}/project, the definition of the IdentityCenter project behind a job this
+    /// installation holds. The answer carries the definition, or the status and reason IdentityCenter refused with
+    /// (404 no such job, 403 held by another server, 409 not a sync project, 503 not deployed); unreachable is a reason too.
+    /// </summary>
+    public async Task<IcProjectDefinitionAnswer> ReadProjectDefinitionAsync(string baseUrl, Guid jobId, CancellationToken ct)
+    {
+        try
+        {
+            using var resp = await _client.GetAsync($"{baseUrl}/api/jobs/{jobId}/project", ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            var status = (int)resp.StatusCode;
+            if (resp.IsSuccessStatusCode)
+            {
+                var definition = IcProjectDefinitionReader.Parse(body);
+                return definition is null
+                    ? new IcProjectDefinitionAnswer(null, status, "IdentityCenter answered with something that is not a project definition.")
+                    : new IcProjectDefinitionAnswer(definition, status, null);
+            }
+            return new IcProjectDefinitionAnswer(null, status, IcHeartbeatBody.DescribeRefusal(status, body));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return new IcProjectDefinitionAnswer(null, 0, $"unreachable ({ex.Message})");
+        }
+    }
+
     public async Task<IcPlanAnswer> PlanPartitionsAsync(string baseUrl, Guid jobId, Guid agentId, IReadOnlyList<SyncRunPartition> partitions, CancellationToken ct)
     {
         try
