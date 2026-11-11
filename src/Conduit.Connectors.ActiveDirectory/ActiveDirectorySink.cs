@@ -101,6 +101,7 @@ public sealed class ActiveDirectorySink : IConnectorSink
     private const int ADS_UF_NORMAL_ACCOUNT = 0x0200;
     private const int ADS_UF_PASSWD_NOTREQD = 0x0020;
     private const int ADS_UF_WORKSTATION_TRUST_ACCOUNT = 0x1000;
+    private const int ADS_UF_DONT_EXPIRE_PASSWD = 0x10000;
 
     public ActiveDirectorySink(
         Guid tenantId,
@@ -752,6 +753,34 @@ public sealed class ActiveDirectorySink : IConnectorSink
         catch (Exception ex)
         {
             _logger.LogError(ex, "AD SetEnabledByGuid failed (tenant={TenantId})", _tenantId);
+            return SinkWriteResult.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// PASSWORD-FLAG-01 (IdentityCenter UC017-S16): set or clear DONT_EXPIRE_PASSWD on the account the GUID
+    /// resolves to, the same bit flip <see cref="SetEnabledByGuidAsync"/> does for ACCOUNTDISABLE. The caller
+    /// (the agent-write executor) has already checked the class; this re-resolves the GUID and writes nothing else.
+    /// </summary>
+    public async Task<SinkWriteResult> SetPasswordNeverExpiresByGuidAsync(string objectGuid, bool neverExpires, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var tenant = await _tenantRepo.GetByIdAsync(_tenantId)
+                ?? throw new InvalidOperationException("Tenant not found.");
+            var creds = await ReadCredsAsync()
+                ?? throw new InvalidOperationException("No 'ldap' credential.");
+            using var conn = Bind(tenant.Domain, creds, out _);
+
+            var target = ResolveByGuid(conn, objectGuid);
+            if (target is null) return SinkWriteResult.Fail($"objectGUID '{objectGuid}' resolved to no AD object.");
+
+            SetUacFlag(conn, target.DistinguishedName, ADS_UF_DONT_EXPIRE_PASSWD, set: neverExpires);
+            return SinkWriteResult.Ok(SinkWriteOutcome.Updated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AD SetPasswordNeverExpiresByGuid failed (tenant={TenantId})", _tenantId);
             return SinkWriteResult.Fail(ex.Message);
         }
     }

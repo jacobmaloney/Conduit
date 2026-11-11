@@ -48,11 +48,13 @@ public sealed class AdAgentWriteExecutor
     private const string OpResetPasswordScramble = "ResetPasswordScramble";
     private const string OpResetPasswordSealed = "ResetPasswordSealed";
     private const string OpDeleteObject = "DeleteObject";
+    /// <summary>PASSWORD-FLAG-01: clear DONT_EXPIRE_PASSWD on a user; a flag flip like Enable/Disable, never a raw userAccountControl write.</summary>
+    private const string OpClearPasswordNeverExpires = "ClearPasswordNeverExpires";
 
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
         OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject,
-        OpResetPasswordScramble, OpResetPasswordSealed, OpDeleteObject
+        OpResetPasswordScramble, OpResetPasswordSealed, OpDeleteObject, OpClearPasswordNeverExpires
     };
 
     /// <summary>
@@ -242,6 +244,7 @@ public sealed class AdAgentWriteExecutor
                 OpResetPasswordScramble => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: false, ct),
                 OpResetPasswordSealed => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: true, ct),
                 OpDeleteObject => await DoDeleteObjectAsync(sink, target, p, sourceConnectionName, ct),
+                OpClearPasswordNeverExpires => await DoClearPasswordNeverExpiresAsync(sink, target, p.ObjectGuid!, ct),
                 _ => (false, $"ApplyObjectWrite: operation '{operation}' is not allowed.")
             };
         }
@@ -530,6 +533,18 @@ public sealed class AdAgentWriteExecutor
         // (9) the sink re-resolves the GUID again and flips ACCOUNTDISABLE.
         var r = await sink.SetEnabledByGuidAsync(objectGuid, enabled, ct);
         return ResultToTuple(r, enabled ? $"Enabled {SafeDn(target)}." : $"Disabled {SafeDn(target)}.");
+    }
+
+    // ── Clear "password never expires" ───────────────────────────────────────
+    private async Task<(bool, string)> DoClearPasswordNeverExpiresAsync(
+        ActiveDirectorySink sink, AdResolvedObject target, string objectGuid, CancellationToken ct)
+    {
+        // (5) a user account's flag: never a group, and not a computer (whose class chain also carries "user").
+        if (!target.IsClass("user") || target.IsClass("computer"))
+            return (false, "ApplyObjectWrite: ClearPasswordNeverExpires target is not a user account.");
+
+        var r = await sink.SetPasswordNeverExpiresByGuidAsync(objectGuid, neverExpires: false, ct);
+        return ResultToTuple(r, $"Cleared password-never-expires on {SafeDn(target)}.");
     }
 
     // ── Add / Remove group member (DELTA) ────────────────────────────────────
