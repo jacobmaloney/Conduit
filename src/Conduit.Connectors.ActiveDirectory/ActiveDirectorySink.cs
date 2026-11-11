@@ -469,6 +469,9 @@ public sealed class ActiveDirectorySink : IConnectorSink
                 AppendIfPresent(add, obj, "displayName");
                 AppendIfPresent(add, obj, "groupType");
                 AppendIfPresent(add, obj, "mail");
+                // OWNER-PICKER-01: the owner a create names travels as managedBy (the owner's distinguished name), the
+                // same attribute AssignOwnerAsync writes on an existing group.
+                AppendIfPresent(add, obj, "managedBy");
                 // Members on create — same full-set semantics, expressed as an initial
                 // multi-valued add of the 'member' attribute.
                 AppendMembersOnCreate(add, obj);

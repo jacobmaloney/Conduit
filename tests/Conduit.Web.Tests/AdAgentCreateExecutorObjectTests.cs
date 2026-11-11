@@ -113,6 +113,25 @@ public class AdAgentCreateExecutorObjectTests
     // ── the object the sink receives ──────────────────────────────────────────────────────────────
 
     [Fact]
+    public void A_group_create_carries_the_owner_it_names_as_managedBy()
+    {
+        const string ownerDn = "CN=Ana Rios,OU=Users,OU=Organization,DC=Domain,DC=Local";
+        var p = Parse(Payload("CreateGroup", sam: "Granite-Field", displayName: "Granite-Field",
+            attributesJson: "{\"description\":\"Field crews\",\"managedBy\":\"" + ownerDn + "\"}"));
+        var o = AdAgentCreateExecutor.BuildObjectCreateObject(p, "group", "Granite-Field", Ou);
+        Assert.Equal(ownerDn, o.Attributes["managedBy"]);
+
+        var add = ActiveDirectorySink.BuildAddRequest("group", "CN=Granite-Field," + Ou, o, "Granite-Field");
+        var managedBy = Assert.Single(add.Attributes.Cast<DirectoryAttribute>(), a => a.Name == "managedBy");
+        Assert.Equal(ownerDn, managedBy[0]);
+
+        var without = ActiveDirectorySink.BuildAddRequest("group", "CN=Granite-Field," + Ou,
+            AdAgentCreateExecutor.BuildObjectCreateObject(Parse(Payload("CreateGroup", sam: "Granite-Field", displayName: "Granite-Field")), "group", "Granite-Field", Ou),
+            "Granite-Field");
+        Assert.DoesNotContain(without.Attributes.Cast<DirectoryAttribute>(), a => a.Name == "managedBy");
+    }
+
+    [Fact]
     public void The_group_object_carries_sam_name_OU_and_the_bag_with_the_controlled_keys_last()
     {
         var p = Parse(Payload("CreateGroup", sam: "Granite-Contractors", displayName: "Granite-Contractors",
