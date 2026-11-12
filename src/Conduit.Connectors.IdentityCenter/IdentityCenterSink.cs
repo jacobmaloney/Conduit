@@ -308,6 +308,9 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         }
 
         var sanitizedSource = SanitizeSource(source);
+        // MEMBERSHIP-RECONCILE-01: the moment this push began; IC marks removed the rows of the pushed groups it did not
+        // refresh after it (minus a window, so a membership the product wrote while the source was enumerating stays).
+        var pushBeganUtc = DateTime.UtcNow;
         // An edge = one member id under a group. IC caps a single POST at ~1000
         // member ids total; chunk so each call's summed member count stays under it.
         const int maxMemberIdsPerCall = 1000;
@@ -408,6 +411,14 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
         }
 
         await FlushAsync();
+
+        // MEMBERSHIP-RECONCILE-01 (UC034-F19): the push only adds or refreshes rows on the IC side, so after a push that
+        // landed every chunk, IC is told which groups' COMPLETE member lists it just received (a group with no members
+        // included) and when the push began; the rows it did not refresh are marked removed there. A chunk that failed
+        // leaves the groups unreconciled for this run (their rows were not all refreshed), and a reconcile that fails is
+        // logged, never counted as an incomplete push: the next run reconciles again.
+        if (failedChunks == 0)
+            await ReconcileGroupMembershipsAsync(client, creds.BaseUrl, sanitizedSource, memberships, pushBeganUtc.AddMinutes(-15), cancellationToken);
 
         _logger.LogInformation(
             "IC group-membership emission complete (tenant={TenantId}, groups={Groups}, edgesPersisted={EdgesPersisted}, membersUnresolved={MembersUnresolved}, groupsUnresolved={GroupsUnresolved}).",
@@ -1899,6 +1910,43 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     }
 
     /// <summary>Retry-aware POST-JSON. Drop-in for <c>client.PostAsJsonAsync(url, body, ct)</c>.</summary>
+    /// <summary>MEMBERSHIP-RECONCILE-01: names the groups whose complete member lists were pushed, 1000 per call.</summary>
+    private async Task ReconcileGroupMembershipsAsync(
+        HttpClient client, string baseUrl, string source, IReadOnlyList<GroupMembership> memberships, DateTime seenSinceUtc, CancellationToken ct)
+    {
+        var groupIds = memberships.Select(m => m.GroupSourceId).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
+        foreach (var chunk in groupIds.Chunk(1000))
+        {
+            var body = new
+            {
+                Source = source,
+                SourceJobServerId = ConduitInstanceIdentity.JobServerIdFor(baseUrl),
+                SourceJobServerName = ConduitInstanceIdentity.Name,
+                GroupSourceUniqueIds = chunk,
+                SeenSinceUtc = seenSinceUtc,
+            };
+            try
+            {
+                using var resp = await PostJsonWithRetryAsync(client, $"{baseUrl}/api/objects/group-memberships/reconcile", body, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning("IC group-membership reconcile refused (tenant={TenantId}, groups={Groups}): HTTP {Status}; stale rows wait for the next run.",
+                        _tenantId, chunk.Length, (int)resp.StatusCode);
+                    continue;
+                }
+                var text = await resp.Content.ReadAsStringAsync(ct);
+                var removed = 0;
+                try { using var doc = JsonDocument.Parse(text); if (doc.RootElement.TryGetProperty("membershipsRemoved", out var r) && r.ValueKind == JsonValueKind.Number) removed = r.GetInt32(); } catch (JsonException) { }
+                _logger.LogInformation("IC group-membership reconcile (tenant={TenantId}, groups={Groups}): {Removed} stale row(s) marked removed.", _tenantId, chunk.Length, removed);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "IC group-membership reconcile threw (tenant={TenantId}, groups={Groups}); stale rows wait for the next run.", _tenantId, chunk.Length);
+            }
+        }
+    }
+
     private Task<HttpResponseMessage> PostJsonWithRetryAsync(
         HttpClient client, string url, object body, CancellationToken ct) =>
         SendWithRetryAsync(client, () => new HttpRequestMessage(HttpMethod.Post, url)

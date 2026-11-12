@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Net;
 using Conduit.Sync.Connectors;
 using Conduit.Sync.Orchestration;
@@ -52,12 +53,41 @@ public class IdentityCenterMembershipIntegrityTests
         Assert.Contains("incomplete", error.Message);
     }
 
+    /// <summary>
+    /// MEMBERSHIP-RECONCILE-01 (UC034-F19): once every chunk landed, the sink names the pushed groups (a group with no
+    /// members included) and when the push began, so IC can mark removed the rows it did not refresh. A push with a
+    /// failed chunk does not reconcile (its rows were not all refreshed), and a refused reconcile is not an incomplete push.
+    /// </summary>
+    [Fact]
+    public async Task A_complete_push_reconciles_the_pushed_groups_and_a_failed_push_does_not()
+    {
+        var handler = new CapturingHandler(call => call <= 2 ? Ok(call == 1 ? 1000 : 1) : new(HttpStatusCode.OK) { Content = new StringContent("{\"groupsResolved\":2,\"groupsUnresolved\":0,\"membershipsRemoved\":3}") });
+        var before = DateTime.UtcNow;
+        var edges = new List<GroupMembership>(Edges(1001)) { new("group-empty", Array.Empty<string>()) };
+        Assert.Equal(1001, await Sink(handler).EmitGroupMembershipsAsync("fixture", edges, default));
+        Assert.Equal(3, handler.Calls);
+        Assert.EndsWith("/api/objects/group-memberships/reconcile", handler.Urls[2]);
+        using var doc = JsonDocument.Parse(handler.Bodies[2]);
+        var groups = doc.RootElement.GetProperty("groupSourceUniqueIds").EnumerateArray().Select(e => e.GetString()).ToList();
+        Assert.Equal(new[] { "group-1", "group-empty" }, groups);
+        var since = doc.RootElement.GetProperty("seenSinceUtc").GetDateTime();
+        Assert.InRange(since, before.AddMinutes(-16), before.AddMinutes(-14));   // the push's start minus the window
+
+        var failing = new CapturingHandler(call => call == 1 ? new(HttpStatusCode.BadRequest) { Content = new StringContent("refused") } : Ok(1));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Sink(failing).EmitGroupMembershipsAsync("fixture", Edges(1001), default));
+        Assert.Equal(2, failing.Calls);   // two chunks, no reconcile
+
+        var refusedReconcile = new CapturingHandler(call => call == 1 ? Ok(1) : new(HttpStatusCode.NotFound));
+        Assert.Equal(1, await Sink(refusedReconcile).EmitGroupMembershipsAsync("fixture", Edges(1), default));
+        Assert.Equal(2, refusedReconcile.Calls);
+    }
+
     [Fact]
     public async Task Complete_chunks_return_the_persisted_count_and_people_target_remains_unsupported_noop()
     {
         var handler = new SequenceHandler(call => Ok(call == 1 ? 1000 : 1));
         Assert.Equal(1001, await Sink(handler).EmitGroupMembershipsAsync("fixture", Edges(1001), default));
-        Assert.Equal(2, handler.Calls);
+        Assert.Equal(3, handler.Calls);   // two chunks and the reconcile (MEMBERSHIP-RECONCILE-01)
         var unsupported = new SequenceHandler(_ => throw new InvalidOperationException("No request is permitted."));
         Assert.Equal(0, await Sink(unsupported, "Identities").EmitGroupMembershipsAsync("fixture", Edges(1), default));
         Assert.Equal(0, unsupported.Calls);
@@ -91,5 +121,19 @@ public class IdentityCenterMembershipIntegrityTests
         public int Calls { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(respond(++Calls));
+    }
+
+    private sealed class CapturingHandler(Func<int, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+        public List<string> Urls { get; } = new();
+        public List<string> Bodies { get; } = new();
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Calls++;
+            Urls.Add(request.RequestUri?.ToString() ?? string.Empty);
+            Bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(ct));
+            return respond(Calls);
+        }
     }
 }
