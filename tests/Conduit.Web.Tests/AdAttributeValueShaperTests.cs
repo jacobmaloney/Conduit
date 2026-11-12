@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.DirectoryServices.Protocols;
+using Conduit.Connectors.ActiveDirectory;
+using Conduit.Sync.Connectors;
 using Conduit.Web.Services;
 using Xunit;
 
@@ -108,16 +111,67 @@ public class AdAttributeValueShaperTests
     [InlineData("extensionAttribute1")]
     [InlineData("extensionAttribute8")]
     [InlineData("extensionAttribute15")]
-    public void The_update_allow_list_names_each_widened_attribute(string name) =>
-        Assert.Contains($"[\"{name}\"] = \"{name}\",", AllowListBlock());
+    public void The_update_allow_list_names_each_widened_attribute(string name)
+    {
+        // CREATE-ATTRS-01: the allow-list is AdUserAttributes.Writable, the one list the create and the update write too.
+        Assert.Contains(name, AdUserAttributes.Writable);
+        Assert.True(AdUserAttributes.TryCanonical(name.ToUpperInvariant(), out var canonical) && canonical == name);
+        Assert.Contains("foreach (var name in AdUserAttributes.Writable) allowed[name] = name;", AllowListBlock());
+    }
 
     [Theory]
     [InlineData("userAccountControl")]
     [InlineData("unicodePwd")]
     [InlineData("sAMAccountName")]
     [InlineData("extensionAttribute16")]
-    public void The_update_allow_list_still_refuses_what_it_should(string name) =>
+    public void The_update_allow_list_still_refuses_what_it_should(string name)
+    {
+        Assert.DoesNotContain(name, AdUserAttributes.Writable);
+        Assert.False(AdUserAttributes.TryCanonical(name, out _));
         Assert.DoesNotContain($"[\"{name}\"]", AllowListBlock());
+    }
+
+    [Theory]
+    [InlineData("physicalDeliveryOfficeName")]
+    [InlineData("mobile")]
+    [InlineData("streetAddress")]
+    [InlineData("l")]
+    [InlineData("postalCode")]
+    [InlineData("co")]
+    [InlineData("description")]
+    [InlineData("employeeType")]
+    public void The_create_and_the_update_write_every_allowed_descriptive_attribute(string name)
+    {
+        // CREATE-ATTRS-01: before, the sink wrote nine families on a create or update and dropped the rest of what the
+        // console sent (the lab's Nora Vance: employeeType in the request, none in the directory).
+        Assert.Contains(AdUserAttributes.WriteFamilies, family => family[0] == name);
+        var obj = new ConnectorObject { SourceId = "nvance", ObjectClass = "User", Attributes = { [name] = "v-" + name } };
+        var add = ActiveDirectorySink.BuildUserAddRequest("CN=Nora Vance,OU=Contractors,DC=Domain,DC=Local", obj, "nvance", "nvance@domain.local");
+        var attr = add.Attributes.Cast<DirectoryAttribute>().Single(a => string.Equals(a.Name, name, StringComparison.Ordinal));
+        Assert.Equal("v-" + name, attr[0]);
+    }
+
+    [Fact]
+    public void The_user_add_request_carries_identity_and_the_disabled_bit_and_never_a_credential_or_location_key()
+    {
+        var obj = new ConnectorObject
+        {
+            SourceId = "nvance", ObjectClass = "User",
+            Attributes = { ["givenName"] = "Nora", ["familyName"] = "Vance", ["email"] = "nora@domain.local", ["employeeType"] = "Contractor",
+                           ["password"] = "never", ["active"] = true, ["targetOU"] = "OU=Elsewhere,DC=Domain,DC=Local", ["userAccountControl"] = "512" },
+        };
+        var add = ActiveDirectorySink.BuildUserAddRequest("CN=Nora Vance,OU=Contractors,DC=Domain,DC=Local", obj, "nvance", null);
+        var names = add.Attributes.Cast<DirectoryAttribute>().Select(a => a.Name).ToList();
+        Assert.Equal(new[] { "top", "person", "organizationalPerson", "user" }, ((DirectoryAttribute)add.Attributes[0]).GetValues(typeof(string)).Cast<string>());
+        Assert.Contains("sAMAccountName", names);
+        Assert.DoesNotContain("userPrincipalName", names);
+        Assert.Equal("Vance", add.Attributes.Cast<DirectoryAttribute>().Single(a => a.Name == "sn")[0]);                 // the alias lands under the canonical name
+        Assert.Equal("nora@domain.local", add.Attributes.Cast<DirectoryAttribute>().Single(a => a.Name == "mail")[0]);
+        Assert.Equal("Contractor", add.Attributes.Cast<DirectoryAttribute>().Single(a => a.Name == "employeeType")[0]);
+        Assert.Equal("514", add.Attributes.Cast<DirectoryAttribute>().Single(a => a.Name == "userAccountControl")[0]);  // NORMAL_ACCOUNT | ACCOUNTDISABLE, whatever the bag says
+        Assert.DoesNotContain(names, n => n is "password" or "active" or "targetOU" or "familyName" or "email");
+        Assert.Single(names, n => n == "userAccountControl");
+    }
 
     [Fact]
     public void SetAttributes_shapes_every_value_before_its_first_write()
@@ -144,7 +198,7 @@ public class AdAttributeValueShaperTests
 
     private static string AllowListBlock()
     {
-        var start = Executor.IndexOf("AllowedAttributes = new", StringComparison.Ordinal);
+        var start = Executor.IndexOf("AllowedAttributes = BuildAllowedAttributes();", StringComparison.Ordinal);   // CREATE-ATTRS-01: built from AdUserAttributes.Writable
         var end = Executor.IndexOf("PrivilegedRids", start, StringComparison.Ordinal);
         return Executor[start..end];
     }

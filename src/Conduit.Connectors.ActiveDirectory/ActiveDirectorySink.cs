@@ -205,10 +205,9 @@ public sealed class ActiveDirectorySink : IConnectorSink
 
     // ─── User upsert ───────────────────────────────────────────────────────
 
-    private static readonly string[][] UserWriteFields = [
-        ["displayName"], ["givenName"], ["sn", "familyName"], ["mail", "email"], ["title"],
-        ["department"], ["company"], ["employeeID", "employeeNumber"], ["telephoneNumber", "phoneNumber"]
-    ];
+    // CREATE-ATTRS-01: the one list of user attributes a create or update writes (AdUserAttributes), the same names the
+    // agent's attribute write allows; each family is the canonical name then the sync's historic aliases.
+    private static readonly string[][] UserWriteFields = AdUserAttributes.WriteFamilies.ToArray();
 
     public static Conduit.SourceBrowsing.SourceMappingSchema? MappingSchema(string objectClass)
     {
@@ -255,17 +254,11 @@ public sealed class ActiveDirectorySink : IConnectorSink
         var cn = GetStr(obj, "cn") ?? GetStr(obj, "displayName") ?? sam!;
         var newDn = $"CN={EscapeDnComponent(cn)},{baseDn}";
 
-        var addRequest = new AddRequest(newDn,
-            new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "user" }));
-        addRequest.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam));
-        if (!string.IsNullOrEmpty(upn)) addRequest.Attributes.Add(new DirectoryAttribute("userPrincipalName", upn));
-        foreach (var field in UserWriteFields) AppendIfPresent(addRequest, obj, field);
+        var addRequest = BuildUserAddRequest(newDn, obj, sam!, upn);
 
         // New accounts are created disabled by default until a password lands;
         // we'll flip the enable bit after the password write below.
         var requestedEnabled = !TryGetBool(obj, "active", out var a) || a;
-        var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
-        addRequest.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
 
         // NAME-COLLISION-01: as CreateAsync - a same-named different account gets "Name (sam)"; nothing is ever linked here
         // (the sAMAccountName and UPN look-ups above found no account for this user).
@@ -298,6 +291,24 @@ public sealed class ActiveDirectorySink : IConnectorSink
         }
 
         return SinkWriteResult.Ok(SinkWriteOutcome.Created);
+    }
+
+    /// <summary>
+    /// The LDAP add for a user: the objectClass chain, the identity (sAMAccountName, userPrincipalName), every writable
+    /// user attribute the object carries (<see cref="AdUserAttributes"/>, CREATE-ATTRS-01) and the disabled initial
+    /// userAccountControl (the enable bit flips after the password write). Pure (no connection), so it is pinned
+    /// without a DC; one builder for the sync upsert's user create and the agent's console create.
+    /// </summary>
+    public static AddRequest BuildUserAddRequest(string dn, ConnectorObject obj, string sam, string? upn)
+    {
+        var addRequest = new AddRequest(dn,
+            new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "user" }));
+        addRequest.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam));
+        if (!string.IsNullOrEmpty(upn)) addRequest.Attributes.Add(new DirectoryAttribute("userPrincipalName", upn));
+        foreach (var field in UserWriteFields) AppendIfPresent(addRequest, obj, field);
+        var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
+        addRequest.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
+        return addRequest;
     }
 
     private void ModifyUser(LdapConnection conn, string dn, ConnectorObject obj, bool isSecure)

@@ -65,65 +65,22 @@ public sealed class AdAgentWriteExecutor
     public string? LastResultJson { get; private set; }
 
     /// <summary>
-    /// Fixed AD attribute allow-list — mirrors IC's writable set. Case-insensitive
-    /// match; the canonical-cased name from this set is what we send to AD.
-    /// 'manager' is included because SetManager writes it as a DN.
+    /// The AD attribute allow-list of a console attribute write: the user attributes the connector writes
+    /// (<see cref="AdUserAttributes.Writable"/>, CREATE-ATTRS-01: one list for the create, the update and this write),
+    /// plus 'manager' (SetManager writes it as a DN) and 'userPrincipalName' (its own controlled field on a create, a
+    /// plain attribute here). Case-insensitive match; the canonical-cased name from the list is what we send to AD.
+    /// userAccountControl stays OUT: enable/disable are their own operations.
     /// </summary>
-    private static readonly Dictionary<string, string> AllowedAttributes = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, string> AllowedAttributes = BuildAllowedAttributes();
+
+    private static Dictionary<string, string> BuildAllowedAttributes()
     {
-        ["displayName"] = "displayName",
-        ["description"] = "description",
-        ["physicalDeliveryOfficeName"] = "physicalDeliveryOfficeName",
-        ["mail"] = "mail",
-        ["wWWHomePage"] = "wWWHomePage",
-        ["telephoneNumber"] = "telephoneNumber",
-        ["title"] = "title",
-        ["department"] = "department",
-        ["company"] = "company",
-        ["manager"] = "manager",
-        ["streetAddress"] = "streetAddress",
-        ["l"] = "l",
-        ["st"] = "st",
-        ["postalCode"] = "postalCode",
-        ["co"] = "co",
-        ["homePhone"] = "homePhone",
-        ["mobile"] = "mobile",
-        ["facsimileTelephoneNumber"] = "facsimileTelephoneNumber",
-        ["userPrincipalName"] = "userPrincipalName",
-        ["givenName"] = "givenName",
-        ["sn"] = "sn",
-        // UC014-D08 (deprovisioning): hide a leaver's mailbox from the address book. Only the Exchange
-        // attribute itself, never a generic one; a domain without the Exchange schema refuses it and the
-        // results card shows why.
-        ["msExchHideFromAddressLists"] = "msExchHideFromAddressLists",
-        // ALLOW-LIST-02 (IdentityCenter UC015-D06, UC017-F06): each name below is a deliberate addition.
-        // employeeID/employeeType/employeeNumber: HR identifiers the Mover keeps current (employeeID was
-        // written on create and refused on update until now). extensionAttribute1-15: the customer's
-        // own fields (a status code, a linked admin account), plain strings. accountExpires: a FILETIME
-        // the shaper builds from the date IdentityCenter sends (AdAttributeValueShaper). homeDirectory/
-        // homeDrive: profile paths. userAccountControl stays OUT: enable/disable are their own operations.
-        ["employeeID"] = "employeeID",
-        ["employeeType"] = "employeeType",
-        ["employeeNumber"] = "employeeNumber",
-        ["accountExpires"] = "accountExpires",
-        ["homeDirectory"] = "homeDirectory",
-        ["homeDrive"] = "homeDrive",
-        ["extensionAttribute1"] = "extensionAttribute1",
-        ["extensionAttribute2"] = "extensionAttribute2",
-        ["extensionAttribute3"] = "extensionAttribute3",
-        ["extensionAttribute4"] = "extensionAttribute4",
-        ["extensionAttribute5"] = "extensionAttribute5",
-        ["extensionAttribute6"] = "extensionAttribute6",
-        ["extensionAttribute7"] = "extensionAttribute7",
-        ["extensionAttribute8"] = "extensionAttribute8",
-        ["extensionAttribute9"] = "extensionAttribute9",
-        ["extensionAttribute10"] = "extensionAttribute10",
-        ["extensionAttribute11"] = "extensionAttribute11",
-        ["extensionAttribute12"] = "extensionAttribute12",
-        ["extensionAttribute13"] = "extensionAttribute13",
-        ["extensionAttribute14"] = "extensionAttribute14",
-        ["extensionAttribute15"] = "extensionAttribute15",
-    };
+        var allowed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in AdUserAttributes.Writable) allowed[name] = name;
+        allowed["manager"] = "manager";
+        allowed["userPrincipalName"] = "userPrincipalName";
+        return allowed;
+    }
 
     /// <summary>Well-known privileged-group RIDs (objectSid suffix).</summary>
     private static readonly HashSet<uint> PrivilegedRids = new() { 512, 519, 518, 544, 548 };
