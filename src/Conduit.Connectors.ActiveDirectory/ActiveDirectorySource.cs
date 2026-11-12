@@ -47,6 +47,11 @@ public sealed class ActiveDirectorySource : IConnectorSource
     /// </summary>
     private static readonly string[] StructuralAttributes =
     {
+        // MEMBER-STRUCTURAL-01 (UC034-F19, 2026-11-11): a group's member list is structural, like its DN. It was read only
+        // when the group step mapped "member", and the lab's project did not, so the routed sync pushed no membership
+        // edges at all and the catalog's memberships froze (34,453 rows under OU=Groups, 147 refreshed in two days).
+        // AdReader completes a ranged "member;range=…" into the full list, so a group past 1,500 members reads whole.
+        "member",
         "objectGUID",      // primary SourceId
         "objectClass",
         "objectCategory",

@@ -77,4 +77,20 @@ public class ActiveDirectoryClassFilterTests
 
         throw new FileNotFoundException($"Could not locate repository file '{relativePath}'.");
     }
+
+    /// <summary>
+    /// MEMBER-STRUCTURAL-01 (UC034-F19): "member" is read for every group whatever the step maps, so the routed sync
+    /// pushes membership edges (and reconciles the stale rows) on every run; it was read only when mapped, and the
+    /// Granite project did not map it.
+    /// </summary>
+    [Fact]
+    public void The_AD_source_reads_a_groups_members_as_a_structural_attribute()
+    {
+        var field = typeof(Conduit.Connectors.ActiveDirectory.ActiveDirectorySource).GetField("StructuralAttributes",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(field);
+        var names = (string[])field!.GetValue(null)!;
+        Assert.Contains("member", names, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("objectGUID", names, StringComparer.OrdinalIgnoreCase);
+    }
 }
