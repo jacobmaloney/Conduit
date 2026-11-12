@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.DirectoryServices.Protocols;
 using System.Linq;
@@ -1044,23 +1044,10 @@ public sealed class ActiveDirectorySink : IConnectorSink
             var cn = GetStr(newObject, "cn") ?? GetStr(newObject, "displayName") ?? sam!;
             var newDn = $"CN={EscapeDnComponent(cn)},{baseDn}";
 
-            var add = new AddRequest(newDn,
-                new DirectoryAttribute("objectClass", new[] { "top", "person", "organizationalPerson", "user" }));
-            add.Attributes.Add(new DirectoryAttribute("sAMAccountName", sam));
-            if (!string.IsNullOrEmpty(upn)) add.Attributes.Add(new DirectoryAttribute("userPrincipalName", upn));
-            AppendIfPresent(add, newObject, "displayName");
-            AppendIfPresent(add, newObject, "givenName");
-            AppendIfPresent(add, newObject, "sn", "familyName");
-            AppendIfPresent(add, newObject, "mail", "email");
-            AppendIfPresent(add, newObject, "title");
-            AppendIfPresent(add, newObject, "department");
-            AppendIfPresent(add, newObject, "company");
-            AppendIfPresent(add, newObject, "employeeID", "employeeNumber");
-            AppendIfPresent(add, newObject, "telephoneNumber", "phoneNumber");
-
-            // Disabled until a password lands — same policy as UpsertUser's create path.
-            var initialUac = ADS_UF_NORMAL_ACCOUNT | ADS_UF_ACCOUNTDISABLE;
-            add.Attributes.Add(new DirectoryAttribute("userAccountControl", initialUac.ToString()));
+            // CREATE-ATTRS-01: the one user add builder (every writable attribute the request carries; disabled until a
+            // password lands, the same policy as UpsertUser's create path). This path had its own nine-attribute copy,
+            // so a console create carrying employeeType or an office wrote the account and dropped them.
+            var add = BuildUserAddRequest(newDn, newObject, sam!, upn);
 
             // Optional initial password (UC008-D07). The secure-channel guard runs BEFORE the add: a
             // password request on a plaintext channel refuses the whole create rather than leave a
