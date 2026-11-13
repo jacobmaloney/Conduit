@@ -39,7 +39,11 @@ public class AgentPriorValuesTests
     [Fact]
     public void Hide_from_address_book_is_its_own_allow_listed_attribute()
     {
-        Assert.Contains("[\"msExchHideFromAddressLists\"] = \"msExchHideFromAddressLists\",", Executor);
+        // CREATE-ATTRS-01 moved the allow-list to AdUserAttributes.Writable (one list for create, update and this write);
+        // the executor builds its map from it. The pin follows the list, not the line it used to be.
+        var attributes = Read("src/Conduit.Connectors.ActiveDirectory/AdUserAttributes.cs").Replace("\r\n", "\n");
+        Assert.Contains("\"msExchHideFromAddressLists\",", attributes);
+        Assert.Contains("foreach (var name in AdUserAttributes.Writable) allowed[name] = name;", Executor);
     }
 
     private static string Read(string relative, [CallerFilePath] string thisFile = "") =>
