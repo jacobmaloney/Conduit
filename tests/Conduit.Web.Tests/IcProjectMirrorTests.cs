@@ -202,7 +202,7 @@ public class IcProjectMirrorTests
         var mirror = new SyncProject { Id = Guid.NewGuid(), Name = "Domain.local by container", SourceTenantId = store.Source!.Id, SinkTenantId = store.Sink!.Id, ObjectClass = "user",
             IsEnabled = true, IdentityCenterProjectId = IcProjectId, IdentityCenterDefinitionFingerprint = "f1" };
         store.Others.Add(mirror);   // the mirror itself never counts against itself
-        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Core", SourceTenantId = store.Source.Id, SinkTenantId = store.Sink.Id, ObjectClass = null, IsEnabled = true });
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Core", SourceTenantId = store.Source.Id, SinkTenantId = store.Sink.Id, ObjectClass = "", IsEnabled = true });
 
         var outcome = await Mirror(store).EnsureAsync(BaseUrl, Definition("f2"), mirror, CancellationToken.None);
 
