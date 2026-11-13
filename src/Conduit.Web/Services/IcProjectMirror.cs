@@ -95,6 +95,8 @@ public interface IIcProjectMirrorStore
     Task<bool> SetMirrorAsync(Guid projectId, Guid identityCenterProjectId, string fingerprint);
     /// <summary>Every workflow of the project goes (steps, scopes, mappings with it) and these take their place.</summary>
     Task ReplaceWorkflowsAsync(Guid projectId, IReadOnlyList<IcProjectGraph.WorkflowRows> workflows);
+    /// <summary>MIRROR-OVERLAP-01: a project on this Conduit that <see cref="IcProjectMirror.Overlaps"/> the mirror, or null.</summary>
+    Task<SyncProject?> FindOverlappingProjectAsync(Guid sourceTenantId, Guid sinkTenantId, string? objectClass, Guid? exceptProjectId);
 }
 
 public sealed class IcProjectMirrorStore : IIcProjectMirrorStore
@@ -124,6 +126,16 @@ public sealed class IcProjectMirrorStore : IIcProjectMirrorStore
         if (tenantId is null) return null;
         using var scope = _scopeFactory.CreateScope();
         return await scope.ServiceProvider.GetRequiredService<TenantRepository>().GetByIdAsync(tenantId.Value);
+    }
+
+    public async Task<SyncProject?> FindOverlappingProjectAsync(Guid sourceTenantId, Guid sinkTenantId, string? objectClass, Guid? exceptProjectId)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var projects = await scope.ServiceProvider.GetRequiredService<SyncProjectRepository>().GetAllAsync();
+        return projects
+            .Where(p => IcProjectMirror.Overlaps(p, sourceTenantId, sinkTenantId, objectClass, exceptProjectId))
+            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     public async Task<SyncProject> CreateProjectAsync(SyncProject project)
@@ -208,6 +220,24 @@ public sealed class IcProjectMirror : IIcProjectMirror
         $"This Conduit has no IdentityCenter connected system pointing at {baseUrl} to write to; the enrollment that created the connection was removed.";
     public static string BindingHeldReason(IcProjectDefinition definition) =>
         $"IdentityCenter project '{definition.Name}' ({definition.ProjectId}) is already bound to another project on this Conduit; unbind it there first.";
+    /// <summary>MIRROR-OVERLAP-01 (UC038-F07): the refusal that names the other project and how to clear it.</summary>
+    public static string OverlapReason(IcProjectDefinition definition, SyncProject other) =>
+        $"IdentityCenter project '{definition.Name}' was not run: Conduit project '{other.Name}' ({other.Id}) is enabled and syncs the same source into the same IdentityCenter for the same objects, so the two would write over each other. Disable it in Schedules (or delete it) and the next run goes ahead.";
+
+    /// <summary>
+    /// MIRROR-OVERLAP-01 (UC038-F07): <paramref name="candidate"/> would write the mirror's objects too: it is not itself a
+    /// mirror (IdentityCenter coordinates its own projects), it is enabled (a paused project is the operator's way out), and
+    /// it reads the same connected system into the same IdentityCenter for an overlapping object class (none means any).
+    /// </summary>
+    public static bool Overlaps(SyncProject candidate, Guid sourceTenantId, Guid sinkTenantId, string? objectClass, Guid? exceptProjectId) =>
+        candidate.Id != exceptProjectId
+        && string.IsNullOrEmpty(candidate.IdentityCenterDefinitionFingerprint)
+        && candidate.IsEnabled
+        && candidate.SourceTenantId == sourceTenantId
+        && candidate.SinkTenantId == sinkTenantId
+        && (string.IsNullOrWhiteSpace(candidate.ObjectClass) || string.IsNullOrWhiteSpace(objectClass)
+            || string.Equals(candidate.ObjectClass.Trim(), objectClass.Trim(), StringComparison.OrdinalIgnoreCase));
+
     public static string RunningReason(SyncProject project) =>
         $"Conduit project '{project.Name}' ({project.Id}) is running, so its definition was not rebuilt; the next claim rebuilds it.";
 
@@ -220,6 +250,10 @@ public sealed class IcProjectMirror : IIcProjectMirror
             // Bound by hand (SYNC-SERVICE-05's API): the operator's project, never rewritten by a definition.
             if (string.IsNullOrEmpty(existing.IdentityCenterDefinitionFingerprint))
                 return new IcProjectMirrorOutcome(existing, null, IcProjectMirrorOutcome.HandBound);
+            var rival = await _store.FindOverlappingProjectAsync(existing.SourceTenantId, existing.SinkTenantId,
+                IcProjectGraph.ProjectObjectClass(definition), existing.Id);
+            if (rival is not null)
+                return IcProjectMirrorOutcome.Refused(OverlapReason(definition, rival));
             if (string.Equals(existing.IdentityCenterDefinitionFingerprint, definition.Fingerprint, StringComparison.Ordinal))
                 return new IcProjectMirrorOutcome(existing, null, IcProjectMirrorOutcome.Unchanged);
             if (existing.IsRunning)
@@ -249,6 +283,9 @@ public sealed class IcProjectMirror : IIcProjectMirror
         var sink = await _store.FindIdentityCenterSystemAsync(baseUrl);
         if (sink is null)
             return IcProjectMirrorOutcome.Refused(NoIdentityCenterSystemReason(baseUrl));
+        var overlapping = await _store.FindOverlappingProjectAsync(source.Id, sink.Id, IcProjectGraph.ProjectObjectClass(definition), null);
+        if (overlapping is not null)
+            return IcProjectMirrorOutcome.Refused(OverlapReason(definition, overlapping));
         ct.ThrowIfCancellationRequested();
 
         var project = new SyncProject

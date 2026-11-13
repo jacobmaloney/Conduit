@@ -97,6 +97,9 @@ public class IcProjectMirrorTests
             return Task.FromResult(true);
         }
         public Task ReplaceWorkflowsAsync(Guid projectId, IReadOnlyList<IcProjectGraph.WorkflowRows> workflows) { ReplaceCalls++; Workflows = workflows; return Task.CompletedTask; }
+        public List<SyncProject> Others { get; } = new();
+        public Task<SyncProject?> FindOverlappingProjectAsync(Guid sourceTenantId, Guid sinkTenantId, string? objectClass, Guid? exceptProjectId) =>
+            Task.FromResult(Others.FirstOrDefault(p => IcProjectMirror.Overlaps(p, sourceTenantId, sinkTenantId, objectClass, exceptProjectId)));
     }
 
     private static IcProjectMirror Mirror(FakeStore store) => new(store, NullLogger<IcProjectMirror>.Instance);
@@ -169,6 +172,73 @@ public class IcProjectMirrorTests
         Assert.Equal(IcProjectMirrorOutcome.Unchanged, busy.Action);
         Assert.Equal("f1", running.IdentityCenterDefinitionFingerprint);
         Assert.Equal(0, store.ReplaceCalls);
+    }
+
+    // ── MIRROR-OVERLAP-01 (UC038-F07): never beside an enabled project writing the same objects ─────────────────
+
+    [Fact]
+    public async Task An_enabled_project_over_the_same_source_sink_and_class_refuses_the_mirror_by_name_and_creates_nothing()
+    {
+        var store = new FakeStore();
+        var core = new SyncProject { Id = Guid.NewGuid(), Name = "Domain.local to Identity Center (Core)", SourceTenantId = store.Source!.Id, SinkTenantId = store.Sink!.Id, ObjectClass = "user", IsEnabled = true, CronSchedule = "0 * * * *" };
+        store.Others.Add(core);
+
+        var outcome = await Mirror(store).EnsureAsync(BaseUrl, Definition(), existing: null, CancellationToken.None);
+
+        Assert.Equal("Refused", outcome.Action);
+        Assert.Null(outcome.Project);
+        Assert.Contains("'Domain.local to Identity Center (Core)'", outcome.Refusal);
+        Assert.Contains(core.Id.ToString(), outcome.Refusal);
+        Assert.Contains("Disable it in Schedules", outcome.Refusal);
+        Assert.Null(store.Created);
+        Assert.Equal(0, store.ReplaceCalls);
+        Assert.Null(store.Mirror);
+    }
+
+    [Fact]
+    public async Task An_existing_mirror_is_refused_too_and_not_rebuilt_while_the_rival_is_enabled()
+    {
+        var store = new FakeStore();
+        var mirror = new SyncProject { Id = Guid.NewGuid(), Name = "Domain.local by container", SourceTenantId = store.Source!.Id, SinkTenantId = store.Sink!.Id, ObjectClass = "user",
+            IsEnabled = true, IdentityCenterProjectId = IcProjectId, IdentityCenterDefinitionFingerprint = "f1" };
+        store.Others.Add(mirror);   // the mirror itself never counts against itself
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Core", SourceTenantId = store.Source.Id, SinkTenantId = store.Sink.Id, ObjectClass = null, IsEnabled = true });
+
+        var outcome = await Mirror(store).EnsureAsync(BaseUrl, Definition("f2"), mirror, CancellationToken.None);
+
+        Assert.Equal("Refused", outcome.Action);
+        Assert.Contains("'Core'", outcome.Refusal);
+        Assert.Equal("f1", mirror.IdentityCenterDefinitionFingerprint);
+        Assert.Equal(0, store.ReplaceCalls);
+    }
+
+    [Fact]
+    public async Task A_paused_project_another_source_another_class_or_another_mirror_lets_the_mirror_run()
+    {
+        var store = new FakeStore();
+        var src = store.Source!.Id;
+        var sink = store.Sink!.Id;
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Paused core", SourceTenantId = src, SinkTenantId = sink, ObjectClass = "user", IsEnabled = false, CronSchedule = "0 * * * *" });
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Granite HR", SourceTenantId = Guid.NewGuid(), SinkTenantId = sink, ObjectClass = "user", IsEnabled = true });
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Groups", SourceTenantId = src, SinkTenantId = sink, ObjectClass = "group", IsEnabled = true });
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Another mirror", SourceTenantId = src, SinkTenantId = sink, ObjectClass = "user", IsEnabled = true, IdentityCenterDefinitionFingerprint = "zz" });
+
+        var outcome = await Mirror(store).EnsureAsync(BaseUrl, Definition(), existing: null, CancellationToken.None);
+
+        Assert.Equal(IcProjectMirrorOutcome.Created, outcome.Action);
+        Assert.Null(outcome.Refusal);
+    }
+
+    [Fact]
+    public async Task A_project_bound_by_hand_is_the_operators_own_and_is_not_held_to_the_overlap_rule()
+    {
+        var store = new FakeStore();
+        var handBound = new SyncProject { Id = Guid.NewGuid(), Name = "Hand", SourceTenantId = store.Source!.Id, SinkTenantId = store.Sink!.Id, ObjectClass = "user", IsEnabled = true, IdentityCenterProjectId = IcProjectId };
+        store.Others.Add(new SyncProject { Id = Guid.NewGuid(), Name = "Other", SourceTenantId = store.Source.Id, SinkTenantId = store.Sink.Id, ObjectClass = "user", IsEnabled = true });
+
+        var outcome = await Mirror(store).EnsureAsync(BaseUrl, Definition(), handBound, CancellationToken.None);
+
+        Assert.Equal(IcProjectMirrorOutcome.HandBound, outcome.Action);
     }
 
     [Fact]
