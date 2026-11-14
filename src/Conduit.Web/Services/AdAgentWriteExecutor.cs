@@ -54,7 +54,10 @@ public sealed class AdAgentWriteExecutor
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
         OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject,
-        OpResetPasswordScramble, OpResetPasswordSealed, OpDeleteObject, OpClearPasswordNeverExpires
+        OpResetPasswordScramble, OpResetPasswordSealed, OpDeleteObject, OpClearPasswordNeverExpires,
+        // EXCHANGE-RECIPIENTS-01: Microsoft's recipient cmdlets, never hand-set msExch* values.
+        ExchangeRecipientOperations.EnableRemoteMailbox, ExchangeRecipientOperations.ConvertRemoteMailboxToShared,
+        ExchangeRecipientOperations.MailEnableGroup
     };
 
     /// <summary>
@@ -98,14 +101,17 @@ public sealed class AdAgentWriteExecutor
     // a move may only land INSIDE a permitted base DN (deny-all when the list is empty).
     private readonly ICreationBaseDnPolicy _baseDnPolicy;
     private readonly ILogger<AdAgentWriteExecutor> _logger;
+    private readonly IExchangeRecipientRunner? _exchange;
 
     public AdAgentWriteExecutor(
         IEnumerable<IConnectorAdapter> adapters,
         SinkConnectionCredentialMapRepository credentialMap,
         TenantRepository tenants,
         ICreationBaseDnPolicy baseDnPolicy,
-        ILogger<AdAgentWriteExecutor> logger)
+        ILogger<AdAgentWriteExecutor> logger,
+        IExchangeRecipientRunner? exchange = null)
     {
+        _exchange = exchange;
         _adapters = adapters;
         _credentialMap = credentialMap;
         _tenants = tenants;
@@ -202,6 +208,7 @@ public sealed class AdAgentWriteExecutor
                 OpResetPasswordSealed => await DoResetPasswordAsync(sink, target, p, sourceConnectionName, sealedMode: true, ct),
                 OpDeleteObject => await DoDeleteObjectAsync(sink, target, p, sourceConnectionName, ct),
                 OpClearPasswordNeverExpires => await DoClearPasswordNeverExpiresAsync(sink, target, p.ObjectGuid!, ct),
+                _ when ExchangeRecipientOperations.All.Contains(operation) => await DoExchangeRecipientAsync(operation, target, p, ct),
                 _ => (false, $"ApplyObjectWrite: operation '{operation}' is not allowed.")
             };
         }
@@ -452,6 +459,29 @@ public sealed class AdAgentWriteExecutor
         return (true, $"SetAttributes applied {applied} attribute(s) to {SafeDn(target)}.");
     }
 
+    // ── Exchange recipients (EXCHANGE-RECIPIENTS-01) ───────────────────────
+    private async Task<(bool, string)> DoExchangeRecipientAsync(
+        string operation, AdResolvedObject target, ApplyObjectWritePayload p, CancellationToken ct)
+    {
+        if (_exchange is null)
+            return (false, $"ApplyObjectWrite: {operation}: the Exchange recipient tools are not available on this agent.");
+        // A privileged group is never mail-enabled from a console (the same guard membership changes keep).
+        if (operation == ExchangeRecipientOperations.MailEnableGroup
+            && ((target.Rid is { } rid && PrivilegedRids.Contains(rid)) || (target.SamAccountName is { } sam && PrivilegedNames.Contains(sam))))
+            return (false, $"ApplyObjectWrite: {operation} refused: {SafeDn(target)} is a privileged group.");
+
+        var (request, refusal) = ExchangeRecipientPlan.Build(operation, target, p.ObjectGuid!, p.Alias, p.PrimarySmtpAddress, p.RemoteRoutingAddress);
+        if (request is null)
+            return (false, $"ApplyObjectWrite: {operation} refused: {refusal}");
+
+        var result = await _exchange.RunAsync(request, ct);
+        if (!result.Ok)
+            return (false, $"ApplyObjectWrite: {operation} failed: {result.Error}");
+        LastResultJson = JsonSerializer.Serialize(new { recipientTypeDetails = result.RecipientTypeDetails, primarySmtpAddress = result.PrimarySmtpAddress });
+        return (true, $"{operation}: {SafeDn(target)} is now {result.RecipientTypeDetails}"
+                      + (string.IsNullOrEmpty(result.PrimarySmtpAddress) ? "." : $" ({result.PrimarySmtpAddress})."));
+    }
+
     // ── SetManager ─────────────────────────────────────────────────────────
     private async Task<(bool, string)> DoSetManagerAsync(
         ActiveDirectorySink sink, AdResolvedObject target, ApplyObjectWritePayload p, CancellationToken ct)
@@ -606,5 +636,9 @@ public sealed class AdAgentWriteExecutor
         [JsonPropertyName("recipientKeyFp")] public string? RecipientKeyFp { get; set; }
         [JsonPropertyName("attributes")] public Dictionary<string, JsonElement?>? Attributes { get; set; }
         [JsonPropertyName("memberObjectGuid")] public string? MemberObjectGuid { get; set; }
+        // EXCHANGE-RECIPIENTS-01: the recipient inputs, validated by ExchangeRecipientPlan before any cmdlet runs.
+        [JsonPropertyName("alias")] public string? Alias { get; set; }
+        [JsonPropertyName("primarySmtpAddress")] public string? PrimarySmtpAddress { get; set; }
+        [JsonPropertyName("remoteRoutingAddress")] public string? RemoteRoutingAddress { get; set; }
     }
 }

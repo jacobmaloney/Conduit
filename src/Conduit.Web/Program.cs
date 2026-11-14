@@ -560,6 +560,7 @@ builder.Services.AddHttpClient("IcAgentCommandPoller")
 // ApplyObjectWrite executor — validates + allow-lists an IC-routed AD write and
 // drives the AD sink. Scoped: it resolves the scoped connector adapters + tenant
 // repo + credential protector. The poller resolves it per-command from its scope.
+builder.Services.AddSingleton<Conduit.Web.Services.IExchangeRecipientRunner, Conduit.Web.Services.PowerShellExchangeRecipientRunner>();   // EXCHANGE-RECIPIENTS-01
 builder.Services.AddScoped<Conduit.Web.Services.AdAgentWriteExecutor>();
 // CreateAdAccount executor — creates a NEW, DISABLED, password-less AD user for an IC-routed
 // provisioning command. Owns the deny-all base-DN containment control (the real OU containment),
