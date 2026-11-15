@@ -222,35 +222,79 @@ public sealed class AdAgentWriteExecutor
 
     // ── DeleteObject ─────────────────────────────────────────────────────────
     /// <summary>
-    /// Permanently delete a directory object. Guards, in order and all before any write:
-    /// LEAF classes only (user/group/computer/contact) — never OUs/containers/infrastructure;
-    /// target's CURRENT DN inside a permitted base DN (deny-all containment); AdminSDHolder
-    /// (adminCount=1) and well-known built-in principals refused outright, no override
-    /// (same guard the password reset uses). Idempotent: a target already gone is reported
-    /// as success (nothing to delete).
+    /// Permanently delete a directory object. Every delete: the target's CURRENT DN strictly BELOW a permitted base DN
+    /// (a permitted base itself is never deleted; deny-all containment), and the well-known built-in principals refused.
+    /// A system delete (a workflow step, the deferred account deletion) keeps its original rule: user, group, computer
+    /// or contact only, one object, never a subtree. OBJECT-DELETE-01 (Jacob 2026-11-15, "Yes, any object"): a delete
+    /// a person confirmed (<c>interactive</c>, set only by IdentityCenter's DeleteObjectViaAgentAsync) takes any class,
+    /// and with <c>includeSubtree</c> everything under it, through <see cref="AdObjectDeletePlan.Decide"/> (naming
+    /// contexts, partitions, critical system objects, AdminSDHolder, domain controllers; the whole subtree listed once
+    /// and judged, no larger than the count the person confirmed) and <see cref="AdObjectDeletePlan.Run"/> (deepest
+    /// first, one object per DeleteRequest by GUID, each re-read and re-judged first; never the Tree Delete control).
     /// </summary>
     private async Task<(bool, string)> DoDeleteObjectAsync(
         ActiveDirectorySink sink, AdResolvedObject target, ApplyObjectWritePayload p,
         string sourceConnectionName, CancellationToken ct)
     {
-        if (!(target.IsClass("user") || target.IsClass("group") ||
+        var interactive = p.Interactive == true;
+        var includeSubtree = p.IncludeSubtree == true;
+        if (includeSubtree && !interactive)
+            return (false, "DeleteObject refused: deleting an object with everything under it is only taken from a person's confirm.");
+        if (!interactive && !(target.IsClass("user") || target.IsClass("group") ||
               target.IsClass("computer") || target.IsClass("contact")))
             return (false, "DeleteObject: only user, group, computer, or contact objects may be deleted through this channel.");
 
         var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
-        if (!BaseDnContainment.IsContained(target.DistinguishedName, permitted))
+        bool IsPermitted(string dn) => BaseDnContainment.IsStrictlyBelow(dn, permitted);
+        if (!IsPermitted(target.DistinguishedName))
             return (false,
-                $"DeleteObject: the target is not within any permitted base DN for connection '{sourceConnectionName}' — refusing (deny-all containment).");
+                $"DeleteObject: the target is not below any permitted base DN for connection '{sourceConnectionName}' — refusing (deny-all containment; a permitted base itself is never deleted).");
 
         var (guarded, reason) = await sink.IsPasswordResetGuardedAsync(p.ObjectGuid!, ct);
         if (guarded)
-            return (false, $"DeleteObject REFUSED: {reason}");
+            return (false, $"DeleteObject refused: {reason}");
 
-        var r = await sink.DeleteAsync(target.DistinguishedName, ct);
-        if (r.Outcome == SinkWriteOutcome.Failed)
-            return (false, $"DeleteObject failed: {r.ErrorMessage}");
+        if (!interactive)
+        {
+            // The original system delete, unchanged; the result names the object so IdentityCenter settles its row.
+            var r = await sink.DeleteAsync(target.DistinguishedName, ct);
+            if (r.Outcome == SinkWriteOutcome.Failed)
+                return (false, $"DeleteObject failed: {r.ErrorMessage}");
+            var node = new AdDeleteNode(Guid.Parse(p.ObjectGuid!), target.DistinguishedName, target.ObjectClasses, false, false, 0);
+            LastResultJson = AdObjectDeletePlan.ResultJson(node, new AdDeleteRun(new[] { node }, null));
+            return (true, $"Deleted {target.DistinguishedName}.");
+        }
 
-        return (true, $"Deleted {target.DistinguishedName}.");
+        using var conn = await sink.OpenConnectionAsync();
+        var facts = await Task.Run(() => AdObjectDeletion.ReadFacts(conn, Guid.Parse(p.ObjectGuid!), includeSubtree, ct), ct);
+        if (facts is null)
+            return (false, $"DeleteObject: objectGuid {p.ObjectGuid} resolved to no AD object.");
+
+        var (plan, refusal) = AdObjectDeletePlan.Decide(facts, includeSubtree, p.ConfirmedCount, IsPermitted);
+        if (plan is null)
+            return (false, $"DeleteObject refused: {facts.Target.DistinguishedName} was not deleted because {refusal}");
+
+        var run = await Task.Run(() => AdObjectDeletePlan.Run(new LdapDeleteDirectory(conn), plan, facts.NamingContexts, IsPermitted, ct), ct);
+        LastResultJson = AdObjectDeletePlan.ResultJson(plan.Target, run);
+        if (!run.Complete)
+            return (false, $"DeleteObject stopped after deleting {run.Deleted.Count} of {plan.Order.Count} object(s): {run.StoppedReason}");
+        return (true, plan.Subtree
+            ? $"Deleted {plan.Target.DistinguishedName} ({plan.Target.PrimaryClass}) and the {plan.DescendantCount} object(s) under it."
+            : $"Deleted {plan.Target.DistinguishedName} ({plan.Target.PrimaryClass}).");
+    }
+
+    /// <summary>OBJECT-DELETE-01: the delete inputs read from an IdentityCenter payload by the same strict parse the executor uses; null when it is not a well-formed DeleteObject.</summary>
+    public static (Guid ObjectGuid, bool IncludeSubtree, bool Interactive, int? ConfirmedCount)? ReadDeleteRequest(string payloadJson)
+    {
+        try
+        {
+            var p = JsonSerializer.Deserialize<ApplyObjectWritePayload>(payloadJson, StrictJson);
+            if (p is null || p.SchemaVersion != 1 || !string.Equals(p.Operation?.Trim(), OpDeleteObject, StringComparison.Ordinal)
+                || !Guid.TryParse(p.ObjectGuid, out var guid) || guid == Guid.Empty)
+                return null;
+            return (guid, p.IncludeSubtree == true, p.Interactive == true, p.ConfirmedCount);
+        }
+        catch (JsonException) { return null; }
     }
 
     // ── SetAttributes ────────────────────────────────────────────────────────
@@ -640,5 +684,11 @@ public sealed class AdAgentWriteExecutor
         [JsonPropertyName("alias")] public string? Alias { get; set; }
         [JsonPropertyName("primarySmtpAddress")] public string? PrimarySmtpAddress { get; set; }
         [JsonPropertyName("remoteRoutingAddress")] public string? RemoteRoutingAddress { get; set; }
+        // OBJECT-DELETE-01: delete the object with everything under it (the Tree Delete control); absent or false = a leaf only.
+        [JsonPropertyName("includeSubtree")] public bool? IncludeSubtree { get; set; }
+        // OBJECT-DELETE-01: a person confirmed this delete (any class; a subtree allowed); absent = a system delete under the original rule.
+        [JsonPropertyName("interactive")] public bool? Interactive { get; set; }
+        // OBJECT-DELETE-01: how many objects under the target the person saw; a larger listed subtree is refused.
+        [JsonPropertyName("confirmedCount")] public int? ConfirmedCount { get; set; }
     }
 }

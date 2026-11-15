@@ -44,6 +44,26 @@ public static class BaseDnContainment
         return false; // deny-all default
     }
 
+    /// <summary>
+    /// OBJECT-DELETE-01: the delete form of <see cref="IsContained"/>: the target must lie strictly BELOW a permitted
+    /// base, so a permitted base itself is never deleted. Same parser, same deny-all and fail-closed rules.
+    /// </summary>
+    public static bool IsStrictlyBelow(string? dn, IEnumerable<string>? permittedBaseDns)
+    {
+        var target = ParseRdns(dn);
+        if (target is null || target.Count == 0 || permittedBaseDns is null)
+            return false;
+        foreach (var baseDn in permittedBaseDns)
+        {
+            var permitted = ParseRdns(baseDn);
+            if (permitted is null || permitted.Count == 0)
+                continue;
+            if (target.Count > permitted.Count && IsRdnSuffix(target, permitted))
+                return true;
+        }
+        return false;
+    }
+
     // target's RDN list must END WITH baseDn's RDN list (component-wise, both already normalized).
     private static bool IsRdnSuffix(List<string> target, List<string> baseDn)
     {
