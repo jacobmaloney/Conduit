@@ -83,7 +83,9 @@ public sealed class ActiveRolesContainerBrowser : IConnectorContainerBrowser
             // OneLevel: immediate children only (lazy drill-down). OUs + containers.
             var request = new SearchRequest(
                 searchBase,
-                "(|(objectClass=organizationalUnit)(objectClass=container))",
+                // CN=Builtin is a builtinDomain, not a container: left out, a run split by container never read the
+                // built-in groups at all (UC017-F47, 2026-11-15). The picker shows it too, as the console does.
+                "(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=builtinDomain))",
                 SearchScope.OneLevel,
                 new[] { "distinguishedName", "ou", "cn", "name", "description" });
             request.Controls.Add(new PageResultRequestControl(1000));

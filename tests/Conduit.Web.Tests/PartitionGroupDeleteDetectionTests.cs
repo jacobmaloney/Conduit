@@ -374,6 +374,17 @@ public class PartitionGroupDeleteDetectionTests
             ArmedStepIds = Step.ToString("N"),
         });
 
+    [Theory]
+    [InlineData("src/Conduit.Connectors.ActiveDirectory/ActiveDirectoryContainerBrowser.cs")]
+    [InlineData("src/Conduit.Connectors.ActiveRoles/ActiveRolesContainerBrowser.cs")]
+    public void The_container_browse_lists_CN_Builtin_so_a_split_run_reads_the_built_in_groups(string browser)
+    {
+        // A run split by container is planned from this browse; CN=Builtin (a builtinDomain) was not listed, so no
+        // partition ever read the built-in groups and the catalog's 29 were frozen at their last unsplit read.
+        var source = File.ReadAllText(Path.Combine(RepoRoot(), browser.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.Contains("\"(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=builtinDomain))\"", source);
+    }
+
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
