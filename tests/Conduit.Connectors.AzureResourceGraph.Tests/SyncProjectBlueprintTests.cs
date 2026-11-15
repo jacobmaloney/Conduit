@@ -156,6 +156,22 @@ public class SyncProjectBlueprintTests
         Assert.Equal(new[] { "user", "group" }, core.ToArray());
     }
 
+    [Theory]
+    [InlineData("ActiveDirectory")]
+    [InlineData("ActiveRoles")]
+    public void Generator_AdCore_carries_the_directory_structure(string sourceSystemType)
+    {
+        // UC017-F46 (2026-11-15): a Core project without OUs left the catalog with a one-off snapshot of them, and the
+        // tree, scopes, rule containers and a leaver OU are all named by their catalog row.
+        var gen = NewGenerator();
+        var core = gen.GetObjectClasses(sourceSystemType, GenerationMode.Core);
+        Assert.Equal(new[] { "user", "group", "computer", "contact", "organizationalUnit", "container", "domainDNS" }, core.ToArray());
+
+        var full = gen.GetObjectClasses(sourceSystemType, GenerationMode.Full).ToArray();
+        Assert.Equal(24, full.Length);
+        Assert.Equal(full.Length, full.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
     [Fact]
     public void Generator_AwsIdentityCenterFull_advertises_permissionSet()
     {

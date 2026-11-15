@@ -107,8 +107,10 @@ namespace Conduit.Sync.Templates
             _attributeMapService = attributeMapService;
         }
 
-        // ── Active Directory: Core(4) / Infrastructure(20) / Full(24) ──
-        private static readonly string[] AdCore = { "user", "group", "computer", "contact" };
+        // ── Active Directory: Core(7) / Infrastructure(20) / Full(24) ──
+        // Core carries the directory's structure (OUs, containers, the domain root) with the people and groups in it: the
+        // catalog's tree, scopes, rule containers and a leaver OU are named by their catalog row (UC017-F46, 2026-11-15).
+        private static readonly string[] AdCore = { "user", "group", "computer", "contact", "organizationalUnit", "container", "domainDNS" };
         private static readonly string[] AdInfrastructure =
         {
             "organizationalUnit", "container", "domainDNS",
@@ -118,7 +120,7 @@ namespace Conduit.Sync.Templates
             "pKICertificateTemplate", "msFVE-RecoveryInformation", "certificationAuthority",
             "attributeSchema", "classSchema", "dnsNode", "dnsZone"
         };
-        private static readonly string[] AdFull = AdCore.Concat(AdInfrastructure).ToArray();
+        private static readonly string[] AdFull = AdCore.Concat(AdInfrastructure).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
         // ── Entra ID: Core(2) / Security(7) / Full(10) ──
         private static readonly string[] EntraCore = { "user", "group" };
