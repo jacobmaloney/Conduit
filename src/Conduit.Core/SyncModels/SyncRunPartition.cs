@@ -10,7 +10,9 @@ namespace Conduit.Core.SyncModels;
 /// reads only it. <see cref="OneLevel"/> is the base itself one level deep (its own objects, not its child
 /// containers'); <see cref="CarriesTombstones"/> marks the one container of a plan that runs the deleted-objects pass
 /// (UC037-D09). A partition run never advances a step's cursor: a partial read must not move the watermark the next
-/// full read resumes from.
+/// full read resumes from. <see cref="ParentJobId"/> is IdentityCenter's plan item, the one id every container of one
+/// plan shares (UC017-F47): the group whose finished partitions together are a complete read of the scope. Null on a
+/// payload written before IdentityCenter carried it, and on a plan Conduit builds before IdentityCenter queues it.
 /// </summary>
 public sealed record SyncRunPartition(
     int Index,
@@ -18,7 +20,8 @@ public sealed record SyncRunPartition(
     string Label,
     IReadOnlyList<string> IncludedBaseDNs,
     bool OneLevel,
-    bool CarriesTombstones)
+    bool CarriesTombstones,
+    Guid? ParentJobId = null)
 {
     public string Describe() => $"Partition {Index}/{Count}: {Label}" + (OneLevel ? " (this level only)" : string.Empty);
 

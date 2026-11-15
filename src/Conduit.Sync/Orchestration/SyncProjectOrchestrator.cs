@@ -52,6 +52,7 @@ public sealed class SyncProjectOrchestrator
     private readonly SinkRecordHashRepository _hashRepo;
     private readonly ProvisioningRouteRegistrar _routeRegistrar;
     private readonly SyncCancellationRegistry _cancellation;
+    private readonly IPartitionGroupRepository _partitionGroups;
     private readonly Microsoft.Extensions.Configuration.IConfiguration _config;
     private readonly ILogger<SyncProjectOrchestrator> _logger;
 
@@ -65,6 +66,7 @@ public sealed class SyncProjectOrchestrator
         SinkRecordHashRepository hashRepo,
         ProvisioningRouteRegistrar routeRegistrar,
         SyncCancellationRegistry cancellation,
+        IPartitionGroupRepository partitionGroups,
         Microsoft.Extensions.Configuration.IConfiguration config,
         ILogger<SyncProjectOrchestrator> logger)
     {
@@ -77,6 +79,7 @@ public sealed class SyncProjectOrchestrator
         _hashRepo = hashRepo;
         _routeRegistrar = routeRegistrar;
         _cancellation = cancellation;
+        _partitionGroups = partitionGroups;
         _config = config;
         _logger = logger;
     }
@@ -203,6 +206,20 @@ public sealed class SyncProjectOrchestrator
         string? errorMessage = null;
         SyncCursor? newCursor = null;
         bool wasIncremental = false;
+        // UC017-F47: a container of a plan IdentityCenter queued (ParentJobId) records what its steps read, so the plan
+        // can be delete-detected as a whole once every container has finished.
+        PartitionGroupTracker? group = null;
+        if (partition?.ParentJobId is { } groupId)
+        {
+            var settings = PartitionDeleteDetectionSettings.Read(_config);
+            if (settings.Mode == PartitionDeleteDetectionMode.Off)
+                await Log(run.Id, "Info", $"Delete detection across the plan is off ({PartitionDeleteDetectionSettings.ModeKey} = Off); this container is upsert-only.");
+            else
+            {
+                group = new PartitionGroupTracker(groupId, partition, settings);
+                await Log(run.Id, "Info", $"{partition.Describe()} belongs to plan {groupId:N}; delete detection is decided across the plan when all {partition.Count} containers finish (mode {settings.Mode}).");
+            }
+        }
 
         try
         {
@@ -242,6 +259,13 @@ public sealed class SyncProjectOrchestrator
                 ?? throw new InvalidOperationException($"Source tenant '{sourceTenant.Name}' ({sourceTenant.SystemType}) does not support source operations.");
             var sink = sinkAdapter.CreateSink(sinkTenant.Id)
                 ?? throw new InvalidOperationException($"Sink tenant '{sinkTenant.Name}' ({sinkTenant.SystemType}) does not support sink operations.");
+            if (group is not null)
+            {
+                group.Sink = sink as ITombstoneEmittingSink;
+                group.SinkTenantId = sinkTenant.Id;
+                // The same source name the tombstone paths below pass, so IC resolves the connection the upserts used.
+                group.SourceName = !string.IsNullOrWhiteSpace(sourceTenant.Name) ? sourceTenant.Name : "Conduit";
+            }
 
             // Self-register the source-connection → Conduit-tenant credential mapping
             // whenever we push to an IdentityCenter sink. IC auto-seeds a
@@ -277,7 +301,7 @@ public sealed class SyncProjectOrchestrator
             if (workflows.Count == 0)
             {
                 await Log(run.Id, "Warning", "Project has no Workflows defined; falling back to legacy single-pass Mapping using project-level mappings + scope.");
-                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints, partition);
+                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints, partition, group);
                 var legacyResult = await ExecuteLegacyMappingAsync(ctx, cancellationToken);
                 totals.Add(legacyResult.Delta, true, legacyResult.WasIncremental,
                     $"Mapping pass reported {legacyResult.Delta.Failed} failure(s). See run logs for the reason.");
@@ -286,7 +310,7 @@ public sealed class SyncProjectOrchestrator
             }
             else
             {
-                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints, partition);
+                var ctx = new RunContext(project, run.Id, sourceAdapter, sinkAdapter, source, sink, sourceTenant, sinkTenant, checkpoints, partition, group);
 
                 foreach (var wf in workflows)
                 {
@@ -454,6 +478,8 @@ public sealed class SyncProjectOrchestrator
             {
                 await _runRepo.SetCursorAsync(run.Id, project.Id, null, wasIncremental);
             }
+            if (group is not null)
+                await FinishPartitionGroupAsync(project, run.Id, group, status, cancellationToken);
             await _runRepo.FinishAsync(run.Id, status, errorMessage, sw.ElapsedMilliseconds);
             await _projectRepo.FinishRunAsync(project.Id, run.Id, status);
         }
@@ -473,7 +499,74 @@ public sealed class SyncProjectOrchestrator
         Core.Models.Tenant SourceTenant,
         Core.Models.Tenant SinkTenant,
         SyncCheckpointBuffer Checkpoints,
-        SyncRunPartition? Partition = null);
+        SyncRunPartition? Partition = null,
+        PartitionGroupTracker? Group = null);
+
+    /// <summary>
+    /// UC017-F47: what one container run of a plan contributes to delete detection across the plan. A step is armed
+    /// once its complete read's ids are recorded; a delete-detected step that could not record a complete read makes
+    /// the container incomplete, and an incomplete container stops the plan from being delete-detected.
+    /// </summary>
+    private sealed class PartitionGroupTracker
+    {
+        public PartitionGroupTracker(Guid groupId, SyncRunPartition partition, PartitionDeleteDetectionSettings settings)
+        {
+            GroupId = groupId;
+            Partition = partition;
+            Settings = settings;
+        }
+
+        public Guid GroupId { get; }
+        public SyncRunPartition Partition { get; }
+        public PartitionDeleteDetectionSettings Settings { get; }
+        public HashSet<Guid> ArmedSteps { get; } = new();
+        public Dictionary<Guid, string> StepNames { get; } = new();
+        public bool AllStepsCompleteRead { get; set; } = true;
+        public ITombstoneEmittingSink? Sink { get; set; }
+        public Guid SinkTenantId { get; set; }
+        public string SourceName { get; set; } = "Conduit";
+    }
+
+    /// <summary>
+    /// UC017-F47: record how this container ended, then let the finalizer decide whether the plan is complete. Never
+    /// fails the run: delete detection across the plan is best-effort, and every gate it misses leaves the sink untouched.
+    /// </summary>
+    private async Task FinishPartitionGroupAsync(SyncProject project, Guid runId, PartitionGroupTracker group, string status, CancellationToken ct)
+    {
+        try
+        {
+            await _partitionGroups.RecordResultAsync(new PartitionRunResult
+            {
+                GroupId = group.GroupId,
+                PartitionIndex = group.Partition.Index,
+                PartitionCount = group.Partition.Count,
+                RunId = runId,
+                ProjectId = project.Id,
+                Succeeded = status == "Succeeded",
+                AllStepsCompleteRead = group.AllStepsCompleteRead,
+                ContainerKey = PartitionGroupFinalizer.ContainerKey(group.Partition),
+                ArmedStepIds = string.Join(",", group.ArmedSteps.Select(id => id.ToString("N"))),
+            });
+
+            // The registry is the step's own key, the one a partial-scope step writes (HashScopeKey with the step id).
+            var request = new PartitionGroupFinalizeRequest(
+                project.Id,
+                group.GroupId,
+                group.Settings,
+                group.Sink,
+                group.SourceName,
+                async stepId => (await _hashRepo.LoadMapAsync(project.Id, group.SinkTenantId, HashScopeKey(string.Empty, stepId))).Keys,
+                (stepId, ids) => _hashRepo.DeleteManyAsync(project.Id, group.SinkTenantId, HashScopeKey(string.Empty, stepId), ids),
+                (level, message) => Log(runId, level, message),
+                group.StepNames);
+            await new PartitionGroupFinalizer(_partitionGroups).FinalizeAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Delete detection across plan {GroupId} could not finish for run {RunId}", group.GroupId, runId);
+            await Log(runId, "Warning", $"Delete detection across the plan could not finish: {ex.Message}. Upsert results stand; nothing was tombstoned.");
+        }
+    }
 
     /// <summary>What a single step returns. Most steps populate only Delta.</summary>
     private sealed class StepResult
@@ -1503,7 +1596,36 @@ public sealed class SyncProjectOrchestrator
         // everything outside the slice "gone from source". Observed live 2026-08-03: a dedicated
         // admin-OU user step (45 reads) tombstoned the other ~1,733 user records. A scoped read
         // is never class-complete, so diff-based delete-detection is structurally invalid for it.
-        if (deleteDetectionOn && scopeIsPartial && tombstoneSink is not null)
+        if (deleteDetectionOn && scopeIsPartial && tombstoneSink is not null && ctx.Group is { } group && step is not null && seenSourceIds is not null)
+        {
+            // UC017-F47: a container of a plan never tombstones on its own; it holds what it read for the plan.
+            if (!readWasComplete || wasIncremental || ct.IsCancellationRequested)
+            {
+                group.AllStepsCompleteRead = false;
+                var why = wasIncremental
+                    ? "incremental (the step resumes from its cursor, so only changed records were read)"
+                    : ct.IsCancellationRequested ? "cancelled" : "not complete (partial/failed/truncated)";
+                await Log(run, "Warning",
+                    $"    Delete-detection for class '{objectClass}' is decided across the plan, but this container's read was {why}. The plan will not be delete-detected this time. Upsert-only.");
+            }
+            else
+            {
+                try
+                {
+                    await _partitionGroups.RecordSeenAsync(project.Id, group.GroupId, step.Id, seenSourceIds);
+                    group.ArmedSteps.Add(step.Id);
+                    group.StepNames[step.Id] = step.Name;
+                    await Log(run, "Info",
+                        $"    Delete-detection for class '{objectClass}' is decided across the plan: this container's {seenSourceIds.Count} id(s) are held until all {group.Partition.Count} containers finish.");
+                }
+                catch (Exception ex)
+                {
+                    group.AllStepsCompleteRead = false;
+                    await Log(run, "Warning", $"    Could not hold this container's ids for delete detection across the plan: {ex.Message}. The plan will not be delete-detected this time.");
+                }
+            }
+        }
+        else if (deleteDetectionOn && scopeIsPartial && tombstoneSink is not null)
         {
             await Log(run, "Info",
                 $"    Delete-detection SKIPPED for class '{objectClass}': this step's scope is partial (BaseDN/include/exclude set) — its read is a slice, not the class population. Upsert-only.");
@@ -1751,7 +1873,11 @@ public sealed class SyncProjectOrchestrator
         // Incremental passes are additive here by construction (UpsertMany never
         // removes keys), so registering their partial seen-set is safe and keeps
         // newly created records delete-detectable.
-        if (deleteDetectionOn && !scopeIsPartial && readWasComplete && !skipUnchanged && seenSourceIds is not null && seenSourceIds.Count > 0)
+        //
+        // UC017-F47: a complete, full container read of a plan also registers, under its step's own key (step:{id}), the
+        // registry delete detection across the plan intersects with, so a plan is delete-detected with skip-unchanged off.
+        var registersHere = !scopeIsPartial || (ctx.Group is not null && step is not null && !wasIncremental);
+        if (deleteDetectionOn && registersHere && readWasComplete && !skipUnchanged && seenSourceIds is not null && seenSourceIds.Count > 0)
         {
             // Register every id seen this run (present in source). Use a sentinel
             // hash — the value is irrelevant for delete-detection (only the key is),
@@ -1760,7 +1886,7 @@ public sealed class SyncProjectOrchestrator
             var registry = new List<KeyValuePair<string, string>>(seenSourceIds.Count);
             foreach (var id in seenSourceIds)
                 registry.Add(new KeyValuePair<string, string>(id, registryHash));
-            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, objectClass, registry); }
+            try { await _hashRepo.UpsertManyAsync(project.Id, sinkTenant.Id, hashKey, registry); }
             catch (Exception ex) { await Log(run, "Warning", $"    Could not update prior-synced id registry: {ex.Message}"); }
         }
 

@@ -49,9 +49,18 @@ public static class IcPartitionPayload
             var label = Find(partition, "Label") is { ValueKind: JsonValueKind.String } l ? l.GetString() : null;
             return new SyncRunPartition(index, count, string.IsNullOrWhiteSpace(label) ? dns[0] : label!.Trim(), dns,
                 Find(partition, "OneLevel") is { ValueKind: JsonValueKind.True },
-                Find(partition, "CarriesTombstones") is { ValueKind: JsonValueKind.True });
+                Find(partition, "CarriesTombstones") is { ValueKind: JsonValueKind.True },
+                ReadParentJobId(partition));
         }
     }
+
+    /// <summary>
+    /// UC017-F47: the plan item every container of one plan names. Absent, empty or not a GUID is no group: the container
+    /// still runs, it only cannot take part in delete detection across the plan.
+    /// </summary>
+    private static Guid? ReadParentJobId(JsonElement partition) =>
+        Find(partition, "ParentJobId") is { ValueKind: JsonValueKind.String } p
+            && Guid.TryParse(p.GetString(), out var parent) && parent != Guid.Empty ? parent : null;
 
     private static bool TryParse(string? payloadJson, out JsonDocument? doc)
     {

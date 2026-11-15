@@ -434,6 +434,8 @@ builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SyncRunAsyncJobRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.WorkflowRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkRecordHashRepository>();
+// UC017-F47: delete detection across the containers of one split read.
+builder.Services.AddScoped<Conduit.DataAccess.Repositories.IPartitionGroupRepository, Conduit.DataAccess.Repositories.PartitionGroupRepository>();
 builder.Services.AddScoped<Conduit.DataAccess.Repositories.SinkConnectionCredentialMapRepository>();
 // Creation base-DN allow-list (V33): customer-owned persistence of the containment control's permitted
 // base DNs. The policy resolves DB-authoritative → config fallback → fail-closed deny-all for the executor.

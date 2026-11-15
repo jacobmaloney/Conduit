@@ -29,16 +29,17 @@ public class SyncExecutionServerBindingContractTests
         Assert.Contains("CREATE UNIQUE NONCLUSTERED INDEX [UX_SyncProjects_IdentityCenterProjectId]", m36.SqlScript);
         Assert.Contains("WHERE [IdentityCenterProjectId] IS NOT NULL", m36.SqlScript);
 
-        // Idempotent at the list level: an applied 36 is not offered again; versions are unique. The tip is 37
-        // (ZERO-TOUCH-01: the fingerprint of the IdentityCenter definition a mirrored project was built from).
-        var m37 = Assert.Single(migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 36 }));
+        // Idempotent at the list level: an applied 36 is not offered again; versions are unique. 37 is ZERO-TOUCH-01 (the
+        // fingerprint of the IdentityCenter definition a mirrored project was built from); the tip is 38 (UC017-F47,
+        // delete detection across a split read, pinned by PartitionGroupDeleteDetectionTests).
+        var m37 = migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 36 }).First();
         Assert.Equal(37, m37.Version);
         Assert.Contains("IF COL_LENGTH('dbo.SyncProjects','IdentityCenterDefinitionFingerprint') IS NULL", m37.SqlScript);
         Assert.Contains("ADD [IdentityCenterDefinitionFingerprint] NVARCHAR(64) NULL;", m37.SqlScript);
-        Assert.Empty(migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 37 }));
+        Assert.Empty(migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 38 }));
         var all = migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 0 });
         Assert.Equal(all.Count, all.Select(m => m.Version).Distinct().Count());
-        Assert.Equal(37, all.Max(m => m.Version));
+        Assert.Equal(38, all.Max(m => m.Version));
     }
 
     [Fact]

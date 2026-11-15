@@ -1541,6 +1541,80 @@ END;
 "
             });
 
+            // Migration 38 (UC017-F47): delete detection across the containers of one split read. A container read is
+            // a slice of the scope, so no single partition may tombstone; the group of one plan (IdentityCenter's
+            // ParentJobId) is. Each partition records the ids it read per step and how it ended; the last one to finish
+            // claims the group's finalization row (primary key = exactly once) and diffs against the step's baseline,
+            // the ids of the last complete group of the same plan. Written only by PartitionGroupRepository.
+            migrations.Add(new SchemaMigration
+            {
+                Version = 38,
+                Name = "Partition group delete detection",
+                Description = "Adds PartitionSeenIds, PartitionRunResults, PartitionGroupFinalizations and PartitionStepBaselines so the containers of one split read are delete-detected together, once, against the last complete read of the same plan.",
+                SqlScript = @"
+IF OBJECT_ID('dbo.PartitionSeenIds','U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[PartitionSeenIds] (
+        [ProjectId]  UNIQUEIDENTIFIER NOT NULL,
+        [GroupId]    UNIQUEIDENTIFIER NOT NULL,
+        [StepId]     UNIQUEIDENTIFIER NOT NULL,
+        [ExternalId] NVARCHAR(400)    NOT NULL,
+        [RecordedAt] DATETIME2        NOT NULL CONSTRAINT [DF_PartitionSeenIds_RecordedAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_PartitionSeenIds] PRIMARY KEY CLUSTERED ([GroupId], [StepId], [ExternalId])
+    );
+    CREATE NONCLUSTERED INDEX [IX_PartitionSeenIds_Project_Step] ON [dbo].[PartitionSeenIds]([ProjectId], [StepId], [GroupId]);
+END;
+
+GO
+
+IF OBJECT_ID('dbo.PartitionRunResults','U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[PartitionRunResults] (
+        [GroupId]              UNIQUEIDENTIFIER NOT NULL,
+        [PartitionIndex]       INT              NOT NULL,
+        [PartitionCount]       INT              NOT NULL,
+        [RunId]                UNIQUEIDENTIFIER NOT NULL,
+        [ProjectId]            UNIQUEIDENTIFIER NOT NULL,
+        [Succeeded]            BIT              NOT NULL,
+        [AllStepsCompleteRead] BIT              NOT NULL,
+        [ContainerKey]         NVARCHAR(2000)   NOT NULL,
+        [ArmedStepIds]         NVARCHAR(MAX)    NULL,
+        [RecordedAt]           DATETIME2        NOT NULL CONSTRAINT [DF_PartitionRunResults_RecordedAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_PartitionRunResults] PRIMARY KEY CLUSTERED ([GroupId], [PartitionIndex], [RunId])
+    );
+END;
+
+GO
+
+IF OBJECT_ID('dbo.PartitionGroupFinalizations','U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[PartitionGroupFinalizations] (
+        [GroupId]         UNIQUEIDENTIFIER NOT NULL,
+        [ProjectId]       UNIQUEIDENTIFIER NOT NULL,
+        [PlanFingerprint] NVARCHAR(64)     NOT NULL,
+        [FinalizedAt]     DATETIME2        NOT NULL CONSTRAINT [DF_PartitionGroupFinalizations_FinalizedAt] DEFAULT SYSUTCDATETIME(),
+        [Outcome]         NVARCHAR(40)     NOT NULL,
+        [DetailJson]      NVARCHAR(MAX)    NULL,
+        CONSTRAINT [PK_PartitionGroupFinalizations] PRIMARY KEY CLUSTERED ([GroupId])
+    );
+END;
+
+GO
+
+IF OBJECT_ID('dbo.PartitionStepBaselines','U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[PartitionStepBaselines] (
+        [ProjectId]       UNIQUEIDENTIFIER NOT NULL,
+        [StepId]          UNIQUEIDENTIFIER NOT NULL,
+        [GroupId]         UNIQUEIDENTIFIER NOT NULL,
+        [PlanFingerprint] NVARCHAR(64)     NOT NULL,
+        [UpdatedAt]       DATETIME2        NOT NULL CONSTRAINT [DF_PartitionStepBaselines_UpdatedAt] DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT [PK_PartitionStepBaselines] PRIMARY KEY CLUSTERED ([ProjectId], [StepId])
+    );
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }
