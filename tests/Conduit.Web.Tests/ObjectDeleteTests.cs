@@ -80,6 +80,9 @@ public class ObjectDeleteTests
     public void A_container_with_children_is_refused_without_the_subtree()
     {
         Assert.Equal("it has 3 children; delete it with everything under it, or empty it first.", Refusal(Facts(OuNode(), 3)));
+        // A container past one page of children reads "more than 500", never a wrong exact count (2026-11-16).
+        Assert.Equal("it has more than 500 children; delete it with everything under it, or empty it first.", Refusal(Facts(OuNode(), 501)));
+        Assert.Equal("it has 1 child; delete it with everything under it, or empty it first.", Refusal(Facts(OuNode(), 1)));
         Assert.Contains("has 1 child;", Refusal(Facts(OuNode(), 1)));
     }
 

@@ -113,7 +113,7 @@ public static class AdObjectDeletePlan
         if (facts.ChildCount == 0)
             return (new AdDeletePlan(target, new[] { target }), null);
         if (!includeSubtree)
-            return (null, string.Concat("it has ", facts.ChildCount.ToString(), facts.ChildCount == 1 ? " child" : " children",
+            return (null, string.Concat("it has ", AdObjectDeletion.ChildrenText(facts.ChildCount),
                 "; delete it with everything under it, or empty it first."));
 
         if (facts.Subtree is null)
@@ -268,6 +268,8 @@ public static class AdObjectDeletePlan
 public static class AdObjectDeletion
 {
     private const int PageSize = 500;
+    /// <summary>Children counted exactly up to this; past it the refusal says "more than".</summary>
+    internal const int ChildCountCap = PageSize;
     internal static readonly string[] NodeAttributes = { "objectGUID", "distinguishedName", "objectClass", "isCriticalSystemObject", "adminCount", "userAccountControl" };
 
     /// <summary>Null when the GUID resolves to nothing. Throws when the directory cannot be read, so the caller refuses.</summary>
@@ -290,7 +292,9 @@ public static class AdObjectDeletion
                 if (!string.IsNullOrWhiteSpace(nc) && !contexts.Contains(nc, StringComparer.OrdinalIgnoreCase)) contexts.Add(nc);
         }
 
-        var children = Search(conn, target.DistinguishedName, SearchScope.OneLevel, new[] { "1.1" }, 1, ct).Count;
+        // One past a page: a container with more children than one page reads "more than 500", never a wrong exact number
+        // (a limit of 1 still read a whole first page and reported "500 children" for any larger container).
+        var children = Search(conn, target.DistinguishedName, SearchScope.OneLevel, new[] { "1.1" }, ChildCountCap + 1, ct).Count;
         IReadOnlyList<AdDeleteNode>? subtree = null;
         if (includeSubtree && children > 0)
         {
@@ -301,6 +305,11 @@ public static class AdObjectDeletion
         }
         return new AdDeleteFacts(target, contexts, configNc, schemaNc, children, subtree);
     }
+
+    /// <summary>"1 child", "37 children", or past the count cap "more than 500 children".</summary>
+    internal static string ChildrenText(int count) =>
+        count > AdObjectDeletion.ChildCountCap ? string.Concat("more than ", AdObjectDeletion.ChildCountCap.ToString("N0"), " children")
+        : count == 1 ? "1 child" : string.Concat(count.ToString("N0"), " children");
 
     internal static AdDeleteNode? ReadNode(LdapConnection conn, Guid objectGuid)
     {
