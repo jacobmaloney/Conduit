@@ -42,6 +42,8 @@ public sealed class AdAgentWriteExecutor
     private const string OpEnable = "Enable";
     private const string OpDisable = "Disable";
     private const string OpSetManager = "SetManager";
+    /// <summary>GROUP-OWNER-01: set or clear the owner (managedBy) of an existing group. Its own operation, like SetManager for a user.</summary>
+    private const string OpSetGroupOwner = "SetGroupOwner";
     private const string OpAddGroupMember = "AddGroupMember";
     private const string OpRemoveGroupMember = "RemoveGroupMember";
     private const string OpMoveObject = "MoveObject";
@@ -53,7 +55,7 @@ public sealed class AdAgentWriteExecutor
 
     private static readonly HashSet<string> AllowedOperations = new(StringComparer.Ordinal)
     {
-        OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject,
+        OpSetAttributes, OpEnable, OpDisable, OpSetManager, OpSetGroupOwner, OpAddGroupMember, OpRemoveGroupMember, OpMoveObject,
         OpResetPasswordScramble, OpResetPasswordSealed, OpDeleteObject, OpClearPasswordNeverExpires,
         // EXCHANGE-RECIPIENTS-01: Microsoft's recipient cmdlets, never hand-set msExch* values.
         ExchangeRecipientOperations.EnableRemoteMailbox, ExchangeRecipientOperations.ConvertRemoteMailboxToShared,
@@ -199,6 +201,7 @@ public sealed class AdAgentWriteExecutor
             {
                 OpSetAttributes => await DoSetAttributesAsync(sink, target, p, ct),
                 OpSetManager => await DoSetManagerAsync(sink, target, p, ct),
+                OpSetGroupOwner => await DoSetGroupOwnerAsync(sink, target, p, ct),
                 OpEnable => await DoEnableAsync(sink, target, p.ObjectGuid!, enabled: true, ct),
                 OpDisable => await DoEnableAsync(sink, target, p.ObjectGuid!, enabled: false, ct),
                 OpAddGroupMember => await DoMembershipAsync(sink, target, p, add: true, ct),
@@ -553,6 +556,70 @@ public sealed class AdAgentWriteExecutor
             : $"SetManager updated manager on {SafeDn(target)}.");
     }
 
+    // ── SetGroupOwner (GROUP-OWNER-01) ───────────────────────────────────────
+    // The owner of an EXISTING group: the directory's managedBy, which a create could already set and
+    // nothing could change afterwards. Shaped like SetManager, with three differences that matter:
+    //   - the owner arrives as an objectGuid and is resolved HERE, against the directory, the way a
+    //     group member is. A distinguished name sent by the caller could be stale or could name anything;
+    //   - a privileged group is refused, by the same rule membership changes use. Who owns Domain Admins
+    //     is not a console edit;
+    //   - clearing is explicit (clearOwner: true). A payload that simply omits the owner is refused, so a
+    //     caller's bug cannot blank an owner.
+    private async Task<(bool, string)> DoSetGroupOwnerAsync(
+        ActiveDirectorySink sink, AdResolvedObject target, ApplyObjectWritePayload p, CancellationToken ct)
+    {
+        // (5) the GUID-resolved target MUST actually be a group.
+        if (!target.IsClass("group"))
+            return (false, "ApplyObjectWrite: SetGroupOwner target is not a group object.");
+
+        // (7) privileged-group guard, the membership rule.
+        if (IsPrivilegedGroup(target, out var why))
+            return (false, $"ApplyObjectWrite: refusing to change the owner of a privileged group ({why}).");
+
+        // (3) this operation writes managedBy and nothing else; it takes no attribute bag.
+        if (p.Attributes is { Count: > 0 })
+            return (false, "ApplyObjectWrite: SetGroupOwner takes the owner as ownerObjectGuid and writes no other attribute.");
+
+        var clear = p.ClearOwner == true;
+        var hasOwner = !string.IsNullOrWhiteSpace(p.OwnerObjectGuid);
+        if (clear == hasOwner)
+            return (false, clear
+                ? "ApplyObjectWrite: SetGroupOwner names an owner and asks to clear it; send one or the other."
+                : "ApplyObjectWrite: SetGroupOwner names no owner. Send ownerObjectGuid, or clearOwner to remove the owner.");
+
+        string? ownerDn = null;
+        if (hasOwner)
+        {
+            if (!Guid.TryParse(p.OwnerObjectGuid, out var ownerGuid) || ownerGuid == Guid.Empty)
+                return (false, "ApplyObjectWrite: ownerObjectGuid is not a GUID.");
+
+            // Re-resolved by GUID like the target. The owner must be a user account: not a group, and
+            // not a computer (whose class chain also carries "user").
+            var owner = await sink.ResolveByGuidAsync(p.OwnerObjectGuid!, ct);
+            if (owner is null)
+                return (false, $"ApplyObjectWrite: ownerObjectGuid {p.OwnerObjectGuid} resolved to no AD object.");
+            if (!owner.IsClass("user") || owner.IsClass("computer"))
+                return (false, "ApplyObjectWrite: SetGroupOwner refused: the owner is not a user account.");
+            if (string.IsNullOrWhiteSpace(owner.DistinguishedName))
+                return (false, "ApplyObjectWrite: SetGroupOwner refused: the owner has no distinguished name.");
+            ownerDn = owner.DistinguishedName;
+        }
+
+        // What the group's owner was before this write, so the caller can record it and put it back.
+        // Null when the read failed: the write still happens, the prior value is just not reported.
+        var prior = await sink.ReadAttributesByGuidAsync(p.ObjectGuid!, new[] { "managedBy" }, ct);
+
+        // (9) Replace on the GUID-resolved group; a null value clears. Never the dnHint.
+        var r = await sink.SetAttributeByGuidAsync(p.ObjectGuid!, "managedBy", ownerDn, ct);
+        if (r.Outcome == SinkWriteOutcome.Failed)
+            return (false, $"ApplyObjectWrite: SetGroupOwner failed: {r.ErrorMessage}");
+
+        LastResultJson = JsonSerializer.Serialize(new { priorValues = prior, ownerDn });
+        return (true, ownerDn is null
+            ? $"SetGroupOwner cleared the owner of {SafeDn(target)}."
+            : $"SetGroupOwner set the owner of {SafeDn(target)}.");
+    }
+
     // ── Enable / Disable ─────────────────────────────────────────────────────
     private async Task<(bool, string)> DoEnableAsync(
         ActiveDirectorySink sink, AdResolvedObject target, string objectGuid, bool enabled, CancellationToken ct)
@@ -680,6 +747,10 @@ public sealed class AdAgentWriteExecutor
         [JsonPropertyName("recipientKeyFp")] public string? RecipientKeyFp { get; set; }
         [JsonPropertyName("attributes")] public Dictionary<string, JsonElement?>? Attributes { get; set; }
         [JsonPropertyName("memberObjectGuid")] public string? MemberObjectGuid { get; set; }
+        // GROUP-OWNER-01: the user who becomes the group's owner, by objectGuid; resolved against the directory, never a DN.
+        [JsonPropertyName("ownerObjectGuid")] public string? OwnerObjectGuid { get; set; }
+        // GROUP-OWNER-01: remove the owner. Explicit, so an omitted owner is a refusal and not a clear.
+        [JsonPropertyName("clearOwner")] public bool? ClearOwner { get; set; }
         // EXCHANGE-RECIPIENTS-01: the recipient inputs, validated by ExchangeRecipientPlan before any cmdlet runs.
         [JsonPropertyName("alias")] public string? Alias { get; set; }
         [JsonPropertyName("primarySmtpAddress")] public string? PrimarySmtpAddress { get; set; }
