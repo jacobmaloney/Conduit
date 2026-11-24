@@ -1842,9 +1842,27 @@ public sealed class SyncProjectOrchestrator
 
             try
             {
-                var edges = await memSink.EmitGroupMembershipsAsync(icUpsertSource, groupMembershipBuffer, ct);
+                // A project that reads some classes from chosen containers only (accounts from two OUs, groups
+                // from the whole domain) has groups naming members it never reads. Those pairs are left out and
+                // counted, not failed; with nothing narrowed, a member the sink does not hold stays a failure.
+                int edges;
+                var membersNotHeld = 0;
+                if (memSink is IScopeAwareGroupMembershipEmittingSink scopeAwareSink)
+                {
+                    var otherNarrowedScopes = step is null ? 0 : await _workflowRepo.CountOtherNarrowedScopesAsync(project.Id, step.Id);
+                    var outcome = await scopeAwareSink.EmitGroupMembershipsAsync(
+                        icUpsertSource, groupMembershipBuffer, MemberScopeRule.MembersOutsideReadScopeExpected(otherNarrowedScopes), ct);
+                    edges = outcome.EdgesPersisted;
+                    membersNotHeld = outcome.MembersNotHeld;
+                }
+                else
+                {
+                    edges = await memSink.EmitGroupMembershipsAsync(icUpsertSource, groupMembershipBuffer, ct);
+                }
                 await Log(run, "Info",
                     $"    Group memberships: pushed {edges} edge(s) across {groupMembershipBuffer.Count} group(s).");
+                if (MemberScopeRule.LeftOutLine(membersNotHeld) is string leftOut)
+                    await Log(run, "Warning", leftOut);
                 if (wellKnownPrincipalEdges > 0)
                     await Log(run, "Info",
                         $"    Group memberships: left out {wellKnownPrincipalEdges} edge(s) to well-known security principals (e.g. Authenticated Users). They are built-in Windows identities, not accounts, so there is no object for them to resolve to.");

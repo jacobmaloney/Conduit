@@ -111,6 +111,50 @@ public class IdentityCenterMembershipIntegrityTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sink.EmitGroupMembershipsAsync("fixture", Edges(1), default));
     }
 
+    /// <summary>
+    /// A project that reads accounts from chosen containers and groups from more of the directory has groups naming
+    /// members it never reads. Told so, the push leaves those pairs out, counts them and succeeds; not told, the same
+    /// answer stays an incomplete effect (Jacob's first Granite read, 2026-11-24: 40,022 such pairs, one failed step).
+    /// </summary>
+    [Fact]
+    public async Task Members_outside_the_read_scope_are_counted_not_failed_only_when_the_project_is_narrowed()
+    {
+        const string body = "{\"edgesPersisted\":2,\"membersResolved\":2,\"membersUnresolved\":3,\"groupsResolved\":1,\"groupsUnresolved\":0}";
+        HttpResponseMessage Answer(int _) => new(HttpStatusCode.OK) { Content = new StringContent(body) };
+
+        var outcome = await Sink(new SequenceHandler(Answer)).EmitGroupMembershipsAsync("fixture", Edges(5), membersOutsideReadScopeExpected: true, default);
+        Assert.Equal(2, outcome.EdgesPersisted);
+        Assert.Equal(3, outcome.MembersNotHeld);
+
+        var strict = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Sink(new SequenceHandler(Answer)).EmitGroupMembershipsAsync("fixture", Edges(5), membersOutsideReadScopeExpected: false, default));
+        Assert.Contains("membersUnresolved=3", strict.Message);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Sink(new SequenceHandler(Answer)).EmitGroupMembershipsAsync("fixture", Edges(5), default));
+    }
+
+    [Fact]
+    public async Task A_group_the_sink_does_not_hold_and_a_failed_chunk_stay_failures_in_a_narrowed_project()
+    {
+        const string noGroup = "{\"edgesPersisted\":0,\"membersResolved\":0,\"membersUnresolved\":0,\"groupsResolved\":0,\"groupsUnresolved\":1}";
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Sink(new SequenceHandler(_ => new(HttpStatusCode.OK) { Content = new StringContent(noGroup) }))
+                .EmitGroupMembershipsAsync("fixture", Edges(1), membersOutsideReadScopeExpected: true, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Sink(new SequenceHandler(_ => new(HttpStatusCode.InternalServerError)))
+                .EmitGroupMembershipsAsync("fixture", Edges(1), membersOutsideReadScopeExpected: true, default));
+    }
+
+    [Fact]
+    public void The_rule_and_its_run_log_line()
+    {
+        Assert.False(MemberScopeRule.MembersOutsideReadScopeExpected(0));
+        Assert.True(MemberScopeRule.MembersOutsideReadScopeExpected(2));
+        Assert.Null(MemberScopeRule.LeftOutLine(0));
+        var line = MemberScopeRule.LeftOutLine(40022);
+        Assert.Contains("left out 40022 membership(s)", line);
+        Assert.Contains("not a failure", line);
+    }
+
     private static HttpResponseMessage Ok(int count) => new(HttpStatusCode.OK)
     {
         Content = new StringContent($"{{\"edgesPersisted\":{count},\"membersResolved\":{count},\"membersUnresolved\":0,\"groupsResolved\":1,\"groupsUnresolved\":0}}")

@@ -259,6 +259,20 @@ public class WorkflowRepository : BaseRepository
             "SELECT TOP 1 * FROM SyncProjectScopes WHERE WorkflowStepId = @Id",
             new { Id = workflowStepId });
 
+    /// <summary>
+    /// How many OTHER scopes in the project (another step's, or the project's own) read a slice of the
+    /// directory: a base DN, included paths or blocked paths. More than zero means some classes are read
+    /// from chosen containers only, so a group can name members this project never reads.
+    /// </summary>
+    public Task<int> CountOtherNarrowedScopesAsync(Guid syncProjectId, Guid exceptWorkflowStepId) =>
+        ExecuteScalarAsync<int>(
+            @"SELECT COUNT(*) FROM SyncProjectScopes
+              WHERE SyncProjectId = @P AND (WorkflowStepId IS NULL OR WorkflowStepId <> @S)
+                AND (NULLIF(LTRIM(RTRIM(BaseDN)), '') IS NOT NULL
+                  OR NULLIF(LTRIM(RTRIM(IncludedBaseDNs)), '') IS NOT NULL
+                  OR NULLIF(LTRIM(RTRIM(ExcludedBaseDNs)), '') IS NOT NULL)",
+            new { P = syncProjectId, S = exceptWorkflowStepId });
+
     public async Task UpsertScopeForStepAsync(Guid syncProjectId, Guid workflowStepId, SyncProjectScope scope)
     {
         scope.SyncProjectId = syncProjectId;

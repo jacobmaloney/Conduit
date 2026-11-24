@@ -315,6 +315,13 @@
                                         }
                                     </div>
                                     <div class="autogen-tpl-card-count">@classes.Count class@(classes.Count == 1 ? "" : "es")</div>
+                                    @* The widest scope is the others together, and some classes sit in more than one, so the
+                                       counts do not add up (Jacob, 2026-11-24: "isn't core plus infrastructure 27 and why is
+                                       full only 24?"). Say so on the card. *@
+                                    @if (AutoGenSharedClassNote(mRef) is string sharedNote)
+                                    {
+                                        <div class="autogen-tpl-card-classes">@sharedNote</div>
+                                    }
                                 </div>
                             }
                         </div>
@@ -4913,6 +4920,16 @@
         }
     }
 
+    /// <summary>For the widest scope only: how many classes the narrower scopes share, when that makes the counts not add up.</summary>
+    private string? AutoGenSharedClassNote(Conduit.Sync.Templates.GenerationMode mode)
+    {
+        var modes = AvailableModes;
+        if (modes.Count < 3 || !EqualityComparer<Conduit.Sync.Templates.GenerationMode>.Default.Equals(mode, modes[modes.Count - 1])) return null;
+        var full = AutoGenConstrainedClassesForMode(mode).Count;
+        var others = modes.Take(modes.Count - 1).ToList();
+        return Conduit.Sync.Templates.ScopeCounts.SharedNote(others.Select(ModeLabel).ToList(), others.Select(m => AutoGenConstrainedClassesForMode(m).Count).ToList(), full);
+    }
+
     private static string ModeLabel(Conduit.Sync.Templates.GenerationMode mode) => mode switch
     {
         Conduit.Sync.Templates.GenerationMode.Core => "Core",
@@ -6702,6 +6719,7 @@
             // the modal preview + cards already filter through (ApplyIdentitiesConstraint).
             var identitiesOnly = AutoGenIcIdentitiesInvolved;
             var totalSteps = 0;
+            var totalWorkflows = 0;
             foreach (var g in generated)
             {
                 g.Project.IsEnabled = autoGenEnable;
@@ -6727,6 +6745,7 @@
                 foreach (var w in workflowsToPersist)
                 {
                     await WorkflowRepo.CreateAsync(w.Workflow);
+                    totalWorkflows++;
                     foreach (var st in w.Steps)
                     {
                         await WorkflowRepo.CreateStepAsync(st.Step);
@@ -6742,7 +6761,9 @@
 
             // Close the modal only AFTER the single successful persist.
             showAutoGenerateModal = false;
-            toastSuccess = $"Auto-generated 1 sync project with {totalSteps} per-class workflow(s) ({ModeLabel(autoGenMode)}) from {src.Name} to {sink.Name}.";
+            // Workflows and steps are counted apart: a class can need more than one step, and "13 per-class
+            // workflow(s)" after a review that promised 7 read as a different result.
+            toastSuccess = Conduit.Sync.Templates.ScopeCounts.GeneratedSummary(totalWorkflows, totalSteps, ModeLabel(autoGenMode), src.Name, sink.Name);
             await Reload();
         }
         catch (Exception ex)

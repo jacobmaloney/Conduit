@@ -591,6 +591,38 @@ public interface IGroupMembershipEmittingSink
         CancellationToken cancellationToken);
 }
 
+/// <summary>What a membership push did: the pairs the sink saved, and the pairs it left out because it does not hold the member.</summary>
+public sealed record GroupMembershipOutcome(int EdgesPersisted, int MembersNotHeld);
+
+/// <summary>
+/// A membership sink that can be told the project reads some classes from chosen containers only.
+/// Then a group naming a member outside them is expected, not a fault: the pairs are left out and
+/// counted, and the push succeeds. Without that, a member the sink does not hold stays a failure,
+/// because every member should have been read. (Jacob's first Granite read, 2026-11-24: accounts from
+/// two OUs, groups from the whole domain, 40,022 such pairs reported as one failed step on every run.)
+/// </summary>
+public interface IScopeAwareGroupMembershipEmittingSink : IGroupMembershipEmittingSink
+{
+    Task<GroupMembershipOutcome> EmitGroupMembershipsAsync(
+        string source,
+        IReadOnlyList<GroupMembership> memberships,
+        bool membersOutsideReadScopeExpected,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>The one place that decides whether members outside the read scope are expected.</summary>
+public static class MemberScopeRule
+{
+    /// <summary>True when another scope in the project reads only a slice of the directory.</summary>
+    public static bool MembersOutsideReadScopeExpected(int otherNarrowedScopes) => otherNarrowedScopes > 0;
+
+    /// <summary>The run-log line for pairs that were left out on purpose. Null when there were none.</summary>
+    public static string? LeftOutLine(int membersNotHeld) => membersNotHeld <= 0 ? null :
+        $"    Group memberships: left out {membersNotHeld} membership(s) whose member this project does not read. " +
+        "Some classes are read from chosen containers only, so this is expected and is not a failure. " +
+        "To include them, widen the scope of the step that reads those members.";
+}
+
 /// <summary>
 /// Outcome of <see cref="ITombstoneEmittingSink.EmitTombstonesAsync"/>. Carries the
 /// sink-reported counts plus the ids the orchestrator may safely prune from its

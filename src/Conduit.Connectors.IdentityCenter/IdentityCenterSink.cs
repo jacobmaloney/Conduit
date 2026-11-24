@@ -35,7 +35,7 @@ namespace Conduit.Connectors.IdentityCenter;
 /// write-back path back to the source directory. Stamping it here in Phase C is what
 /// makes that Phase D dispatch possible.
 /// </summary>
-public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink, IGroupMembershipEmittingSink
+public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink, IScopeAwareGroupMembershipEmittingSink
 {
     private readonly Guid _tenantId;
     private readonly IHttpClientFactory _httpFactory;
@@ -276,9 +276,21 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
     public async Task<int> EmitGroupMembershipsAsync(
         string source,
         IReadOnlyList<GroupMembership> memberships,
+        CancellationToken cancellationToken) =>
+        (await EmitGroupMembershipsAsync(source, memberships, membersOutsideReadScopeExpected: false, cancellationToken)).EdgesPersisted;
+
+    /// <summary>
+    /// The same push, told whether the project reads some classes from chosen containers only. When it does,
+    /// a member IC does not hold is left out and counted, not failed (see <see cref="MemberScopeRule"/>). A
+    /// chunk that failed and a group IC does not hold stay failures either way.
+    /// </summary>
+    public async Task<GroupMembershipOutcome> EmitGroupMembershipsAsync(
+        string source,
+        IReadOnlyList<GroupMembership> memberships,
+        bool membersOutsideReadScopeExpected,
         CancellationToken cancellationToken)
     {
-        if (memberships.Count == 0) return 0;
+        if (memberships.Count == 0) return new GroupMembershipOutcome(0, 0);
 
         IdentityCenterCredentials creds;
         HttpClient client;
@@ -295,7 +307,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
                 _logger.LogInformation(
                     "IC group-membership emission skipped: sink table=Identities has no membership endpoint (tenant={TenantId}, groups={Count}).",
                     _tenantId, memberships.Count);
-                return 0;
+                return new GroupMembershipOutcome(0, 0);
             }
 
             client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
@@ -424,11 +436,12 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             "IC group-membership emission complete (tenant={TenantId}, groups={Groups}, edgesPersisted={EdgesPersisted}, membersUnresolved={MembersUnresolved}, groupsUnresolved={GroupsUnresolved}).",
             _tenantId, pushedGroups, edgesPersistedTotal, membersUnresolvedTotal, groupsUnresolvedTotal);
 
-        if (failedChunks > 0 || membersUnresolvedTotal > 0 || groupsUnresolvedTotal > 0)
+        var membersThatShouldExist = membersOutsideReadScopeExpected ? 0 : membersUnresolvedTotal;
+        if (failedChunks > 0 || membersThatShouldExist > 0 || groupsUnresolvedTotal > 0)
             throw new InvalidOperationException(
                 $"IC group-membership emission incomplete: failedChunks={failedChunks}, membersUnresolved={membersUnresolvedTotal}, groupsUnresolved={groupsUnresolvedTotal}, edgesPersisted={edgesPersistedTotal}. The prior checkpoint must be retained for replay.");
 
-        return edgesPersistedTotal;
+        return new GroupMembershipOutcome(edgesPersistedTotal, membersUnresolvedTotal);
     }
 
     public async Task<ConnectorTestResult> TestConnectionAsync(CancellationToken cancellationToken)
