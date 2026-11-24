@@ -439,7 +439,7 @@ Invoke-RestMethod -Uri "@baseUrl@ScimPath()/Users" -Headers $headers -Method Pos
 
     private async Task CopyToClipboard(string text)
     {
-        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        await BrandClipboard.CopyAsync(JSRuntime, text);
     }
 
     [Inject]

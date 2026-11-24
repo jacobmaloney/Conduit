@@ -2276,7 +2276,7 @@
     {
         try
         {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", value);
+            if (!await BrandClipboard.CopyAsync(JS, value)) return;
             copiedKey = key;
             StateHasChanged();
             await Task.Delay(1200);

@@ -493,8 +493,7 @@
     {
         try
         {
-            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", $"Bearer {generatedToken}");
-            tokenCopied = true;
+            tokenCopied = await BrandClipboard.CopyAsync(JSRuntime, $"Bearer {generatedToken}");
         }
         catch
         {

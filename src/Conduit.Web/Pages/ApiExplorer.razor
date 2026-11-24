@@ -381,7 +381,7 @@ Content-Type: application/scim+json
     private async Task CopyToClipboard(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        await BrandClipboard.CopyAsync(JS, text);
     }
 
     public class TestResult

@@ -118,49 +118,32 @@
                         </div>
                     </div>
 
-                    <!-- IC Agent enrollment status -->
+                    <!-- The link to IdentityCenter: this Conduit's id, how to register it, and what the link reports -->
                     <div class="ic-card mb-3">
                         <div class="ic-card-hdr">
                             <i class="oi oi-rss" aria-hidden="true"></i>
-                            <span class="ic-card-hdr-title">IC Agent</span>
+                            <span class="ic-card-hdr-title">Link to IdentityCenter</span>
                         </div>
                         <div class="ic-card-body">
-                            <p class="mb-3 text-muted">
-                                Enrollment against IdentityCenter's agent command channel. Identity (name,
-                                location, agent id) is assigned server-side when an admin registers this
-                                agent in IdentityCenter and mints its per-agent API key; it is read-only here.
-                                The keys live in the IdentityCenter connection's credential
-                                (<a href="/connected-systems">Connected Systems</a>) — the optional
-                                Agent API Key field drives this channel; when it is blank the shared
-                                API key is used (legacy mode).
-                            </p>
+                            <BrandCopyValue Label="Instance ID" Value="@instanceId" Id="conduitInstanceId"
+                                            Help="IdentityCenter knows this Conduit by this id." />
 
-                            <div class="ic-field-grid p-0 mb-3">
-                                <div class="ic-field">
-                                    <span class="ic-field-label">Instance ID</span>
-                                    <span class="ic-field-value mono" id="conduitInstanceId">@instanceId</span>
-                                    <div>
-                                        <button type="button" class="ic-btn ic-btn-ghost ic-btn-sm" @onclick="CopyInstanceId">
-                                            <i class="oi oi-clipboard" aria-hidden="true"></i> @copyInstanceLabel
-                                        </button>
-                                    </div>
-                                    <div class="small text-muted mt-1">
-                                        Use this when enrolling this agent in IdentityCenter — paste it into the
-                                        <strong>Conduit instance ID</strong> field on IC's Agents page so the minted
-                                        key is bound to the same id this agent stamps on synced objects.
-                                    </div>
-                                </div>
-                                <div class="ic-field">
-                                    <span class="ic-field-label">Auto-enrollment</span>
-                                    <span class="ic-field-value">@Enrollment.StateDescription</span>
-                                </div>
-                            </div>
+                            <ol class="icb-plain-steps mt-3 mb-3">
+                                <li>In IdentityCenter, open <strong>Agents &amp; API Keys</strong>, choose <strong>Register the agent</strong> and paste the Instance ID. Keep the agent key it shows; it is shown once.</li>
+                                <li>Here, open <a href="/connected-systems">Connections</a> and add or edit the <strong>Identity Center</strong> connection: enter its API key and the agent key.</li>
+                                <li>In IdentityCenter, activate the agent. Until then it refuses every change this Conduit is asked to make.</li>
+                            </ol>
+
+                            @if (!Enrollment.StateDescription.StartsWith("Not configured", StringComparison.Ordinal))
+                            {
+                                <p class="mb-3">Automatic enrollment: @Enrollment.StateDescription</p>
+                            }
 
                             @if (icAgentEndpoints.Count == 0)
                             {
-                                <div class="small text-muted">
-                                    No IdentityCenter connection with an API key is configured, or the poller
-                                    has not completed its first cycle yet.
+                                <div class="icb-notice icb-notice-neutral mb-0" role="status">
+                                    <i class="oi oi-info" aria-hidden="true"></i>
+                                    <div class="icb-notice-body"><strong>Not linked yet.</strong> No Identity Center connection with an API key exists here, or it has not been checked yet.</div>
                                 </div>
                             }
                             else
@@ -473,7 +456,6 @@
     // This installation's durable provenance id. It is the value an admin pastes into
     // IdentityCenter's enrollment so the minted key's AgentId == this id.
     private string instanceId = ConduitInstanceIdentity.InstanceId.ToString();
-    private string copyInstanceLabel = "Copy";
 
     protected override async Task OnInitializedAsync()
     {
@@ -495,19 +477,6 @@
     {
         activeTab = key;
         Navigation.NavigateTo($"/configuration?tab={key}", forceLoad: false, replace: true);
-    }
-
-    private async Task CopyInstanceId()
-    {
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", instanceId);
-            copyInstanceLabel = "Copied!";
-        }
-        catch
-        {
-            copyInstanceLabel = "Copy failed";
-        }
     }
 
     private async Task OnToggleOpenAccess(bool enable)
@@ -613,7 +582,7 @@
 
         try
         {
-            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", json);
+            await BrandClipboard.CopyAsync(JSRuntime, json);
             exportTone = BrandNoticeTone.Success;
             exportMessage = "The configuration is on the clipboard as JSON. Secrets in it are masked.";
         }
