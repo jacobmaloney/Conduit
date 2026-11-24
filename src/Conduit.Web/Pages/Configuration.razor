@@ -128,11 +128,19 @@
                             <BrandCopyValue Label="Instance ID" Value="@instanceId" Id="conduitInstanceId"
                                             Help="IdentityCenter knows this Conduit by this id." />
 
-                            <ol class="icb-plain-steps mt-3 mb-3">
-                                <li>In IdentityCenter, open <strong>Agents &amp; API Keys</strong>, choose <strong>Register the agent</strong> and paste the Instance ID. Keep the agent key it shows; it is shown once.</li>
-                                <li>Here, open <a href="/connected-systems">Connections</a> and add or edit the <strong>Identity Center</strong> connection: enter its API key and the agent key.</li>
-                                <li>In IdentityCenter, activate the agent. Until then it refuses every change this Conduit is asked to make.</li>
-                            </ol>
+                            @* The how-to is for a Conduit that is not linked yet; once a heartbeat has been accepted the status below says more. *@
+                            @if (!icAgentEndpoints.Any(e => e.LastHeartbeatOk))
+                            {
+                                <ol class="icb-plain-steps mt-3 mb-3">
+                                    <li>In IdentityCenter, open <strong>Agents &amp; API Keys</strong>, choose <strong>Register the agent</strong> and paste the Instance ID. Keep the agent key it shows; it is shown once.</li>
+                                    <li>Here, open <a href="/connected-systems">Connections</a> and add or edit the <strong>Identity Center</strong> connection: enter its API key and the agent key.</li>
+                                    <li>In IdentityCenter, activate the agent. Until then it refuses every change this Conduit is asked to make.</li>
+                                </ol>
+                            }
+                            else
+                            {
+                                <div class="mb-3"></div>
+                            }
 
                             @if (!Enrollment.StateDescription.StartsWith("Not configured", StringComparison.Ordinal))
                             {

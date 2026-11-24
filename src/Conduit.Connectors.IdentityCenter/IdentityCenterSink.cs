@@ -449,7 +449,7 @@ public sealed class IdentityCenterSink : IConnectorSink, ITombstoneEmittingSink,
             var resp = await GetWithRetryAsync(client, probeUrl, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return new ConnectorTestResult { IsSuccessful = false, Message = IdentityCenterKeyShape.FailureMessage((int)resp.StatusCode, resp.ReasonPhrase, creds.BaseUrl) };
-            return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl} (table={creds.Table})." };
+            return new ConnectorTestResult { IsSuccessful = true, Message = $"IdentityCenter at {creds.BaseUrl} accepted the key." };
         }
         catch (Exception ex)
         {
