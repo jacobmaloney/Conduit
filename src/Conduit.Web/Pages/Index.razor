@@ -151,8 +151,11 @@
         try
         {
             var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
-            connectionCount = tenants.Count;
-            activeConnectionCount = tenants.Count(t => t.IsActive);
+            // The built-in Default connection is never listed on Connections, so it is not counted here
+            // either: the tile and the navigation count must agree (they read "2 active" beside "1").
+            var listed = tenants.Where(t => t.Id != Conduit.DataAccess.Repositories.TenantRepository.DefaultTenantId).ToList();
+            connectionCount = listed.Count;
+            activeConnectionCount = listed.Count(t => t.IsActive);
             tenantNames = tenants.ToDictionary(t => t.Id, t => t.Name);
         }
         catch { connectionCount = 0; }

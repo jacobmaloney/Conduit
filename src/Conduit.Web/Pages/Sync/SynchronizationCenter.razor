@@ -144,7 +144,8 @@
         try
         {
             var tenants = await TenantRepo.GetAllAsync(includeInactive: true);
-            connectionCount = tenants.Count.ToString("N0");
+            // Counts what the Connections page lists: the built-in Default connection is never shown there.
+            connectionCount = tenants.Count(t => t.Id != Conduit.DataAccess.Repositories.TenantRepository.DefaultTenantId).ToString("N0");
         }
         catch { connectionCount = "—"; }
 
