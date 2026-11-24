@@ -127,13 +127,16 @@ public sealed class IdentityCenterSource : IConnectorSource
             var creds = await IdentityCenterCredentialReader.ReadAsync(_protector, _tenantId, CredentialSide.Source);
             if (creds is null)
                 return new ConnectorTestResult { IsSuccessful = false, Message = "No 'identitycenter' credential stored." };
+            // Same two checks as the sink's test: refuse text that cannot be a key, and say what a refusal means.
+            if (IdentityCenterKeyShape.Problem(creds.ApiKey) is string shapeProblem)
+                return new ConnectorTestResult { IsSuccessful = false, Message = shapeProblem };
             var client = IdentityCenterCredentialReader.BuildClient(_httpFactory, creds);
             var probeUrl = creds.Table == IcTable.Identities
                 ? $"{creds.BaseUrl}/api/identities/query?keyField=employeeId&page=1&pageSize=1"
                 : $"{creds.BaseUrl}/api/objects/query?objectClass=user&page=1&pageSize=1";
             var resp = await client.GetAsync(probeUrl, cancellationToken);
             if (!resp.IsSuccessStatusCode)
-                return new ConnectorTestResult { IsSuccessful = false, Message = $"HTTP {(int)resp.StatusCode}: {resp.ReasonPhrase}" };
+                return new ConnectorTestResult { IsSuccessful = false, Message = IdentityCenterKeyShape.FailureMessage((int)resp.StatusCode, resp.ReasonPhrase, creds.BaseUrl) };
             return new ConnectorTestResult { IsSuccessful = true, Message = $"Connected to {creds.BaseUrl} (table={creds.Table})." };
         }
         catch (Exception ex)
