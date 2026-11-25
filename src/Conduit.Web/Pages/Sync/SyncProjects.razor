@@ -31,6 +31,7 @@
 @inject Conduit.Sync.Templates.ISyncProjectGenerator ProjectGenerator
 @inject Conduit.Connectors.IdentityCenter.IdentityCenterTagFetcher IcTagFetcher
 @inject Conduit.Web.Services.FileToPeopleMapping PeopleMapping
+@inject Conduit.Web.Services.SourceSampleReader SampleReader
 
 @*
     Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjects.razor —
@@ -2014,7 +2015,7 @@
                                      AttributePlaceholder="Target, e.g. userName" ExpressionPlaceholder="{sAMAccountName} | trim | lower"
                                      AttributeSuggestions="@MappingTargetSuggestions(mmStepId)" TokenSuggestions="@MappingSourceSuggestions(mmStepId)"
                                      BuilderFields="@MappingBuilderFields()" BuilderTargetValues="@MappingTargetValues"
-                                     Preview="@MappingPreview()" PreviewSubject="@(MappingPreview() is null ? null : "the file's first row")"
+                                     Preview="@MappingPreview()" PreviewSubject="@(MappingPreview() is null ? null : MappingSampleSubject)"
                                      EmptyPreviewText="(empty for this row)"
                                      ExpressionProblem="Conduit.Mapping.MappingRowExpression.Problem"
                                      ShowRequired="true" RequiredHeading="Always write"
@@ -3497,6 +3498,7 @@
         mappingModalStepId = stepId;
         await EnsureStepMappingsLoadedAsync(stepId);
         await LoadPeopleProposalAsync();   // a file of people: suggestions come from the file and the target
+        await LoadMappingSamplesAsync(stepId);   // any other source: a handful of real records for the builder and the preview
     }
 
     private void CloseMappingModal() => mappingModalStepId = null;
@@ -4259,24 +4261,54 @@
         return peopleProposalLoaded;
     }
 
-    /// <summary>The file's columns with a sample value each, for the builder; null leaves the editor to offer the suggested tokens.</summary>
-    private IReadOnlyList<BrandValueField>? MappingBuilderFields() =>
-        CurrentPeopleProposal() is { SampleRows.Count: > 0 } people ? people.Fields : null;
+    // A few real records for the step whose mappings are open: the file's first rows for a file of people, otherwise
+    // a handful read through the source's own connector with the step's scope.
+    private Guid? mappingSamplesFor;
+    private IReadOnlyList<IReadOnlyDictionary<string, string?>> mappingSamples = Array.Empty<IReadOnlyDictionary<string, string?>>();
+
+    private IReadOnlyList<IReadOnlyDictionary<string, string?>> CurrentSamples() =>
+        CurrentPeopleProposal() is { SampleRows.Count: > 0 } people ? people.SampleRows
+        : mappingSamplesFor == mappingModalStepId ? mappingSamples : Array.Empty<IReadOnlyDictionary<string, string?>>();
+
+    private string MappingSampleSubject =>
+        CurrentPeopleProposal() is { SampleRows.Count: > 0 } ? "the file's first row" : "the first record read";
+
+    /// <summary>Reads a handful of records for the open step, unless the file of people already supplied them.</summary>
+    private async Task LoadMappingSamplesAsync(Guid stepId)
+    {
+        if (CurrentPeopleProposal() is { SampleRows.Count: > 0 } || mappingSamplesFor == stepId) return;
+        mappingSamplesFor = stepId;
+        mappingSamples = Array.Empty<IReadOnlyDictionary<string, string?>>();
+        var step = StepById(stepId);
+        if (step is null || !tenantById.TryGetValue(form.SourceTenantId, out var source)) return;
+        var scope = stepScopes.TryGetValue(stepId, out var own) && own is not null ? own : scopeForm;
+        mappingSamples = await SampleReader.ReadAsync(source, step.ObjectClass, scope, CancellationToken.None);
+    }
+
+    /// <summary>The source's fields with a sample value each, for the builder; null leaves the editor to offer the suggested tokens.</summary>
+    private IReadOnlyList<BrandValueField>? MappingBuilderFields()
+    {
+        if (CurrentPeopleProposal() is { SampleRows.Count: > 0 } people) return people.Fields;
+        var samples = CurrentSamples();
+        if (samples.Count == 0 || mappingModalStepId is not Guid stepId) return null;
+        // The fields the step already maps come first, then everything else the records carry.
+        return Conduit.Web.Services.SourceSampleReader.Fields(GetStepMappings(stepId).Select(m => m.SourceAttribute), samples);
+    }
 
     /// <summary>The values IdentityCenter keeps a list of for a person field, offered when a column is translated into it.</summary>
     private IReadOnlyList<string>? MappingTargetValues(string target) =>
         CurrentPeopleProposal() is { } people && people.TargetValues.TryGetValue(target.Trim(), out var values) ? values : null;
 
-    /// <summary>What a row writes for the file's first row; null (no preview) when no row of the file has been read.</summary>
+    /// <summary>What a row writes for the first sample record; null (no preview) when no record has been read.</summary>
     private Func<string, BrandAttributeMapPreview>? MappingPreview()
     {
-        if (CurrentPeopleProposal() is not { SampleRows.Count: > 0 } people) return null;
-        var first = people.SampleRows[0];
+        var samples = CurrentSamples();
+        if (samples.Count == 0) return null;
+        var first = samples[0];
         return expression => Conduit.Mapping.MappingRowExpression.Problem(expression) is { } problem
             ? new BrandAttributeMapPreview(null, problem)
             : new BrandAttributeMapPreview(Conduit.Mapping.MappingRowExpression.Evaluate(expression, first), null);
     }
-
     /// <summary>The proposal's rows as new mapping rows, so two steps never share one row's identity.</summary>
     private static List<AttributeMapping> FreshPeopleMappings(Conduit.Web.Services.FileToPeopleMapping.Result proposal) =>
         proposal.Mappings.Select(m => new AttributeMapping

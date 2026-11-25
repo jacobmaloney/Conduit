@@ -486,6 +486,7 @@ builder.Services.AddScoped<Conduit.Web.Services.SourceBrowseService>();
 builder.Services.AddSingleton<Conduit.SourceBrowsing.ServerFileBrowser>();
 builder.Services.AddScoped<Conduit.Web.Services.ISourceMappingTargetService, Conduit.Web.Services.SourceMappingTargetService>();
 builder.Services.AddScoped<Conduit.Web.Services.FileToPeopleMapping>();
+builder.Services.AddScoped<Conduit.Web.Services.SourceSampleReader>();
 builder.Services.AddScoped<Conduit.Web.Services.ISourceCatalogStore, Conduit.Web.Services.SourceCatalogStore>();
 builder.Services.AddScoped<Conduit.Web.Services.SourceCatalogService>();
 builder.Services.AddScoped<Conduit.Connectors.IdentityCenter.IIdentityCenterSourceCatalogClient, Conduit.Connectors.IdentityCenter.IdentityCenterSourceCatalogClient>();

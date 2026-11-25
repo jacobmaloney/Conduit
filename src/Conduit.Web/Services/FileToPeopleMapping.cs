@@ -28,21 +28,12 @@ public sealed class FileToPeopleMapping(ConnectorRegistry connectors, IIdentityC
             new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The file's columns as the builder offers them: a sample value, and the distinct values seen when they are few.</summary>
-        public IReadOnlyList<IdentityCenter.Brand.Models.BrandValueField> Fields => Columns.Select(column =>
-        {
-            var values = SampleRows.Select(r => r.TryGetValue(column, out var v) ? v?.Trim() : null)
-                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!).ToList();
-            var distinct = values.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
-            return new IdentityCenter.Brand.Models.BrandValueField(column, null, values.FirstOrDefault(),
-                distinct.Count is > 0 and <= MaximumDistinctValues ? distinct : null);
-        }).ToList();
+        public IReadOnlyList<IdentityCenter.Brand.Models.BrandValueField> Fields => SourceSampleReader.Fields(Columns, SampleRows);
     }
 
     /// <summary>How many rows of the file are read for samples.</summary>
     public const int SampleRowCount = 500;
 
-    /// <summary>A column with more distinct values than this is not a list to translate from; none are offered.</summary>
-    public const int MaximumDistinctValues = 25;
 
     /// <summary>True for a CSV file source writing people (not accounts) into IdentityCenter.</summary>
     public static bool Applies(Tenant? source, Tenant? sink, string? sinkTable) =>
