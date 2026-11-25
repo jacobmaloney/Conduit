@@ -56,6 +56,13 @@ public sealed class CsvAdapter : IConnectorAdapter
         new CsvSource(tenantId, _protector, _loggerFactory.CreateLogger<CsvSource>());
 
     public IConnectorSink? CreateSink(Guid tenantId) => null;
+
+    /// <summary>
+    /// The column names in the saved file's header row, in file order. Read on this server, with the saved
+    /// delimiter and encoding. A file saved as having no header row has no names to offer.
+    /// </summary>
+    public Task<IReadOnlyList<string>> ReadHeaderAsync(Guid tenantId, CancellationToken ct) =>
+        CsvSource.ReadHeaderAsync(_protector, tenantId, ct);
 }
 
 internal sealed record CsvCredentials(string FilePath, string Delimiter, bool HasHeader, string Encoding, string? IdColumn);
@@ -219,6 +226,18 @@ public sealed class CsvSource : IConnectorSource
             _logger.LogWarning("CSV sample read failed ({ErrorType})", ex.GetType().Name);
             return new ConnectorTestResult { IsSuccessful = false, Message = ex is CsvReadException csv ? csv.Message : "CSV could not be read. Check file access and encoding." };
         }
+    }
+
+    internal static async Task<IReadOnlyList<string>> ReadHeaderAsync(CredentialProtector protector, Guid tenantId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var creds = await CsvCredentialReader.ReadAsync(protector, tenantId)
+            ?? throw new InvalidOperationException("This CSV connection has no saved file settings.");
+        if (!creds.HasHeader) return Array.Empty<string>();
+        if (!File.Exists(creds.FilePath)) throw new FileNotFoundException("The saved CSV file was not found on this server.");
+        using var input = new StreamReader(creds.FilePath, ResolveEncoding(creds.Encoding));
+        using var csv = CreateReader(input, creds, ct);
+        return (await csv.ReadHeaderAsync()).ToList();
     }
 
     private static CsvRecordReader CreateReader(TextReader input, CsvCredentials creds, CancellationToken ct) =>

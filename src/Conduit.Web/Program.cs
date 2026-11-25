@@ -485,6 +485,7 @@ builder.Services.AddScoped<Conduit.Web.Services.SourceBrowseService>();
 // CSV-FILE-PICKER-01: lists the job server's own disk for a Browse beside a file-path connector field.
 builder.Services.AddSingleton<Conduit.SourceBrowsing.ServerFileBrowser>();
 builder.Services.AddScoped<Conduit.Web.Services.ISourceMappingTargetService, Conduit.Web.Services.SourceMappingTargetService>();
+builder.Services.AddScoped<Conduit.Web.Services.FileToPeopleMapping>();
 builder.Services.AddScoped<Conduit.Web.Services.ISourceCatalogStore, Conduit.Web.Services.SourceCatalogStore>();
 builder.Services.AddScoped<Conduit.Web.Services.SourceCatalogService>();
 builder.Services.AddScoped<Conduit.Connectors.IdentityCenter.IIdentityCenterSourceCatalogClient, Conduit.Connectors.IdentityCenter.IdentityCenterSourceCatalogClient>();

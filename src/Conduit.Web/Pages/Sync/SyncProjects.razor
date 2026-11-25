@@ -30,6 +30,7 @@
 @inject Conduit.Sync.Templates.IAttributeMapService AttributeMapper
 @inject Conduit.Sync.Templates.ISyncProjectGenerator ProjectGenerator
 @inject Conduit.Connectors.IdentityCenter.IdentityCenterTagFetcher IcTagFetcher
+@inject Conduit.Web.Services.FileToPeopleMapping PeopleMapping
 
 @*
     Phase 1C port: shape matches IC's WebPortal/Pages/Admin/SyncProjects.razor —
@@ -3492,6 +3493,7 @@
     {
         mappingModalStepId = stepId;
         await EnsureStepMappingsLoadedAsync(stepId);
+        await LoadPeopleProposalAsync();   // a file of people: suggestions come from the file and the target
     }
 
     private void CloseMappingModal() => mappingModalStepId = null;
@@ -4201,16 +4203,68 @@
         ? "No rules of this step's own. Add mapping or Auto-Fill Mappings gives it its own map, starting here."
         : "No mappings configured. Auto-Fill Mappings or Add mapping to start.";
 
-    /// <summary>Target names the class template knows, for the attribute suggestions.</summary>
+    /// <summary>
+    /// Target names for the attribute suggestions. For a file of people these are the person fields
+    /// IdentityCenter accepts, read from it; otherwise the names the class template knows.
+    /// </summary>
     private IReadOnlyList<string> MappingTargetSuggestions(Guid stepId) =>
+        CurrentPeopleProposal() is { } people ? people.Targets :
         StepTemplateMappings(stepId).Select(m => m.SinkAttribute).Where(n => !string.IsNullOrWhiteSpace(n))
             .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
-    /// <summary>"{source}" tokens for the value suggestions: the template's sources and the ones already mapped.</summary>
+    /// <summary>
+    /// "{source}" tokens for the value suggestions. For a file of people these are the file's own columns
+    /// and the ones already mapped; otherwise the template's sources and the ones already mapped.
+    /// </summary>
     private IReadOnlyList<string> MappingSourceSuggestions(Guid stepId) =>
-        StepTemplateMappings(stepId).Concat(GetStepMappings(stepId)).Select(m => m.SourceAttribute)
+        (CurrentPeopleProposal() is { } people
+            ? people.Columns.Concat(GetStepMappings(stepId).Select(m => m.SourceAttribute))
+            : StepTemplateMappings(stepId).Concat(GetStepMappings(stepId)).Select(m => m.SourceAttribute))
             .Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).Select(n => "{" + n + "}").ToList();
+
+    // The proposal for the project open in the editor, kept per source and target so a second project does not see the first one's file.
+    private (Guid Source, Guid Sink) peopleProposalFor;
+    private Conduit.Web.Services.FileToPeopleMapping.Result? peopleProposalLoaded;
+
+    private Conduit.Web.Services.FileToPeopleMapping.Result? CurrentPeopleProposal() =>
+        peopleProposalFor == (form.SourceTenantId, form.SinkTenantId) ? peopleProposalLoaded : null;
+
+    /// <summary>
+    /// Reads the file's header and IdentityCenter's person fields for the project in the editor, when it is a
+    /// file of people. Null when it is not, or when either end could not be read (the editor then falls back
+    /// to the template's names for suggestions).
+    /// </summary>
+    private async Task<Conduit.Web.Services.FileToPeopleMapping.Result?> LoadPeopleProposalAsync(bool refresh = false)
+    {
+        tenantById.TryGetValue(form.SourceTenantId, out var source);
+        tenantById.TryGetValue(form.SinkTenantId, out var sink);
+        if (!Conduit.Web.Services.FileToPeopleMapping.Applies(source, sink, form.SinkTable))
+        {
+            peopleProposalLoaded = null;
+            return null;
+        }
+        var key = (form.SourceTenantId, form.SinkTenantId);
+        if (!refresh && peopleProposalFor == key && peopleProposalLoaded is not null) return peopleProposalLoaded;
+        peopleProposalFor = key;
+        try { peopleProposalLoaded = await PeopleMapping.ProposeAsync(source!, sink!, form.SinkCredentialName, CancellationToken.None); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("Reading the file header or the target's person fields failed ({ErrorType})", ex.GetType().Name);
+            peopleProposalLoaded = null;
+        }
+        return peopleProposalLoaded;
+    }
+
+    /// <summary>The proposal's rows as new mapping rows, so two steps never share one row's identity.</summary>
+    private static List<AttributeMapping> FreshPeopleMappings(Conduit.Web.Services.FileToPeopleMapping.Result proposal) =>
+        proposal.Mappings.Select(m => new AttributeMapping
+        {
+            SourceAttribute = m.SourceAttribute,
+            SinkAttribute = m.SinkAttribute,
+            IsRequired = m.IsRequired,
+            SortOrder = m.SortOrder,
+        }).ToList();
 
     private readonly Dictionary<(string, string, string), List<AttributeMapping>> templateMappingCache = new();
 
@@ -4254,6 +4308,17 @@
 
         var stepClass = string.IsNullOrWhiteSpace(step.ObjectClass) ? "User" : step.ObjectClass!;
         var suggested = AttributeMapper.BuildMappings(sourceType, sinkType, stepClass);
+        // A file of people: the mapped set is the file's own columns against the person fields the target accepts.
+        if (Conduit.Web.Services.FileToPeopleMapping.Applies(src, snk, form.SinkTable))
+        {
+            var proposal = await LoadPeopleProposalAsync(refresh: true);
+            if (proposal is null)
+            {
+                formError = "The file's header or IdentityCenter's field list could not be read, so there is nothing to map from. Test both connections, then try again.";
+                return;
+            }
+            suggested = FreshPeopleMappings(proposal);
+        }
         if (suggested.Count == 0)
         {
             formError = string.Concat("No attribute template for ", sourceType, " ", stepClass,
@@ -6702,6 +6767,28 @@
                 return;
             }
 
+            // A file of people is mapped from the file's own header and the person fields IdentityCenter accepts,
+            // not from the class template's assumed column names. If either end cannot be read the template
+            // stands and the result line says so.
+            Conduit.Web.Services.FileToPeopleMapping.Result? peopleProposal = null;
+            var peopleProposalNote = string.Empty;
+            if (Conduit.Web.Services.FileToPeopleMapping.Applies(src, sink, AutoGenSinkIsIdentityCenter ? autoGenSinkTable : null))
+            {
+                try { peopleProposal = await PeopleMapping.ProposeAsync(src, sink, null, CancellationToken.None); }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning("Proposing a mapping from the file header failed ({ErrorType})", ex.GetType().Name);
+                    peopleProposalNote = " The file's header or IdentityCenter's field list could not be read, so the mappings are the standard set: check them against your file.";
+                }
+                if (peopleProposal is { Mappings.Count: 0 })
+                {
+                    peopleProposal = null;
+                    peopleProposalNote = " None of the file's columns matched a person field, so the mappings are the standard set: check them against your file.";
+                }
+                if (peopleProposal is not null)
+                    peopleProposalNote = " " + Conduit.Web.Services.FileToPeopleMapping.Summary(peopleProposal);
+            }
+
             // V22: stamp the per-endpoint IC table onto each generated project. Only
             // when that side is an IdentityCenter connector; otherwise leave null so
             // the column stays meaningless for non-IC connectors.
@@ -6750,9 +6837,13 @@
                     {
                         await WorkflowRepo.CreateStepAsync(st.Step);
                         await WorkflowRepo.UpsertScopeForStepAsync(g.Project.Id, st.Step.Id, st.Scope);
-                        if (st.Mappings.Count > 0)
+                        // Only a step that maps attributes gets the proposal; a lookup step keeps what it has.
+                        var stepMappingsToSave = peopleProposal is not null && st.Mappings.Count > 0
+                            ? FreshPeopleMappings(peopleProposal)
+                            : st.Mappings;
+                        if (stepMappingsToSave.Count > 0)
                         {
-                            await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, st.Mappings);
+                            await WorkflowRepo.ReplaceMappingsForStepAsync(g.Project.Id, st.Step.Id, stepMappingsToSave);
                         }
                         totalSteps++;
                     }
@@ -6763,7 +6854,7 @@
             showAutoGenerateModal = false;
             // Workflows and steps are counted apart: a class can need more than one step, and "13 per-class
             // workflow(s)" after a review that promised 7 read as a different result.
-            toastSuccess = Conduit.Sync.Templates.ScopeCounts.GeneratedSummary(totalWorkflows, totalSteps, ModeLabel(autoGenMode), src.Name, sink.Name);
+            toastSuccess = Conduit.Sync.Templates.ScopeCounts.GeneratedSummary(totalWorkflows, totalSteps, ModeLabel(autoGenMode), src.Name, sink.Name) + peopleProposalNote;
             await Reload();
         }
         catch (Exception ex)
