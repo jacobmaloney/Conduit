@@ -3,6 +3,7 @@ using Conduit.Connectors.Csv;
 using Conduit.DataAccess;
 using Conduit.DataAccess.Repositories;
 using Conduit.Sync.Security;
+using Conduit.SourceBrowsing;
 using Conduit.Web.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -157,7 +158,7 @@ public sealed class ServerFileBrowserTests : IDisposable
         Assert.DoesNotContain("style=", adapter);
 
         var program = File.ReadAllText(RepoFile(Path.Combine("src", "Conduit.Web", "Program.cs")));
-        Assert.Contains("builder.Services.AddSingleton<Conduit.Web.Services.ServerFileBrowser>();", program);
+        Assert.Contains("builder.Services.AddSingleton<Conduit.SourceBrowsing.ServerFileBrowser>();", program);
     }
 
     private static string RepoFile(string relativePath, [CallerFilePath] string thisFile = "") =>

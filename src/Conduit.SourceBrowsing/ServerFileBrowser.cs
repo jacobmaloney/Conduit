@@ -1,4 +1,4 @@
-namespace Conduit.Web.Services;
+namespace Conduit.SourceBrowsing;
 
 /// <summary>One row of a <see cref="ServerFolderListing"/>: a drive, a folder or a file on the Conduit host.</summary>
 /// <param name="Name">What the row shows (a drive's root, a folder's or a file's name).</param>
@@ -19,7 +19,9 @@ public sealed record ServerFolderListing(string? Path, string? Parent, IReadOnly
 
 /// <summary>
 /// CSV-FILE-PICKER-01 (Jacob, 2026-11-04: "needed a way to browse the file system and choose the csv file").
-/// Lists the Conduit host's own disk for the Browse button beside a connector field that names a file the
+/// Lists the disk of the machine it runs on (the Conduit host, or the IdentityCenter server for an HR file)
+/// for the Browse button beside a field that names a file that machine reads; in the Conduit that is a
+/// connector field that names a file the
 /// job server reads (CredentialFieldSpec.BrowseServerFileExtensions). It returns names, paths, sizes and
 /// times, never file contents. Only absolute local paths are listed: relative paths, UNC shares, device
 /// paths (\\?\, \\.\) and any "." or ".." segment are refused before the disk is touched, so a typed path
@@ -52,7 +54,7 @@ public sealed class ServerFileBrowser
             return new ServerFolderListing(path, null, Array.Empty<ServerFileEntry>(), false, refusal);
 
         if (!Directory.Exists(folder))
-            return new ServerFolderListing(folder, ParentOf(folder), Array.Empty<ServerFileEntry>(), false, "That folder does not exist on the job server.");
+            return new ServerFolderListing(folder, ParentOf(folder), Array.Empty<ServerFileEntry>(), false, "That folder does not exist on this server.");
 
         var allowed = new HashSet<string>(extensions.Select(NormaliseExtension).Where(e => e.Length > 1), StringComparer.OrdinalIgnoreCase);
         var entries = new List<ServerFileEntry>();
@@ -77,7 +79,7 @@ public sealed class ServerFileBrowser
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
         {
-            return new ServerFolderListing(folder, ParentOf(folder), Array.Empty<ServerFileEntry>(), false, "No access: the job server's account cannot read this folder.");
+            return new ServerFolderListing(folder, ParentOf(folder), Array.Empty<ServerFileEntry>(), false, "No access: the account this server runs as cannot read this folder.");
         }
         return new ServerFolderListing(folder, ParentOf(folder), entries, capped, null);
     }
@@ -106,12 +108,12 @@ public sealed class ServerFileBrowser
         if (candidate.Length == 0) { refusal = "Type or pick a folder."; return false; }
         if (candidate.StartsWith(@"\\", StringComparison.Ordinal) || candidate.StartsWith("//", StringComparison.Ordinal))
         {
-            refusal = "Network and device paths are not browsed. Pick a folder on the job server's own drives.";
+            refusal = "Network and device paths are not browsed. Pick a folder on this server's own drives.";
             return false;
         }
         if (!System.IO.Path.IsPathFullyQualified(candidate))
         {
-            refusal = "Only full paths on the job server are browsed, such as C:\\HRFeeds.";
+            refusal = "Only full paths on this server are browsed, such as C:\\HRFeeds.";
             return false;
         }
         var segments = candidate.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);

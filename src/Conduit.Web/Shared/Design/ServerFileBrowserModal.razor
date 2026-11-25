@@ -14,7 +14,7 @@
 
 @using IdentityCenter.Brand.Models
 @using IdentityCenter.Brand.Components.Modals
-@inject Conduit.Web.Services.ServerFileBrowser Browser
+@inject Conduit.SourceBrowsing.ServerFileBrowser Browser
 @inject AuthenticationStateProvider AuthState
 
 <BrandFileBrowserDialog Visible="@isVisible"
@@ -48,7 +48,7 @@
         hint = string.Concat("This is the disk of the machine Conduit runs on (", Environment.MachineName, "), which reads the file. Showing folders and ",
             acceptedExtensions.Count == 0 ? "every file" : string.Join(", ", acceptedExtensions) + " files", ".");
         selectedPath = string.IsNullOrWhiteSpace(currentValue) ? null : currentValue.Trim();
-        startPath = Conduit.Web.Services.ServerFileBrowser.StartFolderFor(currentValue);
+        startPath = Conduit.SourceBrowsing.ServerFileBrowser.StartFolderFor(currentValue);
         isVisible = true;
         StateHasChanged();
         return Task.CompletedTask;
@@ -68,7 +68,7 @@
     }
 
     /// <summary>A file row's second line: its size and when it last changed (job server time).</summary>
-    private static string? Describe(Conduit.Web.Services.ServerFileEntry entry)
+    private static string? Describe(Conduit.SourceBrowsing.ServerFileEntry entry)
     {
         if (entry.NoAccess) return null;
         var size = entry.Size is long bytes
