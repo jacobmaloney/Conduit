@@ -82,6 +82,11 @@ public class SourceSampleReaderTests
         Assert.Contains("await LoadMappingSamplesAsync(stepId);", page);
         Assert.Contains("mappingSamples = await SampleReader.ReadAsync(source, step.ObjectClass, scope, CancellationToken.None);", page);
         Assert.Contains("var scope = stepScopes.TryGetValue(stepId, out var own) && own is not null ? own : scopeForm;", page);
+        // The step's scope is loaded before it is read: seen on the lab host, a step scoped to one OU previewed the
+        // built-in Guest account because its scope had not been loaded yet.
+        var load = page.Substring(page.IndexOf("private async Task LoadMappingSamplesAsync(Guid stepId)", StringComparison.Ordinal));
+        Assert.True(load.IndexOf("await EnsureStepScopeLoadedAsync(stepId);", StringComparison.Ordinal) is > 0 and var ensured
+            && ensured < load.IndexOf("var scope = stepScopes.TryGetValue(", StringComparison.Ordinal));
         Assert.Contains("PreviewSubject=\"@(MappingPreview() is null ? null : MappingSampleSubject)\"", page);
 
         var reader = File.ReadAllText(RepoFile(Path.Combine("src", "Conduit.Web", "Services", "SourceSampleReader.cs")));

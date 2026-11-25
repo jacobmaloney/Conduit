@@ -4281,6 +4281,9 @@
         mappingSamples = Array.Empty<IReadOnlyDictionary<string, string?>>();
         var step = StepById(stepId);
         if (step is null || !tenantById.TryGetValue(form.SourceTenantId, out var source)) return;
+        // The step's own scope is loaded on demand. Without this the sample was read with the project's scope and
+        // showed a record the step never reads (the built-in Guest account for a step scoped to one OU).
+        await EnsureStepScopeLoadedAsync(stepId);
         var scope = stepScopes.TryGetValue(stepId, out var own) && own is not null ? own : scopeForm;
         mappingSamples = await SampleReader.ReadAsync(source, step.ObjectClass, scope, CancellationToken.None);
     }
