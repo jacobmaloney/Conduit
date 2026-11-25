@@ -41,14 +41,26 @@ public class MappingRowExpressionTests
     [Theory]
     [InlineData("{sAMAcc", "Close the source attribute")]
     [InlineData("{ } | lower", "Name the source attribute")]
-    [InlineData("{mail} lower", "Separate the source attribute")]
     [InlineData("{givenName} | prefix:{sn}", "one source attribute")]
     [InlineData("{mail} | shout", "Unknown transformation")]
     [InlineData("{mail} | substring:x", "substring:start")]
     [InlineData("lower", "Start with the source attribute")]
-    [InlineData("Contractor", "Unknown transformation")]
     public void A_row_the_sync_cannot_run_is_named(string expression, string expected) =>
         Assert.Contains(expected, MappingRowExpression.Problem(expression));
+
+    /// <summary>
+    /// These two were refused while a row could only be one source and a chain of steps. Under the one value
+    /// grammar text is written as it is: a bare word is a fixed value (Jacob typed "Employee" into this box on
+    /// 2026-11-24 and was told "Unknown transformation"), and text after a field follows the field.
+    /// </summary>
+    [Theory]
+    [InlineData("Contractor")]
+    [InlineData("{mail} lower")]
+    public void Text_is_a_value_now_and_no_longer_refused(string expression)
+    {
+        Assert.Null(MappingRowExpression.Problem(expression));
+        Assert.Equal((string.Empty, MappingRowExpression.PatternPrefix + expression), MappingRowExpression.Parse(expression));
+    }
 
     [Fact]
     public void The_step_Mappings_dialog_is_the_shared_editor_not_a_local_table()

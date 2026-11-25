@@ -18,7 +18,31 @@ public sealed class FileToPeopleMapping(ConnectorRegistry connectors, IIdentityC
 {
     /// <summary>The file's columns, the person fields the target accepts, the proposed rows, and the columns left out.</summary>
     public sealed record Result(IReadOnlyList<string> Columns, IReadOnlyList<string> Targets,
-        IReadOnlyList<AttributeMapping> Mappings, IReadOnlyList<string> Unmapped);
+        IReadOnlyList<AttributeMapping> Mappings, IReadOnlyList<string> Unmapped)
+    {
+        /// <summary>The first rows of the file, for the builder's sample values and the preview.</summary>
+        public IReadOnlyList<IReadOnlyDictionary<string, string?>> SampleRows { get; init; } = Array.Empty<IReadOnlyDictionary<string, string?>>();
+
+        /// <summary>The values the target keeps a list of, by person field (a person's type: Employee, Contractor).</summary>
+        public IReadOnlyDictionary<string, IReadOnlyList<string>> TargetValues { get; init; } =
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The file's columns as the builder offers them: a sample value, and the distinct values seen when they are few.</summary>
+        public IReadOnlyList<IdentityCenter.Brand.Models.BrandValueField> Fields => Columns.Select(column =>
+        {
+            var values = SampleRows.Select(r => r.TryGetValue(column, out var v) ? v?.Trim() : null)
+                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!).ToList();
+            var distinct = values.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
+            return new IdentityCenter.Brand.Models.BrandValueField(column, null, values.FirstOrDefault(),
+                distinct.Count is > 0 and <= MaximumDistinctValues ? distinct : null);
+        }).ToList();
+    }
+
+    /// <summary>How many rows of the file are read for samples.</summary>
+    public const int SampleRowCount = 500;
+
+    /// <summary>A column with more distinct values than this is not a list to translate from; none are offered.</summary>
+    public const int MaximumDistinctValues = 25;
 
     /// <summary>True for a CSV file source writing people (not accounts) into IdentityCenter.</summary>
     public static bool Applies(Tenant? source, Tenant? sink, string? sinkTable) =>
@@ -33,7 +57,14 @@ public sealed class FileToPeopleMapping(ConnectorRegistry connectors, IIdentityC
             ?? throw new InvalidOperationException("The CSV connector is not available on this server.");
         var columns = await adapter.ReadHeaderAsync(source.Id, ct);
         var schema = await identityCenter.MappingSchemaAsync(sink.Id, "Identities", sinkCredentialName, ct);
-        return Build(columns, schema.Targets.Select(t => t.Name));
+        var sample = await adapter.ReadSampleAsync(source.Id, SampleRowCount, ct);
+        return Build(columns, schema.Targets.Select(t => t.Name)) with
+        {
+            SampleRows = sample,
+            TargetValues = schema.Targets.Where(t => t.Values is { Count: > 0 })
+                .GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Values!, StringComparer.OrdinalIgnoreCase),
+        };
     }
 
     /// <summary>The proposal itself, with nothing read: rows in file order, the key first-class and required.</summary>

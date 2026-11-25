@@ -11,11 +11,16 @@ namespace Conduit.Sync.Orchestration;
 public sealed class ConnectorMappingPlan
 {
     private readonly FieldProjectionRule[] rules;
+    // Rows written as a pattern read several fields of the record, so they are evaluated against the whole
+    // record, after the single-field rows.
+    private readonly (string Target, string Pattern, bool AlwaysWrite)[] patterns;
 
     public ConnectorMappingPlan(IReadOnlyList<AttributeMapping> mappings)
     {
         ArgumentNullException.ThrowIfNull(mappings);
-        rules = mappings.Select(mapping =>
+        patterns = mappings.Where(m => MappingRowExpression.IsPattern(m.TransformExpr))
+            .Select(m => (m.SinkAttribute, MappingRowExpression.PatternOf(m.TransformExpr)!, m.IsRequired)).ToArray();
+        rules = mappings.Where(m => !MappingRowExpression.IsPattern(m.TransformExpr)).Select(mapping =>
         {
             // Snapshot values: later edits to a draft cannot alter an in-flight plan.
             var expression = mapping.TransformExpr;
@@ -32,12 +37,24 @@ public sealed class ConnectorMappingPlan
 
     /// <summary>Evaluates the same saved rules without connector structural passthrough.</summary>
     public IReadOnlyList<ProjectedField> ProjectFields(IReadOnlyDictionary<string, object?> source) =>
-        rules.Select(rule => FieldProjection.Project(source, rule)).ToArray();
+        rules.Select(rule => FieldProjection.Project(source, rule)).Concat(patterns.Select(p => ProjectPattern(source, p))).ToArray();
+
+    /// <summary>
+    /// A pattern row's field. Written when it has a value; written empty when the record carried one of its
+    /// fields and the value still came out empty (so the target is cleared, as a blank single field is), or
+    /// when the row is marked always write; otherwise left alone.
+    /// </summary>
+    private static ProjectedField ProjectPattern(IReadOnlyDictionary<string, object?> source, (string Target, string Pattern, bool AlwaysWrite) row)
+    {
+        var value = MappingRowExpression.RenderPattern(row.Pattern, source, out var anyFieldPresent);
+        var shouldWrite = value.Length > 0 || anyFieldPresent || row.AlwaysWrite;
+        return new ProjectedField(row.Target, value, shouldWrite, anyFieldPresent, UsedDefault: false);
+    }
 
     public ConnectorObject Apply(ConnectorObject source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (rules.Length == 0) return source; // Existing no-mapping passthrough contract.
+        if (rules.Length == 0 && patterns.Length == 0) return source; // Existing no-mapping passthrough contract.
 
         var target = new ConnectorObject { SourceId = source.SourceId, ObjectClass = source.ObjectClass };
         foreach (var projected in ProjectFields(source.Attributes))

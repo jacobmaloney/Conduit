@@ -2,7 +2,8 @@ using System.Globalization;
 
 namespace Conduit.SourceBrowsing;
 
-public sealed record SourceMappingTarget(string Name, string Kind = "", string DataType = "String", bool Required = false, int? MaxLength = null, string? AliasOf = null)
+/// <summary><paramref name="Values"/>: the values the target keeps a list of for this field, when it keeps one.</summary>
+public sealed record SourceMappingTarget(string Name, string Kind = "", string DataType = "String", bool Required = false, int? MaxLength = null, string? AliasOf = null, IReadOnlyList<string>? Values = null)
 {
     public string Key => Kind + ":" + Name;
 }

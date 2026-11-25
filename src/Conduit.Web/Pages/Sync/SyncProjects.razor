@@ -2013,6 +2013,9 @@
                                      AttributeHeading="Target attribute" ValueHeading="Source and steps"
                                      AttributePlaceholder="Target, e.g. userName" ExpressionPlaceholder="{sAMAccountName} | trim | lower"
                                      AttributeSuggestions="@MappingTargetSuggestions(mmStepId)" TokenSuggestions="@MappingSourceSuggestions(mmStepId)"
+                                     BuilderFields="@MappingBuilderFields()" BuilderTargetValues="@MappingTargetValues"
+                                     Preview="@MappingPreview()" PreviewSubject="@(MappingPreview() is null ? null : "the file's first row")"
+                                     EmptyPreviewText="(empty for this row)"
                                      ExpressionProblem="Conduit.Mapping.MappingRowExpression.Problem"
                                      ShowRequired="true" RequiredHeading="Always write"
                                      RequiredHelp="Write this attribute on every object, even when the value comes out empty."
@@ -4256,6 +4259,24 @@
         return peopleProposalLoaded;
     }
 
+    /// <summary>The file's columns with a sample value each, for the builder; null leaves the editor to offer the suggested tokens.</summary>
+    private IReadOnlyList<BrandValueField>? MappingBuilderFields() =>
+        CurrentPeopleProposal() is { SampleRows.Count: > 0 } people ? people.Fields : null;
+
+    /// <summary>The values IdentityCenter keeps a list of for a person field, offered when a column is translated into it.</summary>
+    private IReadOnlyList<string>? MappingTargetValues(string target) =>
+        CurrentPeopleProposal() is { } people && people.TargetValues.TryGetValue(target.Trim(), out var values) ? values : null;
+
+    /// <summary>What a row writes for the file's first row; null (no preview) when no row of the file has been read.</summary>
+    private Func<string, BrandAttributeMapPreview>? MappingPreview()
+    {
+        if (CurrentPeopleProposal() is not { SampleRows.Count: > 0 } people) return null;
+        var first = people.SampleRows[0];
+        return expression => Conduit.Mapping.MappingRowExpression.Problem(expression) is { } problem
+            ? new BrandAttributeMapPreview(null, problem)
+            : new BrandAttributeMapPreview(Conduit.Mapping.MappingRowExpression.Evaluate(expression, first), null);
+    }
+
     /// <summary>The proposal's rows as new mapping rows, so two steps never share one row's identity.</summary>
     private static List<AttributeMapping> FreshPeopleMappings(Conduit.Web.Services.FileToPeopleMapping.Result proposal) =>
         proposal.Mappings.Select(m => new AttributeMapping
@@ -4308,6 +4329,7 @@
 
         var stepClass = string.IsNullOrWhiteSpace(step.ObjectClass) ? "User" : step.ObjectClass!;
         var suggested = AttributeMapper.BuildMappings(sourceType, sinkType, stepClass);
+        var fromTemplate = true;
         // A file of people: the mapped set is the file's own columns against the person fields the target accepts.
         if (Conduit.Web.Services.FileToPeopleMapping.Applies(src, snk, form.SinkTable))
         {
@@ -4318,6 +4340,7 @@
                 return;
             }
             suggested = FreshPeopleMappings(proposal);
+            fromTemplate = false;   // proposed from the file itself, so not chipped as Template
         }
         if (suggested.Count == 0)
         {
@@ -4342,7 +4365,7 @@
         // Re-stamp SortOrder so the seeded rows persist in template order.
         for (int i = 0; i < suggested.Count; i++) suggested[i].SortOrder = i;
         stepMappings[stepId] = suggested;
-        templateMappingIds.UnionWith(suggested.Select(m => m.Id));   // MAP-EDITOR-CONDUIT-01: chipped as Template
+        if (fromTemplate) templateMappingIds.UnionWith(suggested.Select(m => m.Id));   // MAP-EDITOR-CONDUIT-01: chipped as Template
         stepMappingsLoaded.Add(stepId);
         stepMappingsInherit[stepId] = false; // step now OWNS its class-specific mappings
         workflowsDirty = true;

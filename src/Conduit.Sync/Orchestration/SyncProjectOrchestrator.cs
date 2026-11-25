@@ -1380,7 +1380,7 @@ public sealed class SyncProjectOrchestrator
         // in that degenerate case. The connector always re-adds its structural set,
         // so a mapped attribute that the connector also needs is never double-trouble.
         var mappedSourceAttrs = mappings
-            .Select(m => m.SourceAttribute)
+            .SelectMany(m => Conduit.Mapping.MappingRowExpression.SourceAttributesOf(m.SourceAttribute, m.TransformExpr))
             .Where(a => !string.IsNullOrWhiteSpace(a))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();

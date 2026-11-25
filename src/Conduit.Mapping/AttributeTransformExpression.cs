@@ -14,6 +14,8 @@ public static class AttributeTransformExpression
     public static string? ValidationError(string? expression)
     {
         if (string.IsNullOrWhiteSpace(expression)) return null;
+        // A row written as a pattern is judged by the one value grammar, not as a chain of steps.
+        if (MappingRowExpression.PatternOf(expression) is { } pattern) return MappingRowExpression.PatternProblem(pattern);
         foreach (var raw in expression.Split('|', StringSplitOptions.RemoveEmptyEntries))
         {
             var (operation, argument) = SplitOpArg(raw.Trim());
@@ -60,6 +62,7 @@ public static class AttributeTransformExpression
     public static bool ProducesValueWhenSourceMissing(string expression)
     {
         if (string.IsNullOrWhiteSpace(expression)) return false;
+        if (MappingRowExpression.IsPattern(expression)) return true;   // a pattern names its own fields; the row has no single source
         foreach (var rawStage in expression.Split('|', StringSplitOptions.RemoveEmptyEntries))
         {
             var s = rawStage.Trim();

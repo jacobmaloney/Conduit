@@ -63,6 +63,13 @@ public sealed class CsvAdapter : IConnectorAdapter
     /// </summary>
     public Task<IReadOnlyList<string>> ReadHeaderAsync(Guid tenantId, CancellationToken ct) =>
         CsvSource.ReadHeaderAsync(_protector, tenantId, ct);
+
+    /// <summary>
+    /// The first rows of the saved file, at most <paramref name="maximumRows"/>, each as column name to value.
+    /// For showing what a mapping would write; never the whole file.
+    /// </summary>
+    public Task<IReadOnlyList<IReadOnlyDictionary<string, string?>>> ReadSampleAsync(Guid tenantId, int maximumRows, CancellationToken ct) =>
+        CsvSource.ReadSampleAsync(_protector, tenantId, maximumRows, ct);
 }
 
 internal sealed record CsvCredentials(string FilePath, string Delimiter, bool HasHeader, string Encoding, string? IdColumn);
@@ -238,6 +245,21 @@ public sealed class CsvSource : IConnectorSource
         using var input = new StreamReader(creds.FilePath, ResolveEncoding(creds.Encoding));
         using var csv = CreateReader(input, creds, ct);
         return (await csv.ReadHeaderAsync()).ToList();
+    }
+
+    internal static async Task<IReadOnlyList<IReadOnlyDictionary<string, string?>>> ReadSampleAsync(
+        CredentialProtector protector, Guid tenantId, int maximumRows, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var rows = new List<IReadOnlyDictionary<string, string?>>();
+        var creds = await CsvCredentialReader.ReadAsync(protector, tenantId)
+            ?? throw new InvalidOperationException("This CSV connection has no saved file settings.");
+        if (!creds.HasHeader || maximumRows <= 0) return rows;
+        if (!File.Exists(creds.FilePath)) throw new FileNotFoundException("The saved CSV file was not found on this server.");
+        using var input = new StreamReader(creds.FilePath, ResolveEncoding(creds.Encoding));
+        using var csv = CreateReader(input, creds, ct);
+        while (rows.Count < maximumRows && await csv.ReadAsync() is { } row) rows.Add(new Dictionary<string, string?>(row, StringComparer.OrdinalIgnoreCase));
+        return rows;
     }
 
     private static CsvRecordReader CreateReader(TextReader input, CsvCredentials creds, CancellationToken ct) =>
