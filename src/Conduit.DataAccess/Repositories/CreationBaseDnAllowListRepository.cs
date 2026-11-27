@@ -11,6 +11,8 @@ public sealed class CreationBaseDnEntry
     public Guid Id { get; set; }
     public string SourceConnectionName { get; set; } = string.Empty;
     public string BaseDn { get; set; } = string.Empty;
+    /// <summary>True when the row refuses the container (and everything beneath it) instead of permitting it.</summary>
+    public bool IsBlocked { get; set; }
     public DateTime CreatedAt { get; set; }
     public string? CreatedBy { get; set; }
 }
@@ -23,17 +25,21 @@ public sealed class CreationBaseDnEntry
 /// </summary>
 public interface ICreationBaseDnAllowListRepository
 {
-    /// <summary>The permitted base DNs configured for a connection (empty when none).</summary>
+    /// <summary>The permitted base DNs configured for a connection (empty when none). Blocks are not in this list.</summary>
     Task<List<string>> GetBaseDnsAsync(string sourceConnectionName);
+
+    /// <summary>The blocked containers configured for a connection (empty when none).</summary>
+    Task<List<string>> GetBlockedBaseDnsAsync(string sourceConnectionName);
 
     /// <summary>Every configured entry (for the settings UI), ordered by connection then DN.</summary>
     Task<List<CreationBaseDnEntry>> GetAllAsync();
 
     /// <summary>
-    /// Add a permitted base DN for a connection. Idempotent — a duplicate (same name + DN) is a no-op.
+    /// Add a permitted base DN (or, with <paramref name="isBlocked"/>, a blocked container) for a connection.
+    /// Idempotent — a container already listed for the connection, as either kind, is a no-op.
     /// Returns true when a row was inserted, false when it already existed.
     /// </summary>
-    Task<bool> AddAsync(string sourceConnectionName, string baseDn, string? createdBy);
+    Task<bool> AddAsync(string sourceConnectionName, string baseDn, string? createdBy, bool isBlocked = false);
 
     /// <summary>Remove a permitted base DN by id. Returns true when a row was deleted.</summary>
     Task<bool> DeleteAsync(Guid id);
@@ -42,33 +48,37 @@ public interface ICreationBaseDnAllowListRepository
     Task<CreationBaseDnEntry?> GetByIdAsync(Guid id);
 }
 
-/// <summary>Dapper implementation. Schema managed by DatabaseMigrator V33.</summary>
+/// <summary>Dapper implementation. Schema managed by DatabaseMigrator V33 and V39.</summary>
 public class CreationBaseDnAllowListRepository : BaseRepository, ICreationBaseDnAllowListRepository
 {
     public CreationBaseDnAllowListRepository(DatabaseConfig config) : base(config) { }
 
-    public async Task<List<string>> GetBaseDnsAsync(string sourceConnectionName)
+    public Task<List<string>> GetBaseDnsAsync(string sourceConnectionName) => GetByKindAsync(sourceConnectionName, isBlocked: false);
+
+    public Task<List<string>> GetBlockedBaseDnsAsync(string sourceConnectionName) => GetByKindAsync(sourceConnectionName, isBlocked: true);
+
+    private async Task<List<string>> GetByKindAsync(string sourceConnectionName, bool isBlocked)
     {
         if (string.IsNullOrWhiteSpace(sourceConnectionName))
             return new List<string>();
         var rows = await QueryAsync<string>(@"
             SELECT BaseDn FROM ProvisioningCreationBaseDns
-             WHERE SourceConnectionName = @Name
+             WHERE SourceConnectionName = @Name AND IsBlocked = @IsBlocked
              ORDER BY BaseDn",
-            new { Name = sourceConnectionName });
+            new { Name = sourceConnectionName, IsBlocked = isBlocked });
         return rows.ToList();
     }
 
     public async Task<List<CreationBaseDnEntry>> GetAllAsync()
     {
         var rows = await QueryAsync<CreationBaseDnEntry>(@"
-            SELECT Id, SourceConnectionName, BaseDn, CreatedAt, CreatedBy
+            SELECT Id, SourceConnectionName, BaseDn, IsBlocked, CreatedAt, CreatedBy
               FROM ProvisioningCreationBaseDns
              ORDER BY SourceConnectionName, BaseDn");
         return rows.ToList();
     }
 
-    public async Task<bool> AddAsync(string sourceConnectionName, string baseDn, string? createdBy)
+    public async Task<bool> AddAsync(string sourceConnectionName, string baseDn, string? createdBy, bool isBlocked = false)
     {
         if (string.IsNullOrWhiteSpace(sourceConnectionName))
             throw new ArgumentException("sourceConnectionName is required.", nameof(sourceConnectionName));
@@ -78,12 +88,12 @@ public class CreationBaseDnAllowListRepository : BaseRepository, ICreationBaseDn
         // Idempotent insert — the (name, DN) pair is unique by intent but the column is too long for a
         // UNIQUE index key, so dedupe here with INSERT..WHERE NOT EXISTS.
         var affected = await ExecuteAsync(@"
-            INSERT INTO ProvisioningCreationBaseDns (Id, SourceConnectionName, BaseDn, CreatedAt, CreatedBy)
-            SELECT @Id, @Name, @BaseDn, SYSUTCDATETIME(), @CreatedBy
+            INSERT INTO ProvisioningCreationBaseDns (Id, SourceConnectionName, BaseDn, IsBlocked, CreatedAt, CreatedBy)
+            SELECT @Id, @Name, @BaseDn, @IsBlocked, SYSUTCDATETIME(), @CreatedBy
             WHERE NOT EXISTS (
                 SELECT 1 FROM ProvisioningCreationBaseDns
                  WHERE SourceConnectionName = @Name AND BaseDn = @BaseDn)",
-            new { Id = Guid.NewGuid(), Name = sourceConnectionName.Trim(), BaseDn = baseDn.Trim(), CreatedBy = createdBy });
+            new { Id = Guid.NewGuid(), Name = sourceConnectionName.Trim(), BaseDn = baseDn.Trim(), IsBlocked = isBlocked, CreatedBy = createdBy });
         return affected > 0;
     }
 
@@ -97,7 +107,7 @@ public class CreationBaseDnAllowListRepository : BaseRepository, ICreationBaseDn
 
     public Task<CreationBaseDnEntry?> GetByIdAsync(Guid id) =>
         QuerySingleOrDefaultAsync<CreationBaseDnEntry>(@"
-            SELECT Id, SourceConnectionName, BaseDn, CreatedAt, CreatedBy
+            SELECT Id, SourceConnectionName, BaseDn, IsBlocked, CreatedAt, CreatedBy
               FROM ProvisioningCreationBaseDns
              WHERE Id = @Id",
             new { Id = id });

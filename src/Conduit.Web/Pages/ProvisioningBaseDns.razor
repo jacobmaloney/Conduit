@@ -26,6 +26,8 @@
             <strong>This is the creation containment control.</strong> An AD account create is only permitted when its
             target OU is <em>contained within</em> one of the base DNs configured here for its connection.
             A connection with <strong>no</strong> permitted base DN <strong>denies every create</strong> (deny-all by default).
+            A permitted container <strong>includes every container beneath it</strong>. A <strong>blocked</strong> container refuses
+            itself and everything beneath it, even inside a permitted one.
             Grant only the OUs where creation is intended — and delegate the bind account "Create User objects" only there.
             These values live on this agent and are never set from IdentityCenter.
         </div>
@@ -43,11 +45,11 @@
     <div class="ic-card mb-4">
         <div class="ic-card-hdr">
             <i class="fas fa-plus" aria-hidden="true"></i>
-            <span class="ic-card-hdr-title">Add a permitted base DN</span>
+            <span class="ic-card-hdr-title">Choose where accounts may be created</span>
         </div>
         <div class="ic-card-body">
             <div class="row g-2 align-items-start">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="icb-form-field">
                         <BrandSelectField Label="Connection name" Id="pbd-conn" @bind-Value="newConnectionName">
                             <option value="">-- select a connection --</option>
@@ -68,24 +70,30 @@
                         </span>
                     </div>
                 </div>
+                <div class="col-md-3">
+                    <div class="icb-form-field">
+                        <span class="icb-form-label d-none d-md-block">&nbsp;</span>
+                        <button type="button" class="ic-btn ic-btn-primary w-100 justify-content-center" @onclick="BrowseAsync" disabled="@(saving || string.IsNullOrWhiteSpace(newConnectionName))">
+                            <i class="fas fa-folder-tree me-1" aria-hidden="true"></i>Browse and choose
+                        </button>
+                        <span class="icb-form-help">Shows what is permitted and blocked now. Click a container to permit it, click again to block it.</span>
+                    </div>
+                </div>
                 <div class="col-md-4">
                     <div class="icb-form-field">
-                        <BrandTextField Label="Permitted base DN" Id="pbd-dn" @bind-Value="newBaseDn" Immediate="true" Placeholder="OU=Staff,OU=Users,DC=corp,DC=local" Monospace="true" />
-                        <span class="icb-form-help">Browse the directory and choose a container, or type its distinguished name.</span>
+                        <BrandTextField Label="Or type a distinguished name" Id="pbd-dn" @bind-Value="newBaseDn" Immediate="true" Placeholder="OU=Staff,OU=Users,DC=corp,DC=local" Monospace="true" />
                     </div>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-1">
                     <div class="icb-form-field">
                         <span class="icb-form-label d-none d-md-block">&nbsp;</span>
-                        <button type="button" class="ic-btn ic-btn-ghost w-100 justify-content-center" @onclick="BrowseAsync" disabled="@(saving || string.IsNullOrWhiteSpace(newConnectionName))">
-                            <i class="fas fa-folder-open me-1" aria-hidden="true"></i>Browse
-                        </button>
+                        <button type="button" class="ic-btn ic-btn-ghost w-100 justify-content-center" @onclick="() => AddAsync(false)" disabled="@saving">Permit</button>
                     </div>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-1">
                     <div class="icb-form-field">
                         <span class="icb-form-label d-none d-md-block">&nbsp;</span>
-                        <button type="button" class="ic-btn ic-btn-primary w-100 justify-content-center" @onclick="AddAsync" disabled="@saving">Add</button>
+                        <button type="button" class="ic-btn ic-btn-danger w-100 justify-content-center" @onclick="() => AddAsync(true)" disabled="@saving">Block</button>
                     </div>
                 </div>
             </div>
@@ -120,7 +128,7 @@
                     <span class="ms-auto">
                         @if (conn.EnforcedSource == BaseDnSource.Database)
                         {
-                            <BrandBadge Text="@($"{conn.DbEntries.Count} enforced (database)")" Tone="BrandBadgeTone.Success" Compact="true" />
+                            <BrandBadge Text="@($"{conn.DbEntries.Count(e => !e.IsBlocked)} permitted, {conn.DbEntries.Count(e => e.IsBlocked)} blocked (database)")" Tone="BrandBadgeTone.Success" Compact="true" />
                         }
                         else if (conn.EnforcedSource == BaseDnSource.Config)
                         {
@@ -136,13 +144,30 @@
                     <div class="icb-table-scroll" tabindex="0" role="region" aria-label="@($"Permitted base DNs for {conn.Name}")">
                         <table class="icb-data-table">
                             <thead>
-                                <tr><th scope="col">Base DN</th><th scope="col">Source</th><th scope="col">Added</th><th scope="col">By</th><th scope="col" class="text-end">Action</th></tr>
+                                <tr><th scope="col">Container</th><th scope="col">Rule</th><th scope="col">Source</th><th scope="col">Added</th><th scope="col">By</th><th scope="col" class="text-end">Action</th></tr>
                             </thead>
                             <tbody>
                                 @foreach (var entry in conn.DbEntries)
                                 {
                                     <tr>
-                                        <td class="mono">@entry.BaseDn</td>
+                                        <td>
+                                            <div class="mono">@entry.BaseDn</div>
+                                            @{ var note = NoteFor(conn, entry); }
+                                            @if (note is not null)
+                                            {
+                                                <div>@note</div>
+                                            }
+                                        </td>
+                                        <td>
+                                            @if (entry.IsBlocked)
+                                            {
+                                                <BrandBadge Text="Blocked" Tone="BrandBadgeTone.Danger" Compact="true" />
+                                            }
+                                            else
+                                            {
+                                                <BrandBadge Text="Permitted, with everything beneath" Tone="BrandBadgeTone.Success" Compact="true" />
+                                            }
+                                        </td>
                                         <td><BrandBadge Text="database (enforced)" Tone="BrandBadgeTone.Success" Compact="true" /></td>
                                         <td>@entry.CreatedAt.ToString("u")</td>
                                         <td>@(entry.CreatedBy ?? "—")</td>
@@ -155,6 +180,7 @@
                                 {
                                     <tr>
                                         <td class="mono">@dn</td>
+                                        <td><BrandBadge Text="Permitted, with everything beneath" Tone="BrandBadgeTone.Neutral" Compact="true" /></td>
                                         <td>
                                             @if (conn.EnforcedSource == BaseDnSource.Config)
                                             {
@@ -178,8 +204,9 @@
     }
 </div>
 
-@* The same directory browser the sync project editor uses; choosing a container only fills the field. *@
-<Conduit.Web.Shared.Design.DirectoryBrowserModal @ref="browser" OnSelected="OnContainerPicked" />
+@* The same directory browser the sync project editor uses, in its include/block mode: it opens showing what is
+   permitted (and inherited beneath it) and blocked now, and Apply saves the difference, each change audited. *@
+<Conduit.Web.Shared.Design.DirectoryBrowserModal @ref="browser" ScopeTitle="Where accounts may be created" OnScopesSelected="OnScopesAppliedAsync" />
 
 @code {
     private Conduit.Web.Shared.Design.DirectoryBrowserModal? browser;
@@ -197,7 +224,12 @@
                 return;
             }
             ClearMessage();
-            await browser.ShowAsync(tenantId.Value);
+            browseConnection = connName;
+            var current = (await Repo.GetAllAsync())
+                .Where(e => string.Equals(e.SourceConnectionName, connName, StringComparison.OrdinalIgnoreCase)).ToList();
+            await browser.ShowForScopeAsync(tenantId.Value, null,
+                current.Where(e => !e.IsBlocked).Select(e => e.BaseDn),
+                current.Where(e => e.IsBlocked).Select(e => e.BaseDn));
         }
         catch (Exception ex)
         {
@@ -206,10 +238,82 @@
         }
     }
 
-    private void OnContainerPicked(string dn)
+    private string browseConnection = string.Empty;
+
+    /// <summary>
+    /// Apply in the browser: store exactly what the tree now shows for the connection it was opened for. Rows whose
+    /// rule is unchanged are left alone; every removal and addition is audited like a typed one.
+    /// </summary>
+    private async Task OnScopesAppliedAsync((HashSet<string> Included, HashSet<string> Blocked) picked)
     {
-        newBaseDn = dn;
-        ClearMessage();
+        var connName = browseConnection;
+        if (connName.Length == 0) return;
+        saving = true;
+        try
+        {
+            var userName = await GetUserNameAsync();
+            var current = (await Repo.GetAllAsync())
+                .Where(e => string.Equals(e.SourceConnectionName, connName, StringComparison.OrdinalIgnoreCase)).ToList();
+            var malformed = picked.Included.Concat(picked.Blocked).FirstOrDefault(d => !BaseDnContainment.IsWellFormedDn(d));
+            if (malformed is not null)
+            {
+                SetError(string.Concat("'", malformed, "' is not a well-formed distinguished name. Nothing was changed."));
+                return;
+            }
+
+            int added = 0, removed = 0;
+            foreach (var entry in current)
+            {
+                // A block wins when a container is somehow in both sets.
+                var wanted = picked.Blocked.Contains(entry.BaseDn) ? true : picked.Included.Contains(entry.BaseDn) ? false : (bool?)null;
+                if (wanted == entry.IsBlocked) continue;
+                if (await Repo.DeleteAsync(entry.Id))
+                {
+                    removed++;
+                    await AuditAsync(entry.IsBlocked ? "CreationBaseDnBlockRemoved" : "CreationBaseDnRemoved", connName, userName,
+                        details: string.Concat(entry.IsBlocked ? "Blocked container removed from connection '" : "Permitted AD creation base DN removed from connection '", connName, "'."),
+                        oldValue: entry.BaseDn, newValue: null);
+                }
+            }
+            foreach (var (dn, isBlocked) in picked.Blocked.Select(d => (d, true))
+                         .Concat(picked.Included.Where(d => !picked.Blocked.Contains(d)).Select(d => (d, false))))
+            {
+                if (await Repo.AddAsync(connName, dn, userName, isBlocked))
+                {
+                    added++;
+                    await AuditAsync(isBlocked ? "CreationBaseDnBlocked" : "CreationBaseDnAdded", connName, userName,
+                        details: string.Concat(isBlocked ? "Container blocked for connection '" : "Permitted AD creation base DN added for connection '", connName, "'."),
+                        oldValue: null, newValue: dn);
+                }
+            }
+
+            if (added == 0 && removed == 0) SetSuccess(string.Concat("Nothing changed for '", connName, "'."));
+            else SetSuccess(string.Concat("Saved for '", connName, "': ", added.ToString(), " added, ", removed.ToString(), " removed."));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to save the creation base-DN allow-list from the directory browser.");
+            SetError("Failed to save. Check the database connection, then open the browser again to see what is stored.");
+            await LoadAsync();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    /// <summary>
+    /// What a row means next to its neighbours, from the same containment rule the write paths use: a permit inside a
+    /// block does nothing, and a permit inside another permit is already covered.
+    /// </summary>
+    private static string? NoteFor(ConnDisplay conn, CreationBaseDnEntry entry)
+    {
+        if (entry.IsBlocked) return null;
+        var block = conn.DbEntries.FirstOrDefault(o => o.IsBlocked && BaseDnContainment.IsContained(entry.BaseDn, new[] { o.BaseDn }));
+        if (block is not null) return string.Concat("Has no effect: inside the blocked container ", block.BaseDn);
+        var parent = conn.DbEntries.FirstOrDefault(o => !o.IsBlocked && o.Id != entry.Id && BaseDnContainment.IsStrictlyBelow(entry.BaseDn, new[] { o.BaseDn }));
+        return parent is null ? null : string.Concat("Already covered by ", parent.BaseDn);
     }
 
     private bool loading = true;
@@ -294,7 +398,7 @@
         }
     }
 
-    private async Task AddAsync()
+    private async Task AddAsync(bool isBlocked)
     {
         var connName = newConnectionName?.Trim() ?? string.Empty;
         var baseDn = newBaseDn?.Trim() ?? string.Empty;
@@ -320,19 +424,19 @@
         try
         {
             var userName = await GetUserNameAsync();
-            var inserted = await Repo.AddAsync(connName, baseDn, userName);
+            var inserted = await Repo.AddAsync(connName, baseDn, userName, isBlocked);
             if (!inserted)
             {
-                SetError(string.Concat("'", baseDn, "' is already permitted for connection '", connName, "'."));
+                SetError(string.Concat("'", baseDn, "' is already listed for connection '", connName, "'. Remove it first to change its rule."));
                 return;
             }
 
-            await AuditAsync("CreationBaseDnAdded", connName, userName,
-                details: string.Concat("Permitted AD creation base DN added for connection '", connName, "'."),
+            await AuditAsync(isBlocked ? "CreationBaseDnBlocked" : "CreationBaseDnAdded", connName, userName,
+                details: string.Concat(isBlocked ? "Container blocked for connection '" : "Permitted AD creation base DN added for connection '", connName, "'."),
                 oldValue: null, newValue: baseDn);
 
             newBaseDn = string.Empty;
-            SetSuccess(string.Concat("Added permitted base DN for '", connName, "'."));
+            SetSuccess(string.Concat(isBlocked ? "Blocked the container for '" : "Added permitted base DN for '", connName, "'."));
             await LoadAsync();
         }
         catch (Exception ex)
@@ -356,10 +460,10 @@
             if (deleted && entry is not null)
             {
                 var userName = await GetUserNameAsync();
-                await AuditAsync("CreationBaseDnRemoved", entry.SourceConnectionName, userName,
-                    details: string.Concat("Permitted AD creation base DN removed from connection '", entry.SourceConnectionName, "'."),
+                await AuditAsync(entry.IsBlocked ? "CreationBaseDnBlockRemoved" : "CreationBaseDnRemoved", entry.SourceConnectionName, userName,
+                    details: string.Concat(entry.IsBlocked ? "Blocked container removed from connection '" : "Permitted AD creation base DN removed from connection '", entry.SourceConnectionName, "'."),
                     oldValue: entry.BaseDn, newValue: null);
-                SetSuccess("Removed permitted base DN.");
+                SetSuccess(entry.IsBlocked ? "Removed the block." : "Removed permitted base DN.");
             }
             await LoadAsync();
         }

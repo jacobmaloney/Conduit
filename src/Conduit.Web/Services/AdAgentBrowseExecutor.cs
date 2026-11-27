@@ -82,7 +82,7 @@ public sealed class AdAgentBrowseExecutor
         if (!BaseDnContainment.IsWellFormedDn(baseDn))
             return Fail("BrowseContainers: baseDn is not a well-formed distinguished name.");
 
-        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        var permitted = await _baseDnPolicy.GetScopeAsync(sourceConnectionName);
         if (!BaseDnContainment.IsContained(baseDn, permitted))
         {
             _logger.LogWarning("BrowseContainers {CommandId}: baseDn refused by the creation base-DN allow-list.", commandId);

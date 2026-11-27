@@ -23,7 +23,7 @@ public class AdAgentBrowseExecutorTests
     {
         private readonly IReadOnlyList<string> _dns;
         public FakePolicy(IReadOnlyList<string> dns) => _dns = dns;
-        public Task<IReadOnlyList<string>> GetPermittedBaseDnsAsync(string sourceConnectionName) => Task.FromResult(_dns);
+        public Task<CreationScope> GetScopeAsync(string sourceConnectionName) => Task.FromResult(new CreationScope(_dns, System.Array.Empty<string>()));
         public Task<(IReadOnlyList<string> Enforced, BaseDnSource Source)> GetEffectiveAsync(string sourceConnectionName)
             => Task.FromResult((_dns, _dns.Count > 0 ? BaseDnSource.Database : BaseDnSource.None));
         public IReadOnlyList<string> GetConfigBaseDns(string sourceConnectionName) => System.Array.Empty<string>();

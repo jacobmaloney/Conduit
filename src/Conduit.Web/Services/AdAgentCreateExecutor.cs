@@ -190,7 +190,7 @@ public sealed class AdAgentCreateExecutor
 
         // ── (4) ★ Containment — the deny-all base-DN allow-list, BEFORE any LDAP call. The policy is
         //        DB-authoritative with a config fallback and FAILS CLOSED (deny-all) on any read error. ──
-        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        var permitted = await _baseDnPolicy.GetScopeAsync(sourceConnectionName);
         if (!BaseDnContainment.IsContained(targetOu, permitted))
         {
             _logger.LogWarning("CreateAdAccount {CommandId}: targetOu refused by the creation base-DN allow-list.", commandId);

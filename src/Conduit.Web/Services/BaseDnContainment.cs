@@ -64,6 +64,21 @@ public static class BaseDnContainment
         return false;
     }
 
+    /// <summary>
+    /// The inclusive rule with blocks: inside a permitted base and NOT inside (or equal to) a blocked container.
+    /// A block always wins, at any depth. FAIL-CLOSED: one malformed block refuses everything, because a block that
+    /// cannot be read must never be skipped.
+    /// </summary>
+    public static bool IsContained(string? targetOu, CreationScope scope)
+        => BlocksAreReadable(scope) && IsContained(targetOu, scope.Permitted) && !IsContained(targetOu, scope.Blocked);
+
+    /// <summary>The delete rule with blocks: strictly below a permitted base, and not inside a blocked container.</summary>
+    public static bool IsStrictlyBelow(string? dn, CreationScope scope)
+        => BlocksAreReadable(scope) && IsStrictlyBelow(dn, scope.Permitted) && !IsContained(dn, scope.Blocked);
+
+    private static bool BlocksAreReadable(CreationScope scope)
+        => scope.Blocked is null || scope.Blocked.All(IsWellFormedDn);
+
     // target's RDN list must END WITH baseDn's RDN list (component-wise, both already normalized).
     private static bool IsRdnSuffix(List<string> target, List<string> baseDn)
     {

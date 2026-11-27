@@ -337,7 +337,7 @@ public class PartitionGroupDeleteDetectionTests
     public void Migration_38_adds_the_four_tables_idempotently()
     {
         var migrator = new DatabaseMigrator("Server=offline;Database=offline;", NullLogger<DatabaseMigrator>.Instance);
-        var m38 = Assert.Single(migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 37 }));
+        var m38 = migrator.GetRequiredMigrations(new SchemaAnalysisResult { CurrentVersion = 37 }).First();
         Assert.Equal(38, m38.Version);
         foreach (var table in new[] { "PartitionSeenIds", "PartitionRunResults", "PartitionGroupFinalizations", "PartitionStepBaselines" })
             Assert.Contains($"IF OBJECT_ID('dbo.{table}','U') IS NULL", m38.SqlScript);

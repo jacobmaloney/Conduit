@@ -1615,6 +1615,23 @@ END;
 "
             });
 
+            // Migration 39 (UC039-F104): a row of the creation allow-list can BLOCK a container instead of permitting
+            // it. A block refuses the container and everything beneath it, even inside a permitted one. Existing rows
+            // stay permits (default 0).
+            migrations.Add(new SchemaMigration
+            {
+                Version = 39,
+                Name = "Blocked containers in the creation allow-list",
+                Description = "Adds ProvisioningCreationBaseDns.IsBlocked (default 0) so a container beneath a permitted one can be refused.",
+                SqlScript = @"
+IF COL_LENGTH('dbo.ProvisioningCreationBaseDns','IsBlocked') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[ProvisioningCreationBaseDns]
+        ADD [IsBlocked] BIT NOT NULL CONSTRAINT [DF_ProvBaseDns_IsBlocked] DEFAULT 0;
+END;
+"
+            });
+
             // Filter migrations that haven't been applied yet
             return migrations.Where(m => m.Version > analysis.CurrentVersion).OrderBy(m => m.Version).ToList();
         }

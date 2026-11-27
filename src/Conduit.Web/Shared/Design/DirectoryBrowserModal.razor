@@ -24,6 +24,7 @@
                          Mode="@(scopeMode ? ScopeBrowserMode.ScopeLocations : ScopeBrowserMode.SingleContainer)"
                          DataSource="@scopeDataSource"
                          ContextKey="@scopeContextKey"
+                         Title="@(scopeMode ? ScopeTitle : null)"
                          Loading="@isLoadingRoot"
                          Error="@errorMessage"
                          NoSourceMessage="No source system selected."
@@ -44,6 +45,9 @@
     /// UI and re-derived at read time, never persisted as its own entry.
     /// </summary>
     [Parameter] public EventCallback<(HashSet<string> Included, HashSet<string> Blocked)> OnScopesSelected { get; set; }
+
+    /// <summary>Header text in include/block mode, when the caller is not choosing a sync scope. Null keeps the shared default.</summary>
+    [Parameter] public string? ScopeTitle { get; set; }
 
     private bool isVisible;
     private bool isLoadingRoot;

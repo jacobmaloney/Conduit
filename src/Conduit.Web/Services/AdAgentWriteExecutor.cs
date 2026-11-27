@@ -247,7 +247,7 @@ public sealed class AdAgentWriteExecutor
               target.IsClass("computer") || target.IsClass("contact")))
             return (false, "DeleteObject: only user, group, computer, or contact objects may be deleted through this channel.");
 
-        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        var permitted = await _baseDnPolicy.GetScopeAsync(sourceConnectionName);
         bool IsPermitted(string dn) => BaseDnContainment.IsStrictlyBelow(dn, permitted);
         if (!IsPermitted(target.DistinguishedName))
             return (false,
@@ -317,7 +317,7 @@ public sealed class AdAgentWriteExecutor
         if (!target.IsClass("user"))
             return (false, "ResetPassword: only user objects are resettable through this channel.");
 
-        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        var permitted = await _baseDnPolicy.GetScopeAsync(sourceConnectionName);
         if (!BaseDnContainment.IsContained(target.DistinguishedName, permitted))
             return (false,
                 $"ResetPassword: the target is not within any permitted base DN for connection '{sourceConnectionName}' — refusing (deny-all containment).");
@@ -447,7 +447,7 @@ public sealed class AdAgentWriteExecutor
         if (!BaseDnContainment.IsWellFormedDn(targetOu))
             return (false, $"MoveObject: targetOu '{targetOu}' is not a well-formed DN.");
 
-        var permitted = await _baseDnPolicy.GetPermittedBaseDnsAsync(sourceConnectionName);
+        var permitted = await _baseDnPolicy.GetScopeAsync(sourceConnectionName);
         if (!BaseDnContainment.IsContained(targetOu, permitted))
             return (false,
                 $"MoveObject: targetOu is not within any permitted creation base DN for connection '{sourceConnectionName}' — refusing the move (deny-all containment).");
