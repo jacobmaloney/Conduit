@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Safe deploy of the Conduit publish folder to the .56 server as the 'Conduit' Windows service.
+    Safe deploy of the Conduit publish folder to the .60 lab server as the 'Conduit' Windows service.
     Mirrors the staged publish output to the remote publish root WITHOUT deleting
     runtime-written directories (Logs, App_Data, ...), then restarts the service and
     health-checks it.
@@ -74,7 +74,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Server      = "192.168.1.56",
+    [string]$Server      = "192.168.1.60",
     # Canonical name matches the other IC services (IdentityCenterWebPortal, IdentityCenterApi).
     [string]$ServiceName = "IdentityCenterConduit",
     # Pre-rename name still present on boxes deployed before 2026-07. Stopped alongside
@@ -82,7 +82,7 @@ param(
     # if $ServiceName does not exist yet.
     [string]$LegacyServiceName = "Conduit",
     [string]$PublishDir  = "C:\Users\jacob\source\repos\_deploy-conduit\publish",
-    [string]$RemotePath  = "\\192.168.1.56\C$\Software\Conduit\publish",
+    [string]$RemotePath  = "\\192.168.1.60\C$\Software\Conduit\publish",
     [int]$Port           = 5500,
 
     # SMB credentials for the C$ admin share. Provide ONE of: -Credential, or
