@@ -68,9 +68,18 @@
                         </span>
                     </div>
                 </div>
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <div class="icb-form-field">
                         <BrandTextField Label="Permitted base DN" Id="pbd-dn" @bind-Value="newBaseDn" Immediate="true" Placeholder="OU=Staff,OU=Users,DC=corp,DC=local" Monospace="true" />
+                        <span class="icb-form-help">Browse the directory and choose a container, or type its distinguished name.</span>
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <div class="icb-form-field">
+                        <span class="icb-form-label d-none d-md-block">&nbsp;</span>
+                        <button type="button" class="ic-btn ic-btn-ghost w-100 justify-content-center" @onclick="BrowseAsync" disabled="@(saving || string.IsNullOrWhiteSpace(newConnectionName))">
+                            <i class="fas fa-folder-open me-1" aria-hidden="true"></i>Browse
+                        </button>
                     </div>
                 </div>
                 <div class="col-md-2">
@@ -169,7 +178,40 @@
     }
 </div>
 
+@* The same directory browser the sync project editor uses; choosing a container only fills the field. *@
+<Conduit.Web.Shared.Design.DirectoryBrowserModal @ref="browser" OnSelected="OnContainerPicked" />
+
 @code {
+    private Conduit.Web.Shared.Design.DirectoryBrowserModal? browser;
+
+    private async Task BrowseAsync()
+    {
+        var connName = newConnectionName?.Trim() ?? string.Empty;
+        if (connName.Length == 0 || browser is null) return;
+        try
+        {
+            var tenantId = await CredMapRepo.GetTenantIdByNameAsync(connName);
+            if (tenantId is null || tenantId.Value == Guid.Empty)
+            {
+                SetError(string.Concat("'", connName, "' is not registered on this agent yet, so its directory cannot be browsed. Type the distinguished name."));
+                return;
+            }
+            ClearMessage();
+            await browser.ShowAsync(tenantId.Value);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to open the directory browser for the creation base-DN allow-list.");
+            SetError("The directory could not be opened. Type the distinguished name.");
+        }
+    }
+
+    private void OnContainerPicked(string dn)
+    {
+        newBaseDn = dn;
+        ClearMessage();
+    }
+
     private bool loading = true;
     private bool saving = false;
     private string? message;
